@@ -22,9 +22,8 @@ from functools import partial
 
 import psfmodels as psfm
 
-from . import analysis_tools as tools
-
-
+import analysis_tools as tools
+# from . import analysis_tools as tools
 
 def get_background(img, npix):
     """

@@ -1,10 +1,13 @@
 # my tools
-from . import analysis_tools as tools
-from . import fit_psf as psf
-from . import affine as affine
-
+# from . import analysis_tools as tools
+# from . import fit_psf as psf
+# from . import affine as affine
+import analysis_tools as tools
+import fit_psf as psf
+import affine
 # other tools
-from . import psd
+# from . import psd
+import psd
 
 # general imports
 import pickle
