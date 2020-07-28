@@ -16,7 +16,8 @@ from scipy import optimize
 import scipy.interpolate
 import pickle
 
-import analysis_tools as tools
+#import analysis_tools as tools
+from . import analysis_tools as tools
 
 # affine matrix parametrizations
 def xform2params(affine_mat):

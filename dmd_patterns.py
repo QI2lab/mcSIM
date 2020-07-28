@@ -22,9 +22,12 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 import matplotlib.patches
 
-import analysis_tools as tools
-import affine
-import simulate_dmd
+# import analysis_tools as tools
+# import affine
+# import simulate_dmd
+from . import analysis_tools as tools
+from . import affine
+from . import simulate_dmd
 
 def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
     """

@@ -17,14 +17,14 @@ import skimage.filters
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import matplotlib.cm
-import psfmodels as psfm
-import analysis_tools as tools
-
-# import dask
-# from dask.distributed import Client, LocalCluster
-# from multiprocessing import Pool
 import joblib
 from functools import partial
+
+import psfmodels as psfm
+
+from . import analysis_tools as tools
+
+
 
 def get_background(img, npix):
     """
