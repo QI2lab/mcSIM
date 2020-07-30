@@ -1159,7 +1159,7 @@ class dlp6500():
         This command is based on Table 5-3 in the DLP programming manual
 
         :param patterns: N x Ny x Nx NumPy array of uint8
-        :param exp_times: exposure times in us. Either a single uint8 number, or a list the same length as the number of patterns
+        :param exp_times: exposure times in us. Either a single uint8 number, or a list the same length as the number of patterns. >=105us
         :param dark_times: dark times in us. Either a single uint8 number or a list the same length as the number of patterns
         :param triggered: Boolean. Whether or not DMD is to wait to be triggered.
         :param clear_pattern_after_trigger: Boolean. Whether or not to keep displaying the pattern at the end of exposure time,
