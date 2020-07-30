@@ -1,5 +1,6 @@
 """
-Miscellaneous helper functions. As I collect many relating to a certain area, these can be split into topic specific files
+Miscellaneous helper functions. As I collect many relating to a certain area, these can be split into topic
+specific modules.
 """
 
 import numpy as np
@@ -373,7 +374,7 @@ def load_images(fnames, slice_indices):
     return imgs
 
 def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata=None,
-              axes_order='ZYX', hyperstack=False):
+              axes_order='ZYX', hyperstack=False, **kwargs):
     """
     Save an nD NumPy array to a tiff file
 
@@ -413,7 +414,7 @@ def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata
     if hyperstack:
         img = tiffile.transpose_axes(img, axes_order, asaxes='TZCYXS')
 
-    tiffile.imwrite(save_fname, img.astype(dtype), imagej=True)
+    tiffile.imwrite(save_fname, img.astype(dtype), imagej=True, **kwargs)
 
 def parse_imagej_tiff_tag(tag):
     """

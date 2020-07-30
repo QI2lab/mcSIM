@@ -1,10 +1,13 @@
+"""
+Tools for simulating diffraction of digital mirror device (DMD)
+"""
 # from . import analysis_tools as tools
 import analysis_tools as tools
+
 import os
 import numpy as np
 import scipy.optimize
 import pickle
-
 import joblib
 from functools import partial
 
@@ -18,7 +21,7 @@ from matplotlib.patches import Circle
 def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
                  tx_in, ty_in, txs_out, tys_out, is_coherent=True):
     """
-    Simulate light diffracted from a digital mirror device (DMD). We assume that the body of the device is in the xy
+    Simulate plane wave diffracted from a digital mirror device (DMD). We assume that the body of the device is in the xy
     plane with the negative z- unit vector defining the plane's normal. We suppose the device has rectangular pixels with sides
     parallel to the x- and y-axes. We further suppose a given pixel (centered at (0,0))
     swivels about the vector n = [1, 1, 0]/sqrt(2) by angle gamma, i.e. the direction x-y is the most interesting one.

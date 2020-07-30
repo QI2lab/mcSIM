@@ -1,12 +1,13 @@
-# my tools
+"""
+Tools for reconstructing SIM data
+"""
 # from . import analysis_tools as tools
 # from . import fit_psf as psf
 # from . import affine as affine
+# from . import psd
 import analysis_tools as tools
 import fit_psf as psf
 import affine
-# other tools
-# from . import psd
 import psd
 
 # general imports
@@ -16,6 +17,7 @@ import time
 import datetime
 import warnings
 import shutil
+import joblib
 
 # numerical tools
 import numpy as np
@@ -38,8 +40,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from matplotlib.colors import LogNorm
 import matplotlib.patches
-
-import joblib
 
 def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, excitation_wavelengths,
                        affine_data_paths, otf_data_fname, dmd_pattern_data_fpath,
@@ -141,9 +141,12 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
     if use_scmos_cal:
         with open(scmos_calibration_file, 'rb') as f:
             data = pickle.load(f)
-        gainmap = data[0]
-        means = data[1]
-        varmap = data[2]
+        # gainmap = data[0]
+        # means = data[1]
+        # varmap = data[2]
+        gainmap = data['gain']
+        means = data['mean']
+        varmap = data['variance']
 
     # ############################################
     # SIM images
@@ -180,6 +183,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 
         # load metadata
         metadata, dims, summary = tools.parse_mm_metadata(rpath)
+        start_time = datetime.datetime.strptime(summary['StartTime'],  '%Y-%d-%m;%H:%M:%S.%f')
         nz = dims['z']
         nxy = dims['position']
         nt = dims['time']
@@ -228,8 +232,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                         affine.xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0], frqs_dmd[kk, ii, 1],
                                                          phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], roi, xform)
 
-            # TODO: somehow my phase guess is backwards and I don't understand why! Fix it and remove this!
-            phases_guess = np.mod(-phases_guess, 2*np.pi)
+            # phases_guess = np.mod(-phases_guess, 2*np.pi)
 
             # convert from 1/mirrors to 1/um
             frqs_guess = frqs_guess / pixel_size
@@ -280,10 +283,10 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 
                         if saving and not save_tif_stack:
                             fname = os.path.join(sim_results_path, "sim_os_%s.tif" % file_identifier)
-                            tools.save_tiff(r.imgs_os, fname, dtype='float32')
+                            tools.save_tiff(r.imgs_os, fname, dtype='float32', datetime=start_time)
 
                             fname = os.path.join(sim_results_path, "widefield_%s.tif" % file_identifier)
-                            tools.save_tiff(r.widefield, fname, dtype='float32')
+                            tools.save_tiff(r.widefield, fname, dtype='float32', datetime=start_time)
                         else:
                             # store widefield and os
                             imgs_os.append(r.imgs_os)
@@ -297,10 +300,10 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 
                             if saving and not save_tif_stack:
                                 fname = os.path.join(sim_results_path, "sim_sr_%s.tif" % file_identifier)
-                                tools.save_tiff(r.img_sr, fname, dtype='float32')
+                                tools.save_tiff(r.img_sr, fname, dtype='float32', datetime=start_time)
 
                                 fname = os.path.join(sim_results_path, "deconvolved_%s.tif" % file_identifier)
-                                tools.save_tiff(r.widefield_deconvolution, fname, dtype='float32')
+                                tools.save_tiff(r.widefield_deconvolution, fname, dtype='float32', datetime=start_time)
                             else:
                                 # store sr and deconvolved
                                 imgs_sr.append(r.img_sr)
@@ -329,15 +332,14 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
         # save data
         # #################################
         if saving and save_tif_stack:
+
             # todo: want to include metadata in tif.
-            # currently saving as stack, but may want individual images.
 
             fname = tools.get_unique_name(os.path.join(sim_results_path, 'widefield.tif'))
             imgs_wf = np.asarray(imgs_wf)
-            # wf_to_save = np.reshape(imgs_wf, [ncolors, nz, nt, imgs_wf[0].shape[-2], imgs_wf[0].shape[-1]])
-            # tools.save_tiff(wf_to_save, fname, dtype='float32', axes_order="CZTYX", hyperstack=True)
             wf_to_save = np.reshape(imgs_wf, [ncolors, nt, nz, imgs_wf[0].shape[-2], imgs_wf[0].shape[-1]])
-            tools.save_tiff(wf_to_save, fname, dtype='float32', axes_order="CTZYX", hyperstack=True)
+            tools.save_tiff(wf_to_save, fname, dtype='float32', axes_order="CTZYX", hyperstack=True,
+                            datetime=start_time)
 
             # fname = tools.get_unique_name(os.path.join(sim_results_path, 'widefield_maxproj.tif'))
             # wf_max_proj = np.max(wf_to_save, axis=2)
@@ -345,24 +347,23 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 
             fname = tools.get_unique_name(os.path.join(sim_results_path, 'sim_os.tif'))
             imgs_os = np.asarray(imgs_os)
-            # sim_os = np.reshape(imgs_os, [ncolors, nz, nt, imgs_os[0].shape[-2], imgs_os[0].shape[-1]])
-            # tools.save_tiff(sim_os, fname, dtype='float32', axes_order="CZTYX", hyperstack=True)
             sim_os = np.reshape(imgs_os, [ncolors, nt, nz, imgs_os[0].shape[-2], imgs_os[0].shape[-1]])
-            tools.save_tiff(sim_os, fname, dtype='float32', axes_order="CTZYX", hyperstack=True)
+            tools.save_tiff(sim_os, fname, dtype='float32', axes_order="CTZYX", hyperstack=True,
+                            datetime=start_time)
 
             if not widefield_only:
                 fname = tools.get_unique_name(os.path.join(sim_results_path, 'sim_sr.tif'))
                 imgs_sr = np.asarray(imgs_sr)
-                # sim_to_save = np.reshape(imgs_sr, [ncolors, nz, nt, imgs_sr[0].shape[-2], imgs_sr[0].shape[-1]])
-                # tools.save_tiff(sim_to_save, fname, dtype='float32', axes_order="CZTYX", hyperstack=True)
                 sim_to_save = np.reshape(imgs_sr, [ncolors, nt, nz, imgs_sr[0].shape[-2], imgs_sr[0].shape[-1]])
-                tools.save_tiff(sim_to_save, fname, dtype='float32', axes_order="CTZYX", hyperstack=True)
+                tools.save_tiff(sim_to_save, fname, dtype='float32', axes_order="CTZYX", hyperstack=True,
+                                datetime=start_time)
 
                 fname = tools.get_unique_name(os.path.join(sim_results_path, 'deconvolved.tif'))
                 imgs_deconvolved = np.asarray(imgs_deconvolved)
                 deconvolved_to_save = np.reshape(imgs_deconvolved, [ncolors, nt, nz, imgs_deconvolved[0].shape[-2],
                                                                     imgs_deconvolved[0].shape[-1]])
-                tools.save_tiff(deconvolved_to_save, fname, dtype='float32', axes_order='CTZYX', hyperstack=True)
+                tools.save_tiff(deconvolved_to_save, fname, dtype='float32', axes_order='CTZYX', hyperstack=True,
+                                datetime=start_time)
 
     return imgs_sr, imgs_wf, imgs_deconvolved, imgs_os, r
 

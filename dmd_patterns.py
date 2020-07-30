@@ -1,12 +1,13 @@
 """
 Generate SIM patterns using lattice periodicity vectors Va and Vb, and duplicating roi_size single unit cell.
-See the supplemental material of doi: 10.1038/nmeth.1734 for more information.
+See the supplemental material of doi: 10.1038/nmeth.1734 for more discussion of similar approaches.
+
 Note: we interpret the pattern params(x, y) = M[i_y, i_x], where M is the matrix representing the pattern. matplotlib
 will display the matrix with i_y = 1 on top, so the pattern we really want is the matrix flipped along the first
 dimension.
 
-# todo: some vectors and etc. in this are passed around as lists. Probably prefer to pass them around as arrays instead.
-# todo: at some point maybe better to make a class for a pattern. This would store vectors, unit cell, etc.
+# todo: some vectors and etc. in this are passed around as lists. Prefer to pass them around as arrays instead.
+# todo: maybe better to make a class for a pattern. This could store lattice vectors, unit cell, etc.
 """
 
 import os

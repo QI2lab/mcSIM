@@ -1,13 +1,15 @@
-'''Periodic & smooth image decomposition
+"""Periodic & smooth image decomposition
 
-Code taken from https://github.com/jacobkimmel/ps_decomp
+Code included here for convenience with permission from the authors
+https://github.com/jacobkimmel/ps_decomp
 
 References
 ----------
 Periodic Plus Smooth Image Decomposition
 Moisan, L. J Math Imaging Vis (2011) 39: 161.
 doi.org/10.1007/s10851-010-0227-1
-'''
+"""
+
 import numpy as np
 
 def periodic_smooth_decomp(I: np.ndarray) -> (np.ndarray, np.ndarray):
