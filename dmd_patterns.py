@@ -15,8 +15,8 @@ import numpy as np
 from PIL import Image
 from scipy import fftpack
 import scipy.signal
-#from skimage.feature import peak_local_max
 import pickle
+import copy
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
@@ -255,8 +255,15 @@ def get_sim_unit_cell(vec_a, vec_b, nphases):
 
 def get_unit_cell(vec_a, vec_b):
     """
-    Generate a single unit cell of DMD pattern for given vectors. This is a square array with NaNs at positions outside
-    of the unit cell, and zeros at points in the cell.
+    Generate a mask which represents one unit cell of a pattern for given vectors.
+    This mask is a square array with NaNs at positions outside of the unit cell, and
+    zeros at points in the cell.
+
+    The unit cell is the area enclosed by [0, vec_a, vec_b, vec_a + vec_b]. For pixels, we say that
+    an entire pixel is within the cell if its center is. For a pixel with center exactly on one of the
+    edges of the cell, we say it is inside if it lies on the lines from [vec_b, vec_a + vec_b] or
+    [vec_a, vec_a + vec_b] and outside of its lies on the lines from [0, vec_a] or [0, vec_b]. This
+    choice avoids including pixels twice. The one exception: (0,  0) is always in the cell.
 
     :param vec_a: [dxa, dya] list or numpy array
     :param vec_b: [dxb, dyb] list or numpy array
@@ -499,8 +506,7 @@ def get_sim_frqs(vec_a, vec_b):
 
 def get_sim_phase(vec_a, vec_b, nphases, phase_index, pattern_size, origin='fft'):
     """
-    Get phase of SIM pattern.  assuming the same coordinates as the FFT does. In particular, the origin is
-    near the center of the pattern.
+    Get phase of dominant frequency component in the SIM pattern.
 
     P(x, y) = 0.5 * (1 + cos(2pi*f_x*x + 2pi*f_y*y + phi)
 
@@ -545,17 +551,17 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
     :return fcomponent: fourier component of pattern at frq_vector
     :return frq_vector: recp_vec_a * n + recp_vec_b * m
     """
-    recp_vect_a, recp_vect_b = get_reciprocal_vects(vec_a, vec_b, mode='frequency')
 
+    recp_vect_a, recp_vect_b = get_reciprocal_vects(vec_a, vec_b, mode='frequency')
     frq_vector = n * recp_vect_a + m * recp_vect_b
 
     # fourier component is integral over unit cell
     xxs, yys = np.meshgrid(x, y)
-    fcomponent = np.nansum(unit_cell * np.exp(-1j * 2 * np.pi * (frq_vector[0] * xxs + frq_vector[1] * yys)))
+    fcomponent = np.nansum(unit_cell * np.exp(-1j*2*np.pi * (frq_vector[0] * xxs + frq_vector[1] * yys)))
 
     # correct phase for start coord
     start_coord = np.array(vec_b) / nphases * phase_index
-    phase = np.angle(fcomponent) + 2 * np.pi * start_coord.dot(frq_vector)
+    phase = np.angle(fcomponent) - 2 * np.pi * start_coord.dot(frq_vector)
 
     if origin == 'corner':
         pass
@@ -756,21 +762,24 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
     nrows = 2
     ncols = 2
     lims = [1e-4, 1]
-    space_lims = [-2*fmax, 2*fmax]
+    msize = 2
 
     # fourier components fo electric field
     ax = plt.subplot(nrows, ncols, 1)
+    ax.set_facecolor((0., 0., 0.))
     ax.axis('equal')
-    plt.scatter(vecs[:, :, 0].ravel(), vecs[:, :, 1].ravel(), c=plot_scale(np.abs(efield_fc)).ravel(),
+
+    plt.scatter(vecs[:, :, 0].ravel(), vecs[:, :, 1].ravel(),
+                s=msize, c=plot_scale(np.abs(efield_fc)).ravel(),
                 norm=matplotlib.colors.Normalize(vmin=plot_scale(lims[0])), vmax=plot_scale(lims[1]))
 
     plt.scatter([recp_va[0], recp_vb[0]], [recp_va[1], recp_vb[1]], edgecolor='r', facecolor='none')
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0, ls='--')
+    circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='r', fill=0, ls='-')
     ax.add_artist(circ)
 
-    plt.xlim(space_lims)
-    plt.ylim(space_lims)
+    plt.xlim([-fmax, fmax])
+    plt.ylim([-fmax, fmax])
     cb = plt.colorbar()
     plt.clim(plot_scale(lims))
 
@@ -797,19 +806,24 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
 
     # intensity, real space
     ax = plt.subplot(nrows, ncols, 2)
+    ax.set_facecolor((0.,0.,0.))
     ax.axis('equal')
 
-    plt.scatter(vecs[:, :, 0].ravel(), vecs[:, :, 1].ravel(), c=plot_scale(np.abs(int_fc).ravel()),
+    plt.scatter(vecs[:, :, 0].ravel(), vecs[:, :, 1].ravel(),
+                s=msize, c=plot_scale(np.abs(int_fc).ravel()),
                 norm=matplotlib.colors.Normalize(vmin=plot_scale(lims[0])), vmax=plot_scale(lims[1]))
     plt.scatter([recp_va[0], recp_vb[0]], [recp_va[1], recp_vb[1]], edgecolor='r', facecolor='none')
 
-    circ = matplotlib.patches.Circle((0, 0), radius=(2*fmax), color='k', fill=0, ls='--')
+    circ = matplotlib.patches.Circle((0, 0), radius=(2*fmax), color='r', fill=0, ls='-')
     ax.add_artist(circ)
+
+    circ2 = matplotlib.patches.Circle((0, 0), radius=(fmax), color='r', fill=0, ls='-')
+    ax.add_artist(circ2)
 
     cb = plt.colorbar()
     plt.clim(plot_scale(lims))
-    plt.xlim(space_lims)
-    plt.ylim(space_lims)
+    plt.xlim([-2*fmax, 2*fmax])
+    plt.ylim([-2*fmax, 2*fmax])
 
     plt.xlabel('x-frequency (1/mirror)')
     plt.ylabel('y-frequency (1/mirror)')
@@ -832,6 +846,50 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
         cb.set_label('fourier weight')
 
     return figh
+
+# working with grayscale patterns
+def binarize(pattern_gray, mode="floyd-steinberg"):
+    """
+    Binarize a gray scale pattern
+
+    :param pattern_gray: gray scale pattern, with values in the range [0, 1]
+    :param mode: "floyd-steinberg" to specify the Floyd-Steinberg error diffusion algorithm, "random" to use
+    a random dither, or "round" to round to the nearest value
+    :return pattern_binary: binary approximation of pattern_gray
+    """
+
+    pattern_gray = copy.deepcopy(pattern_gray)
+
+    if np.any(pattern_gray) > 1 or np.any(pattern_gray) < 0:
+        raise Exception("pattern values must be in [0, 1]")
+
+    if mode == "floyd-steinberg":
+        ny, nx = pattern_gray.shape
+
+        pattern_bin = np.zeros(pattern_gray.shape, dtype=np.bool)
+
+        for ii in range(ny):
+            for jj in range(nx):
+                pattern_bin[ii, jj] = np.round(pattern_gray[ii, jj])
+                err = pattern_gray[ii, jj] - pattern_bin[ii, jj]
+
+                if jj < (nx  - 1):
+                    pattern_gray[ii, jj+1] += err * 7/16
+
+                if ii < (ny - 1):
+                    if jj > 0:
+                        pattern_gray[ii + 1, jj - 1] += err * 3/16
+                    pattern_gray[ii + 1, jj] += err * 5/16
+                    if jj < (ny - 1):
+                        pattern_gray[ii + 1, jj + 1] += err * 1/16
+    elif mode == "random":
+        pattern_bin = np.asarray(np.random.binomial(1, pattern_gray), dtype=np.bool)
+    elif mode == "round":
+        pattern_bin = np.asarray(np.round(pattern_gray), dtype=np.bool)
+    else:
+        raise Exception("mode must be 'floyd-steinberg', 'random', or 'round' but was '%s'" % mode)
+
+    return pattern_bin
 
 # utility functions
 def min_angle_diff(angle1, angle2, mode='normal'):
