@@ -14,19 +14,6 @@ import matplotlib.widgets
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
 
-class dmd_simulation():
-    # todo: work in progress.
-    def __init__(self, gamma_on, gamma_off, dx, dy, wx, wy):
-        self.gamma_on = gamma_on
-        self.gamma_off = gamma_off
-        self.dx = dx
-        self.dy = dy
-        self.wx = wx
-        self.wy = wy
-
-    def simulate_dmd_diffraction(self, wavelength, pattern, tx_in, ty_in, tx_out, ty_out):
-        pass
-
 # main simulation function and important auxiliary functions
 def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
                  tx_in, ty_in, txs_out, tys_out, is_coherent=True):
@@ -365,11 +352,8 @@ def solve_blaze_condition(tp_in, tm_in, gamma):
     :return tp_out: output angles (in general there will be two solutions)
     :return tm_out:
     """
-    #tp_in, tm_in = angle2pm(tx_in, ty_in)
     a = lambda tp, tm: get_unit_vector(tp, tm, mode='in')
     b = lambda tp, tm: get_unit_vector(tp, tm, mode='out')
-    # a = lambda tp, tm: np.array([np.tan(tp), np.tan(tm), 1]) / np.sqrt(np.tan(tp)**2 + np.tan(tm)**2 + 1)
-    # b = lambda tp, tm: np.array([np.tan(tp), np.tan(tm), -1]) / np.sqrt(np.tan(tp) ** 2 + np.tan(tm) ** 2 + 1)
 
     f1 = lambda tp, tm: a(tp_in, tm_in)[0] - b(tp, tm)[0]
     f2 = lambda tp, tm: (a(tp_in, tm_in)[1] - b(tp, tm)[1]) / (a(tp_in, tm_in)[2] - b(tp, tm)[2]) - np.tan(gamma)
@@ -400,7 +384,11 @@ def solve_diffraction_condition(tx_in, ty_in, dx, dy, wavelength, max_order=4):
     :param dy:
     :param wavelength: in the same units as dx, dy
     :param max_order: will solve for all orders (i, j), for i and j in  [-max_order, ..., 0, ... max_order]
-    :return:
+
+    :return tx_outs:
+    :return ty_outs:
+    :return nx:
+    :return ny:
     """
 
     # expected diffraction peaks
@@ -678,159 +666,6 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
             'sinc_efield_off': sinc_efield_off, 'diffraction_efield': diffraction_efield}
 
     return data
-
-def find_peaks_sim1d(data):
-    """
-    Plot peak positions for main and sidepeaks in SIM data.
-    #todo: dumped code from simulate_1d() here during refactoring. Need to make work.
-    :return:
-    """
-
-    # todo: unpack data
-
-    n_wavelens = len(wavelengths)
-
-    # find peaks, most naive method
-    for ii in range(n_wavelens):
-
-        # diffraction peaks
-        # todo: get from diffraction fn now
-        tout_peak_pos, peak_ht, peak_ind = find_peaks(diffraction_int[:, ii], t45s_out[kk])
-
-        if tout_peak_pos.size != 0:
-            # todo: when replace with diffraction condition, no need to do this filtering.
-            # only keep peaks within certain height of max
-            inds_keep = peak_ht > 0.01 * np.max(peak_ht)
-            tout_peak_pos = tout_peak_pos[inds_keep]
-            peak_ht = peak_ht[inds_keep]
-            peak_ind = peak_ind[inds_keep]
-
-            # closest diffraction peak to blaze angle
-            closest_peak_ind = np.argmin(abs(tout_peak_pos - t45s_blaze_on[kk]))
-
-            peak_locs_all[kk, 1, ii] = tout_peak_pos[closest_peak_ind]
-            peak_heights_all[kk, 1, ii] = peak_ht[closest_peak_ind]
-
-            # find side peaks
-            tout_side_peaks, side_peak_ht, side_peak_ind = find_peaks(np.abs(efields[:, ii])**2, t45s_out[kk])
-            inds_keep = side_peak_ht > 0.0001 * np.max(side_peak_ht)
-            tout_side_peaks = tout_side_peaks[inds_keep]
-            side_peak_ht = side_peak_ht[inds_keep]
-            side_peak_ind = side_peak_ind[inds_keep]
-
-            main_peak_ind = np.argmin(np.abs(tout_side_peaks - peak_locs_all[kk, 1, ii]))
-
-            # save peak locs and heights
-            try:
-                peak_locs_all[kk, 0, ii] = tout_side_peaks[main_peak_ind - 1]
-                peak_heights_all[kk, 0, ii] = side_peak_ht[main_peak_ind - 1]
-            except:
-                # if sidepeak index doesn't exist....
-                peak_locs_all[kk, 0, ii] = np.nan
-                peak_heights_all[kk, 0, ii] = np.nan
-
-            try:
-                peak_locs_all[kk, 2, ii] = tout_side_peaks[main_peak_ind + 1]
-                peak_heights_all[kk, 2, ii] = side_peak_ht[main_peak_ind + 1]
-            except:
-                peak_locs_all[kk, 2, ii] = np.nan
-                peak_heights_all[kk, 2, ii] = np.nan
-
-        else:
-            peak_locs_all[kk, :, ii] = np.nan
-            peak_heights_all[kk, :, ii] = np.nan
-
-    # find largest diffraction peak for each color
-
-        # peak locations vs input angle
-        # no point in plotting summary if we have only one angle
-
-        figh = plt.figure(figsize=(16,12))
-        plt.suptitle('DMD performance for multiple colors')
-
-        nrows = 1
-        ncols = 2
-
-        ax = plt.subplot(nrows, ncols, 1)
-        hs = []
-        for ii in range(n_wavelens):
-            h = plt.plot(t45_ins * 180 / np.pi, peak_locs_all[:, 1, ii] * 180 / np.pi, color=colors[ii])
-            plt.plot(t45_ins * 180 / np.pi, peak_locs_all[:, [0, 2], ii] * 180 / np.pi, '--', color=colors[ii])
-            hs.append(h)
-
-        h1 = plt.plot(t45_ins * 180 / np.pi, t45s_blaze_on * 180 / np.pi, 'k:')
-        # h2 = plt.plot(t45_ins * 180/np.pi, t45s_blaze_off * 180/np.pi, 'k--')
-        h3 = plt.plot(t45_ins * 180 / np.pi, t45s_diff_zero * 180 / np.pi, 'm')
-        hs = hs + [h1, h3]
-
-        leg = [str(l * 1e9) for l in wavelengths] + ['blaze ON', '0th order']
-
-        plt.legend(hs, leg)
-        plt.xlabel('t45 in (deg)')
-        plt.ylabel('t45 out (deg)')
-        plt.title('peak locations vs input angle')
-
-        # side peak imbalance
-        ax = plt.subplot(nrows, ncols, 2)
-        side_peak_imb = peak_heights_all[:, 0, :] / peak_heights_all[:, 2, :]
-
-        side_peak_imb[side_peak_imb > 1] = 1 / side_peak_imb[side_peak_imb > 1]
-        side_peak_imb = np.sqrt(side_peak_imb)
-
-        for ii in range(n_wavelens):
-            plt.plot(t45_ins * 180 / np.pi, side_peak_imb[:, ii], color=colors[ii])
-
-        plt.legend([str(l * 1e9) for l in wavelengths])
-        plt.xlabel('t45 in (deg)')
-        plt.ylabel('imbalance')
-        plt.title('side peak  electric field imbalance vs input angle')
-
-def find_peaks(x, t):
-    """
-    Find peaks in 1D data
-    # todo: test or delete
-
-    :param x:
-    :param t:
-    :return:
-    """
-
-    if x.size != t.size:
-        raise Exception('x and t must be the same size')
-
-    # if x.shape[0] > 1 and t.shape[1] > 1:
-    #     t = np.transpose(t)
-    # elif x.shape[1] > 1 and t.shape[0] > 1:
-    #     t = np.transpose(t)
-
-    # take derivative
-    dxdt = (x[1:] - x[:-1]) / (t[1:] - t[:-1])
-    td = 0.5 * (t[1:] - t[:-1])
-
-    # identify zero crossingings
-    # bool_zc(ii) = 1 if zero crossing between dxdt(ii-1) and dxdt(ii)
-    bool_zc = (dxdt > 0) * np.roll(dxdt < 0, 1) + \
-              (dxdt < 0) * np.roll(dxdt > 0, 1)
-    bool_zc[0] = 0 # to eliminate circular aspect of circshift.
-    bool_zc = np.concatenate((bool_zc, np.array([0])))
-
-    # for dxdt, td(ii) = 0.5(t(ii+1) + t(ii)), so if
-    # bool_zc(ii) = 1, i.e. the zero crossing is definitely in
-    #(td(ii-1), td(ii)) = ( 0.5*(t(ii) - t(ii-1)), 0.5*(t(ii+1) - t(ii))
-    # then it must be at t(ii).
-    # on the other hand, if we find an actual zero at td(ii), then either
-    # t(ii+1) or t(ii) could be the peak. We will take t(ii) for ease.
-    inds = np.arange(len(t))
-    # inds_peaks = inds[bool_zc == 1]
-
-    # peak data
-    # locs = t[inds_peaks]
-    # heights = x[inds_peaks]
-    locs = t[bool_zc > 0]
-    heights = x[bool_zc > 0]
-    inds_peaks = inds[bool_zc > 0]
-
-    return locs, heights, inds_peaks
 
 def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_simulation', figsize=(18, 14)):
     """
