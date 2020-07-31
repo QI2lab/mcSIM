@@ -19,7 +19,8 @@ import pickle
 import analysis_tools as tools
 # from . import analysis_tools as tools
 
-# affine matrix parametrizations
+
+# affine matrix parameterizations
 def xform2params(affine_mat):
     """
     Parametrize affine transformation in terms of rotation angles, magnifications, and offsets.
@@ -28,8 +29,10 @@ def xform2params(affine_mat):
            0        ,    0        , 1
 
     Both theta_x and theta_y are measured CCW from the x-axis
-    :param affine_mat:
-    :return:
+
+    :param np.array affine_mat:
+
+    :return list[float]: [mx, theta_x, vx, my, theta_y, vy]
     """
     # get offsets
     vx = affine_mat[0, -1]
@@ -44,6 +47,7 @@ def xform2params(affine_mat):
     my = np.nanmean([affine_mat[1, 1] / np.cos(theta_y), -affine_mat[0, 1] / np.sin(theta_y)])
 
     return [mx, theta_x, vx, my, theta_y, vy]
+
 
 def inv_xform2params(affine_mat_inv):
     """
@@ -61,8 +65,9 @@ def inv_xform2params(affine_mat_inv):
             -sin(tx)/(My*cos(tx-ty), cos(tx)/(My*cos(tx-ty)), -(-Vx*sin(tx) + vy*cos(tx))/(My*cos(tx-ty))
                      0             ,             0          ,                  1
 
-    :param affine_mat_inv:
-    :return:
+    :param np.array affine_mat_inv:
+
+    :return list[float]: [mx, theta_x, vx, my, theta_y, vy]
     """
 
     # todo: why not just invert the matrix and apply xform2params?
@@ -74,8 +79,8 @@ def inv_xform2params(affine_mat_inv):
         theta_x = theta_x + np.pi
         theta_y = theta_y + np.pi
 
-    mx = 1 / (np.cos(theta_x - theta_y) * np.nanmean([ affine_mat_inv[0, 0] / np.cos(theta_y),
-                                                        affine_mat_inv[0, 1] / np.sin(theta_y)]))
+    mx = 1 / (np.cos(theta_x - theta_y) * np.nanmean([affine_mat_inv[0, 0] / np.cos(theta_y),
+                                                      affine_mat_inv[0, 1] / np.sin(theta_y)]))
     my = 1 / (np.cos(theta_x - theta_y) * np.nanmean([-affine_mat_inv[1, 0] / np.sin(theta_x),
                                                       affine_mat_inv[1, 1] / np.cos(theta_x)]))
 
@@ -87,6 +92,7 @@ def inv_xform2params(affine_mat_inv):
 
     return [mx, theta_x, vx, my, theta_y, vy]
 
+
 def params2xform(params):
     """
     Construct affine transformation from parameters. Inverse function for xform2params()
@@ -95,9 +101,9 @@ def params2xform(params):
         Mx * sin(tx),  My * cos(ty), vy
            0        ,    0        , 1
 
-    :param params: [Mx, theta_x, vx ,My, theta_y, vy]
+    :param list[float] params: [Mx, theta_x, vx ,My, theta_y, vy]
 
-    :return affine_xform:
+    :return np.array affine_xform:
     """
     # read parameters
     mx = params[0]
@@ -114,6 +120,7 @@ def params2xform(params):
 
     return affine_xform
 
+
 # transform functions/matrices under action of affine transformation
 def affine_xform_mat(mat, xform, img_coords, mode='nearest'):
     """
@@ -124,11 +131,10 @@ def affine_xform_mat(mat, xform, img_coords, mode='nearest'):
 
     # todo: change out_shape to a coordinate argument so I can directly generate e.g. a region of interest or etc.
 
-    :param mat: matrix in object space
-    :param xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [xo, yo]
-    :param out_size: size of image space matrix
+    :param np.array mat: matrix in object space
+    :param np.array xform: affine transformation which takes object space coordinates as input, [yi, xi] = T * [xo, yo]
     :param img_coords: (xi, yi) coordinates where the transformed matrix is evaluated.
-    :param mode: 'nearest' or 'interp'. 'interp' will produce better results if e.g. looking at phase content after
+    :param str mode: 'nearest' or 'interp'. 'interp' will produce better results if e.g. looking at phase content after
     affine transformation.
 
     :return mat_out: matrix in image space
@@ -189,6 +195,7 @@ def affine_xform_mat(mat, xform, img_coords, mode='nearest'):
 
     return mat_out
 
+
 def xform_fn(fn, xform, out_coords):
     """
     Given a function on object space, evaluate the corresponding image space function at out_coords
@@ -211,6 +218,7 @@ def xform_fn(fn, xform, out_coords):
     img = np.reshape(fn(x_o, y_o), x_img.shape)
 
     return img
+
 
 # modify affine xform
 def xform_shift_center(xform, cobj_new=None, cimg_new=None):
@@ -246,8 +254,18 @@ def xform_shift_center(xform, cobj_new=None, cimg_new=None):
 
     return xform
 
+
 # transform sinusoid parameters for coordinate shifts
 def phase_edge2fft(frq, phase, img_shape, dx=1):
+    """
+
+    :param list[float] or np.array frq:
+    :param float phase:
+    :param tuple or list img_shape:
+    :param float dx:
+
+    :return phase_fft:
+    """
 
     xft = tools.get_fft_pos(img_shape[1], dt=dx, centered=True, mode="symmetric")
     yft = tools.get_fft_pos(img_shape[0], dt=dx, centered=True, mode="symmetric")
@@ -255,13 +273,24 @@ def phase_edge2fft(frq, phase, img_shape, dx=1):
 
     return phase_fft
 
+
 def phase_fft2edge(frq, phase, img_shape, dx=1):
+    """
+
+    :param list[float] or np.array frq:
+    :param float phase:
+    :param tuple or list img_shape:
+    :param float dx:
+
+    :return phase_edge:
+    """
 
     xft = tools.get_fft_pos(img_shape[1], dt=dx, centered=True, mode="symmetric")
     yft = tools.get_fft_pos(img_shape[0], dt=dx, centered=True, mode="symmetric")
     phase_edge = xform_phase_translation(frq[0], frq[1], phase, [xft[0], yft[0]])
 
     return phase_edge
+
 
 def xform_phase_translation(fx, fy, phase, shifted_center):
     """
@@ -271,10 +300,10 @@ def xform_phase_translation(fx, fy, phase, shifted_center):
     then the phase transforms
     phase' = phase + 2*pi * (fx * cx + fy * cy)
 
-    :param fx: x-component of frequency
-    :param fy: y-component of frequency
-    :param phase:
-    :param shifted_center: shifted center in initial coordinates, [cx, cy]
+    :param float fx: x-component of frequency
+    :param float fy: y-component of frequency
+    :param float phase:
+    :param list[float] shifted_center: shifted center in initial coordinates, [cx, cy]
 
     :return phase_shifted:
     """
@@ -282,6 +311,7 @@ def xform_phase_translation(fx, fy, phase, shifted_center):
     cx, cy = shifted_center
     phase_shifted = np.mod(phase + 2*np.pi * (fx * cx + fy * cy), 2*np.pi)
     return phase_shifted
+
 
 # transform sinusoid parameters under full affine transformation
 def xform_sinusoid_params(fx_obj, fy_obj, phi_obj, affine_mat):
@@ -291,10 +321,11 @@ def xform_sinusoid_params(fx_obj, fy_obj, phi_obj, affine_mat):
     find the frequency and phase parameters for the corresponding function on image space,
     cos[2pi f_xi * x_i + 2pi f_yi * yi + phi_i]
 
-    :param fx_obj: x-component of frequency in object space
-    :param fy_obj: y-component of frequency in object space
-    :param phi_obj: phase in object space
-    :param affine_mat: affine transformation homogeneous coordinate matrix transforming points in object space to image space
+    :param float fx_obj: x-component of frequency in object space
+    :param float fy_obj: y-component of frequency in object space
+    :param float phi_obj: phase in object space
+    :param np.array affine_mat: affine transformation homogeneous coordinate matrix transforming
+     points in object space to image space
 
     :return fx_img: x-component of frequency in image space
     :return fy_img: y-component of frequency in image space
@@ -307,7 +338,9 @@ def xform_sinusoid_params(fx_obj, fy_obj, phi_obj, affine_mat):
 
     return fx_img, fy_img, phi_img
 
-def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat, input_origin="fft", output_origin="fft"):
+
+def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat,
+                              input_origin="fft", output_origin="fft"):
     """
     Transform sinusoid parameter from object space to a region of interest in image space.
 
@@ -321,16 +354,16 @@ def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat, i
     r': roi coordinates, with origin near the center of the roi (coordinates for fft)
     The frequencies don't care about the coordinate origin, but the phase does
 
-    :param fx: x-component of frequency in object space
-    :param fy: y-component of frequency in object space
-    :param phase: phase of pattern in object space coordinates system o or o'.
-    :param object_size: [sy, sx], size of object space, required to define origin of o'
-    :param img_roi: [ystart, yend, xstart, xend], region of interest in image space. Note: this region does not include
+    :param float fx: x-component of frequency in object space
+    :param float fy: y-component of frequency in object space
+    :param float phase: phase of pattern in object space coordinates system o or o'.
+    :param list[int] object_size: [sy, sx], size of object space, required to define origin of o'
+    :param list[int] img_roi: [ystart, yend, xstart, xend], region of interest in image space. Note: this region does not include
     the pixels at yend and xend! In coordinates with integer values the pixel centers, it is the area
     [ystart - 0.5*dy, yend-0.5*dy] x [xstart -0.5*dx, xend - 0.5*dx]
-    :param affine_mat: affine transformation matrix, which takes points from o -> i
-    :param input_origin: "fft" if phase is provided in coordinate system o', or "edge" if provided in coordinate sysem o
-    :param output_origin: "fft" if output phase should be in coordinate system r' or "edge" if in coordinate system r
+    :param np.array affine_mat: affine transformation matrix, which takes points from o -> i
+    :param str input_origin: "fft" if phase is provided in coordinate system o', or "edge" if provided in coordinate sysem o
+    :param str output_origin: "fft" if output phase should be in coordinate system r' or "edge" if in coordinate system r
 
     :return fx_xform: x-component of frequency in coordinate system r'
     :return fy_xform: y-component of frequency in coordinates system r'
@@ -342,7 +375,7 @@ def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat, i
         # xft = tools.get_fft_pos(object_size[1])
         # yft = tools.get_fft_pos(object_size[0])
         # phase_o = xform_phase_translation(fx, fy, phase, [xft[0], yft[0]])
-    elif input_origin =="edge":
+    elif input_origin == "edge":
         phase_o = phase
     else:
         raise Exception("input origin must be 'fft' or 'edge' but was '%s'" % input_origin)
@@ -371,6 +404,7 @@ def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat, i
 
     return fx_xform, fy_xform, phase_xform
 
+
 # deprecate this fn in favor of xform_sinusoid_params_roi()
 def get_roi_sinusoid_params(roi, fs, phi, dr=None):
     """
@@ -378,10 +412,10 @@ def get_roi_sinusoid_params(roi, fs, phi, dr=None):
 
     # todo: probably better to write this more generally for a change of center, rather than narrowly as roi shift
 
-    :param roi: [r1_start, r1_end, r2_start, r2_end, r3_start, ..., rn_end]
+    :param list[int] roi: [r1_start, r1_end, r2_start, r2_end, r3_start, ..., rn_end]
     :param fs: [f1, f2, ..., fn]
-    :param phi:
-    :param dr: [dr1, dr2, ..., drn]
+    :param float phi:
+    :param list[float] dr: [dr1, dr2, ..., drn]
     :return:
     """
 
@@ -400,6 +434,7 @@ def get_roi_sinusoid_params(roi, fs, phi, dr=None):
 
     return np.mod(phi_roi, 2*np.pi)
 
+
 # fit affine transformation
 def fit_affine_xform_points(from_pts, to_pts):
     """
@@ -409,13 +444,17 @@ def fit_affine_xform_points(from_pts, to_pts):
     Put this in roi_size form where Gaussian elimination is applicable by taking transpose of this,
     from_pts_aug^t * T^t = to_pts_aug^t
 
-    Based on method written by Jarno Elonen <elonen@iki.fi> in 2007 (Placed in Public Domain), which was in turn based
-    on the paper "Fitting affine and orthogonal transformations between two sets of points, by Helmuth Späth (2003).
+    Based on a`function <https://elonen.iki.fi/code/misc-notes/affine-fit/>` written by Jarno Elonen
+    <elonen@iki.fi> in 2007 (Placed in Public Domain),
+    which was in turn based on the paper "Fitting affine and orthogonal transformations between
+    two sets of points" Mathematical Communications 9 27-34 (2004) by Helmuth Späth, available
+    `here <https://hrcak.srce.hr/712>`
 
-    :param from_pts: list of lists [[x1, y1, ...], [x2, y2, ...]] or array, where each column represents roi_size point
+    :param list[list[float]] from_pts: list of lists [[x1, y1, ...], [x2, y2, ...]] or array, where each column represents roi_size point
     :param to_pts:
     :return soln:
-    :return affine_mat:
+
+    :return np.array affine_mat:
     """
 
     # input and output points as arrays
@@ -440,13 +479,15 @@ def fit_affine_xform_points(from_pts, to_pts):
 
     return soln, affine_mat
 
-def fit_affine_xform_mask(img, mask, init_params):
+
+def fit_affine_xform_mask(img, mask, init_params=None):
     """
     Fit affine transformation by comparing img with transformed images of mask
     :param img:
     :param mask:
     :param init_params:
-    :return:
+
+    :return np.array pfit:
     """
 
     if init_params is None:
@@ -470,22 +511,28 @@ def fit_affine_xform_mask(img, mask, init_params):
 
     return pfit
 
+
 def fit_barrel_distortion(from_pts, to_pts):
+    """
+
+    :param from_pts:
+    :param to_pts:
+    :return:
+    """
     raise Exception("todo: not implemented")
+
 
 def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd=None, debug=False):
     """
     Fit peak of fluorescence pattern
 
-    :param img:
-    :param img_sd:
+    :param np.array img:
+    :param centers:
     :param centers_init:
     :param indices_init:
-    :param centers:
-    :param debug:
-    :return fps:
-    :return chisqs:
-    :return successful_fits:
+    :param roi_size:
+    :param img_sd:
+    :param bool debug:
     """
 
     if img_sd is None:
@@ -596,8 +643,8 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd
         # guess point
         diff_a = ind_tuple[0] - nearest_ind_tuple[0]
         diff_b = ind_tuple[1] - nearest_ind_tuple[1]
-        center_guess = fps[nearest_ind_tuple[0], nearest_ind_tuple[1],
-                       1:3] + vec_a_guess * diff_a + vec_b_guess * diff_b
+        center_guess = fps[nearest_ind_tuple[0], nearest_ind_tuple[1], 1:3] + \
+                       vec_a_guess * diff_a + vec_b_guess * diff_b
         xc = int(center_guess[0])
         yc = int(center_guess[1])
 
@@ -646,6 +693,7 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd
 
     return fps, chisqs, successful_fits
 
+
 def get_affine_xform(fps, succesful_fits, dmd_centers):
     """
     Determine affine transformation from DMD to image space using the results of fit_pattern_peaks
@@ -673,15 +721,16 @@ def get_affine_xform(fps, succesful_fits, dmd_centers):
 
     return affine_xform
 
+
 def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, affine_xform, options):
     """
     Plot results of DMD affine transformation fitting using results of fit_pattern_peaks and get_affine_xform
 
-    :param img:
-    :param mask:
+    :param np.array img:
+    :param np.array mask:
     :param fps:
     :param chisqs:
-    :param successful_fits: boolean giving which fits we consider successful
+    :param bool succesful_fits: boolean giving which fits we consider successful
     :param dmd_centers:
     :param affine_xform:
     :param options:
@@ -719,7 +768,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
 
     # residual position error
     residual_dist_err = np.zeros((fps.shape[0], fps.shape[1])) * np.nan
-    residual_dist_err[succesful_fits] = np.sqrt( (xdmd_xform - xcam)**2 + (ydmd_xform - ycam)**2)
+    residual_dist_err[succesful_fits] = np.sqrt((xdmd_xform - xcam)**2 + (ydmd_xform - ycam)**2)
 
     # get mask transformed to image space
     img_coords = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
@@ -784,6 +833,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
 
     return fig
 
+
 # main function for estimating affine transform
 def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, options, roi_size=25,
                    export_fname="affine_xform", export_dir=None):
@@ -807,7 +857,8 @@ def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, optio
     """
 
     # fit points
-    fps, chisqs, succesful_fits = fit_pattern_peaks(img, pattern_centers, centers_init, indices_init, roi_size, img_sd=None, debug=False)
+    fps, chisqs, succesful_fits = fit_pattern_peaks(img, pattern_centers, centers_init, indices_init,
+                                                    roi_size, img_sd=None, debug=False)
     # get affine xforms
     affine_xform = get_affine_xform(fps, succesful_fits, pattern_centers)
 
@@ -826,6 +877,7 @@ def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, optio
     plt.show()
 
     return data, fig
+
 
 if __name__ == '__main__':
     pass
