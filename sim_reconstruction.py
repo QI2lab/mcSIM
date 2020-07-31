@@ -53,33 +53,39 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
     (images, affine transformations, SIM pattern information), selecting images to recombine from metadata, and
     saving results for SIM superresolution, deconvolution, widefield image, etc.
 
-    :param data_root_paths: list of directories where data is stored
-    :param pixel_size: pixel size in ums. If None, read pixel size from metadata
-    :param na: numerical aperture
-    :param emission_wavelengths: list of emission wavelengths
-    :param excitation_wavelengths: list of excitation wavelengths
-    :param affine_data_paths: list of paths to files storing data about affine transformations between DMD and camera
+    :param list data_root_paths: list of directories where data is stored
+    :param float pixel_size: pixel size in ums. If None, read pixel size from metadata
+    :param float na: numerical aperture
+    :param list emission_wavelengths: list of emission wavelengths
+    :param list excitation_wavelengths: list of excitation wavelengths
+    :param list affine_data_paths: list of paths to files storing data about affine transformations between DMD and camera
     space. [path_color_0, path_color_1, ...]. The affine data files store pickled dictionary objects. The dictionary
     must have an entry 'affine_xform' which contains the affine transformation matrix (in homogeneous coordinates)
-    :param otf_data_fname: path to file storing optical transfer function data. Data is a pickled dictionary object
+    :param str otf_data_fname: path to file storing optical transfer function data. Data is a pickled dictionary object
     and must have entry 'fit_params'.
-    :param dmd_pattern_data_fpath: list of paths to files storing data about DMD patterns for each color. Data is
+    :param list dmd_pattern_data_fpath: list of paths to files storing data about DMD patterns for each color. Data is
     stored in a pickled dictionary object which must contain fields 'frqs', 'phases', 'nx', and 'ny'
-    :param channel_inds: list of channel indices corresponding to each color. If set to None, will use [0, 1, ..., ncolors -1]
-    :param img_centers: list of centers for images in each data directory to be used in cropping [[cy, cx], ...]
-    :param crop_sizes: list of crop sizes for each data directory
-    :param saving: boolean, if True, save results
-    :param use_scmos_cal: boolean, if true correct camera counts to photons using calibration information
-    :param scmos_calibration_file: path to scmos calibration file. This should be a pickled file storing a list
+    :param list channel_inds: list of channel indices corresponding to each color. If set to None, will use [0, 1, ..., ncolors -1]
+    :param bool crop_image:
+    :param list img_centers: list of centers for images in each data directory to be used in cropping [[cy, cx], ...]
+    :param list or int crop_sizes: list of crop sizes for each data directory
+    :param bool use_scmos_cal: if true correct camera counts to photons using calibration information
+    :param str scmos_calibration_file: path to scmos calibration file. This should be a pickled file storing a list
     object [gainmap, means, varmap]
-    :param widefield_only: boolean, if true only produce widefield images but don't do full reconstruction. Useful
+    :param bool widefield_only: if true only produce widefield images but don't do full reconstruction. Useful
     for diagnostic purposes
+    :param int nangles:
+    :param int nphases:
+    :param bool npatterns_ignored: number of patterns to ignore at the start of each channel.
+    :param bool saving: if True, save results
+    :param bool save_tif_stack:
+    :param str sim_data_export_fname:
     :param **kwargs: passed through to reconstruction
 
-    :return imgs_sr:
-    :return imgs_wf:
-    :return imgs_deconvolved:
-    :return imgs_os:
+    :return np.ndarray imgs_sr:
+    :return np.ndarray imgs_wf:
+    :return np.ndarray imgs_deconvolved:
+    :return np.ndarray imgs_os:
     """
 
     nfolders = len(data_root_paths)
