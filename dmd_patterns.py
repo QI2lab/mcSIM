@@ -871,6 +871,156 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
 
     return figh
 
+# Lagrange-Gauss basis reduction
+def reduce_basis(va, vb):
+    """
+    Find the "smallest" set of basis vectors using Lagrange-Gauss basis reduction.
+
+    :param va:
+    :param vb:
+    :return:
+    """
+    va = np.array(va, copy=True)
+    va = va.reshape([2, ])
+
+    vb = np.array(vb, copy=True)
+    vb = vb.reshape([2, ])
+
+    Ba = np.linalg.norm(va)**2
+    mu = np.vdot(va, vb) / Ba
+    vb = vb - np.round(mu) * va
+    Bb = np.linalg.norm(vb)**2
+
+    swapped = -1
+    while (Bb < Ba):
+        va, vb = vb, va
+        swapped *= -1
+
+        Ba = Bb
+
+        mu = np.inner(va, vb) / Ba
+        vb = vb - np.round(mu) * va
+        Bb = np.linalg.norm(vb) ** 2
+
+    if swapped == 1:
+        va, vb = vb, va
+
+    return va, vb
+
+
+def reduce_recp_basis(va, vb):
+    """
+    Compute the shortest pair of reciprocal basis vectors. These vectors may not be dual to the lattice vectors
+    in the sense that vi * rsj = delta_{ij}, but they do form a basis for the reciprocal lattice vectors.
+
+    :param list or np.array va: lattice vector
+    :param list or np.array vb:
+    :return np.array rsa: reduced reciprocal vector a
+    :return np.array rsb: reduced reciprocal vector b
+
+    """
+    # todo: this this just equivalent to getting reciprocal vectors of the reduced basis vectors?
+    # rva, rvb = get_reciprocal_vects(va, vb)
+
+    # force integer coefficients. Since we know that can get reciprocal vectors from
+    # inverse of matrix of lattice vectors, they must have integer values divided by this determinant
+    # det = va[0] * vb[1] - va[1] * vb[0]
+    # rsa, rsb = reduce_basis(rva * det, rvb * det)
+    #
+    # rsa = rsa / det
+    # rsb = rsb / det
+
+    va, vb = reduce_basis(va, vb)
+    rsa, rsb = get_reciprocal_vects(va, vb)
+
+    return rsa, rsb
+
+
+def get_closest_lattice_vec(point, va, vb):
+    """
+    Find the closest lattice vector to point
+
+    todo: didn't absolutely verify this always gives closest vector
+    :param list or np.array point:
+    :param list or np.array va:
+    :param list or np.array vb:
+    :return int na_min:
+    :return int nb_min:
+    :return float diff:
+    """
+    point = np.array(point, copy=True)
+    point = point.reshape([2,])
+
+    # get reduced lattice basis vectors
+    var, vbr = reduce_basis(va, vb)
+
+    # get reduced reciprocal vectors
+    rva, rvb = get_reciprocal_vects(var, vbr)
+    frac_a = np.vdot(point, rva)
+    nas = [int(np.ceil(frac_a)), int(np.floor(frac_a))]
+
+    frac_b = np.vdot(point, rvb)
+    nbs = [int(np.ceil(frac_b)), int(np.floor(frac_b))]
+
+    # possible choices
+    diff = np.inf
+    for na in nas:
+        for nb in nbs:
+            v_diff = point - na * var - nb * vbr
+            diff_current = np.linalg.norm(v_diff)
+
+            if diff_current < diff:
+                nar_min = na
+                nbr_min = nb
+                diff = diff_current
+                vec = na*var + nb*vbr
+
+    # convert back to initial basis lattice vectors
+    # get reciprocal vectors
+    ra, rb = get_reciprocal_vects(va, vb)
+    # and how they are related to initial lattice vectors
+    var_ints = np.array([np.vdot(var, ra), np.vdot(var, rb)])
+    vbr_ints = np.array([np.vdot(vbr, ra), np.vdot(vbr, rb)])
+
+    na_min = int(np.round(nar_min * var_ints[0] + nbr_min * vbr_ints[0]))
+    nb_min = int(np.round(nar_min * var_ints[1] + nbr_min * vbr_ints[1]))
+
+    return vec, na_min, nb_min
+
+
+def get_closest_recip_vec(recp_point, va, vb):
+    """
+    Find the closest reciprocal lattive vector, f = na * rva + nb * rvb, to a given point in reciprocal space,
+    recp_point.
+
+    :param list or np.array recp_point:
+    :param list or np.array va:
+    :param list or np.array vb:
+
+    :return np.array vec: na * rva + nb * rvb
+    :return int na_min: na
+    :return int nb_min: nb
+    """
+
+    recp_point = np.array(recp_point, copy=True)
+    recp_point = recp_point.reshape([2, ])
+
+    va = np.array(va, copy=True)
+    va = va.reshape([2,])
+
+    vb = np.array(vb, copy=True)
+    vb = vb.reshape([2,])
+
+    det = va[0] * vb[1] - va[1] * vb[0]
+
+    rva, rvb = get_reciprocal_vects(va, vb)
+
+    # use get_closest_lattice_vec() function after scaling rva, rvb to have integer components
+    vec, na_min, nb_min = get_closest_lattice_vec(recp_point * det, rva * det, rvb * det)
+    vec = vec / det
+
+    return vec, na_min, nb_min
+
 
 # working with grayscale patterns
 def binarize(pattern_gray, mode="floyd-steinberg"):
@@ -878,7 +1028,8 @@ def binarize(pattern_gray, mode="floyd-steinberg"):
     Binarize a gray scale pattern
 
     :param np.array pattern_gray: gray scale pattern, with values in the range [0, 1]
-    :param str mode: "floyd-steinberg" to specify the Floyd-Steinberg error diffusion algorithm, "random" to use
+    :param str mode: "floyd-steinberg" to specify the Floyd-Steinberg error diffusion algorithm, "jjn" to use
+    the error diffusion algorithm of Jarvis, Judis, and Ninke https:doi.org/10.1016/S0146-664X(76)80003-2, "random" to use
     a random dither, or "round" to round to the nearest value
 
     :return np.array pattern_binary: binary approximation of pattern_gray
@@ -889,9 +1040,11 @@ def binarize(pattern_gray, mode="floyd-steinberg"):
     if np.any(pattern_gray) > 1 or np.any(pattern_gray) < 0:
         raise Exception("pattern values must be in [0, 1]")
 
-    if mode == "floyd-steinberg":
-        ny, nx = pattern_gray.shape
+    ny, nx = pattern_gray.shape
 
+    if mode == "floyd-steinberg":
+        # error diffusion Kernel =
+        # 1/16 * [[_ # 7], [3, 5, 1]]
         pattern_bin = np.zeros(pattern_gray.shape, dtype=np.bool)
 
         for ii in range(ny):
@@ -908,6 +1061,51 @@ def binarize(pattern_gray, mode="floyd-steinberg"):
                     pattern_gray[ii + 1, jj] += err * 5/16
                     if jj < (ny - 1):
                         pattern_gray[ii + 1, jj + 1] += err * 1/16
+    elif mode == "jjn":
+        # error diffusion Kernel =
+        # 1/48 * [[_, _, #, 7, 5], [3, 5, 7, 5, 3], [1, 3, 5, 3, 1]]
+        pattern_bin = np.zeros(pattern_gray.shape, dtype=np.bool)
+
+        for ii in range(ny):
+            for jj in range(nx):
+                pattern_bin[ii, jj] = np.round(pattern_gray[ii, jj])
+                err = pattern_gray[ii, jj] - pattern_bin[ii, jj]
+
+                if jj < (nx - 1):
+                    pattern_gray[ii, jj + 1] += err * 7/48
+                if jj < (nx - 2):
+                    pattern_gray[ii, jj + 2] += err * 5/48
+
+                if ii < (ny - 1):
+                    if jj > 1:
+                        pattern_gray[ii + 1, jj - 2] += err * 3/48
+
+                    if jj > 0:
+                        pattern_gray[ii + 1, jj - 1] += err * 5/48
+
+                    pattern_gray[ii + 1, jj] += err * 7/48
+
+                    if jj < (ny - 1):
+                        pattern_gray[ii + 1, jj + 1] += err * 5/48
+
+                    if jj < (ny - 2):
+                        pattern_gray[ii + 1, jj + 2] += err * 3/48
+
+            if ii < (ny - 2):
+                if jj > 1:
+                    pattern_gray[ii + 2, jj - 2] += err * 1/48
+
+                if jj > 0:
+                    pattern_gray[ii + 2, jj - 1] += err * 3/48
+
+                pattern_gray[ii + 2, jj] += err * 5/48
+
+                if jj < (ny - 1):
+                    pattern_gray[ii + 2, jj + 1] += err * 3/48
+
+                if jj < (ny - 2):
+                    pattern_gray[ii + 2, jj + 2] += err * 1/48
+
     elif mode == "random":
         pattern_bin = np.asarray(np.random.binomial(1, pattern_gray), dtype=np.bool)
     elif mode == "round":
