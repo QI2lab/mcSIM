@@ -307,14 +307,14 @@ def get_unit_cell(vec_a, vec_b):
         raise Exception("vec_a and vec_b are linearly dependent.")
 
     # handle case where vec_a = [dx, 0] and vec_b = [0, dy]
-    transposed = False
-    if vec_a[1] == 0:
-        vec_a = np.flip(vec_a)
-        vec_b = np.flip(vec_b)
-        transposed = True
+    # transposed = False
+    # if vec_a[1] == 0:
+    #     vec_a = np.flip(vec_a)
+    #     vec_b = np.flip(vec_b)
+    #     transposed = True
 
     # ensure x components are positive
-    # free to negative of these vectors
+    # free to take negative of these vectors
     if vec_a[0] < 0:
         vec_a = -vec_a
 
@@ -322,8 +322,9 @@ def get_unit_cell(vec_a, vec_b):
         vec_b = -vec_b
 
     # get slopes of these vectors
-    slope_a = vec_a[1] / vec_a[0]
-    slope_b = vec_b[1] / vec_b[0]
+    with np.errstate(divide='ignore'):
+        slope_a = vec_a[1] / vec_a[0]
+        slope_b = vec_b[1] / vec_b[0]
 
     # square array containing unit cell, with points not in unit cell nans
     dy = np.abs(vec_a[1]) + np.abs(vec_b[1])
@@ -331,9 +332,9 @@ def get_unit_cell(vec_a, vec_b):
     cell = np.zeros((dy, dx))
 
     # coordinates
-    x = list(range(dx))
-    y = list(range(dy))
-    shift = np.max([-vec_a[1], -vec_b[1]])
+    x = np.array(range(dx))
+    y = np.array(range(dy))
+    # shift = np.max([-vec_a[1], -vec_b[1]])
     if vec_a[1] < 0 and vec_b[1] >= 0:
         y = y + vec_a[1] + 1
     elif vec_a[1] >= 0 and vec_b[1] < 0:
@@ -359,20 +360,21 @@ def get_unit_cell(vec_a, vec_b):
         vmax_slope = vec_b
         vmin_slope = vec_a
 
-    # can get bit by roundoff errors
-    cell[yy > np.round(slope_max * xx, 12)] = np.nan
-    cell[yy < np.round(slope_min * xx, 12)] = np.nan
-    # line parallel to vec_a, but shifted to pass through 0 + vec_b
-    cell[yy <= np.round(slope_max * xx + (vmin_slope[1] - slope_max * vmin_slope[0]), 12)] = np.nan
-    # line parallel to vec_b, but shifted to pass through 0 + vec_a
-    cell[yy >= np.round(slope_min * xx + (vmax_slope[1] - slope_min * vmax_slope[0]), 12)] = np.nan
+    with np.errstate(invalid='ignore'):
+        # can get bit by roundoff errors
+        cell[yy > np.round(slope_max * xx, 12)] = np.nan
+        cell[yy < np.round(slope_min * xx, 12)] = np.nan
+        # line parallel to vec_a, but shifted to pass through 0 + vec_b
+        cell[yy <= np.round(slope_max * xx + (vmin_slope[1] - slope_max * vmin_slope[0]), 12)] = np.nan
+        # line parallel to vec_b, but shifted to pass through 0 + vec_a
+        cell[yy >= np.round(slope_min * xx + (vmax_slope[1] - slope_min * vmax_slope[0]), 12)] = np.nan
 
     # check unit cell has correct volume
     assert np.nansum(np.logical_not(np.isnan(cell))) == cell_volume
 
-    if transposed:
-        cell = np.transpose(cell)
-        x, y = y, x
+    # if transposed:
+    #     cell = np.transpose(cell)
+    #     x, y = y, x
 
     return cell, x, y
 
@@ -684,14 +686,17 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
                 efield_fc[ii, jj] = efield_fc[ii, jj] * blaze_envelope[ii, jj]
 
     # divide by volume of unit cell (i.e. maximum possible Fourier component)
-    efield_fc = efield_fc / np.nansum(unit_cell >= 0)
+    with np.errstate(invalid='ignore'):
+        efield_fc = efield_fc / np.nansum(unit_cell >= 0)
 
     # band limit
     frqs = np.linalg.norm(vecs, axis=2)
     efield_fc = efield_fc * (frqs <= fmax)
 
     # intensity fourier components from autocorrelation
-    intensity_fc = scipy.signal.fftconvolve(efield_fc, efield_fc, mode='same')
+    # intensity_fc = scipy.signal.fftconvolve(efield_fc, efield_fc, mode='same')
+    # I(f) = convolution(E(f), E^*(-f))
+    intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
 
     return intensity_fc, efield_fc, ns, ms, vecs
 
