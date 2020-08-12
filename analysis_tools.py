@@ -568,11 +568,17 @@ def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
     Take azimuthal average of img. All points which have a dist_grid value lying
     between successive bin_edges will be averaged. Points are considered to lie within a bin
     if their value is strictly smaller than the upper edge, and greater than or equal to the lower edge.
-    :param img: 2D image
-    :param dist_grid:
-    :param bin_edges:
-    :param weights:
-    :return:
+    :param np.array img: 2D image
+    :param np.array dist_grid:
+    :param np.array or list bin_edges:
+    :param np.array weights:
+
+    :return az_avg:
+    :return sdm:
+    :return dist_mean:
+    :return dist_sd:
+    :return npts_bin:
+    :return masks:
     """
 
     # there are many possible approaches for doing azimuthal averaging. Naive way: for each mask az_avg = np.mean(img[mask])
@@ -1355,57 +1361,6 @@ def poly(xx, yy, params, max_orders=(1, 1)):
             val += params[2 + ii * ny + jj] * (xx - cx) ** ii * (yy - cy) ** jj
 
     return val
-
-def fit_polynomial(img, max_orders=(1, 1), init_params=None, fixed_params=None, sd=None, xx=None, yy=None, bounds=None):
-    """
-    # todo: obviously this is not a good approach since it is using a nonlinear least squares solver to solve a linear problem...
-    # todo: implement using np.linalg.lstsq
-
-    :param img:
-    :param max_orders:
-    :param init_params: [cx, cy, b00, b01, ..., b0N, b10, ...bMN], where P(x) = \sum_{n,m} bnm (X - cx)**n * (Y - cy)**m
-    :param fixed_params:
-    :param sd:
-    :param xx:
-    :param yy:
-    :param bounds:
-    :return:
-    """
-
-    max_x, max_y = max_orders
-    nparams = (max_x + 1) * (max_y + 1) + 2
-
-    model_fn = lambda xx, yy, p: poly(xx, yy, p, max_orders)
-    model_jacobian = lambda xx, yy, p: poly_jacobian(xx, yy, p, max_orders)
-
-    if xx is None or yy is None:
-        xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
-
-    # get default initial parameters
-    if init_params is None:
-        init_params = [None] * nparams
-    else:
-        init_params = copy.deepcopy(init_params)
-
-    if np.any([ip is None for ip in init_params]):
-        # set any parameters that were None to the default values
-        for ii in range(nparams):
-            if init_params[ii] is None:
-                init_params[ii] = 1
-
-    if bounds is None:
-        bounds = ((-np.inf,) * nparams,
-                  (np.inf,) * nparams)
-
-    result = fit_model(img, lambda p: model_fn(xx, yy, p), init_params, fixed_params=fixed_params,
-                       sd=sd, bounds=bounds, model_jacobian=lambda p: model_jacobian(xx, yy, p))
-    # result = fit_model(img, lambda p: model_fn(xx, yy, p), init_params, fixed_params=fixed_params,
-    #                    sd=sd, bounds=bounds)
-
-    pfit = result['fit_params']
-    fit_fn = lambda x, y: model_fn(x, y, pfit)
-
-    return result, fit_fn
 
 def poisson(n, p):
     """
