@@ -56,7 +56,7 @@ def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
     return pattern, cell
 
 
-def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell):
+def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell, do_cell_reduction=True):
     """
     Generate SIM patterns using lattice periodicity vectors vec_a = [dxa, dya] and vec_b = [dxb, 0],
     and duplicating roi_size single unit cell. See the supplemental material of
@@ -82,8 +82,12 @@ def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell):
     vec_a = np.array(vec_a, copy=True)
     vec_b = np.array(vec_b, copy=True)
     start_coord = np.array(start_coord, copy=True)
-
     nx, ny = dmd_size
+
+    if do_cell_reduction:
+        # this will typically make the vectors shorter and more orthogonal, so tiling is easier
+        cell, x_cell, y_cell, vec_a, vec_b = get_minimal_cell(cell, x_cell, y_cell, vec_a, vec_b)
+
     pattern = np.zeros((ny, nx)) * np.nan
 
     dy, dx = cell.shape
@@ -117,7 +121,7 @@ def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell):
 
         # finish by tiling
         pattern = tile_pattern(dmd_size, 2 ** na_doublings * vec_a, 2 ** nb_doublings * vec_b,
-                               start_coord, large_pattern, xp, yp)
+                               start_coord, large_pattern, xp, yp, do_cell_reduction=False)
     else:
         # for smaller iteration number, tile directly
         for n in range(na_min, na_max + 1):
@@ -183,12 +187,6 @@ def double_cell(cell, x, y, vec_a, vec_b, na=1, nb=0):
     vec_a = np.array(vec_a, copy=True)
     vec_b = np.array(vec_b, copy=True)
 
-    if vec_a[0] < 0:
-        vec_a = -vec_a
-
-    if vec_b[0] < 0:
-        vec_b = -vec_b
-
     if not (na == 1 and nb == 0):
         big_cell = cell
         xs = x
@@ -201,22 +199,23 @@ def double_cell(cell, x, y, vec_a, vec_b, na=1, nb=0):
     else:
         dyc, dxc = cell.shape
 
-        dx = 2*vec_a[0] + vec_b[0]
-        xs = np.arange(0, dx)
-
         v1 = np.array([0, 0])
         v2 = 2*vec_a
         v3 = vec_b
         v4 = 2*vec_a + vec_b
+
+        xs = np.arange(np.min([v1[0], v2[0], v3[0], v4[0]]), np.max([v1[0], v2[0], v3[0], v4[0]]) + 1)
         ys = np.arange(np.min([v1[1], v2[1], v3[1], v4[1]]), np.max([v1[1], v2[1], v3[1], v4[1]]) + 1)
+
+        dx = len(xs)
         dy = len(ys)
 
         big_cell = np.zeros((dy, dx)) * np.nan
 
         for n in [0, 1]:
             xzero, yzero = vec_a * n
-            istart_x = xzero - np.min(xs) + np.min(x)
-            istart_y = yzero - np.min(ys) + np.min(y)
+            istart_x = int(xzero - np.min(xs) + np.min(x))
+            istart_y = int(yzero - np.min(ys) + np.min(y))
 
             big_cell[istart_y:istart_y+dyc, istart_x:istart_x+dxc][np.logical_not(np.isnan(cell))] = cell[np.logical_not(np.isnan(cell))]
 
@@ -276,9 +275,9 @@ def get_unit_cell(vec_a, vec_b):
 
     The unit cell is the area enclosed by [0, vec_a, vec_b, vec_a + vec_b]. For pixels, we say that
     an entire pixel is within the cell if its center is. For a pixel with center exactly on one of the
-    edges of the cell, we say it is inside if it lies on the lines from [vec_b, vec_a + vec_b] or
-    [vec_a, vec_a + vec_b] and outside of its lies on the lines from [0, vec_a] or [0, vec_b]. This
-    choice avoids including pixels twice. The one exception: (0,  0) is always in the cell.
+    edges of the cell, we say it is inside if it lies on the lines from [0, vec_b] or
+    [0, vec_a] and outside of its lies on the lines from [vec_a, vec_a + vec_b] or [vec_b, vec_a + vec_b].
+    This choice avoids including pixels twice.
 
     :param list or np.array vec_a: [dxa, dya]
     :param list or np.array vec_b: [dxb, dyb]
@@ -288,6 +287,7 @@ def get_unit_cell(vec_a, vec_b):
     :return np.array y:
     """
 
+    # test that vec_a and vec_b components are integers
     for v in vec_a:
         if isinstance(v, float):
             if not v.is_integer():
@@ -306,77 +306,208 @@ def get_unit_cell(vec_a, vec_b):
     if np.cross(vec_a, vec_b) == 0:
         raise Exception("vec_a and vec_b are linearly dependent.")
 
-    # handle case where vec_a = [dx, 0] and vec_b = [0, dy]
-    # transposed = False
-    # if vec_a[1] == 0:
-    #     vec_a = np.flip(vec_a)
-    #     vec_b = np.flip(vec_b)
-    #     transposed = True
-
-    # ensure x components are positive
-    # free to take negative of these vectors
-    if vec_a[0] < 0:
-        vec_a = -vec_a
-
-    if vec_b[0] < 0:
-        vec_b = -vec_b
-
-    # get slopes of these vectors
-    with np.errstate(divide='ignore'):
-        slope_a = vec_a[1] / vec_a[0]
-        slope_b = vec_b[1] / vec_b[0]
-
     # square array containing unit cell, with points not in unit cell nans
     dy = np.abs(vec_a[1]) + np.abs(vec_b[1])
-    dx = vec_a[0] + vec_b[0]
-    cell = np.zeros((dy, dx))
+    dx = np.abs(vec_a[0]) + np.abs(vec_b[0])
 
-    # coordinates
+    # x-coordinates massaged so that origin is at x=0
     x = np.array(range(dx))
+    if vec_a[0] < 0 and vec_b[0] >= 0:
+        x = x + vec_a[0] + 1
+    elif vec_a[0] >= 0 and vec_b[0] < 0:
+        x = x + vec_b[0] + 1
+    elif vec_a[0] < 0 and vec_b[0] < 0:
+        x = x + vec_a[0] + vec_b[0] + 1
+
+    # y-coordinates massaged so that origin is at y=0
     y = np.array(range(dy))
-    # shift = np.max([-vec_a[1], -vec_b[1]])
     if vec_a[1] < 0 and vec_b[1] >= 0:
         y = y + vec_a[1] + 1
     elif vec_a[1] >= 0 and vec_b[1] < 0:
         y = y + vec_b[1] + 1
     elif vec_a[1] < 0 and vec_b[1] < 0:
         y = y + vec_a[1] + vec_b[1] + 1
+
     xx, yy = np.meshgrid(x, y)
 
     # get cell volume from cross product
     cell_volume = np.abs(vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0])
 
-    # mask off parts not in unit cell...
-    if slope_a >= slope_b:
-        slope_max = slope_a
-        slope_min = slope_b
-
-        vmax_slope = vec_a
-        vmin_slope = vec_b
-    else:
-        slope_max = slope_b
-        slope_min = slope_a
-
-        vmax_slope = vec_b
-        vmin_slope = vec_a
-
-    with np.errstate(invalid='ignore'):
-        # can get bit by roundoff errors
-        cell[yy > np.round(slope_max * xx, 12)] = np.nan
-        cell[yy < np.round(slope_min * xx, 12)] = np.nan
-        # line parallel to vec_a, but shifted to pass through 0 + vec_b
-        cell[yy <= np.round(slope_max * xx + (vmin_slope[1] - slope_max * vmin_slope[0]), 12)] = np.nan
-        # line parallel to vec_b, but shifted to pass through 0 + vec_a
-        cell[yy >= np.round(slope_min * xx + (vmax_slope[1] - slope_min * vmax_slope[0]), 12)] = np.nan
+    # generate cell
+    cell = np.array(test_in_cell([xx, yy], vec_a, vec_b), dtype=np.float)
+    cell[cell == False] = np.nan
+    cell[cell == True] = 0
 
     # check unit cell has correct volume
     assert np.nansum(np.logical_not(np.isnan(cell))) == cell_volume
 
-    # if transposed:
-    #     cell = np.transpose(cell)
-    #     x, y = y, x
-
     return cell, x, y
+
+
+def test_in_cell(points, va, vb):
+    """
+    Test if points (x, y) are in the unit cell for a given pair of unit vectors. We suppose the
+    unit cell is the region enclosed by 0, va, vb, and va + vb. Point on the boundary are considered
+    inside if they are on the lines 0 -> va or 0 ->vb, and outside if they are on the lines va -> va+vb
+    or vb -> va + vb
+
+    :param points: [xx, yy]
+    :param va:
+    :param vb:
+    :return:
+    """
+
+    va = np.array(va, copy=True)
+    va = va.reshape([2, ])
+
+    vb = np.array(vb, copy=True)
+    vb = vb.reshape([2, ])
+
+    x, y = points
+
+    def line(x, p1, p2): return ((p2[1] - p1[1]) * x + p1[1] * p2[0] - p1[0] * p2[1])/ (p2[0] - p1[0])
+
+    precision = 12
+
+    # strategy: consider parellel lines from line1 = [0,0] -> va and line2 = vb -> va + vb
+    # if point is on opposite sides of line1 and line2, or exactly on line1 then it is inside the cell
+    # if it is one the same sides of line1 and line2, or exactly on line2, it is outside
+    if va[0] != 0:
+        gthan_a1 = np.round(line(x, [0, 0], va), precision) > np.round(y, precision)
+        eq_a1 = np.round(line(x, [0, 0], va), precision) == np.round(y, precision)
+        gthan_a2 = np.round(line(x, vb, va + vb), precision) > np.round(y, precision)
+        eq_a2 = np.round(line(x, vb, va + vb), precision) == np.round(y, precision)
+    else:
+        # if x-component of va = 0. Then x-component of vb cannot be zero, else linearly dependent
+        gthan_a1 = np.round(x, precision) > 0
+        eq_a1 = np.round(x, precision) == 0
+        gthan_a2 = np.round(x, precision) > np.round(vb[0], precision)
+        eq_a2 = np.round(x, precision) == np.round(vb[0], precision)
+
+    in_cell_a = np.logical_and(np.logical_or(gthan_a1 != gthan_a2, eq_a1), np.logical_not(eq_a2))
+
+
+    # same strategy for vb
+    if vb[0] != 0:
+        gthan_b1 = np.round(line(x, [0, 0], vb), precision) > np.round(y, precision)
+        eq_b1 = np.round(line(x, [0, 0], vb), precision) == np.round(y, precision)
+        gthan_b2 = np.round(line(x, va, va + vb), precision) > np.round(y, precision)
+        eq_b2 = np.round(line(x, va, va + vb), precision) == np.round(y, precision)
+    else:
+        # if x-component of vb = 0. Then x-component of va cannot be zero, else linearly dependent
+        gthan_b1 = np.round(x, precision) > 0
+        eq_b1 = np.round(x, precision) == 0
+        gthan_b2 = np.round(x, precision) > np.round(va[0], precision)
+        eq_b2 = np.round(x, precision) == np.round(va[0], precision)
+
+    in_cell_b = np.logical_and(np.logical_or(gthan_b1 != gthan_b2, eq_b1), np.logical_not(eq_b2))
+
+    in_cell = np.logical_and(in_cell_a, in_cell_b)
+
+    return in_cell
+
+
+def reduce2cell(point, va, vb):
+    """
+    Given a vector, reduce it to coordinates within the unit cell
+    :param np.array point:
+    :param list or np.array va:
+    :param list or np.array vb:
+    :return:
+    """
+    point = np.array(point, copy=True)
+    va = np.array(va, copy=True)
+    vb = np.array(vb, copy=True)
+
+    ra, rb = get_reciprocal_vects(va, vb)
+    # need to round to avoid problems with machine precision
+    na_out = int(np.floor(np.round(np.vdot(point, ra), 12)))
+    nb_out = int(np.floor(np.round(np.vdot(point, rb), 12)))
+    point_red = point - (na_out * va + nb_out * vb)
+
+    if not test_in_cell(point_red, va, vb):
+        print("(%d, %d) not in cell, va=(%d, %d), vb=(%d, %d)" % (point_red[0], point_red[1], va[0], va[1], vb[0], vb[1]))
+
+    assert test_in_cell(point_red, va, vb)
+
+    # # this point may not be in cell, but only need to go one away to find it
+    # _, na, nb = get_closest_lattice_vec(point, va, vb)
+    #
+    # # todo: found [-1, 0, 1] not enough to ensure point is there
+    # # e.g. vec_a = (-15, 15), vec_b = (-27, -30), point = (2, -12) requires going 2 away
+    # # is this a rare case where there is a "tie" between "closest" vectors,
+    # # or are there more pathological cases?
+    # # e.g. vec_a = (-15, 15), vec_b = (-27, -30), point = (2, -11) requires going 3 away
+    #
+    # found_point = False
+    # nmax = 1
+    # while not found_point:
+    #     # each time expand range, don't want to redo any points we already checked
+    #     n1s, m1s = np.meshgrid([-nmax, nmax], range(-nmax, nmax+1))
+    #     n2s, m2s = np.meshgrid(range(-(nmax - 1), nmax), [-nmax, nmax])
+    #     ns = np.concatenate((n1s.ravel(), n2s.ravel()), axis=0)
+    #     ms = np.concatenate((m1s.ravel(), m2s.ravel()), axis=0)
+    #
+    #     for n,m in zip(ns, ms):
+    #         point_red = point - (na + n) * va - (nb + m) * vb
+    #         #print("%d, %d, (%d, %d)" % (na+n, nb+m, point_red[0], point_red[1]))
+    #
+    #         if test_in_cell(point_red, va, vb):
+    #             found_point = True
+    #             na_out = na + n
+    #             nb_out = nb + m
+    #             break
+    #
+    #     nmax += 1
+    #
+    # if not found_point:
+    #     raise Exception("did not find point (%d,%d) in unit cell of va=(%d,%d), vb=(%d,%d)" %
+    #                     (point[0], point[1], va[0], va[1], vb[0], vb[1]))
+
+    return point_red, na_out, nb_out
+
+
+def convert_cell(cell1, x1, y1, va1, vb1, va2, vb2):
+    """
+    Given a unit cell described by vectors va1 and vb2, convert to equivalent description
+    in terms of va2, vb2
+    :param cell1:
+    :param x1:
+    :param y1:
+    :param va1:
+    :param vb1:
+    :param va2:
+    :param vb2:
+
+    :return cell2:
+    :return x2:
+    :return y2:
+    """
+    cell2, x2, y2 = get_unit_cell(va2, vb2)
+    y1min = y1.min()
+    x1min = x1.min()
+
+    for ii in range(cell2.shape[0]):
+        for jj in range(cell2.shape[1]):
+            p1, _, _ = reduce2cell((x2[jj], y2[ii]), va1, vb1)
+            cell2[ii, jj] += cell1[p1[1] - y1min, p1[0] - x1min]
+
+    return cell2, x2, y2
+
+
+def get_minimal_cell(cell, x, y, va, vb):
+    """
+    Convert to cell using smallest lattice vectors
+    :param cell:
+    :param x:
+    :param y:
+    :param va:
+    :param vb:
+    :return:
+    """
+    va_m, vb_m = reduce_basis(va, vb)
+    cell_m, x_m, y_m = convert_cell(cell, x, y, va, vb, va_m, vb_m)
+    return cell_m, x_m, y_m, va_m, vb_m
 
 
 def show_cell(vec_a, vec_b, cell, x, y):
@@ -394,12 +525,6 @@ def show_cell(vec_a, vec_b, cell, x, y):
     # ensure these vectors have positive x-components, as that is the assumption used to generate the unit cells
     vec_a = np.array(vec_a, copy=True)
     vec_b = np.array(vec_b, copy=True)
-
-    if vec_a[0] < 0:
-        vec_a = -vec_a
-
-    if vec_b[0] < 0:
-        vec_b = -vec_b
 
     # plot
     extent = [x[0] - 0.5, x[-1] + 0.5, y[0] - 0.5, y[-1] + 0.5]
