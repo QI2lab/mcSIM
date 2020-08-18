@@ -762,7 +762,7 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     of 2 that appears for the intensity.
     :param int nphases:
     :param int phase_index:
-    :param list[int] dmd_size:
+    :param list[int] dmd_size: [nx, ny]
     :param int nmax:
     :param str origin: origin used to compute pattern phases "fft" or ""
     :param bool include_blaze_correction: if True, include blaze corrections
