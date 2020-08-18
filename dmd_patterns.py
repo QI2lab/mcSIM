@@ -56,7 +56,7 @@ def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
     return pattern, cell
 
 
-def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell):
+def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell, do_cell_reduction=True):
     """
     Generate SIM patterns using lattice periodicity vectors vec_a = [dxa, dya] and vec_b = [dxb, 0],
     and duplicating roi_size single unit cell. See the supplemental material of
@@ -82,8 +82,12 @@ def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell):
     vec_a = np.array(vec_a, copy=True)
     vec_b = np.array(vec_b, copy=True)
     start_coord = np.array(start_coord, copy=True)
-
     nx, ny = dmd_size
+
+    if do_cell_reduction:
+        # this will typically make the vectors shorter and more orthogonal, so tiling is easier
+        cell, x_cell, y_cell, vec_a, vec_b = get_minimal_cell(cell, x_cell, y_cell, vec_a, vec_b)
+
     pattern = np.zeros((ny, nx)) * np.nan
 
     dy, dx = cell.shape
@@ -117,7 +121,7 @@ def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell):
 
         # finish by tiling
         pattern = tile_pattern(dmd_size, 2 ** na_doublings * vec_a, 2 ** nb_doublings * vec_b,
-                               start_coord, large_pattern, xp, yp)
+                               start_coord, large_pattern, xp, yp, do_cell_reduction=False)
     else:
         # for smaller iteration number, tile directly
         for n in range(na_min, na_max + 1):
@@ -210,8 +214,8 @@ def double_cell(cell, x, y, vec_a, vec_b, na=1, nb=0):
 
         for n in [0, 1]:
             xzero, yzero = vec_a * n
-            istart_x = xzero - np.min(xs) + np.min(x)
-            istart_y = yzero - np.min(ys) + np.min(y)
+            istart_x = int(xzero - np.min(xs) + np.min(x))
+            istart_y = int(yzero - np.min(ys) + np.min(y))
 
             big_cell[istart_y:istart_y+dyc, istart_x:istart_x+dxc][np.logical_not(np.isnan(cell))] = cell[np.logical_not(np.isnan(cell))]
 
@@ -402,6 +406,110 @@ def test_in_cell(points, va, vb):
 
     return in_cell
 
+
+def reduce2cell(point, va, vb):
+    """
+    Given a vector, reduce it to coordinates within the unit cell
+    :param np.array point:
+    :param list or np.array va:
+    :param list or np.array vb:
+    :return:
+    """
+    point = np.array(point, copy=True)
+    va = np.array(va, copy=True)
+    vb = np.array(vb, copy=True)
+
+    ra, rb = get_reciprocal_vects(va, vb)
+    # need to round to avoid problems with machine precision
+    na_out = int(np.floor(np.round(np.vdot(point, ra), 12)))
+    nb_out = int(np.floor(np.round(np.vdot(point, rb), 12)))
+    point_red = point - (na_out * va + nb_out * vb)
+
+    if not test_in_cell(point_red, va, vb):
+        print("(%d, %d) not in cell, va=(%d, %d), vb=(%d, %d)" % (point_red[0], point_red[1], va[0], va[1], vb[0], vb[1]))
+
+    assert test_in_cell(point_red, va, vb)
+
+    # # this point may not be in cell, but only need to go one away to find it
+    # _, na, nb = get_closest_lattice_vec(point, va, vb)
+    #
+    # # todo: found [-1, 0, 1] not enough to ensure point is there
+    # # e.g. vec_a = (-15, 15), vec_b = (-27, -30), point = (2, -12) requires going 2 away
+    # # is this a rare case where there is a "tie" between "closest" vectors,
+    # # or are there more pathological cases?
+    # # e.g. vec_a = (-15, 15), vec_b = (-27, -30), point = (2, -11) requires going 3 away
+    #
+    # found_point = False
+    # nmax = 1
+    # while not found_point:
+    #     # each time expand range, don't want to redo any points we already checked
+    #     n1s, m1s = np.meshgrid([-nmax, nmax], range(-nmax, nmax+1))
+    #     n2s, m2s = np.meshgrid(range(-(nmax - 1), nmax), [-nmax, nmax])
+    #     ns = np.concatenate((n1s.ravel(), n2s.ravel()), axis=0)
+    #     ms = np.concatenate((m1s.ravel(), m2s.ravel()), axis=0)
+    #
+    #     for n,m in zip(ns, ms):
+    #         point_red = point - (na + n) * va - (nb + m) * vb
+    #         #print("%d, %d, (%d, %d)" % (na+n, nb+m, point_red[0], point_red[1]))
+    #
+    #         if test_in_cell(point_red, va, vb):
+    #             found_point = True
+    #             na_out = na + n
+    #             nb_out = nb + m
+    #             break
+    #
+    #     nmax += 1
+    #
+    # if not found_point:
+    #     raise Exception("did not find point (%d,%d) in unit cell of va=(%d,%d), vb=(%d,%d)" %
+    #                     (point[0], point[1], va[0], va[1], vb[0], vb[1]))
+
+    return point_red, na_out, nb_out
+
+
+def convert_cell(cell1, x1, y1, va1, vb1, va2, vb2):
+    """
+    Given a unit cell described by vectors va1 and vb2, convert to equivalent description
+    in terms of va2, vb2
+    :param cell1:
+    :param x1:
+    :param y1:
+    :param va1:
+    :param vb1:
+    :param va2:
+    :param vb2:
+
+    :return cell2:
+    :return x2:
+    :return y2:
+    """
+    cell2, x2, y2 = get_unit_cell(va2, vb2)
+    y1min = y1.min()
+    x1min = x1.min()
+
+    for ii in range(cell2.shape[0]):
+        for jj in range(cell2.shape[1]):
+            p1, _, _ = reduce2cell((x2[jj], y2[ii]), va1, vb1)
+            cell2[ii, jj] += cell1[p1[1] - y1min, p1[0] - x1min]
+
+    return cell2, x2, y2
+
+
+def get_minimal_cell(cell, x, y, va, vb):
+    """
+    Convert to cell using smallest lattice vectors
+    :param cell:
+    :param x:
+    :param y:
+    :param va:
+    :param vb:
+    :return:
+    """
+    va_m, vb_m = reduce_basis(va, vb)
+    cell_m, x_m, y_m = convert_cell(cell, x, y, va, vb, va_m, vb_m)
+    return cell_m, x_m, y_m, va_m, vb_m
+
+
 def show_cell(vec_a, vec_b, cell, x, y):
     """
     Display unit cell and periodicity vectors graphically
@@ -417,12 +525,6 @@ def show_cell(vec_a, vec_b, cell, x, y):
     # ensure these vectors have positive x-components, as that is the assumption used to generate the unit cells
     vec_a = np.array(vec_a, copy=True)
     vec_b = np.array(vec_b, copy=True)
-
-    # if vec_a[0] < 0:
-    #     vec_a = -vec_a
-    #
-    # if vec_b[0] < 0:
-    #     vec_b = -vec_b
 
     # plot
     extent = [x[0] - 0.5, x[-1] + 0.5, y[0] - 0.5, y[-1] + 0.5]
@@ -1015,17 +1117,6 @@ def get_closest_lattice_vec(point, va, vb):
 
     return vec, na_min, nb_min
 
-
-def reduce2cell(point, va, vb):
-    """
-    Given a vector, reduce it to coordinates within the unit cell
-    :param np.array point:
-    :param list or np.array va:
-    :param list or np.array vb:
-    :return:
-    """
-    # this point may not be in cell, but only need to go one away to find it
-    _, na, nb = get_closest_lattice_vec(point, va, vb)
 
 def get_closest_recip_vec(recp_point, va, vb):
     """
