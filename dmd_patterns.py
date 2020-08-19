@@ -483,6 +483,8 @@ def convert_cell(cell1, x1, y1, va1, vb1, va2, vb2):
     :return x2:
     :return y2:
     """
+    # todo: add check that va1/vb1 and va2/vb2 describe same lattice
+
     cell2, x2, y2 = get_unit_cell(va2, vb2)
     y1min = y1.min()
     x1min = x1.min()
@@ -747,11 +749,11 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     dx, dy, wx, wy, etc. variables.
     # todo: debating moving this function to simulate_dmd.py instead
 
-    Given an electric field in fourier space E(k), the intensity I(k) = \sum_q E(q) E(k-q).
-    For a pattern where P(r)^2 = P(r), these must be equal, giving P(k) = \sum_q P(q) P(k-q).
+    Given an electric field in fourier space E(k), the intensity I(k) = \sum_q E(q) E^*(q-k).
+    For a pattern where P(r)^2 = P(r), these must be equal, giving P(k) = \sum_q P(q) P(q-k).
     But the relevant quantity after passing through the microscope is P(k) * bandlimit(k), where bandlimit(k) = 1 for
     k <= fmax, and 0 otherwise. Then the intensity pattern should be
-    \sum_q P(q) P(k-q) * bandlimit(q) * bandlimit(k-q)
+    \sum_q P(q) P(q-k) * bandlimit(q) * bandlimit(q-k)
 
     :param np.array unit_cell: unit cell
     :param list[int] or np.array x: x-coordinates of unit cell
@@ -759,7 +761,7 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     :param list[int] or np.array vec_a:
     :param list[int] or np.array vec_b:
     :param float fmax: maximum pass frequency for electric field in 1/mirrors. i.e. fmax = NA/lambda without the factor
-    of 2 that appears for the intensity.
+    of 2 that appears for the intensity. Note that fmax <= 1, which is the maximum frequency supported by the DMD.
     :param int nphases:
     :param int phase_index:
     :param list[int] dmd_size: [nx, ny]
@@ -789,6 +791,13 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
         tin_x, tin_y = dmd_params['theta_ins']
         tout_x, tout_y = dmd_params['theta_outs']
 
+    # get minimal lattice vectors
+    # todo: use minimal lattice vectors to do the computation
+    # va_m, vb_m = reduce_basis(vec_a, vec_b)
+    # cell_m, x_m, y_m = convert_cell(unit_cell, x, y, vec_a, vec_b, va_m, vb_m)
+
+    # todo: compute nmax
+
     # first, get electric field fourier components
     ns = np.arange(-nmax, nmax + 1)
     ms = np.arange(-nmax, nmax + 1)
@@ -816,12 +825,18 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
 
     # band limit
     frqs = np.linalg.norm(vecs, axis=2)
+    # enforce maximum allowable frequency from DMD
+    efield_fc = efield_fc * (frqs <= 1)
+    # enforce maximum allowable frequency from imaging system
     efield_fc = efield_fc * (frqs <= fmax)
 
     # intensity fourier components from autocorrelation
     # intensity_fc = scipy.signal.fftconvolve(efield_fc, efield_fc, mode='same')
     # I(f) = convolution(E(f), E^*(-f))
     intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
+    # enforce maximum allowable frequency (should only be machine precision errors)
+    intensity_fc = intensity_fc * (frqs <= 2)
+    intensity_fc = intensity_fc * (frqs <= 2*fmax)
 
     return intensity_fc, efield_fc, ns, ms, vecs
 
