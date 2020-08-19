@@ -2351,6 +2351,9 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
             tend = time.process_time()
             print("generated pattern %d/%d in %s" % (ii * len(angles) + jj + 1, len(periods) * len(angles), tend-tstart))
 
+    pattern_on = np.ones((ny, nx), dtype=np.uint8)
+    pattern_off = np.zeros((ny, nx), dtype=np.uint8)
+
     # export results
     if save_dir is not None:
         save_dir = tools.get_unique_name(save_dir, mode='dir')
@@ -2362,7 +2365,8 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
         data = {'vec_as': vec_as, 'vec_bs': vec_bs, 'angles': real_angles,
                 'periods': real_periods, 'frequencies': real_frqs,
                 'phases': real_phases, 'nphases': nphases, 'phase_index': phase_index,
-                'units': 'um'}
+                'units': 'um', 'notes': 'total number of patterns should be nphases*nangles + 2.'
+                                        ' The last two patterns are all ON and all OFF respectively.'}
 
         with open(fpath, 'wb') as f:
             pickle.dump(data, f)
@@ -2370,16 +2374,28 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
         # save patterns as set of pngs
         for ii in range(nperiods):
             for jj in range(nangles):
-                fpath = os.path.join(save_dir, "pattern_period_ind=%d_angle_ind=%d" % (ii, jj)) + ".png"
+                ind = ii * nangles + jj
+                fpath = os.path.join(save_dir, "%03d_pattern_period=%0.3f_angle=%0.2fdeg" % (ind, real_periods[ii, jj], real_angles[ii, jj] * 180/np.pi)) + ".png"
 
                 # need to convert so not float to save as PNG
                 im = Image.fromarray(patterns[ii, jj].astype('bool'))
                 im.save(fpath)
 
+        # save all on
+        fpath = os.path.join(save_dir, "%03d_pattern_all_on" % (nperiods * nangles)) + ".png"
+        im = Image.fromarray(pattern_on.astype('bool'))
+        im.save(fpath)
+
+        # save all off
+        fpath = os.path.join(save_dir, "%03d_pattern_all_off" % (nperiods * nangles + 1)) + ".png"
+        im = Image.fromarray(pattern_off.astype('bool'))
+        im.save(fpath)
+
         # save patterns as tif
         fpath = os.path.join(save_dir, "otf_patterns.tif")
         patterns_reshaped = np.reshape(patterns, [patterns.shape[0] * patterns.shape[1],
                                                   patterns.shape[2], patterns.shape[3]])
+        patterns_reshaped = np.concatenate((patterns_reshaped, pattern_on[None, :, :], pattern_off[None, :, :]), axis=0)
         tools.save_tiff(patterns_reshaped, fpath)
 
     return patterns, vec_as, vec_bs, real_angles, real_periods
@@ -2520,6 +2536,8 @@ if __name__ == "__main__":
     #ntimes = 30
     export_spifi_patterns([nx, ny], spifi_periods, ntimes, start_pos=300, strip_size=40, debug=True)
     '''
+
+    '''
     save_dir = '../sim_patterns/2020_07_31_multicolor_sim_patterns_new'
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -2530,4 +2548,14 @@ if __name__ == "__main__":
                                    plot_results=True, wavelengths=[473, 532, 635], invert=[False, True, False],
                                    ptol_relative=0.025,
                                    angle_sep_tol=5*np.pi/180, max_solutions_to_search=200)
+   '''
+
+    save_dir = "../calibration_patterns"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    export_affine_fit_pattern([nx, ny], radii=(1, 1.5, 5), save_dir=save_dir)
+
+    export_calibration_patterns([nx, ny], save_dir=save_dir)
+
     plt.show()
