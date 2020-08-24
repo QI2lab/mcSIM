@@ -16,6 +16,7 @@ import skimage.filters
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
+from matplotlib.colors import PowerNorm
 import matplotlib.cm
 import joblib
 from functools import partial
@@ -883,8 +884,9 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
     figh = plt.figure(figsize=figsize, **kwargs)
 
     nrows = nfits + 1
-    ncols = 1
+    ncols = 2
 
+    gamma = 0.1
     extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, z[-1] + 0.5 * dz, z[0] - 0.5 * dz]
     ax = plt.subplot(nrows, ncols, 1)
     plt.imshow(imgs[:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
@@ -895,10 +897,21 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
     plt.title('Image')
     plt.suptitle("PSF XZ plane")
 
+    ax = plt.subplot(nrows, ncols, 2)
+    plt.imshow(imgs[:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
+    plt.title("power norm")
+
     for ii in range(nfits):
-        ax = plt.subplot(nrows, ncols, ii + 2)
+        # normal scale
+        ax = plt.subplot(nrows, ncols, ii * ncols + 3)
         im = plt.imshow(fit_img3d[ii][:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
         plt.title('%s, sf=%d, NA=%0.3f' % (model[ii], sfs[ii], fit_params[ii][4]))
+        if ii < (nfits - 1):
+            plt.setp(ax.get_xticklabels(), visible=False)
+
+        # power law scaled, to emphasize smaller features
+        ax = plt.subplot(nrows, ncols, ii * ncols + 4)
+        plt.imshow(fit_img3d[ii][:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
         if ii < (nfits - 1):
             plt.setp(ax.get_xticklabels(), visible=False)
 
@@ -992,17 +1005,17 @@ def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
         # weights[ii] = signal / noise
 
     # weighted averaging
-    with np.errstate(divide='ignore'):
+    with np.errstate(divide='ignore', invalid='ignore'):
         psf_weighted = np.array([p * w for p, w in zip(psf_shifted, weights)])
         weights_nan = np.transpose(np.tile(weights, [nzroi, nroi, nroi, 1]), [3, 0, 1, 2])
         weights_nan[np.isnan(psf_weighted)] = np.nan
         psf_mean = np.nansum(psf_weighted, axis=0) / np.nansum(weights_nan, axis=0)
 
-    # reliability weighted standard error
-    v1 = np.nansum(weights_nan, axis=0)
-    v2 = np.nansum(weights_nan ** 2, axis=0)
-    numerator = np.asarray([w * (pshift - psf_mean)**2 for w, pshift in zip(weights, psf_shifted)])
-    psf_sd = np.nansum(numerator, axis=0) / (v1 - v2/v1)
+        # reliability weighted standard error
+        v1 = np.nansum(weights_nan, axis=0)
+        v2 = np.nansum(weights_nan ** 2, axis=0)
+        numerator = np.asarray([w * (pshift - psf_mean)**2 for w, pshift in zip(weights, psf_shifted)])
+        psf_sd = np.nansum(numerator, axis=0) / (v1 - v2/v1)
 
     return psf_mean, psf_sd
 
