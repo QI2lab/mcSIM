@@ -932,7 +932,7 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
     # ax = plt.subplot(nrows, ncols, 2)
     ax = figh.add_subplot(spec[0, 2:4])
     plt.imshow(imgs[:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
-    plt.title("power norm")
+    plt.title("XZ power norm")
 
     ax = figh.add_subplot(spec[0, 4:6])
     plt.imshow(imgs[:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
@@ -942,6 +942,7 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
 
     ax = figh.add_subplot(spec[0, 6:8])
     plt.imshow(imgs[:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
+    plt.title('YZ power norm')
 
     for ii in range(nfits):
         # normal scale
@@ -1459,7 +1460,7 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
 
     return rois, centers, fit_params, bg
 
-def fit_roi(center, roi, dx, dz, wavelength, ni, imgs, imgs_sd, model):
+def fit_roi(center, roi, dx, dz, wavelength, ni, sf, imgs, imgs_sd, model):
     """
     Fit region of interest in image stack to a psf model function
 
@@ -1487,7 +1488,7 @@ def fit_roi(center, roi, dx, dz, wavelength, ni, imgs, imgs_sd, model):
 
     # find z-plane closest to fit center and fit gaussian to get initial parameters for model fit
     c_roi = tools.full2roi(center, roi)
-    result, _ = fit_pixelated_psfmodel(sub_img[c_roi[0]][None, :, :], dx, dz, wavelength, ni=ni, sf=3, model='gaussian',
+    result, _ = fit_pixelated_psfmodel(sub_img[c_roi[0]][None, :, :], dx, dz, wavelength, ni=ni, sf=sf, model='gaussian',
                                        init_params=[None, None, None, 0, None, None],
                                        fixed_params=[False, False, False, True, False, False])
     result['fit_params'][3] = z[c_roi[0]]
@@ -1495,17 +1496,18 @@ def fit_roi(center, roi, dx, dz, wavelength, ni, imgs, imgs_sd, model):
     # full 3D PSF fit
     # na cannot exceed index of refraction...
     cz = z[c_roi[0]]
-    bounds = ((0, x.min(), y.min(), np.max([cz - 2.5 * dz, z.min()]), 0.2, -np.inf),
-              (np.inf, x.max(), y.max(), np.min([cz + 2.5 * dz, z.max()]), ni, np.inf))
+    bounds = ((0, x.min(), y.min(), np.max([cz - 2.5 * float(dz), z.min()]), 0.2, -np.inf),
+              (np.inf, x.max(), y.max(), np.min([cz + 2.5 * float(dz), z.max()]), ni, np.inf))
 
     # fit 3D psf model
+    # todo: add sf
     init_params = result['fit_params']
     fit3d, _ = fit_pixelated_psfmodel(sub_img, dx, dz, wavelength, ni=ni, model=model, init_params=init_params,
                                       sd=sub_img_sd, bounds=bounds)
 
     # fit 2D gaussian to closest slice to 3D fit center
     izc = np.argmin(np.abs(z - fit3d['fit_params'][3]))
-    fit2d, _ = fit_pixelated_psfmodel(sub_img[izc][None, :, :], dx, dz, wavelength, ni=ni, sf=3, model='gaussian',
+    fit2d, _ = fit_pixelated_psfmodel(sub_img[izc][None, :, :], dx, dz, wavelength, ni=ni, sf=sf, model='gaussian',
                                       init_params=[None, None, None, 0, None, None],
                                       fixed_params=[False, False, False, True, False, False])
     fit2d['fit_params'][3] = z[izc]
@@ -1513,21 +1515,26 @@ def fit_roi(center, roi, dx, dz, wavelength, ni, imgs, imgs_sd, model):
     return fit2d, fit3d
 
 # main fitting function
-def autofit_psfs(imgs, imgs_sd, dx, dz, wavelength, ni=1.5, model='vectorial', **kwargs):
+def autofit_psfs(imgs, imgs_sd, dx, dz, wavelength, ni=1.5, model='vectorial', sf=3, **kwargs):
     """
     Find isolated points, fit PSFs, and report data. This is the main function of this module
 
     :param imgs: nz x nx x ny image
     :param imgs_sd: standard deviations, assuming img is an average of other images
-    :param dx: pixel size in um
-    :param dz: z-plane spacing in um
-    :param wavelength: wavelength in um
+    :param float dx: pixel size in um
+    :param float dz: z-plane spacing in um
+    :param float wavelength: wavelength in um
     :param **kwargs: passed through to find_beads(). See that function for allowed keyword arguments
     :return centers:
     :return rois:
     :return fit2ds:
     :return fit3ds:
     """
+
+    # ensure these are floats, not numpy arrays
+    dz = float(copy.deepcopy(dz))
+    dx = float(copy.deepcopy(dx))
+    wavelength = float(copy.deepcopy(wavelength))
 
     # todo: to account for images with fluctuating background, might want to segment the image and then apply some stages of this?
     rois, centers, _, _ = find_beads(imgs, imgs_sd, dx, dz, **kwargs)
@@ -1541,7 +1548,7 @@ def autofit_psfs(imgs, imgs_sd, dx, dz, wavelength, ni=1.5, model='vectorial', *
         fit2ds = None
         fit3ds = None
     else:
-        fit_roi_partial = partial(fit_roi, dx=dx, dz=dz, wavelength=wavelength, ni=ni, imgs=imgs, imgs_sd=imgs_sd, model=model)
+        fit_roi_partial = partial(fit_roi, dx=dx, dz=dz, wavelength=wavelength, ni=ni, sf=sf, imgs=imgs, imgs_sd=imgs_sd, model=model)
         print("starting PSF fitting for %d ROI's" % len(rois))
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
                   joblib.delayed(fit_roi_partial)(centers[ii], rois[ii]) for ii in range(len(centers)))
