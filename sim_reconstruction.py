@@ -656,7 +656,9 @@ class sim_image_set():
             # if mcnr is too low (typically < 1), use guess values instead
             if self.default_to_guess_on_low_mcnr and np.mean(mcnr[ii]) < self.min_mcnr and self.frqs_guess is not None:
                 self.frqs[ii] = self.frqs_guess[ii]
-                warnings.warn("Angle %d, mcnr is less than the minimum value, %0.2f, so fit frequency will be replaced with guess" % (ii, self.min_mcnr))
+                # warnings.warn("Angle %d, mcnr is less than the minimum value, %0.2f, so fit frequency will be replaced with guess" % (ii, self.min_mcnr))
+                print_tee("Angle %d, mcnr = %0.2f is less than the minimum value, %0.2f, so fit frequency will be replaced with guess"
+                          % (ii, np.min(mcnr[ii]), self.min_mcnr), self.log_file)
 
                 for jj in range(self.nphases):
                     mcnr[ii, jj] = get_mcnr(self.imgs_ft[ii, jj], self.frqs[ii], self.fx, self.fy, self.fmax)
@@ -1103,8 +1105,8 @@ class sim_image_set():
             for ii in range(self.nangles):
                 if np.any(np.abs(diffs[ii]) > self.max_phase_error):
                     phases[ii] = phase_guess[ii]
-                    str = "Angle %d, phase guesses are more than the maximum allowed phase error=%0.2fdeg." \
-                          " Defaulting to guess values" % (ii, self.max_phase_error * 180/np.pi)
+                    str = "Angle %d/%d, phase guesses are more than the maximum allowed phase error=%0.2fdeg." \
+                          " Defaulting to guess values" % (ii+1, self.nangles, self.max_phase_error * 180/np.pi)
 
                     str += "\nfit phase diffs="
                     for jj in range(self.nphases):
@@ -1113,7 +1115,8 @@ class sim_image_set():
                     for jj in range(self.nphases):
                         str += "%0.2fdeg, " % (phase_guess_diffs[ii, jj] * 180/np.pi)
 
-                    warnings.warn(str)
+                    # warnings.warn(str)
+                    print_tee(str, self.log_file)
 
         return phases, amps
 
