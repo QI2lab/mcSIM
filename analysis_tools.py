@@ -23,10 +23,11 @@ import re
 # I/O for text files
 def parse_mm_metadata(metadata_dir, file_pattern='*metadata*.txt'):
     """
-    Parse all micromanager metadata files in subdirectories of metadata_dir. MM metadata is stored as JSON object in text file.
+    Parse all micromanager metadata files in subdirectories of metadata_dir. MM metadata is stored as JSON
+    object in text file.
 
-    :param metadata_dir: directory storying metadata files
-    :param file_pattern: file pattern which metadata files must match
+    :param str metadata_dir: directory storing metadata files
+    :param str file_pattern: file pattern which metadata files must match
 
     :return: df_images: dataframe object summarizing images described in metadata file
     :return: dims:
@@ -61,7 +62,7 @@ def parse_mm_metadata(metadata_dir, file_pattern='*metadata*.txt'):
     for k, entry in summary['UserData'].items():
         dims[k] = entry['scalar']
 
-    #dims = {'nxy': nxy, 'nz': nz, 'nchannels': nchannels, 'ntimes': ntimes, 'nsim_patterns': nsim_patterns}
+    # dims = {'nxy': nxy, 'nz': nz, 'nchannels': nchannels, 'ntimes': ntimes, 'nsim_patterns': nsim_patterns}
 
     # run through each metadata file to figure out settings for stage positions and individual images
     initialized = False
@@ -1558,8 +1559,9 @@ def fit_gauss(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=Non
 
         cy, cx = get_moments(img, order=1, coords=[yy[:, 0], xx[0, :]])
         m2y, m2x = get_moments(img, order=2, coords=[yy[:, 0], xx[0, :]])
-        sx = np.sqrt(m2x - cx ** 2)
-        sy = np.sqrt(m2y - cy ** 2)
+        with np.errstate(invalid='ignore'):
+            sx = np.sqrt(m2x - cx ** 2)
+            sy = np.sqrt(m2y - cy ** 2)
 
         ip_default = [A, cx, cy, sx, sy, bg, 0]
 
@@ -1572,27 +1574,25 @@ def fit_gauss(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=Non
         bounds = ((-np.inf, xx.min(), yy.min(), 0, 0, -np.inf, -np.inf),
                   (np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf, np.inf))
 
-    # result = fit_model(img, lambda p: model_fn(xx, yy, p), init_params, fixed_params=fixed_params,
-    #                    sd=sd, bounds=bounds, model_jacobian = lambda p: model_jacobian(xx, yy, p))
     result = fit_model(img, lambda p: gauss_fn(xx, yy, p), init_params, fixed_params=fixed_params,
                        sd=sd, bounds=bounds, model_jacobian=lambda p: gauss_jacobian(xx, yy, p))
 
     pfit = result['fit_params']
-    fit_fn = lambda x, y: gauss_fn(x, y, pfit)
+    def fit_fn(x, y): return gauss_fn(x, y, pfit)
 
     return result, fit_fn
 
 def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=None, model_jacobian=None, **kwargs):
     """
     Fit 2D model function
-    :param img: nd array
+    :param np.array img: nd array
     :param model_fn: function f(p)
-    :param init_params: p = [p1, p2, ..., pn]
-    :param fixed_params: list of boolean values, same size as init_params. If None, no parameters will be fixed.
+    :param list[float] init_params: p = [p1, p2, ..., pn]
+    :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None, no parameters will be fixed.
     :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the standard
     deviation of the mean. If None, then will use a value of 1 for all points. As long as these values are all the same
     they will not affect the optimization results, although they will affect chi squared.
-    :param bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
+    :param tuple[tuple[float]] bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
     :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None, no jacobian used.
     :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares
     :return:
@@ -1615,7 +1615,8 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
     if bounds is None:
         bounds = (tuple([-np.inf] * len(init_params)), tuple([np.inf] * len(init_params)))
 
-    init_params = copy.deepcopy(init_params)
+    # init_params = copy.deepcopy(init_params)
+    init_params = np.array(init_params, copy=True)
     # ensure initial parameters within bounds, but don't touch if parameter is fixed
     for ii in range(len(init_params)):
         if (init_params[ii] < bounds[0][ii] or init_params[ii] > bounds[1][ii]) and not fixed_params[ii]:
@@ -1626,23 +1627,23 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
             else:
                 init_params[ii] = 0.5 * (bounds[0][ii] + bounds[1][ii])
 
-    err_fn = lambda p: np.divide(model_fn(p)[to_use].ravel() - img[to_use].ravel(), sd[to_use].ravel())
+    def err_fn(p): return np.divide(model_fn(p)[to_use].ravel() - img[to_use].ravel(), sd[to_use].ravel())
     if model_jacobian is not None:
-        jac_fn = lambda p: [v[to_use] / sd[to_use] for v in model_jacobian(p)]
+        def jac_fn(p): return [v[to_use] / sd[to_use] for v in model_jacobian(p)]
 
     # if some parameters are fixed, we need to hide them from the fit function to produce correct covariance, etc.
     # awful list comprehension. The idea is this: map the "reduced" (i.e. not fixed) parameters onto the full parameter list.
     # do this by looking at each parameter. If it is supposed to be "fixed" substitute the initial parameter. If not,
     # then get the next value from pfree. We find the right index of pfree by summing the number of previously unfixed parameters
-    pfree2pfull = lambda pfree: np.array([pfree[int(np.sum(np.logical_not(fixed_params[:ii])))] if not fp else init_params[ii] \
-                                          for ii, fp in enumerate(fixed_params)])
+    free_inds = [int(np.sum(np.logical_not(fixed_params[:ii]))) for ii in range(len(fixed_params))]
+    def pfree2pfull(pfree): return np.array([pfree[free_inds[ii]] if not fp else init_params[ii] for ii, fp in enumerate(fixed_params)])
     # map full parameters to reduced set
-    pfull2pfree = lambda pfull: np.array([p for p, fp in zip(pfull, fixed_params) if not fp])
+    def pfull2pfree(pfull): return np.array([p for p, fp in zip(pfull, fixed_params) if not fp])
 
     # function to minimize the sum of squares of, now as a function of only the free parameters
-    err_fn_pfree = lambda pfree: err_fn(pfree2pfull(pfree))
+    def err_fn_pfree(pfree): return err_fn(pfree2pfull(pfree))
     if model_jacobian is not None:
-        jac_fn_free = lambda pfree: pfull2pfree(jac_fn(pfree2pfull(pfree))).transpose()
+        def jac_fn_free(pfree): return pfull2pfree(jac_fn(pfree2pfull(pfree))).transpose()
     init_params_free = pfull2pfree(init_params)
     bounds_free = (tuple(pfull2pfree(bounds[0])), tuple(pfull2pfree(bounds[1])))
 
@@ -1682,7 +1683,6 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
               'nfev': fit_info['nfev'], 'njev': fit_info['njev'], 'status': fit_info['status'],
               'success': fit_info['success'], 'message': fit_info['message']}
 
-    # return pfit, red_chi_sq, cov, fit_info
     return result
 
 # fft tools
