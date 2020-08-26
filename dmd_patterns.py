@@ -14,7 +14,7 @@ import os
 import time
 import numpy as np
 from PIL import Image
-from scipy import fftpack
+from scipy import fft
 import scipy.signal
 import pickle
 import copy
@@ -745,8 +745,6 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     effect of the Blaze angle and system numerical aperture
 
     # todo: instead of setting nmax, just generate all e-field components that do not get blocked
-    # todo: probably want to either acccept a dictionary object or make DMD class object or something to cary all of the
-    dx, dy, wx, wy, etc. variables.
     # todo: debating moving this function to simulate_dmd.py instead
 
     Given an electric field in fourier space E(k), the intensity I(k) = \sum_q E(q) E^*(q-k).
@@ -805,6 +803,7 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     efield_fc = np.zeros((len(ns), len(ms)), dtype=np.complex)
     blaze_envelope = np.zeros(efield_fc.shape)
 
+    # todo: calculating at f and -f is redundant
     for ii in range(len(ns)):
         for jj in range(len(ms)):
             efield_fc[ii, jj], v = get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, ns[ii], ms[jj],
@@ -818,6 +817,32 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
                                                                      tout_y + wavelength * vecs[ii, jj][1] / dy)
 
                 efield_fc[ii, jj] = efield_fc[ii, jj] * blaze_envelope[ii, jj]
+    # for ii, n in enumerate(ns):
+    #     for m in range(nmax + 1):
+    #         jj = nmax + m
+    #
+    #         efield_fc[ii, jj], v = get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
+    #                                                              nphases, phase_index, origin=origin, dmd_size=dmd_size)
+    #         vecs[ii, jj] = v[:, 0]
+    #
+    #         # also negative of this frequency
+    #         iin = np.abs(nmax - n)
+    #         jjn = nmax - m
+    #         efield_fc[iin, jjn] = np.conj(efield_fc[ii, jj])
+    #         vecs[iin, jjn] = -vecs[ii, jj]
+    #
+    #         if include_blaze_correction:
+    #             # wavelength * frq = theta in Fraunhofer approximation
+    #             blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, tin_x, tin_y,
+    #                                                                  tout_x + wavelength * vecs[ii, jj][0] / dx,
+    #                                                                  tout_y + wavelength * vecs[ii, jj][1] / dy)
+    #             efield_fc[ii, jj] = efield_fc[ii, jj] * blaze_envelope[ii, jj]
+    #
+    #             blaze_envelope[iin, jjn] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, tin_x, tin_y,
+    #                                                                    tout_x + wavelength * vecs[iin, jjn][0] / dx,
+    #                                                                    tout_y + wavelength * vecs[iin, jjn][1] / dy)
+    #             efield_fc[iin, jjn] = efield_fc[iin, jjn] * blaze_envelope[iin, jjn]
+
 
     # divide by volume of unit cell (i.e. maximum possible Fourier component)
     with np.errstate(invalid='ignore'):
@@ -826,7 +851,7 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     # band limit
     frqs = np.linalg.norm(vecs, axis=2)
     # enforce maximum allowable frequency from DMD
-    efield_fc = efield_fc * (frqs <= 1)
+    efield_fc = efield_fc * (frqs <= 0.5)
     # enforce maximum allowable frequency from imaging system
     efield_fc = efield_fc * (frqs <= fmax)
 
@@ -835,15 +860,28 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     # I(f) = convolution(E(f), E^*(-f))
     intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
     # enforce maximum allowable frequency (should only be machine precision errors)
-    intensity_fc = intensity_fc * (frqs <= 2)
+    intensity_fc = intensity_fc * (frqs <= 1)
     intensity_fc = intensity_fc * (frqs <= 2*fmax)
 
     return intensity_fc, efield_fc, ns, ms, vecs
 
 
-def get_bandlimited_fourier_components_xform(pattern, affine_xform, roi, vec_a, vec_b, fmax, nmax=20):
+def get_bandlimited_fourier_components_xform(pattern, affine_xform, roi, vec_a, vec_b, fmax, nmax=20,
+                                             cam_size=(2048, 2048),
+                                             include_blaze_correction=True, dmd_params=None):
     """
-    Test function...is doing it this way better?
+    Utility function for computing many electric field and intensity components of the Fourier pattern, including the
+    effect of the Blaze angle and system numerical aperture. To correct for ROI effects, extract from affine transformed
+    pattern
+
+    # todo: instead of setting nmax, just generate all e-field components that do not get blocked
+    # todo: debating moving this function to simulate_dmd.py instead
+
+    Given an electric field in fourier space E(k), the intensity I(k) = \sum_q E(q) E^*(q-k).
+    For a pattern where P(r)^2 = P(r), these must be equal, giving P(k) = \sum_q P(q) P(q-k).
+    But the relevant quantity after passing through the microscope is P(k) * bandlimit(k), where bandlimit(k) = 1 for
+    k <= fmax, and 0 otherwise. Then the intensity pattern should be
+    \sum_q P(q) P(q-k) * bandlimit(q) * bandlimit(q-k)
 
     :param np.array pattern:
     :param np.array affine_xform:
@@ -852,15 +890,39 @@ def get_bandlimited_fourier_components_xform(pattern, affine_xform, roi, vec_a, 
     :param list[int] or np.array vec_b:
     :param float fmax:
     :param int nmax:
+    :param tuple[int] cam_size: (ny, nx)
+    :param bool include_blaze_correction: if True, include blaze corrections
+    :param dict dmd_params: dictionary {'wavelength', 'dx', 'dy', 'wx', 'wy', 'theta_ins': [tx_in, ty_in],
+     'theta_outs': [tx_out, ty_out]}
 
     :return:
     """
 
+    if dmd_params is None and include_blaze_correction is True:
+        raise Exception("dmd_params must be supplied as include_blaze_correction is True")
+
+    if dmd_params is not None:
+        wavelength = dmd_params["wavelength"]
+        gamma = dmd_params["gamma"]
+        dx = dmd_params["dx"]
+        dy = dmd_params["dy"]
+        wx = dmd_params["wx"]
+        wy = dmd_params["wy"]
+        tin_x, tin_y = dmd_params['theta_ins']
+        tout_x, tout_y = dmd_params['theta_outs']
+
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
 
-    img_coords = np.meshgrid(range(2048), range(2048))
-    pattern_xformed = affine.affine_xform_mat(pattern, affine_xform, img_coords, mode="interp")
-    pattern_xformed = pattern_xformed[roi[0]:roi[1], roi[2]:roi[3]]
+    # todo: generate roi directly instead of cropping
+    # img_coords = np.meshgrid(range(cam_size[1]), range(cam_size[0]))
+    xform_roi = affine.xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
+    nx_roi = roi[3] - roi[2]
+    ny_roi = roi[1] - roi[0]
+    img_coords_roi = np.meshgrid(range(nx_roi), range(ny_roi))
+    pattern_xformed = affine.affine_xform_mat(pattern, xform_roi, img_coords_roi, mode="interp")
+    # pattern_xformed = affine.affine_xform_mat(pattern, affine_xform, img_coords, mode="interp")
+    # pattern_xformed = pattern_xformed[roi[0]:roi[1], roi[2]:roi[3]]
+    pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
 
     fxs = tools.get_fft_frqs(pattern_xformed.shape[1], dt=1)
     fys = tools.get_fft_frqs(pattern_xformed.shape[0], dt=1)
@@ -871,10 +933,10 @@ def get_bandlimited_fourier_components_xform(pattern, affine_xform, roi, vec_a, 
     vecs = np.zeros((len(ns), len(ms), 2))
     vecs_xformed = np.zeros(vecs.shape)
 
-    efield_fc = np.zeros((len(ns), len(ms)), dtype=np.complex)
-    efield_fc_xformed = np.zeros(efield_fc.shape, dtype=np.complex)
-    # blaze_envelope = np.zeros(efield_fc.shape)
+    efield_fc_xformed = np.zeros((len(ns), len(ms)), dtype=np.complex)
+    blaze_envelope = np.zeros(efield_fc_xformed.shape)
 
+    # todo: calculating @ freq and -freq is redundant
     for ii in range(len(ns)):
         for jj in range(len(ms)):
             vecs[ii, jj] = ns[ii] * recp_va[:, 0] + ms[jj] * recp_vb[:, 0]
@@ -882,21 +944,34 @@ def get_bandlimited_fourier_components_xform(pattern, affine_xform, roi, vec_a, 
                 affine.xform_sinusoid_params(vecs[ii, jj, 0], vecs[ii, jj, 1], 0, affine_xform)
 
             try:
-                efield_fc_xformed[ii, jj] = tools.get_peak_value(pattern_xformed, fxs, fys, vecs[ii, jj], peak_pixel_size=2)
+                efield_fc_xformed[ii, jj] = tools.get_peak_value(pattern_xformed_ft, fxs, fys, vecs_xformed[ii, jj], peak_pixel_size=2)
             except:
                 efield_fc_xformed[ii, jj] = 0
+
+            if include_blaze_correction:
+                # wavelength * frq = theta in Fraunhofer approximation
+                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, tin_x, tin_y,
+                                                                     tout_x + wavelength * vecs[ii, jj][0] / dx,
+                                                                     tout_y + wavelength * vecs[ii, jj][1] / dy)
+
+                efield_fc_xformed[ii, jj] = efield_fc_xformed[ii, jj] * blaze_envelope[ii, jj]
 
     # divide by DC component
     efield_fc_xformed = efield_fc_xformed / np.max(np.abs(efield_fc_xformed))
     # hack to get to agree with nphases = 3
+    # todo: why is this here?
     efield_fc_xformed = efield_fc_xformed / 3
 
     # band limit
     frqs = np.linalg.norm(vecs, axis=2)
+    efield_fc_xformed = efield_fc_xformed * (frqs <= 0.5)
     efield_fc_xformed = efield_fc_xformed * (frqs <= fmax)
 
     # intensity fourier components from autocorrelation
-    intensity_fc_xformed = scipy.signal.fftconvolve(efield_fc_xformed, efield_fc_xformed, mode='same')
+    # intensity_fc_xformed = scipy.signal.fftconvolve(efield_fc_xformed, efield_fc_xformed, mode='same')
+    intensity_fc_xformed = scipy.signal.fftconvolve(efield_fc_xformed, np.flip(efield_fc_xformed, axis=(0, 1)).conj(), mode='same')
+    intensity_fc_xformed = intensity_fc_xformed * (frqs <= 1)
+    intensity_fc_xformed = intensity_fc_xformed * (frqs <= 2*fmax)
 
     return intensity_fc_xformed, efield_fc_xformed, ns, ms, vecs, vecs_xformed
 
@@ -1925,7 +2000,7 @@ def plot_sim_pattern_sets(patterns, vas, vbs, wavelength=None, pitch=7560):
         # 2D window from broadcasting
         window = window_x * window_y
 
-        ft = fftpack.fftshift(fftpack.fft2(window * patterns[ii, 0]))
+        ft = fft.fftshift(fft.fft2(fft.ifftshift(window * patterns[ii, 0])))
         plt.imshow(np.abs(ft) / np.abs(ft).max(), norm=PowerNorm(gamma=0.1), extent=extent)
 
         # dominant frequencies of underlying patterns
