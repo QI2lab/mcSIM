@@ -17,6 +17,7 @@ import skimage.filters
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.colors import PowerNorm
+import matplotlib.gridspec
 import matplotlib.cm
 import joblib
 from functools import partial
@@ -81,11 +82,39 @@ def circ_aperture_otf(fx, fy, na, wavelength):
     fy = np.asarray(fy)
     ff = np.asarray(np.sqrt(fx**2 + fy**2))
 
-    # compute otf
-    otf = np.asarray(2 / np.pi * (np.arccos(ff / fmax) - (ff / fmax) * np.sqrt(1 - (ff / fmax)**2)))
-    otf[ff > fmax] = 0
+    with np.errstate(invalid='ignore'):
+        # compute otf
+        otf = np.asarray(2 / np.pi * (np.arccos(ff / fmax) - (ff / fmax) * np.sqrt(1 - (ff / fmax)**2)))
+        otf[ff > fmax] = 0
 
     return otf
+
+# helper functions for converting between NA and peak widths
+def na2fwhm(na, wavelength):
+    """
+
+    :param na:
+    :param wavelength:
+    :return:
+    """
+    return 0.5 * wavelength / na
+
+def na2sigma(na, wavelength):
+    """
+
+    :param na:
+    :param wavelength:
+    :return:
+    """
+    sigma = na2fwhm(na, wavelength) / (2*np.sqrt(2 * np.log(2)))
+    return sigma
+
+def fwhm2na(wavelength, fwhm):
+    return 0.5 * wavelength / fwhm
+
+def sigma2na(wavelength, sigma):
+    fwhm = sigma * (2*np.sqrt(2 * np.log(2)))
+    return fwhm2na(wavelength, fwhm)
 
 # different PSF model functions
 def gaussian_psf(x, y, p, wavelength):
@@ -118,6 +147,7 @@ def gaussian3d_psf(x, y, z, p, wavelength, ni):
     :return:
     """
 
+    # factor = 0.5 / (2 * np.sqrt(2 * np.log(2)))
     sigma_xy = 0.22 * wavelength / p[4]
     sigma_z = np.sqrt(6) / np.pi * ni * wavelength / p[4] ** 2
     val = p[0] * np.exp(- (x - p[1])**2 / (2 * sigma_xy**2) -
@@ -880,47 +910,72 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
         else:
             plt.setp(ax4.get_yticklabels(), visible=False)
 
-    # plot XZ planes
-    figh = plt.figure(figsize=figsize, **kwargs)
-
+    # plot XZ/YZ planes
+    figh = plt.figure(constrained_layout=True, figsize=figsize, **kwargs)
+    plt.suptitle("PSF XZ/YZ planes")
     nrows = nfits + 1
-    ncols = 2
+    ncols = 9
+    spec = matplotlib.gridspec.GridSpec(ncols=ncols, nrows=nrows, figure=figh)
 
     gamma = 0.1
     extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, z[-1] + 0.5 * dz, z[0] - 0.5 * dz]
-    ax = plt.subplot(nrows, ncols, 1)
+
+    # ax = plt.subplot(nrows, ncols, 1)
+    ax = figh.add_subplot(spec[0, 0:2])
     plt.imshow(imgs[:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
 
     plt.setp(ax.get_xticklabels(), visible=False)
     plt.ylabel('Z (um)')
     plt.xlabel('X (um)')
-    plt.title('Image')
-    plt.suptitle("PSF XZ plane")
+    plt.title('XZ plane')
 
-    ax = plt.subplot(nrows, ncols, 2)
+    # ax = plt.subplot(nrows, ncols, 2)
+    ax = figh.add_subplot(spec[0, 2:4])
     plt.imshow(imgs[:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
     plt.title("power norm")
 
+    ax = figh.add_subplot(spec[0, 4:6])
+    plt.imshow(imgs[:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
+    plt.ylabel('Z (um)')
+    plt.xlabel('Y (um)')
+    plt.title('YZ plane')
+
+    ax = figh.add_subplot(spec[0, 6:8])
+    plt.imshow(imgs[:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
+
     for ii in range(nfits):
         # normal scale
-        ax = plt.subplot(nrows, ncols, ii * ncols + 3)
+        ax = figh.add_subplot(spec[ii + 1, 0:2])
         im = plt.imshow(fit_img3d[ii][:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
         plt.title('%s, sf=%d, NA=%0.3f' % (model[ii], sfs[ii], fit_params[ii][4]))
         if ii < (nfits - 1):
             plt.setp(ax.get_xticklabels(), visible=False)
 
         # power law scaled, to emphasize smaller features
-        ax = plt.subplot(nrows, ncols, ii * ncols + 4)
+        ax = figh.add_subplot(spec[ii + 1, 2:4])
         plt.imshow(fit_img3d[ii][:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
         if ii < (nfits - 1):
             plt.setp(ax.get_xticklabels(), visible=False)
 
-    figh.subplots_adjust(right=0.8)
-    cbar_ax = figh.add_axes([0.85, 0.15, 0.05, 0.7])
+        # other cut
+        ax = figh.add_subplot(spec[ii + 1, 6:8])
+        im = plt.imshow(fit_img3d[ii][:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent,
+                        norm=PowerNorm(gamma=gamma))
+        if ii < (nfits - 1):
+            plt.setp(ax.get_xticklabels(), visible=False)
+
+        ax = figh.add_subplot(spec[ii + 1, 4:6])
+        im = plt.imshow(fit_img3d[ii][:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
+        if ii < (nfits - 1):
+            plt.setp(ax.get_xticklabels(), visible=False)
+
+    # figh.subplots_adjust(right=0.8)
+    # cbar_ax = figh.add_axes([0.85, 0.15, 0.05, 0.7])
+    cbar_ax = figh.add_subplot(spec[:, 8])
     figh.colorbar(im, cax=cbar_ax)
 
     figh_list.append(figh)
-    fig_names.append("%s_XZ_psf" % label)
+    fig_names.append("%s_XZ_YZ_psf" % label)
 
     # optional saving
     if save_dir is not None:
@@ -1122,17 +1177,21 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
         if expected_na is not None:
             plt.plot(y, vexp[ixz, :], '--', marker='>', color='g')
 
-        plt.errorbar(y, psf2d[ixz, :], yerr=psf2d_sd[ixz, :], fmt='.', color='k')
-        plt.errorbar(x, psf2d[:, ixz], yerr=psf2d_sd[:, ixz], fmt='.', color='b')
+        plt.errorbar(x, psf2d[ixz, :], yerr=psf2d_sd[ixz, :], fmt='.', color='k')
+        plt.errorbar(y, psf2d[:, ixz], yerr=psf2d_sd[:, ixz], fmt='.', color='b')
         plt.errorbar(np.sqrt(x**2 + y**2), np.diag(psf2d), yerr=np.diag(psf2d_sd), fmt='.', color='m')
         plt.errorbar(np.sqrt(x**2 + y**2), np.diag(np.rot90(psf2d)), yerr=np.diag(np.rot90(psf2d_sd)),
                      fmt='.', color='blueviolet')
 
         plt.xlabel('position (um)')
         if expected_na is None:
-            plt.legend(['gauss', 'vectorial', 'x', 'y', 'x+y', 'x-y'])
+            plt.legend(['gauss na=%0.2f' % pfit_g2d[4],
+                        'vectorial na=%0.2f' % pfit_g2d[4],
+                        'x', 'y', 'x+y', 'x-y'])
         else:
-            plt.legend(['gauss', 'vectorial', 'vectorial na=%0.2f' % expected_na, 'x', 'y', 'x+y', 'x-y'])
+            plt.legend(['gauss na=%0.2f' % pfit_g2d[4],
+                        'vectorial na=%0.2f' % pfit_g2d[4],
+                        'vectorial na=%0.2f' % expected_na, 'x', 'y', 'x+y', 'x-y'])
 
         # OTF
         psf2d[np.isnan(psf2d)] = 0
@@ -1155,8 +1214,15 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
 
         # 1D OTF plot
         ax = plt.subplot(2, 2, 4)
-        plt.plot(fx, mtf[:, ixz], '.')
+
+        if expected_na is not None:
+            otf_ideal = circ_aperture_otf(fx, 0, expected_na, wavelength) * mtf[ixz, ixz]
+            plt.plot(fx, otf_ideal, '-')
+
         plt.plot(fx, mtf[ixz, :], '.')
+        plt.plot(fy, mtf[:, ixz], '.')
+        plt.plot(np.sqrt(fx ** 2 + fy ** 2), np.diag(mtf), '.')
+        plt.plot(np.sqrt(fx ** 2 + fy ** 2), np.diag(np.rot90(mtf)), '.')
 
         xlim = ax.get_xlim()
         ylim = ax.get_ylim()
@@ -1167,6 +1233,11 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
 
         # zero line
         plt.plot([xlim[0], xlim[1]], [0, 0], 'k--')
+
+        if expected_na is None:
+            plt.legend(['x', 'y', 'x+y', 'x-y'])
+        else:
+            plt.legend(['airy otf na=%0.2f' % expected_na, 'x', 'y', 'x+y', 'x-y'])
 
         ax.set_ylim(ylim)
         ax.set_xlim(xlim)
