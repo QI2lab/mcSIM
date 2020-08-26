@@ -382,6 +382,7 @@ class sim_image_set():
                  default_to_guess_on_low_mcnr=True, min_mcnr=1,
                  normalize_histograms=True, remove_background=True,
                  phases_guess=None, mod_depths_guess=None, pspec_params_guess=None,
+                 use_fixed_phase=False, use_fixed_frq=False, find_frq_first=True,
                  log_file_fname=None):
         """
         Class for reconstructing a single SIM image
@@ -1255,7 +1256,8 @@ class sim_image_set():
         print_tee("emission wavelength=%.0fnm and NA=%0.2f" % (self.wavelength * 1e3, self.na), self.log_file)
 
         for ii in range(self.nangles):
-            print_tee("Angle %d/%d" % (ii + 1, self.nangles), self.log_file)
+            print_tee("Angle %d/%d ##########################################################################"
+                      % (ii + 1, self.nangles), self.log_file)
             angle_guess = np.angle(self.frqs_guess[ii, 0] + 1j * self.frqs_guess[ii, 1])
             period_guess = 1 / np.linalg.norm(self.frqs_guess[ii])
 
@@ -1268,8 +1270,8 @@ class sim_image_set():
                 self.log_file)
 
             # modulation depth
-            print_tee("modulation depth=%0.3f, minimum mcnr=%0.3f" % (self.mod_depths[ii], np.min(self.mcnr[ii])),
-                      self.log_file)
+            print_tee("modulation depth=%0.3f" % self.mod_depths[ii], self.log_file)
+            print_tee("minimum mcnr=%0.3f" % np.min(self.mcnr[ii]), self.log_file)
 
             # phase information
             print_tee("phases  =", self.log_file, end="")
