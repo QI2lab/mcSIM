@@ -238,8 +238,6 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                         affine.xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0], frqs_dmd[kk, ii, 1],
                                                          phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], roi, xform)
 
-            # phases_guess = np.mod(-phases_guess, 2*np.pi)
-
             # convert from 1/mirrors to 1/um
             frqs_guess = frqs_guess / pixel_size
 
@@ -247,6 +245,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
             for ii in range(nt):
                 for bb in range(nxy):
                     for aa in range(nz):
+
                         identifier = "%.0fnm_nt=%d_nxy=%d_nz=%d" % (excitation_wavelengths[kk] * 1e3, ii, bb, aa)
                         file_identifier = "nc=%d_nt=%d_nxy=%d_nz=%d" % (kk, ii, bb, aa)
 
@@ -1098,12 +1097,12 @@ class sim_image_set():
             phase_guess_diffs = np.mod(phase_guess - phase_guess[:, 0][:, None], 2*np.pi)
             phase_diffs = np.mod(phases - phases[:, 0][:, None], 2*np.pi)
 
-            diffs = np.mod(phase_guess_diffs[ii] - phase_diffs[ii], 2*np.pi)
-            condition = np.abs(diffs - 2*np.pi) < diffs
-            diffs[condition] = diffs[condition] - 2*np.pi
-
             for ii in range(self.nangles):
-                if np.any(np.abs(diffs[ii]) > self.max_phase_error):
+                diffs = np.mod(phase_guess_diffs[ii] - phase_diffs[ii], 2 * np.pi)
+                condition = np.abs(diffs - 2 * np.pi) < diffs
+                diffs[condition] = diffs[condition] - 2 * np.pi
+
+                if np.any(np.abs(diffs) > self.max_phase_error):
                     phases[ii] = phase_guess[ii]
                     str = "Angle %d/%d, phase guesses are more than the maximum allowed phase error=%0.2fdeg." \
                           " Defaulting to guess values" % (ii+1, self.nangles, self.max_phase_error * 180/np.pi)
@@ -1111,9 +1110,9 @@ class sim_image_set():
                     str += "\nfit phase diffs="
                     for jj in range(self.nphases):
                         str += "%0.2fdeg, " % (phase_diffs[ii, jj] * 180/np.pi)
-                    str += "\nguesses="
-                    for jj in range(self.nphases):
-                        str += "%0.2fdeg, " % (phase_guess_diffs[ii, jj] * 180/np.pi)
+                    # str += "\nguesses="
+                    # for jj in range(self.nphases):
+                    #     str += "%0.2fdeg, " % (phase_guess_diffs[ii, jj] * 180/np.pi)
 
                     # warnings.warn(str)
                     print_tee(str, self.log_file)
