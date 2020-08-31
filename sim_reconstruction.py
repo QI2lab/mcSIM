@@ -46,6 +46,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                        channel_inds=None, crop_image=False, img_centers=None,
                        crop_sizes=None, use_scmos_cal=False, scmos_calibration_file=None, widefield_only=False,
                        nangles=3, nphases=3, npatterns_ignored=0, saving=True,
+                       zinds_to_use=None, tinds_to_use=None, xyinds_to_use=None,
                        save_tif_stack=True,
                        sim_data_export_fname=r"sim_reconstruction_params.pkl", **kwargs):
     """
@@ -194,22 +195,44 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
         nxy = dims['position']
         nt = dims['time']
 
+        if zinds_to_use is None:
+            zinds_to_use = range(nz)
+        nz_used = len(zinds_to_use)
+
+        if tinds_to_use is None:
+            tinds_to_use = range(nt)
+        nt_used = len(tinds_to_use)
+
+        if xyinds_to_use is None:
+            xyinds_to_use = range(nxy)
+        nxy_used = len(xyinds_to_use)
+
         if pixel_size is None:
             pixel_size = metadata['PixelSizeUm'][0]
 
         # set up image size
+        # load one file to check size
+        fname = os.path.join(rpath, metadata['FileName'].values[0])
+        im, _, _ = tools.read_tiff(fname, [metadata['ImageIndexInFile'].values[0]])
+        _, ny_raw, nx_raw = im.shape
         if crop_image:
             # or pick ROI
-            ny = crop_size
-            nx = crop_size
-            roi = tools.get_centered_roi(img_center, [ny, nx])
-            # todo: should check that points do not exceed image size
+            roi = tools.get_centered_roi(img_center, [crop_size, crop_size])
+
+            # check points don't exceed image size
+            if roi[0] < 0:
+                roi[0] = 0
+            if roi[1] > ny_raw:
+                roi[1] = ny_raw
+            if roi[2] < 0:
+                roi[2] = 0
+            if roi[3] > nx_raw:
+                roi[3] = nx_raw
         else:
-            # load one file to check size
-            fname = os.path.join(rpath, metadata['FileName'].values[0])
-            im, _, _ = tools.read_tiff(fname, [metadata['ImageIndexInFile'].values[0]])
-            _, ny, nx = im.shape
-            roi = [0, ny, 0, nx]
+            roi = [0, ny_raw, 0, nx_raw]
+
+        ny = roi[1] - roi[0]
+        nx = roi[3] - roi[2]
 
         # arrays to save results
         imgs_sr = []
@@ -242,9 +265,10 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
             frqs_guess = frqs_guess / pixel_size
 
             # analyze pictures
-            for ii in range(nt):
-                for bb in range(nxy):
-                    for aa in range(nz):
+            for ii in tinds_to_use:
+                for bb in xyinds_to_use:
+                    for aa in zinds_to_use:
+                        tstart = time.process_time()
 
                         identifier = "%.0fnm_nt=%d_nxy=%d_nz=%d" % (excitation_wavelengths[kk] * 1e3, ii, bb, aa)
                         file_identifier = "nc=%d_nt=%d_nxy=%d_nz=%d" % (kk, ii, bb, aa)
@@ -265,8 +289,6 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                         to_use = np.logical_and(to_use, metadata['SliceIndex'] == aa)
                         to_use = np.logical_and(to_use, metadata['PositionIndex'] == bb)
                         paths, slices, info = find_images_to_combine(metadata[to_use], root_path=rpath)
-
-                        tstart = time.process_time()
 
                         # load first images
                         raw_imgs = tools.load_images(paths[0], slices[0])
@@ -329,7 +351,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                             plt.close(fig)
 
                         tend = time.process_time()
-                        print("%d/%d in %0.2f" % (counter, ncolors * nt * nxy * nz, tend - tstart))
+                        print("%d/%d in %0.2f" % (counter, ncolors * nt_used * nxy_used * nz_used, tend - tstart))
 
                         counter += 1
 
@@ -339,10 +361,9 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
         if saving and save_tif_stack:
 
             # todo: want to include metadata in tif.
-
             fname = tools.get_unique_name(os.path.join(sim_results_path, 'widefield.tif'))
             imgs_wf = np.asarray(imgs_wf)
-            wf_to_save = np.reshape(imgs_wf, [ncolors, nt, nz, imgs_wf[0].shape[-2], imgs_wf[0].shape[-1]])
+            wf_to_save = np.reshape(imgs_wf, [ncolors, nt_used, nz_used, imgs_wf[0].shape[-2], imgs_wf[0].shape[-1]])
             tools.save_tiff(wf_to_save, fname, dtype='float32', axes_order="CTZYX", hyperstack=True,
                             datetime=start_time)
 
@@ -352,14 +373,14 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 
             fname = tools.get_unique_name(os.path.join(sim_results_path, 'sim_os.tif'))
             imgs_os = np.asarray(imgs_os)
-            sim_os = np.reshape(imgs_os, [ncolors, nt, nz, imgs_os[0].shape[-2], imgs_os[0].shape[-1]])
+            sim_os = np.reshape(imgs_os, [ncolors, nt_used, nz_used, imgs_os[0].shape[-2], imgs_os[0].shape[-1]])
             tools.save_tiff(sim_os, fname, dtype='float32', axes_order="CTZYX", hyperstack=True,
                             datetime=start_time)
 
             if not widefield_only:
                 fname = tools.get_unique_name(os.path.join(sim_results_path, 'sim_sr.tif'))
                 imgs_sr = np.asarray(imgs_sr)
-                sim_to_save = np.reshape(imgs_sr, [ncolors, nt, nz, imgs_sr[0].shape[-2], imgs_sr[0].shape[-1]])
+                sim_to_save = np.reshape(imgs_sr, [ncolors, nt_used, nz_used, imgs_sr[0].shape[-2], imgs_sr[0].shape[-1]])
                 tools.save_tiff(sim_to_save, fname, dtype='float32', axes_order="CTZYX", hyperstack=True,
                                 datetime=start_time)
 
@@ -419,8 +440,6 @@ class sim_image_set():
         self.use_wicker = use_wicker
         self.use_fixed_parameters = use_fixed_parameters
         self.global_phase_correction = global_phase_correction
-        # self.remove_peaks_by_hand = remove_peaks_by_hand
-        # self.remove_peak_sigma_pixels = remove_peak_sigma_pixels
         self.normalize_histograms = normalize_histograms
         self.remove_background = remove_background
         self.default_to_guess_on_bad_phase_fit = default_to_guess_on_bad_phase_fit
@@ -428,6 +447,9 @@ class sim_image_set():
         self.default_to_guess_on_low_mcnr = default_to_guess_on_low_mcnr
         self.min_mcnr = min_mcnr
         self.determine_amplitudes = determine_amplitudes
+        self.use_fixed_phase = use_fixed_phase
+        self.use_fixed_frq = use_fixed_frq
+        self.find_frq_first = find_frq_first
         self.plot_diagnostics = plot_diagnostics
 
         # #############################################
@@ -624,16 +646,30 @@ class sim_image_set():
             else:
 
                 # estimate frequencies
-                tstart = time.time() # since done using joblib, process_time() is not useful...
-                self.frqs = self.estimate_sim_frqs(self.frqs_guess)
+                tstart = time.time()  # since done using joblib, process_time() is not useful...
+                if not self.use_fixed_frq:
+                    if self.find_frq_first:
+                        self.frqs = self.estimate_sim_frqs(self.frqs_guess)
+                    else:
+                        # todo: finish implementing
+                        self.separated_components_ft = separate_components(self.imgs_ft, self.phases, self.amps)
+                        self.frqs = self.estimate_sim_frqs(self.frqs_guess) # todo: probably need some internal changes to this fn to get everything working...
+                else:
+                    self.frqs = self.frqs_guess
+                    print_tee("using fixed frequencies")
                 tend = time.time()
                 print_tee("fitting %d frequencies took %0.2fs" % (self.nangles * self.nphases, tend - tstart), self.log_file)
 
                 # estimate phases
                 tstart = time.process_time()
-                self.phases, self.amps = self.estimate_sim_phases(self.frqs, self.phases_guess)
+                if not self.use_fixed_phase:
+                    self.phases, self.amps = self.estimate_sim_phases(self.frqs, self.phases_guess)
+                else:
+                    self.phases = self.phases_guess
+                    print_tee("Using fixed phases")
                 tend = time.process_time()
                 print_tee("estimated %d phases in %0.2fs" % (self.nangles * self.nphases, tend - tstart), self.log_file)
+
 
                 # separate components
                 self.separated_components_ft = separate_components(self.imgs_ft, self.phases, self.amps)
@@ -3048,6 +3084,9 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ax1.semilogy(ff_shift[mask].ravel(), ps_exp[mask].ravel(), 'b.')
     ax1.semilogy(ff_shift.ravel(), ps_fit.ravel(), 'r')
 
+    ylims = ax1.get_ylim()
+    ax1.set_ylim([ylims[0], 1.2 * np.max(ps_exp[mask].ravel())])
+
     ax1.set_xlabel('frequency (1/um)')
     ax1.set_ylabel('power spectrum')
     ax1.legend(['all data', 'data used to fit', 'fit'], loc="upper right")
@@ -3061,6 +3100,9 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ax2.semilogy(ff_shift.ravel(), ps_exp_deconvolved.ravel(), 'k.')
     ax2.semilogy(ff_shift[mask].ravel(), ps_exp_deconvolved[mask].ravel(), 'b.')
     ax2.semilogy(ff_shift.ravel(), ps_fit_no_otf.ravel(), 'g')
+
+    ylims = ax1.get_ylim()
+    ax1.set_ylim([ylims[0], 1.2 * np.max(ps_exp_deconvolved[mask].ravel())])
 
     ax2.title.set_text('m^2 A^2 |k|^{-2*alpha} |otf|^4/(|otf|^4 + snr^2)')
     ax2.set_xlabel('|f - f_sim| (1/um)')
