@@ -158,6 +158,10 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
     # ############################################
     # SIM images
     # ############################################
+    if not crop_image:
+        crop_sizes = [np.nan] * len(data_root_paths)
+        img_centers = [[np.nan, np.nan]] * len(data_root_paths)
+
     for rpath, crop_size, img_center in zip(data_root_paths, crop_sizes, img_centers):
         folder_path, folder = os.path.split(rpath)
         print("# ######################################")
@@ -289,6 +293,11 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                         to_use = np.logical_and(to_use, metadata['SliceIndex'] == aa)
                         to_use = np.logical_and(to_use, metadata['PositionIndex'] == bb)
                         paths, slices, info = find_images_to_combine(metadata[to_use], root_path=rpath)
+
+                        if np.sum(to_use) != (nangles * nphases + npatterns_ignored):
+                            raise Exception("Found %d images, but expected %d images at channel=%d,"
+                                            " zindex=%d, tindex=%d, xyindex=%d" % (np.sum(to_use), nangles * nphases + npatterns_ignored,
+                                                                                   channel_inds[kk], aa, ii, bb))
 
                         # load first images
                         raw_imgs = tools.load_images(paths[0], slices[0])
@@ -605,6 +614,7 @@ class sim_image_set():
         debug_fig_names = []
 
         if self.use_fixed_parameters:
+            # todo: deprecate this global option for ability to fix any of these parameters selectively
             if self.phases_guess is None or self.mod_depths_guess is None or self.power_spectrum_params_guess is None:
                 raise Exception("use_fixed_parameters was True, but at least one required parameter was not provided.")
 
@@ -649,14 +659,17 @@ class sim_image_set():
                 tstart = time.time()  # since done using joblib, process_time() is not useful...
                 if not self.use_fixed_frq:
                     if self.find_frq_first:
-                        self.frqs = self.estimate_sim_frqs(self.frqs_guess)
+                        self.frqs = self.estimate_sim_frqs(self.imgs_ft, self.imgs_ft, self.frqs_guess)
                     else:
                         # todo: finish implementing
-                        self.separated_components_ft = separate_components(self.imgs_ft, self.phases, self.amps)
-                        self.frqs = self.estimate_sim_frqs(self.frqs_guess) # todo: probably need some internal changes to this fn to get everything working...
+                        print_tee("doing phase demixing prior to frequency finding", self.log_file)
+                        self.separated_components_ft = separate_components(self.imgs_ft, self.phases_guess, np.ones((self.nangles, self.nphases)))
+                        imgs1 = np.expand_dims(self.separated_components_ft[:, 0], axis=1)
+                        imgs2 = np.expand_dims(self.separated_components_ft[:, 1], axis=1)
+                        self.frqs = self.estimate_sim_frqs(imgs1, imgs2, self.frqs_guess) # todo: probably need some internal changes to this fn to get everything working...
                 else:
                     self.frqs = self.frqs_guess
-                    print_tee("using fixed frequencies")
+                    print_tee("using fixed frequencies", self.log_file)
                 tend = time.time()
                 print_tee("fitting %d frequencies took %0.2fs" % (self.nangles * self.nphases, tend - tstart), self.log_file)
 
@@ -666,7 +679,8 @@ class sim_image_set():
                     self.phases, self.amps = self.estimate_sim_phases(self.frqs, self.phases_guess)
                 else:
                     self.phases = self.phases_guess
-                    print_tee("Using fixed phases")
+                    self.amps = np.ones((self.nangles, self.nphases))
+                    print_tee("Using fixed phases", self.log_file)
                 tend = time.process_time()
                 print_tee("estimated %d phases in %0.2fs" % (self.nangles * self.nphases, tend - tstart), self.log_file)
 
@@ -1060,7 +1074,7 @@ class sim_image_set():
         return sim_sr, sim_sr_ft, components_deconvolved_ft, components_shifted_ft,\
                weights, weight_norm, snr, snr_shifted
 
-    def estimate_sim_frqs(self, frq_guess):
+    def estimate_sim_frqs(self, fts1, fts2, frq_guess):
         """
         estimate SIM frequency
 
@@ -1069,31 +1083,25 @@ class sim_image_set():
         :return phases:
         :return peak_heights_relative: Height of the fit peak relative to the DC peak.
         """
+        nangles = fts1.shape[0]
+        nphases = fts1.shape[1]
 
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
             joblib.delayed(fit_modulation_frq)(
-                self.imgs[ii, jj], {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                fts1[ii, jj], fts2[ii, jj], {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
                 frq_guess=frq_guess[ii])
-            for ii in range(self.nangles) for jj in range(self.nphases)
+            for ii in range(nangles) for jj in range(nphases)
         )
 
         frqs, _ = zip(*results)
-        frqs = np.reshape(np.asarray(frqs), [self.nangles, self.nphases, 2])
+        frqs = np.reshape(np.asarray(frqs), [nangles, nphases, 2])
 
-        # frqs = np.zeros((self.nangles, self.nphases, 2))
+        # frqs = np.zeros((nangles, nphases, 2))
         # for ii in range(self.nangles):
         #     for jj in range(self.nphases):
-        #
-        #         tstart = time.process_time()
-        #
         #         frqs[ii, jj, :], mask = \
-        #              fit_modulation_frq(self.imgs[ii, jj], {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+        #              fit_modulation_frq(fts1[ii, jj], fts2[ii, jj], {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
         #                                 frq_guess=frq_guess[ii])
-        #
-        #         tend = time.process_time()
-        #
-        #         print("finished SIM frequency estimate %d/%d in %0.2fs" %
-        #               (ii * self.nphases + (jj + 1), self.nangles * self.nphases, tend - tstart))
 
         # get frequency and angle estimates
         frqs = np.mean(frqs, axis=1)
@@ -1245,9 +1253,9 @@ class sim_image_set():
                         get_sim_params_mcmc(self.imgs_ft[ii, jj], self.otf, frqs_sim[ii], self.fx, self.fy, self.fmax, fit_shifts=False)
 
                 if self.plot_diagnostics and ii == 0:
-                    figh = plot_sim_params(self.imgs_ft[ii, jj], frqs_sim[ii],
-                                           {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                           frqs_guess=self.frqs_guess[ii], figsize=figsize)
+                    figh = plot_correlation_fit(self.imgs_ft[ii, jj], self.imgs_ft[ii, jj], frqs_sim[ii],
+                                                {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                                                frqs_guess=self.frqs_guess[ii], figsize=figsize)
 
                     debug_figs += [figh]
                     debug_fig_names += ['frq_fit_angle=%d' % (ii + 1)]
@@ -1606,21 +1614,14 @@ class sim_image_set():
                 elif jj == 1:
                     plt.title('m*O(f-fo)otf(f)')
                     plt.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                    # circ2 = matplotlib.patches.Circle((self.frqs[ii, 0], self.frqs[ii, 1]),
-                    #                                   radius=self.fmax, color='k', fill=0, ls='--')
-                    # ax.add_artist(circ2)
                 elif jj == 2:
                     plt.title('m*O(f+fo)otf(f)')
                     plt.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                    # circ3 = matplotlib.patches.Circle((-self.frqs[ii, 0], -self.frqs[ii, 1]),
-                    #                                   radius=self.fmax, color='k', fill=0, ls='--')
-                    # ax.add_artist(circ3)
 
                 plt.setp(ax.get_xticklabels(), visible=False)
                 plt.setp(ax.get_yticklabels(), visible=False)
 
                 plt.xlim([-2 * self.fmax, 2 * self.fmax])
-                # plt.ylim([-2 * self.fmax, 2 * self.fmax])
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
 
                 # ####################
@@ -1825,12 +1826,20 @@ class sim_image_set():
         figs = []
         fig_names = []
         for ii in range(self.nangles):
-            for jj in range(self.nphases):
-                figh = plot_sim_params(self.imgs_ft[ii, jj], self.frqs[ii, :],
-                                       {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                       frqs_guess=self.frqs_guess[ii], figsize=figsize)
+
+            if self.find_frq_first:
+                for jj in range(self.nphases):
+                    figh = plot_correlation_fit(self.imgs_ft[ii, jj], self.imgs_ft[ii, jj], self.frqs[ii, :],
+                                                {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                                                frqs_guess=self.frqs_guess[ii], figsize=figsize)
+                    figs.append(figh)
+                    fig_names.append("frq_fit_angle=%d_phase=%d" % (ii + 1, jj + 1))
+            else:
+                figh = plot_correlation_fit(self.separated_components_ft[ii, 0], self.separated_components_ft[ii, 1], self.frqs[ii, :],
+                                            {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                                            frqs_guess=self.frqs_guess[ii], figsize=figsize)
                 figs.append(figh)
-                fig_names.append("frq_fit_angle=%d_phase=%d" % (ii + 1, jj + 1))
+                fig_names.append("frq_fit_angle=%d" % (ii + 1))
 
         return figs, fig_names
 
@@ -1967,7 +1976,7 @@ def find_images_to_combine(metadata_frame, root_path=""):
     return paths, slices, metadata
 
 # estimate frequency and phase of modulation pattern
-def fit_modulation_frq(img, options, exclude_res=0.7, frq_guess=None, roi_pix_size=5, use_jacobian=False):
+def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_pix_size=5, use_jacobian=False):
     """
     Find SIM frequency from image by maximizing
     C(f) =  \sum_k img_ft(k) x img_ft*(k+f) = F(img_ft) * F(img_ft*) = F(|img_ft|^2).
@@ -1980,17 +1989,20 @@ def fit_modulation_frq(img, options, exclude_res=0.7, frq_guess=None, roi_pix_si
     Note, faster to give img as input instead of its fourier transform, because getting shifted ft of image requires
     only one fft, whereas getting shifted fourier transform of the transform itself requires two (ifft, then fft again)
 
-    :param img: 2D real NumPy array
-    :param options: dictionary of options
-    :param exclude_res: frequencies as roi_size proportion of fmax to be excluded from peak finding
+    :param img1: 2D real NumPy array
+    :param img2: 2D real NumPy array to be cross correlated with
+    :param options: dictionary of options {'pixel_size', 'wavelength', 'na'}.
+    todo: wavelength/na only used to calculate fmax, so lets make fmax the argument instead
+    :param exclude_res: frequencies less than this fraction of fmax are excluded from peak finding. Not
     :param frq_guess: frequency guess [fx, fy]. Can be None.
     :param roi_pix_size: half-size of the region of interest around frq_guess used to estimate the peak location
+
     :return fit_frqs:
     :return mask: mask detailing region used in fitting
     """
 
-    if np.any(np.iscomplex(img)):
-        raise Exception('img must be real, but was complex.')
+    # if np.any(np.iscomplex(img1)):
+    #     raise Exception('img must be real, but was complex.')
 
     # extract options
     dx = options['pixel_size']
@@ -1998,37 +2010,41 @@ def fit_modulation_frq(img, options, exclude_res=0.7, frq_guess=None, roi_pix_si
     wavelength = options['wavelength']
     na = options['na']
     fmax = 1 / (0.5 * wavelength / na)
+    ny, nx = ft1.shape
 
     # coords
-    xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
-    xx = xx * dx
-    yy = yy * dx
+    x = tools.get_fft_pos(nx, dx, centered=False, mode='symmetric')
+    y = tools.get_fft_pos(ny, dy, centered=False, mode='symmetric')
+    xx, yy = np.meshgrid(x, y)
 
     # get frequency data
-    fxs = tools.get_fft_frqs(img.shape[1], dx)
-    dfx = fxs[1] - fxs[1]
-    fys = tools.get_fft_frqs(img.shape[0], dy)
+    fxs = tools.get_fft_frqs(ft1.shape[1], dx)
+    dfx = fxs[1] - fxs[0]
+    fys = tools.get_fft_frqs(ft1.shape[0], dy)
     dfy = fys[1] - fys[0]
     fxfx, fyfy = np.meshgrid(fxs, fys)
     ff = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
     # mask
     if frq_guess is None:
-        mask = np.ones(img.shape)
+        mask = np.ones(ft1.shape)
         mask[ff > fmax] = 0
         mask[ff < exclude_res * fmax] = 0
     else:
         # account for frq_guess
         pix_x_guess = np.argmin(np.abs(fxs - frq_guess[0]))
         pix_y_guess = np.argmin(np.abs(fys - frq_guess[1]))
-        mask = np.zeros(img.shape)
+        mask = np.zeros(ft1.shape)
         mask[pix_y_guess - roi_pix_size : pix_y_guess + roi_pix_size + 1,
              pix_x_guess - roi_pix_size : pix_x_guess + roi_pix_size + 1] = 1
 
-    # ft of image
-    # todo: should have an ifftshift? I think it doesn't matter in this fn because I'm only looking at intensity?
-    ft = fft.fftshift(fft.fft2(img))
-    cc = np.abs(ft * ft.conj())
+    # cross correlation of Fourier transforms
+    # cc = np.abs(ft1 * ft2.conj())
+    #cc = np.abs(scipy.signal.fftconvolve(ft1, ft2.conj(), mode='same'))
+    # WARNING: correlate2d uses a different convention for the frequencies of the output, which will not agree with the fft convention
+    # take conjugates so this will give \sum ft1 * ft2.conj()
+    # scipy.signal.correlate(g1, g2)(fo) seems to compute \sum_f g1^*(f) * g2(f - fo), but I want g1^*(f)*g2(f+fo)
+    cc = np.abs(scipy.signal.correlate(ft2, ft1, mode='same'))
 
     # get initial frq_guess by looking at cc at discrete frequency set and finding max
     max_ind = (cc * mask).argmax()
@@ -2043,34 +2059,34 @@ def fit_modulation_frq(img, options, exclude_res=0.7, frq_guess=None, roi_pix_si
         subscript_list = [subscript, reflected_subscript]
         # always return frequency with positive fy. If fy=0, return with positive fx.
         # i.e. want to sort so that larger y-subscript is returned first
-        m = np.max(img.shape)
+        m = np.max(ft1.shape)
         subscript_list.sort(key=lambda x: x[0] * m + x[1], reverse=True)
         subscript, reflected_subscript = subscript_list
 
     # do fitting
-    # ft shifted by f
-    fft_shifted = lambda f: fft.fftshift(fft.fft2(np.exp(-1j*2*np.pi * (f[0] * xx + f[1] * yy)) * img))
+    img2 = fft.fftshift(fft.ifft2(fft.ifftshift(ft2)))
+    # compute ft2(f + fo)
+    fft_shifted = lambda f: fft.fftshift(fft.fft2(np.exp(-1j*2*np.pi * (f[0] * xx + f[1] * yy)) * fft.ifftshift(img2)))
     # cross correlation
-    cc_fn = lambda f: np.sum(ft * fft_shifted(f).conj())
-    fft_norm = np.sum(np.abs(ft)**2)**2
-    min_fn = lambda f: -np.abs(cc_fn(f)) ** 2 / fft_norm
+    # todo: conjugating ft2 instead of ft1, as in typical definition of cross correlation. Doesn't matter bc taking norm
+    cc_fn = lambda f: np.sum(ft1 * fft_shifted(f).conj())
+    fft_norm = np.sum(np.abs(ft1) * np.abs(ft2))**2
+    min_fn = lambda f: -np.abs(cc_fn(f))**2 / fft_norm
 
     # derivatives and jacobian
     # these work, but the cost of evaluating this is so large that it slows down the fitting. This is not surprising,
     # as evaluating the jacobian is equivalent to ~4 function evaluations. So even though having the jacobian reduces
     # the number of function evaluations by a factor of ~3, this increase wins.
-    dfx_fft_shifted = lambda f: fft.fftshift(fft.fft2(-1j * 2 * np.pi * xx * np.exp(-1j * 2 * np.pi * (f[0] * xx + f[1] * yy)) * img))
-    dfy_fft_shifted = lambda f: fft.fftshift(fft.fft2(-1j * 2 * np.pi * yy * np.exp(-1j * 2 * np.pi * (f[0] * xx + f[1] * yy)) * img))
-    dfx_cc = lambda f: np.sum(ft * dfx_fft_shifted(f).conj())
-    dfy_cc = lambda f: np.sum(ft * dfy_fft_shifted(f).conj())
+    # todo: need to check these now that added second fn to correlate
+    dfx_fft_shifted = lambda f: fft.fftshift(fft.fft2(-1j * 2 * np.pi * xx * np.exp(-1j * 2 * np.pi * (f[0] * xx + f[1] * yy)) * img2))
+    dfy_fft_shifted = lambda f: fft.fftshift(fft.fft2(-1j * 2 * np.pi * yy * np.exp(-1j * 2 * np.pi * (f[0] * xx + f[1] * yy)) * img2))
+    dfx_cc = lambda f: np.sum(ft2 * dfx_fft_shifted(f).conj())
+    dfy_cc = lambda f: np.sum(ft2 * dfy_fft_shifted(f).conj())
     dfx_min_fn = lambda f: -2 * (cc_fn(f) * dfx_cc(f).conj()).real / fft_norm
     dfy_min_fn = lambda f: -2 * (cc_fn(f) * dfy_cc(f).conj()).real / fft_norm
     jac = lambda f: np.array([dfx_min_fn(f), dfy_min_fn(f)])
 
     init_params = [fxfx[subscript], fyfy[subscript]]
-    # frq_guess should be correct to within a few pixels
-    # lbs = init_params - 0.05 * np.abs(init_params)
-    # ubs = init_params + 0.05 * np.abs(init_params)
     # enforce frequency fit in same box as guess
     lbs = (init_params[0] - dfx * roi_pix_size, init_params[1] - dfy * roi_pix_size)
     ubs = (init_params[0] + dfx * roi_pix_size, init_params[1] + dfy * roi_pix_size)
@@ -2464,12 +2480,12 @@ def get_noise_power(img_ft, fxs, fys, fmax):
     :return noise_power:
     """
 
-    cc = np.abs(img_ft) ** 2
+    ps = np.abs(img_ft) ** 2
 
     # exclude regions of frequency space
     fxfx, fyfy = np.meshgrid(fxs, fys)
     ff = np.sqrt(fxfx ** 2 + fyfy ** 2)
-    noise_power = np.mean(cc[ff > fmax])
+    noise_power = np.mean(ps[ff > fmax])
 
     return noise_power
 
@@ -2909,7 +2925,7 @@ def get_extent(y, x):
     extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
     return extent
 
-def plot_sim_params(img_ft, frqs, options, frqs_guess=None, figsize=(20, 10)):
+def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_size=31, figsize=(20, 10)):
     """
     Display SIM parameter fitting results visually, in a way that is easy to inspect.
 
@@ -2923,9 +2939,6 @@ def plot_sim_params(img_ft, frqs, options, frqs_guess=None, figsize=(20, 10)):
     :return figh: handle to figure produced
     """
 
-    # todo: work in progress. Should replace plotting function inside get_sim_frq
-    # todo: maybe plot both power spectrum and fft?
-
     # get physical parameters
     dx = options['pixel_size']
     dy = dx
@@ -2934,13 +2947,15 @@ def plot_sim_params(img_ft, frqs, options, frqs_guess=None, figsize=(20, 10)):
     fmax = 1 / (0.5 * wavelength / na)
 
     # get frequency data
-    fxs = tools.get_fft_frqs(img_ft.shape[1], dx)
+    fxs = tools.get_fft_frqs(img1_ft.shape[1], dx)
     dfx = fxs[1] - fxs[0]
-    fys = tools.get_fft_frqs(img_ft.shape[0], dy)
+    fys = tools.get_fft_frqs(img1_ft.shape[0], dy)
     dfy = fys[1] - fys[0]
 
-    # power sectrum / cross correlation
-    cc = np.abs(img_ft * img_ft.conj())
+    # power spectrum / cross correlation
+    # cc = np.abs(img1_ft * img2_ft.conj())
+    # cc = np.abs(scipy.signal.fftconvolve(img1_ft, img2_ft.conj(), mode='same'))
+    cc = np.abs(scipy.signal.correlate(img2_ft, img1_ft, mode='same'))
 
     fx_sim, fy_sim = frqs
     # useful info to print
@@ -2950,19 +2965,32 @@ def plot_sim_params(img_ft, frqs, options, frqs_guess=None, figsize=(20, 10)):
     extent = get_extent(fys, fxs)
 
     # create figure
-    figh, (ax, ax2) = plt.subplots(1, 2, figsize=figsize)
+    figh = plt.figure(figsize=figsize)
+    gspec = matplotlib.gridspec.GridSpec(ncols=14, nrows=2, figure=figh)
+
+    # suptitle
+    str = '   fit: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um' % (period * 1e3, angle * 180 / np.pi, angle, fx_sim, fy_sim)
+    if frqs_guess is not None:
+        fx_g, fy_g = frqs_guess
+        period_g = 1 / np.sqrt(fx_g ** 2 + fy_g ** 2)
+        angle_g = np.angle(fx_g + 1j * fy_g)
+
+        str += '\nguess: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um' % (period_g * 1e3, angle_g * 180 / np.pi, angle_g, fx_g, fy_g)
+    plt.suptitle(str)
 
     # #######################################
     # plot region of interest
     # #######################################
     roi_cx = np.argmin(np.abs(fx_sim - fxs))
     roi_cy = np.argmin(np.abs(fy_sim - fys))
-    roi = tools.get_centered_roi([roi_cy, roi_cx], [51, 51])
+    roi = tools.get_centered_roi([roi_cy, roi_cx], [roi_size, roi_size])
 
     extent_roi = get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
+    ax = plt.subplot(gspec[0, 0:6])
+    ax.set_title("cross correlation, ROI")
     # ax.imshow(cc * mask, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent)
-    ax.imshow(cc[roi[0]:roi[1], roi[2]:roi[3]], norm=PowerNorm(gamma=0.1), extent=extent_roi)
+    im1 = ax.imshow(cc[roi[0]:roi[1], roi[2]:roi[3]], norm=PowerNorm(gamma=0.1), extent=extent_roi)
     ph1 = ax.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
@@ -2981,43 +3009,58 @@ def plot_sim_params(img_ft, frqs, options, frqs_guess=None, figsize=(20, 10)):
     ax.set_xlabel('fx (1/um)')
     ax.set_ylabel('fy (1/um)')
 
+
+    cbar_ax = figh.add_subplot(gspec[0, 6])
+    figh.colorbar(im1, cax=cbar_ax)
+
     ### full image ###
-
-    circ_fit_frq = matplotlib.patches.Circle((fx_sim, fy_sim), radius=dfx * 5, color='r', fill=0, ls='-')
-    ax2.add_artist(circ_fit_frq)
-
-    circ_fit_frq_reflected = matplotlib.patches.Circle((-fx_sim, -fy_sim), radius=dfx * 5, color='r', fill=0, ls='-')
-    ax2.add_artist(circ_fit_frq_reflected)
+    ax2 = plt.subplot(gspec[0, 7:13])
+    im2 = ax2.imshow(cc, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent)
+    ax2.set_xlim([-fmax, fmax])
+    ax2.set_ylim([-fmax, fmax])
 
     # plot maximum frequency
-    circ_max_frq = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0, ls='--')
+    circ_max_frq = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0)
     ax2.add_artist(circ_max_frq)
 
-    circ_max_frq_shift1 = matplotlib.patches.Circle((fx_sim, fy_sim), radius=fmax, color='k', fill=0, ls='--')
-    ax2.add_artist(circ_max_frq_shift1)
+    roi_rec = matplotlib.patches.Rectangle((fxs[roi[2]], fys[roi[0]]), fxs[roi[3]] - fxs[roi[2]], fys[roi[1]] - fys[roi[0]], edgecolor='k', fill=0)
+    ax2.add_artist(roi_rec)
 
-    circ_max_frq_shift2 = matplotlib.patches.Circle((-fx_sim, -fy_sim), radius=fmax, color='k', fill=0, ls='--')
-    ax2.add_artist(circ_max_frq_shift2)
-
-    ax2.imshow(cc, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent)
-    # ax2.scatter(frqs[0], frqs[1], color='r', marker='x')
-    if frqs_guess is not None:
-        circ_fit_frq = matplotlib.patches.Circle((frqs_guess[0], frqs_guess[1]), radius=dfx * 5, color='g', fill=0, ls='-')
-        ax2.add_artist(circ_fit_frq)
-
-        circ_fit_frq_reflected = matplotlib.patches.Circle((-frqs_guess[0], -frqs_guess[1]), radius=dfx * 5, color='g', fill=0,ls='-')
-        ax2.add_artist(circ_fit_frq_reflected)
-
-        # ax2.scatter(frqs_guess[0], frqs_guess[1], color='g', marker='x')
-        # ax2.scatter(-frqs_guess[0], -frqs_guess[1], color='g', marker='x')
-
+    ax2.set_title("Cross correlation, C(fo) = \sum_f img_ft1(f) x img_ft2^*(f+fo)")
     ax2.set_xlabel('fx (1/um)')
     ax2.set_ylabel('fy (1/um)')
 
-    plt.suptitle('Autocorrelation, C(q)\n'
-                 ' = \sum_k img_ft(k) x img_ft*(k+q) = F(img_ft) * F(img_ft*) = F(|img_ft|^2)\n'
-                 ' period %0.3fnm at %.2fdeg=%0.3frad\n'
-                 'f=(%0.3f,%0.3f) 1/um' % (period * 1e3, angle * 180 / np.pi, angle, fx_sim, fy_sim))
+    cbar_ax = figh.add_subplot(gspec[0, 13])
+    figh.colorbar(im2, cax=cbar_ax)
+
+    # ft 1
+    ax3 = plt.subplot(gspec[1, 0:6])
+    ax3.set_title("fft 1 PS near DC")
+
+    cx_c = np.argmin(np.abs(fxs))
+    cy_c = np.argmin(np.abs(fys))
+    roi_center = tools.get_centered_roi([cy_c, cx_c], [roi_size, roi_size])
+
+    im3 = ax3.imshow(np.abs(img1_ft[roi_center[0]:roi_center[1], roi_center[2]:roi_center[3]])**2, norm=PowerNorm(gamma=0.1), extent=extent)
+    ax3.scatter(0, 0, color='r', marker='x')
+
+    cbar_ax = figh.add_subplot(gspec[1, 6])
+    figh.colorbar(im3, cax=cbar_ax)
+
+    # ft 2
+    ax4 = plt.subplot(gspec[1, 7:13])
+    ax4.set_title("fft 2 PS near fo")
+
+    im4 = ax4.imshow(np.abs(img2_ft[roi[0]:roi[1], roi[2]:roi[3]])**2, norm=PowerNorm(gamma=0.1), extent=extent_roi)
+    ph1 = ax4.scatter(frqs[0], frqs[1], color='r', marker='x')
+    if frqs_guess is not None:
+        if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
+            ph2 = ax4.scatter(frqs_guess[0], frqs_guess[1], color='g', marker='x')
+        else:
+            ph2 = ax4.scatter(-frqs_guess[0], -frqs_guess[1], color='g', marker='x')
+
+    cbar_ax = figh.add_subplot(gspec[1, 13])
+    figh.colorbar(im4, cax=cbar_ax)
 
     return figh
 
