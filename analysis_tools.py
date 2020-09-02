@@ -1920,12 +1920,16 @@ def translate_ft(img_ft: np.ndarray, shift_frq, dx=1, dy=None, apodization=None)
     """
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
+    using the FFT shift relationship, img_ft(f + shift_frq) = F[ exp(-2*pi*i * shift_frq * r) * img(r) ]
+
+    This is an approximation to the Whittaker-Shannon interpolation formula which can be performed using only FFT's
 
     :param img_ft: fourier transform, with frequencies centered using fftshift
     :param shift_frq: [fx, fy]. Frequency in hertz (i.e. angular frequency is k = 2*pi*f)
     :param dx: pixel size (sampling rate) of real space image in x-direction
     :param dy: pixel size (sampling rate) of real space image in y-direction
     :param apodization: apodization function applied (in both k- and real- space)
+
     :return img_ft_shifted:
     """
     if dy is None:
@@ -1941,13 +1945,13 @@ def translate_ft(img_ft: np.ndarray, shift_frq, dx=1, dy=None, apodization=None)
 
     ny, nx = img_ft.shape
     # must use symmetric frequency representation to do correctly!
-    # we are using the FT shift theorem to approximate the Nyquist-Whittaker interpolation formula,
+    # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
     # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
     x = get_fft_pos(nx, dx, centered=False, mode='symmetric')
     y = get_fft_pos(ny, dy, centered=False, mode='symmetric')
 
     exp_factor = np.exp(-1j * 2 * np.pi * (shift_frq[0] * x[None, :] + shift_frq[1] * y[:, None]))
-
+    #ifft2(ifftshift(img_ft)) = ifftshift(img)
     img_ft_shifted = fft.fftshift(fft.fft2(apodization * exp_factor * fft.ifft2(fft.ifftshift(img_ft * apodization))))
 
     return img_ft_shifted
