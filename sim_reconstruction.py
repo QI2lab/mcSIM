@@ -360,7 +360,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                             plt.close(fig)
 
                         tend = time.process_time()
-                        print("%d/%d in %0.2f" % (counter, ncolors * nt_used * nxy_used * nz_used, tend - tstart))
+                        print("%d/%d from %s in %0.2fs" % (counter, ncolors * nt_used * nxy_used * nz_used, folder, tend - tstart))
 
                         counter += 1
 
@@ -395,7 +395,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 
                 fname = tools.get_unique_name(os.path.join(sim_results_path, 'deconvolved.tif'))
                 imgs_deconvolved = np.asarray(imgs_deconvolved)
-                deconvolved_to_save = np.reshape(imgs_deconvolved, [ncolors, nt, nz, imgs_deconvolved[0].shape[-2],
+                deconvolved_to_save = np.reshape(imgs_deconvolved, [ncolors, nt_used, nz_used, imgs_deconvolved[0].shape[-2],
                                                                     imgs_deconvolved[0].shape[-1]])
                 tools.save_tiff(deconvolved_to_save, fname, dtype='float32', axes_order='CTZYX', hyperstack=True,
                                 datetime=start_time)
