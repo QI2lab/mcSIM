@@ -1475,7 +1475,6 @@ class sim_image_set():
         ax.add_artist(circ2)
 
         plt.xlim([-2 * self.fmax, 2 * self.fmax])
-        #plt.ylim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
 
         # deconvolution Fourier space
@@ -1486,8 +1485,6 @@ class sim_image_set():
         circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ2)
 
-        plt.xlim([-2 * self.fmax, 2 * self.fmax])
-        # plt.ylim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
 
         # SIM fourier space
@@ -1500,7 +1497,6 @@ class sim_image_set():
         ax.add_artist(circ2)
 
         plt.xlim([-2 * self.fmax, 2 * self.fmax])
-        # plt.ylim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
 
         return figh
@@ -1648,7 +1644,6 @@ class sim_image_set():
                 plt.setp(ax.get_yticklabels(), visible=False)
 
                 plt.xlim([-2 * self.fmax, 2 * self.fmax])
-                # plt.ylim([-2 * self.fmax, 2 * self.fmax])
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
 
                 # ####################
@@ -1678,7 +1673,6 @@ class sim_image_set():
                 plt.setp(ax.get_yticklabels(), visible=False)
 
                 plt.xlim([-2 * self.fmax, 2 * self.fmax])
-                # plt.ylim([-2 * self.fmax, 2 * self.fmax])
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
 
                 # ####################
@@ -1696,7 +1690,6 @@ class sim_image_set():
                 ax.add_artist(circ)
 
                 plt.xlim([-2 * self.fmax, 2 * self.fmax])
-                # plt.ylim([-2 * self.fmax, 2 * self.fmax])
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
 
                 if jj == 0:
@@ -1718,7 +1711,6 @@ class sim_image_set():
                 ax.add_artist(circ)
 
                 plt.xlim([-2 * self.fmax, 2 * self.fmax])
-                # plt.ylim([-2 * self.fmax, 2 * self.fmax])
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
 
                 if jj == 0:
@@ -1747,7 +1739,6 @@ class sim_image_set():
                 plt.setp(ax.get_yticklabels(), visible=False)
 
                 plt.xlim([-2 * self.fmax, 2 * self.fmax])
-                # plt.ylim([-2 * self.fmax, 2 * self.fmax])
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
 
             plt.suptitle('period=%0.3fnm at %0.3fdeg=%0.3frad, f=(%0.3f,%0.3f) 1/um\n'
@@ -1781,7 +1772,6 @@ class sim_image_set():
         plt.title('Net weight')
 
         plt.xlim([-2 * self.fmax, 2 * self.fmax])
-        # plt.ylim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
 
         figs.append(figh)
@@ -2969,13 +2959,15 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     gspec = matplotlib.gridspec.GridSpec(ncols=14, nrows=2, figure=figh)
 
     # suptitle
-    str = '   fit: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um' % (period * 1e3, angle * 180 / np.pi, angle, fx_sim, fy_sim)
+    str = '   fit: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um' % \
+          (period * 1e3, angle * 180 / np.pi, angle, fx_sim, fy_sim)
     if frqs_guess is not None:
         fx_g, fy_g = frqs_guess
         period_g = 1 / np.sqrt(fx_g ** 2 + fy_g ** 2)
         angle_g = np.angle(fx_g + 1j * fy_g)
 
-        str += '\nguess: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um' % (period_g * 1e3, angle_g * 180 / np.pi, angle_g, fx_g, fy_g)
+        str += '\nguess: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um' % \
+               (period_g * 1e3, angle_g * 180 / np.pi, angle_g, fx_g, fy_g)
     plt.suptitle(str)
 
     # #######################################
@@ -2989,8 +2981,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
 
     ax = plt.subplot(gspec[0, 0:6])
     ax.set_title("cross correlation, ROI")
-    # ax.imshow(cc * mask, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent)
-    im1 = ax.imshow(cc[roi[0]:roi[1], roi[2]:roi[3]], norm=PowerNorm(gamma=0.1), extent=extent_roi)
+    im1 = ax.imshow(cc[roi[0]:roi[1], roi[2]:roi[3]], interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi)
     ph1 = ax.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
@@ -3017,13 +3008,14 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     ax2 = plt.subplot(gspec[0, 7:13])
     im2 = ax2.imshow(cc, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent)
     ax2.set_xlim([-fmax, fmax])
-    ax2.set_ylim([-fmax, fmax])
+    ax2.set_ylim([fmax, -fmax])
 
     # plot maximum frequency
     circ_max_frq = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0)
     ax2.add_artist(circ_max_frq)
 
-    roi_rec = matplotlib.patches.Rectangle((fxs[roi[2]], fys[roi[0]]), fxs[roi[3]] - fxs[roi[2]], fys[roi[1]] - fys[roi[0]], edgecolor='k', fill=0)
+    roi_rec = matplotlib.patches.Rectangle((fxs[roi[2]], fys[roi[0]]), fxs[roi[3]] - fxs[roi[2]], fys[roi[1]] - fys[roi[0]],
+                                           edgecolor='k', fill=0)
     ax2.add_artist(roi_rec)
 
     ax2.set_title("Cross correlation, C(fo) = \sum_f img_ft1(f) x img_ft2^*(f+fo)")
@@ -3041,7 +3033,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     cy_c = np.argmin(np.abs(fys))
     roi_center = tools.get_centered_roi([cy_c, cx_c], [roi_size, roi_size])
 
-    im3 = ax3.imshow(np.abs(img1_ft[roi_center[0]:roi_center[1], roi_center[2]:roi_center[3]])**2, norm=PowerNorm(gamma=0.1), extent=extent)
+    im3 = ax3.imshow(np.abs(img1_ft[roi_center[0]:roi_center[1], roi_center[2]:roi_center[3]])**2,
+                     interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent)
     ax3.scatter(0, 0, color='r', marker='x')
 
     cbar_ax = figh.add_subplot(gspec[1, 6])
@@ -3051,7 +3044,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     ax4 = plt.subplot(gspec[1, 7:13])
     ax4.set_title("fft 2 PS near fo")
 
-    im4 = ax4.imshow(np.abs(img2_ft[roi[0]:roi[1], roi[2]:roi[3]])**2, norm=PowerNorm(gamma=0.1), extent=extent_roi)
+    im4 = ax4.imshow(np.abs(img2_ft[roi[0]:roi[1], roi[2]:roi[3]])**2,
+                     interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi)
     ph1 = ax4.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
