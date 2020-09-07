@@ -522,21 +522,27 @@ def fit_barrel_distortion(from_pts, to_pts):
     raise Exception("todo: not implemented")
 
 
-def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd=None, debug=False):
+def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_squared_relative_max=1.5, max_position_err=0.1, img_sd=None, debug=False):
     """
     Fit peak of fluorescence pattern
 
     :param np.array img:
     :param centers:
-    :param centers_init:
-    :param indices_init:
-    :param roi_size:
+    :param list[list[float]] centers_init: [[cy1, cx1], [cy2, cx2], ...] must supply at least three centers.
+    Given one initial center, the other two should be shifted by one index along each direction of the DMD
+    :param indices_init: indices corresponding to centers init
+    :param int roi_size:
+    :param chi_squared_relative_max: fits with chi squared values larger than this factor * the chi squared of the
+     initial guess points will be ignored
+    :param max_position_err: points where fits have larger relative position error than this value will be ignored
     :param img_sd:
     :param bool debug:
     """
 
     if img_sd is None:
         img_sd = np.ones(img.shape)
+
+    indices_init = np.array(indices_init, copy=True)
 
     # indices for dmd_centers from mask
     inds_a = np.arange(centers.shape[0])
@@ -550,39 +556,55 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd
     # fit initial dmd_centers
     for ii in range(len(centers_init)):
         roi = tools.get_centered_roi(centers_init[ii], [roi_size, roi_size])
-        xstart = roi[2]
-        xend = roi[3]
-        ystart = roi[0]
-        yend = roi[1]
 
-        cell = img[ystart:yend, xstart:xend]
-        cell_sd = img_sd[ystart:yend, xstart:xend]
+        cell = img[roi[0]:roi[1], roi[2]:roi[3]]
+        cell_sd = img_sd[roi[0]:roi[1], roi[2]:roi[3]]
         xx, yy = np.meshgrid(range(roi[2], roi[3]), range(roi[0], roi[1]))
         result, fit_fn = tools.fit_gauss(cell, sd=cell_sd, xx=xx, yy=yy)
         pfit = result['fit_params']
         chi_sq = result['chi_squared']
 
-        fps[indices_init[ii][0], indices_init[ii][1], :] = pfit
-        chisqs[indices_init[ii][0], indices_init[ii][1]] = chi_sq
+        fps[indices_init[ii, 0], indices_init[ii, 1], :] = pfit
+        chisqs[indices_init[ii, 0], indices_init[ii, 1]] = chi_sq
 
         if debug:
+            dx = xx[0, 1] - xx[0, 0]
+            dy = yy[1, 0] - yy[0, 0]
+            extent = (xx[0, 0] - 0.5 * dx, xx[0, -1] + 0.5 * dx,
+                      yy[-1, 0] + 0.5 * dy, yy[0, 0] - 0.5 * dy)
+
             vmin = pfit[5]
             vmax = pfit[5] + pfit[0] * 1.2
 
             fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
-            ax1.imshow(cell, vmin=vmin, vmax=vmax, extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
+            ax1.imshow(cell, vmin=vmin, vmax=vmax, extent=extent)
             ax1.scatter(pfit[1], pfit[2], c='r', marker='x')
-            ax2.imshow(fit_fn(xx, yy), vmin=vmin, vmax=vmax, extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
+            ax2.imshow(fit_fn(xx, yy), vmin=vmin, vmax=vmax, extent=extent)
             ax3.imshow(cell - fit_fn(xx, yy), extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
             ax4.imshow(img, vmin=vmin, vmax=vmax)
-            rec = matplotlib.patches.Rectangle((xstart, ystart), xend - xstart, yend - ystart, color='white', fill=0)
+            rec = matplotlib.patches.Rectangle((roi[2], roi[0]), roi[3] - roi[2], roi[1] - roi[0], color='white', fill=0)
             ax4.add_artist(rec)
             plt.suptitle('(ia, ib) = (%d, %d), chi sq=%0.2f' % (indices_init[ii][0], indices_init[ii][1], chi_sq))
+
+    # guess initial vec_a, vec_b
+    #iia = np.array(indices_init)
+    ias1, ias2 = np.meshgrid(indices_init[:, 0], indices_init[:, 0])
+    adiffs = ias1 - ias2
+    ibs1, ibs2 = np.meshgrid(indices_init[:, 1], indices_init[:, 1])
+    bdiffs = ibs1 - ibs2
+    xdiffs = fps[ias1, ibs1, 1] - fps[ias2, ibs2, 1]
+    ydiffs = fps[ias1, ibs1, 2] - fps[ias2, ibs2, 2]
+
+    to_use_a = np.logical_and(adiffs != 0, bdiffs == 0)
+    vec_a_ref = np.array([np.mean(xdiffs[to_use_a] / adiffs[to_use_a]), np.mean(ydiffs[to_use_a] / adiffs[to_use_a])])
+
+    to_use_b = np.logical_and(adiffs == 0, bdiffs != 0)
+    vec_b_ref = np.array([np.mean(xdiffs[to_use_b] / bdiffs[to_use_b]), np.mean(ydiffs[to_use_b] / bdiffs[to_use_b])])
 
     # set maximum chi-square value that we will consider a 'good fit'
     # chi_sq_max = np.nanmean(chisqs[chisqs != 0]) * 1.5
     # the first three fits must succeed
-    chi_sq_max = np.nanmax(chisqs[chisqs != 0]) * 1.5
+    chi_sq_max = np.nanmax(chisqs[chisqs != 0]) * chi_squared_relative_max
 
     # loop over points
     # estimate position by guessing vec_a and vec_b from nearest pairs
@@ -590,7 +612,7 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd
         successful_fits = np.logical_and(chisqs > 0, chisqs < chi_sq_max)
         completed_fits = (chisqs != 0)
 
-        # find nearest point to already fitted points, only including succesful fits
+        # find nearest point to already fitted points, only including successful fits
         ia_fitted = iaia[successful_fits]
         ib_fitted = ibib[successful_fits]
         # use broadcasting to minimize distance sum
@@ -637,7 +659,7 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd
         bmin = bb[ind_pair_tuple_b]
         b1 = int(np.floor(bmin))
         b2 = int(np.ceil(bmin))
-        # get estimated a vector
+        # get estimated b vector
         vec_b_guess = fps[amin, b2, 1:3] - fps[amin, b1, 1:3]
 
         # guess point
@@ -657,7 +679,8 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd
         yend = int(roi[1])
 
         # do fitting if end points are reasonable
-        if xstart >= 0 and xend < img.shape[1] and ystart >= 0 and yend < img.shape[0]:
+        end_points_ok = xstart >= 0 and xend < img.shape[1] and ystart >= 0 and yend < img.shape[0]
+        if end_points_ok:
             xx, yy = np.meshgrid(range(xstart, xend), range(ystart, yend))
             cell = img[ystart:yend, xstart:xend]
             cell_sd = img_sd[ystart:yend, xstart:xend]
@@ -666,23 +689,32 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, img_sd
             pfit = result['fit_params']
             chi_sq = result['chi_squared']
 
-            fps[ind_tuple[0], ind_tuple[1], :] = pfit
-            chisqs[ind_tuple] = chi_sq
+            # check if actual center was within max_position_err of the distance we expected
+            vec_ref = diff_a * vec_a_ref + diff_b * vec_b_ref
+            center_err = np.linalg.norm(np.array([pfit[1], pfit[2]]) - np.array([xc, yc])) / np.linalg.norm(vec_ref)
 
-            if debug and np.sum(chisqs != 0) < 20:
-                vmin = pfit[5]
-                vmax = pfit[5] + pfit[0] * 1.2
+            if center_err > max_position_err:
+                fps[ind_tuple[0], ind_tuple[1], :] = np.nan
+                chisqs[ind_tuple] = np.nan
 
-                fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
-                ax1.imshow(cell, vmin=vmin, vmax=vmax, extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
-                ax1.scatter(pfit[1], pfit[2], c='r', marker='x')
-                ax2.imshow(fit_fn(xx, yy), vmin=vmin, vmax=vmax, extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
-                ax3.imshow(cell - fit_fn(xx, yy), extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
-                ax4.imshow(img, vmin=vmin, vmax=vmax)
-                rec = matplotlib.patches.Rectangle((xstart, ystart), xend - xstart, yend - ystart, color='white',
-                                                   fill=0)
-                ax4.add_artist(rec)
-                plt.suptitle('(ia, ib) = (%d, %d), chi sq=%0.2f' % (ind_tuple[0], ind_tuple[1], chi_sq))
+            else:
+                fps[ind_tuple[0], ind_tuple[1], :] = pfit
+                chisqs[ind_tuple] = chi_sq
+
+                if debug and np.sum(chisqs != 0) < 20:
+                    vmin = pfit[5]
+                    vmax = pfit[5] + pfit[0] * 1.2
+
+                    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
+                    ax1.imshow(cell, vmin=vmin, vmax=vmax, extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
+                    ax1.scatter(pfit[1], pfit[2], c='r', marker='x')
+                    ax2.imshow(fit_fn(xx, yy), vmin=vmin, vmax=vmax, extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
+                    ax3.imshow(cell - fit_fn(xx, yy), extent=(xx[0, 0], xx[0, -1], yy[-1, 0], yy[0, 0]))
+                    ax4.imshow(img, vmin=vmin, vmax=vmax)
+                    rec = matplotlib.patches.Rectangle((xstart, ystart), xend - xstart, yend - ystart, color='white',
+                                                       fill=0)
+                    ax4.add_artist(rec)
+                    plt.suptitle('(ia, ib) = (%d, %d), chi sq=%0.2f' % (ind_tuple[0], ind_tuple[1], chi_sq))
 
         else:
             fps[ind_tuple[0], ind_tuple[1], :] = np.nan
@@ -775,45 +807,56 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     mask_xformed = affine_xform_mat(mask, affine_xform, img_coords, mode='nearest')
 
     # summarize results
-    vmin = np.min(bgs[succesful_fits])
-    vmax = vmin + np.max(amps[succesful_fits]) * 1.2
+    vmin_img = np.min(bgs[succesful_fits])
+    vmax_img = vmin_img + np.max(amps[succesful_fits]) * 1.2
 
     # plot results
     fig = plt.figure(figsize=(16, 12))
     grid = plt.GridSpec(4, 4)
 
     plt.subplot(grid[0, 0])
-    plt.imshow(chisqs)
+    no_nans = chisqs.ravel()[np.logical_not(np.isnan(chisqs.ravel()))]
+    vmin = np.percentile(no_nans, 1)
+    vmax = np.percentile(no_nans, 90)
+    plt.imshow(chisqs, vmin=vmin, vmax=vmax)
     plt.title('chi squared values')
     plt.colorbar()
 
     plt.subplot(grid[0, 1])
-    plt.imshow(residual_dist_err)
+    no_nans = residual_dist_err.ravel()[np.logical_not(np.isnan(residual_dist_err.ravel()))]
+    vmax = np.percentile(no_nans, 90)
+    plt.imshow(residual_dist_err, vmin=0, vmax=vmax)
     plt.title('residual position error')
     plt.colorbar()
 
     plt.subplot(grid[1, 0])
-    plt.imshow(sigma_mean_cam)
+    no_nans = sigma_mean_cam.ravel()[np.logical_not(np.isnan(sigma_mean_cam.ravel()))]
+    vmin = np.percentile(no_nans, 1)
+    vmax = np.percentile(no_nans, 90)
+    plt.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax)
     plt.title('sigma (geometric mean)')
     plt.colorbar()
 
     plt.subplot(grid[1, 1])
-    plt.imshow(amps)
+    no_nans = amps.ravel()[np.logical_not(np.isnan(amps.ravel()))]
+    vmin = np.percentile(no_nans, 1)
+    vmax = np.percentile(no_nans, 90)
+    plt.imshow(amps, vmin=vmin, vmax=vmax)
     plt.title('amplitudes')
     plt.colorbar()
 
     plt.subplot(grid[2, 0])
-    plt.imshow(sigma_asymmetry_cam)
+    plt.imshow(sigma_asymmetry_cam, vmin=-0.25, vmax=0.25)
     plt.title('sigma asymmetry')
     plt.colorbar()
 
     plt.subplot(grid[2, 1])
-    plt.imshow(angles)
+    plt.imshow(angles, vmin=0, vmax=(2*np.pi))
     plt.title('rotation angle')
     plt.colorbar()
 
     plt.subplot(grid[:2, 2:])
-    plt.imshow(img, vmin=vmin, vmax=vmax)
+    plt.imshow(img, vmin=vmin_img, vmax=vmax_img)
     plt.scatter(xcam, ycam, c='r', marker='x')
     plt.scatter(xdmd_xform, ydmd_xform, c='y', marker='1')
     plt.title('red=fit points, yellow=dmd xformed points')
@@ -826,7 +869,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     plt.imshow(mask_xformed)
     plt.title('dmd mask xformed to img space')
 
-    plt.suptitle('theta_x=%.0fdeg, pixel corrected Mag_x=%.2f\ntheta_y=%.0fdeg, Mag_y=%0.2f\n expected mag=%0.2f'
+    plt.suptitle('theta_x=%.2fdeg, pixel corrected Mag_x=%.3f\ntheta_y=%.2fdeg, Mag_y=%0.3f\n expected mag=%0.3f'
                  % (affine_params[1] * 180 / np.pi, affine_params[0] * pixel_correction_factor,
                     affine_params[4] * 180 / np.pi, affine_params[3] * pixel_correction_factor,
                     expected_mag))
@@ -836,7 +879,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
 
 # main function for estimating affine transform
 def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, options, roi_size=25,
-                   export_fname="affine_xform", export_dir=None):
+                   export_fname="affine_xform", export_dir=None, **kwargs):
     """
     Estimate affine transformation from DMD space to camera image space from an image.
 
@@ -858,7 +901,7 @@ def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, optio
 
     # fit points
     fps, chisqs, succesful_fits = fit_pattern_peaks(img, pattern_centers, centers_init, indices_init,
-                                                    roi_size, img_sd=None, debug=False)
+                                                    roi_size, img_sd=None, debug=False, **kwargs)
     # get affine xforms
     affine_xform = get_affine_xform(fps, succesful_fits, pattern_centers)
 
