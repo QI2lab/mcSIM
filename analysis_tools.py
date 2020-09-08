@@ -308,6 +308,14 @@ def read_tiff(fname, slices=None, offset=None, skip=None, dtype=np.uint16):
 
     n_frames = tif.n_frames
 
+    # try:
+    #     ij_data = parse_imagej_tiff_tag(tiff_metadata['ImageDescription'][0])
+    #     n_ij = int(ij_data['images'])
+    #     if n_frames == 1 and n_ij != 1:
+    #         n_frames = n_ij
+    # except:
+    #     pass
+
     # tif = libtiff.TIFF.open(path, 'r')
     # surely there is roi_size property to find the number of images? But couldn't find it...
     # n_frames = sum([1 for _ in tif.iter_images()])
@@ -391,6 +399,9 @@ def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata
     :return:
     """
 
+    if not isinstance(dtype, str):
+        raise Exception("dtype must be a string, e.g. 'uint16'")
+
     # convert numpy array images to PIL.Image
     # if img.ndim == 2:
     #     im_list = [Image.fromarray(img.astype(dtype))]
@@ -415,7 +426,7 @@ def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata
     if hyperstack:
         img = tiffile.transpose_axes(img, axes_order, asaxes='TZCYXS')
 
-    tiffile.imwrite(save_fname, img.astype(dtype), imagej=True, **kwargs)
+    tiffile.imwrite(save_fname, img.astype(dtype), dtype=dtype, imagej=True, **kwargs)
 
 def parse_imagej_tiff_tag(tag):
     """
@@ -548,22 +559,6 @@ def get_timestamp():
     return '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
 
 # image processing
-def adc2photons(img, gain_map, bg_map):
-    """
-    Convert ADC counts to photon number
-    :param img:
-    :param gain_map:
-    :param bg_map:
-    :return:
-    """
-
-    # subtraction
-    photons = (img - bg_map) / gain_map
-
-    # set anything less than zero to machine preceision
-    photons[photons <= 0] = np.finfo(float).eps
-    return photons
-
 def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
     """
     Take azimuthal average of img. All points which have a dist_grid value lying

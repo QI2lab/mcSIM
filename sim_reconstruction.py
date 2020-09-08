@@ -8,6 +8,7 @@ Tools for reconstructing SIM data
 import analysis_tools as tools
 import fit_psf as psf
 import affine
+import camera_noise
 import psd
 
 # general imports
@@ -148,12 +149,9 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
     if use_scmos_cal:
         with open(scmos_calibration_file, 'rb') as f:
             data = pickle.load(f)
-        # gainmap = data[0]
-        # means = data[1]
-        # varmap = data[2]
-        gainmap = data['gain']
-        means = data['mean']
-        varmap = data['variance']
+        gain_map = data['gains']
+        offsets = data['offsets']
+        #varmap = data['vars']
 
     # ############################################
     # SIM images
@@ -306,7 +304,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 
                         # optionally convert from ADC to photons
                         if use_scmos_cal:
-                            imgs_sim = tools.adc2photons(raw_imgs, gainmap, means)
+                            imgs_sim = camera_noise.adc2photons(raw_imgs, gain_map, offsets)
                         else:
                             imgs_sim = raw_imgs
 
