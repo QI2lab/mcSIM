@@ -2850,8 +2850,9 @@ def sim_optical_section(imgs):
     :param imgs: array of size 3 x Ny x Nx
     :return img_os: optically sectioned image
     """
+    factor = 3 / np.sqrt(2)
     img_os = np.sqrt(
-        (imgs[0, :] - imgs[1, :]) ** 2 + (imgs[0, :] - imgs[2, :]) ** 2 + (imgs[1, :] - imgs[2, :]) ** 2)
+        (imgs[0, :] - imgs[1, :]) ** 2 + (imgs[0, :] - imgs[2, :]) ** 2 + (imgs[1, :] - imgs[2, :]) ** 2) / factor
 
     return img_os
 
