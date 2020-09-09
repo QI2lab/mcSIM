@@ -22,7 +22,7 @@ def adc2photons(img, gain_map, bg_map):
     photons[photons <= 0] = np.finfo(float).eps
     return photons
 
-def estimate_camera_noise(files, description=""):
+def estimate_camera_noise(files, description="", calculate_correlations=False):
     """
     Estimate camera readout noise from a set of images taken in zero light conditions
     :param list[str] files: list of file names
@@ -44,20 +44,23 @@ def estimate_camera_noise(files, description=""):
     mean_sqrs = np.zeros(means.shape)
     mean_cubes = np.zeros(means.shape)
     mean_fourths = np.zeros(means.shape)
+    corrsx = np.zeros(means.shape)
+    corrsy = np.zeros(means.shape)
 
     # loop to avoid casting entire
+    print("starting file %d/%d" % (1, len(files)))
     for ii in range(0, nimgs, n_chunk_size):
         tnow = time.process_time()
-        print("%d, elapsed time=%0.2fs" % (ii, tnow - tstart))
+        print("%d/%d images analyzed, elapsed time=%0.2fs" % (ii, nimgs, tnow - tstart))
         img_float = np.asarray(imgs[ii : ii + n_chunk_size], dtype=np.float)
         mean_sqrs += np.sum(img_float**2, axis=0) / nimgs
         mean_cubes += np.sum(img_float**3, axis=0) / nimgs
         mean_fourths += np.sum(img_float**4, axis=0) / nimgs
 
+        if calculate_correlations:
+            corrsx += np.sum(img_float * np.roll(img_float, 1, axis=2), axis=0) / nimgs
+            corrsy += np.sum(img_float * np.roll(img_float, 1, axis=1), axis=0) / nimgs
 
-
-    # mean_cubes = np.mean(np.asarray(imgs, dtype=np.float)**3, axis=0)
-    # mean_fourths = np.mean(np.asarray(imgs, dtype=np.float)**4, axis=0)
     for ii, f in enumerate(files[1:]):
         tnow = time.process_time()
         print("finished %d/%d, elapsed time=%0.2fs" % (ii + 1, len(files), tnow - tstart))
@@ -71,11 +74,17 @@ def estimate_camera_noise(files, description=""):
         mean_sqrs_temp = np.zeros(means.shape)
         mean_cubes_temp = np.zeros(means.shape)
         mean_fourths_temp = np.zeros(means.shape)
+        corrsx_temp = np.zeros(means.shape)
+        corrsy_temp = np.zeros(means.shape)
         for jj in range(0, nimgs_current, n_chunk_size):
             img_float = np.asarray(imgs[jj: jj + n_chunk_size], dtype=np.float)
             mean_sqrs_temp += np.sum(img_float ** 2, axis=0) / nimgs_current
             mean_cubes_temp += np.sum(img_float ** 3, axis=0) / nimgs_current
             mean_fourths_temp += np.sum(img_float ** 4, axis=0) / nimgs_current
+
+            if calculate_correlations:
+                corrsx_temp += np.sum(img_float * np.roll(img_float, 1, axis=2), axis=0) / nimgs_current
+                corrsy_temp += np.sum(img_float * np.roll(img_float, 1, axis=1), axis=0) / nimgs_current
 
         mean_sqrs = mean_sqrs * (nimgs / (nimgs + nimgs_current)) + \
                     mean_sqrs_temp * (nimgs_current / (nimgs + nimgs_current))
@@ -83,6 +92,10 @@ def estimate_camera_noise(files, description=""):
                      mean_cubes_temp * (nimgs_current / (nimgs + nimgs_current))
         mean_fourths = mean_fourths * (nimgs / (nimgs + nimgs_current)) + \
                        mean_fourths_temp * (nimgs_current / (nimgs + nimgs_current))
+        corrsx = corrsx * (nimgs / (nimgs + nimgs_current)) + \
+                       corrsx_temp * (nimgs_current / (nimgs + nimgs_current))
+        corrsy = corrsy * (nimgs / (nimgs + nimgs_current)) + \
+                       corrsy_temp * (nimgs_current / (nimgs + nimgs_current))
 
         nimgs += nimgs_current
 
@@ -98,6 +111,9 @@ def estimate_camera_noise(files, description=""):
             "mean_sqrs": mean_sqrs, "mean_cubes": mean_cubes, "mean_fourths": mean_fourths,
             "nimgs": nimgs,
             "description": description}
+
+    if calculate_correlations:
+        data.update({"corr_x": corrsx, "corr_y": corrsy})
 
     return data
 
