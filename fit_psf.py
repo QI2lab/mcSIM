@@ -1275,13 +1275,20 @@ def find_candidate_beads(img, filter_xy_pix=1, filter_z_pix=0.5, min_distance=1,
         smoothed = skimage.filters.gaussian(img, [filter_z_pix, filter_xy_pix, filter_xy_pix],
                                             output=None, mode='nearest', cval=0,
                                             multichannel=None, preserve_range=True)
+
+        # if img.shape[0] > 1:
+        #     exclude_border = (True, True, True)
+        # else:
+        #     exclude_border = (False, True, True)
+
     else:
         smoothed = skimage.filters.gaussian(img, filter_xy_pix, output=None, mode='nearest', cval=0,
                                             multichannel=None, preserve_range=True)
+        # exclude_border = (0, 1, 1)
 
     abs_threshold = smoothed.mean() + abs_thresh_std * img.std()
     centers = peak_local_max(smoothed, min_distance=min_distance, threshold_abs=abs_threshold,
-                             exclude_border=True, num_peaks=max_num_peaks)
+                             exclude_border=False, num_peaks=max_num_peaks)
     return centers
 
 def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.7,
@@ -1307,12 +1314,17 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
     :param filter_xy_pix: standard deviation of gaussian filter applied in x- and y-directions
     :param filter_z_pix: standard deviation of gaussian filter applied in z-direction
     :param min_distance: minimum distance between peaks, in pixels
-    :param abs_thresh_std:
-    :param max_num_peaks: maximum number of peaks to find
-    :param remove_background: boolean. whether or not to remove background from image before peak finding.
+    :param float abs_thresh_std:
+    :param int max_num_peaks: maximum number of peaks to find
+    :param bool remove_background: boolean. whether or not to remove background from image before peak finding.
     :return rois: list of regions of interest [[zstart, zend, ystart, yend, xstart, xend], ...] as coordinates in imgs
     :return centers: list of centers [[cz, cy, cx], ....] as coordinates in imgs
+    :return fit_params: nroi x 7, where each row is of the form [A, cx, cy, sx, sy, bg]. The coordinates sx are given
+    relative to the region of interest. So the center for the bead is at (cx + x_roi_start, cy + y_roi_start)
     """
+
+    if imgs.ndim == 2:
+        imgs = imgs[None, :, :]
 
     _, ny, nx = imgs.shape
 
@@ -1344,6 +1356,8 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
                                             output=None, mode='nearest', cval=0,
                                             multichannel=None, preserve_range=True)
         imgs = imgs - bg
+    else:
+        bg = 0
 
 
     # todo: maybe useful to set filter_size_pix based on expected NA?
