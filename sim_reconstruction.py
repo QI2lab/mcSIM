@@ -166,9 +166,11 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
         print("analyzing folder: %s" % folder)
         print("located in: %s" % folder_path)
 
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H;%M;%S")
         # path to store processed results
         if saving:
-            sim_results_path = tools.get_unique_name(os.path.join(rpath, 'sim_reconstruction'))
+            # sim_results_path = tools.get_unique_name(os.path.join(rpath, 'sim_reconstruction'))
+            sim_results_path = os.path.join(rpath, '%s_sim_reconstruction' % now_str)
             if not os.path.exists(sim_results_path):
                 os.mkdir(sim_results_path)
             print("save directory: %s" % sim_results_path)
@@ -410,7 +412,7 @@ class sim_image_set():
                  normalize_histograms=True, remove_background=True,
                  phases_guess=None, mod_depths_guess=None, pspec_params_guess=None,
                  use_fixed_phase=False, use_fixed_frq=False, find_frq_first=True,
-                 log_file_fname=None):
+                 log_file_fname=None, interactive_plotting=False):
         """
         Class for reconstructing a single SIM image
 
@@ -701,11 +703,10 @@ class sim_image_set():
                 mcnr[ii, jj] = get_mcnr(self.imgs_ft[ii, jj], self.frqs[ii], self.fx, self.fy, self.fmax)
 
             # if mcnr is too low (typically < 1), use guess values instead
-            if self.default_to_guess_on_low_mcnr and np.mean(mcnr[ii]) < self.min_mcnr and self.frqs_guess is not None:
+            if self.default_to_guess_on_low_mcnr and np.min(mcnr[ii]) < self.min_mcnr and self.frqs_guess is not None:
                 self.frqs[ii] = self.frqs_guess[ii]
-                # warnings.warn("Angle %d, mcnr is less than the minimum value, %0.2f, so fit frequency will be replaced with guess" % (ii, self.min_mcnr))
-                print_tee("Angle %d, mcnr = %0.2f is less than the minimum value, %0.2f, so fit frequency will be replaced with guess"
-                          % (ii, np.min(mcnr[ii]), self.min_mcnr), self.log_file)
+                print_tee("Angle %d/%d, minimum mcnr = %0.2f is less than the minimum value, %0.2f, so fit frequency will be replaced with guess"
+                          % (ii + 1, self.nangles, np.min(mcnr[ii]), self.min_mcnr), self.log_file)
 
                 for jj in range(self.nphases):
                     mcnr[ii, jj] = get_mcnr(self.imgs_ft[ii, jj], self.frqs[ii], self.fx, self.fy, self.fmax)
@@ -1483,6 +1484,7 @@ class sim_image_set():
         circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ2)
 
+        plt.xlim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
 
         # SIM fourier space
@@ -3321,7 +3323,8 @@ def get_lines_test_pattern(img_size=(2048, 2048), angles=(0, 45, 90, 135)):
     return test_patterns, line_center_sep
 
 def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths, max_photons, cam_gains, cam_offsets,
-                           cam_readout_noise_sds, pix_size, amps=None, origin="center", **kwargs):
+                           cam_readout_noise_sds, pix_size, amps=None, origin="center",
+                           coherent_projection=True, otf=None, **kwargs):
     """
     Get simulated SIM images, including the effects of shot-noise and camera noise.
 
@@ -3343,6 +3346,9 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths, max_photons, 
     nangles = len(frqs)
     nphases = len(phases)
     ny, nx = ground_truth.shape
+
+    if otf is None and not coherent_projection:
+        raise Exception("If coherent_projection is false, OTF must be provided")
 
     if mod_depths.size == nangles and nphases > 1:
         mod_depths = np.concatenate([mod_depths[:, None]] * nphases, axis=1)
@@ -3374,9 +3380,12 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths, max_photons, 
         for jj in range(nphases):
             pattern = amps[ii, jj] * (1 + mod_depths[ii, jj] * np.cos(2*np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) +
                                                                       phases[ii, jj]))
+            if not coherent_projection:
+                pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern)))
+                pattern = fft.fftshift(fft.ifft2(fft.ifftshift(pattern_ft * otf))).real
 
             sim_imgs[ii, jj], snrs[ii, jj], real_max_photons[ii, jj] = simulated_img(ground_truth * pattern, max_photons, cam_gains,
-                                                           cam_offsets, cam_readout_noise_sds, pix_size, **kwargs)
+                                                           cam_offsets, cam_readout_noise_sds, pix_size, otf=otf, **kwargs)
 
     return sim_imgs, snrs, real_max_photons
 
@@ -3415,7 +3424,8 @@ def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout
         fy = tools.get_fft_frqs(img_size[0], pix_size)
         otf = psf.circ_aperture_otf(fx[None, :], fy[:, None], na, wavelength)
 
-    gt_ft = fft.fftshift(fft.fft2(fft.fftshift(ground_truth)))
+    #gt_ft = fft.fftshift(fft.fft2(fft.fftshift(ground_truth)))
+    gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
     img_blurred = max_photons * fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf))).real
     img_blurred[img_blurred < 0] = 0
 
