@@ -735,11 +735,76 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
 
     return fcomponent, frq_vector
 
+def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_index, dmd_size,
+                                  nmax=20, origin="fft", otf=None):
+    """
+
+    :param unit_cell:
+    :param x:
+    :param y:
+    :param vec_a:
+    :param vec_b:
+    :param nphases:
+    :param phase_index:
+    :param dmd_size:
+    :param nmax:
+    :param origin:
+    :param otf: optical transfer function to apply
+    :return:
+    """
+
+    if otf is None:
+        def otf(fx, fy): return 1
+
+    rva, rvb = get_reciprocal_vects(vec_a, vec_b)
+
+    # first, get electric field fourier components
+    ns = np.arange(-nmax, nmax + 1)
+    ms = np.arange(-nmax, nmax + 1)
+    ninds = 2 * nmax + 1
+    vecs = np.zeros((ninds, ninds, 2))
+    efield_fc = np.zeros((ninds, ninds), dtype=np.complex)
+
+    # calculate half of values, as can get other half with E(-f) = E^*(f)
+    for ii in range(nmax, len(ns)):
+        for jj in range(len(ms)):
+
+            # don't bother to calculate if pattern is smaller than 1 mirror
+            v = rva * ns[ii] + rvb * ms[jj]
+            if np.linalg.norm(v) > 1:
+                efield_fc[ii, jj] = 0
+                vecs[ii, jj] = v[:, 0]
+            else:
+                efield_fc[ii, jj], v = get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, ns[ii], ms[jj],
+                                                                     nphases, phase_index, origin=origin, dmd_size=dmd_size)
+                vecs[ii, jj] = v[:, 0]
+
+    # E(-f) = E^*(f)
+    efield_fc[:nmax] = np.flip(efield_fc[nmax + 1:], axis=(0, 1)).conj()
+    vecs[:nmax] = -np.flip(vecs[nmax + 1:], axis=(0, 1))
+
+    # apply OTF
+    efield_fc = efield_fc * otf(vecs[:, :, 0], vecs[:, :, 1])
+
+    # divide by volume of unit cell (i.e. maximum possible Fourier component)
+    with np.errstate(invalid='ignore'):
+        efield_fc = efield_fc / np.nansum(unit_cell >= 0)
+
+    return efield_fc, ns, ms, vecs
+
+def get_int_fc(efield_fc):
+    ny, nx = efield_fc.shape
+    if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
+        raise Exception("not implemented for even sized arrays")
+
+    intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
+
+    return intensity_fc
 
 # other fourier component function
-def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
-                                       nphases, phase_index, dmd_size, nmax=20, origin="fft",
-                                       include_blaze_correction=True, dmd_params=None):
+def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
+                                     nphases, phase_index, dmd_size, nmax=20, origin="fft",
+                                     include_blaze_correction=True, dmd_params=None):
     """
     Utility function for computing many electric field and intensity components of the Fourier pattern, including the
     effect of the Blaze angle and system numerical aperture
@@ -858,6 +923,7 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     # intensity fourier components from autocorrelation
     # intensity_fc = scipy.signal.fftconvolve(efield_fc, efield_fc, mode='same')
     # I(f) = convolution(E(f), E^*(-f))
+    # note: the flip operation only for taking f-> -f only works assuming that array size is odd, with f=0 at the center
     intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
     # enforce maximum allowable frequency (should only be machine precision errors)
     intensity_fc = intensity_fc * (frqs <= 1)
@@ -866,9 +932,9 @@ def get_bandlimited_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     return intensity_fc, efield_fc, ns, ms, vecs
 
 
-def get_bandlimited_fourier_components_xform(pattern, affine_xform, roi, vec_a, vec_b, fmax, nmax=20,
-                                             cam_size=(2048, 2048),
-                                             include_blaze_correction=True, dmd_params=None):
+def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, vec_b, fmax, nmax=20,
+                                           cam_size=(2048, 2048),
+                                           include_blaze_correction=True, dmd_params=None):
     """
     Utility function for computing many electric field and intensity components of the Fourier pattern, including the
     effect of the Blaze angle and system numerical aperture. To correct for ROI effects, extract from affine transformed
@@ -1001,7 +1067,8 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
 
     figh = plt.figure()
-    plt.suptitle('Pattern fourier weights versus position and reciprocal lattice vector')
+    plt.suptitle('Pattern fourier weights versus position and reciprocal lattice vector\n va=(%d, %d); vb=(%d, %d)' %
+                 (vec_a[0], vec_a[1], vec_b[0], vec_b[1]))
 
     nrows = 2
     ncols = 2
