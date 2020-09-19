@@ -869,9 +869,11 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     plt.imshow(mask_xformed)
     plt.title('dmd mask xformed to img space')
 
-    plt.suptitle('theta_x=%.2fdeg, pixel corrected Mag_x=%.3f\ntheta_y=%.2fdeg, Mag_y=%0.3f\n expected mag=%0.3f'
-                 % (affine_params[1] * 180 / np.pi, affine_params[0] * pixel_correction_factor,
-                    affine_params[4] * 180 / np.pi, affine_params[3] * pixel_correction_factor,
+    plt.suptitle('theta_x=%.2fdeg, mx=%0.3f, cx=%0.1f, pixel corrected mx=%.3f\n'
+                 'theta_y=%.2fdeg, my=%0.3f, cy=%0.1f, pixel corrected my=%0.3f\n'
+                 'expected mag=%0.3f'
+                 % (affine_params[1] * 180 / np.pi, affine_params[0], affine_params[2], affine_params[0] * pixel_correction_factor,
+                    affine_params[4] * 180 / np.pi, affine_params[3], affine_params[5], affine_params[3] * pixel_correction_factor,
                     expected_mag))
 
     return fig
