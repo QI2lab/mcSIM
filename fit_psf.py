@@ -64,6 +64,18 @@ def get_background(img, npix):
     return bg
 
 # model OTF function
+def circ_aperture_pupil(fx, fy, na, wavelength):
+    fmax = 0.5 / (0.5 * wavelength / na)
+
+    nx = len(fx)
+    ny = len(fy)
+    ff = np.sqrt(fx[None, :]**2 + fy[:, None]**2)
+
+    pupil = np.ones((ny, nx))
+    pupil[ff > fmax] = 0
+
+    return pupil
+
 def circ_aperture_otf(fx, fy, na, wavelength):
     """
     OTF for roi_size circular aperture
@@ -88,6 +100,42 @@ def circ_aperture_otf(fx, fy, na, wavelength):
         otf[ff > fmax] = 0
 
     return otf
+
+def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None):
+    """
+    Get incoherent transfer function from autocorrelation of coherent transfer functino
+    :param otf_c:
+    :param dx:
+    :param wavelength:
+    :param ni:
+    :param defocus_um:
+    :param fx:
+    :param fy:
+    :return:
+    """
+    ny, nx = otf_c.shape
+
+    if fx is None:
+        fx = tools.get_fft_frqs(nx, dt=dx)
+    if fy is None:
+        fy = tools.get_fft_frqs(ny, dt=dx)
+
+    if defocus_um != 0:
+
+        if dx is None or wavelength is None or ni is None:
+            raise Exception("if defocus != 0, dx, wavelength, ni must be provided")
+
+        k = 2*np.pi / wavelength * ni
+        defocus_fn = np.exp(1j * defocus_um * np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2), dtype=np.complex)))
+    else:
+        defocus_fn = 1
+
+    otf_c_defocus = otf_c * defocus_fn
+    # if even number of frequencies, we must translate otf_c by one so that f and -f match up
+    otf_c_minus_conj = np.roll(np.roll(np.flip(otf_c_defocus, axis=(0, 1)), np.mod(ny + 1, 2), axis=0), np.mod(nx + 1, 2), axis=1).conj()
+
+    otf_inc = scipy.signal.fftconvolve(otf_c_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(otf_c) ** 2)
+    return otf_inc, otf_c_defocus
 
 # helper functions for converting between NA and peak widths
 def na2fwhm(na, wavelength):
