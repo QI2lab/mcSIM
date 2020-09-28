@@ -2266,7 +2266,7 @@ def checkerboard(dmd_size, n_on, n_off=None):
     return mask
 
 
-def export_calibration_patterns(dmd_size, save_dir=''):
+def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4, 5, 10, 25, 50, 100, 200, 300)):
     """
     Produce calibration patterns for the DMD, which are all on, all off, center-circles of several sizes,
     and checkerboard patterns of several sizes
@@ -2275,7 +2275,6 @@ def export_calibration_patterns(dmd_size, save_dir=''):
     :return:
     """
 
-    save_dir = tools.get_unique_name(save_dir, mode='dir')
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
 
@@ -2293,12 +2292,11 @@ def export_calibration_patterns(dmd_size, save_dir=''):
     im.save(os.path.join(save_dir, "off.png"))
 
     # circles of different radii
-    radii = [1, 5, 10, 25, 50, 100, 200, 300]
     xx, yy = np.meshgrid(range(nx), range(ny))
     xc = (nx - 1) / 2
     yc = (ny - 1) / 2
     rr = np.sqrt((xx - xc)**2 + (yy - yc)**2)
-    for r in radii:
+    for r in circle_radii:
         mask = np.zeros((ny, nx))
         mask[rr <= r] = 1
 
@@ -2361,7 +2359,6 @@ def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 5), save_dir=None):
     """
 
     if save_dir is not None:
-        save_dir = tools.get_unique_name(save_dir, mode='dir')
         if not os.path.exists(save_dir):
             os.mkdir(save_dir)
 
@@ -2401,31 +2398,44 @@ def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 5), save_dir=None):
         # add various markers to fix orientation
 
         # two edges
-        mask[:corner_size, :] = 1
-        mask[:, :corner_size] = 1
+        mask[:1, :] = 1
+        mask[:, :1] = 1
 
         # marks near center
         mark_sep = 15
         cx = nx // 2
         cy = ny // 2
 
+        # block displaced along x-axis
         xstart1 = cx - mark_sep
         xend1 = xstart1 + corner_size
         ystart1 = cy - corner_size//2
         yend1 = ystart1 + corner_size
         mask[ystart1:yend1, xstart1:xend1] = 1
 
+        # second block along x-axis
+        xstart4 = cx - 2 * mark_sep
+        xend4 = xstart4 + corner_size
+        ystart4 = ystart1
+        yend4 = yend1
+        mask[ystart4:yend4, xstart4:xend4] = 1
+
+        # central block
         xstart2 = cx - corner_size//2
         xend2 = xstart2 + corner_size
         ystart2 = cy - mark_sep
         yend2 = ystart2 + corner_size
         mask[ystart2:yend2, xstart2:xend2] = 1
 
+        # block displaced along y-axis
         xstart3 = cx - corner_size//2
         xend3 = xstart3 + corner_size
         ystart3 = cy - corner_size//2
         yend3 = ystart3 + corner_size
         mask[ystart3:yend3, xstart3:xend3] = 1
+
+        mask_half_on = np.array(mask, copy=True)
+        mask_half_on[dmd_size[1]//2 - 30: dmd_size[1]//2 + 30, :] = 1
 
         if save_dir is not None:
             im = Image.fromarray(mask.astype('bool'))
@@ -2433,6 +2443,9 @@ def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 5), save_dir=None):
 
             im = Image.fromarray((1-mask).astype('bool'))
             im.save(os.path.join(save_dir, "affine_cal_sparse_off_points_r=%.1f.png" % r))
+
+            im = Image.fromarray(mask_half_on.astype('bool'))
+            im.save(os.path.join(save_dir, "affine_cal_strip_on_points_r=%.1f.png" % r))
 
         masks.append(mask)
 
