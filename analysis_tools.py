@@ -1313,18 +1313,20 @@ def get_moments(img, order=1, coords=None, dims=None):
 
     if coords is None:
         coords = [np.arange(s) for ii, s in enumerate(img.shape) if ii in dims]
+    # ensure coords are float arrays to avoid overflow issues
+    coords = [np.array(c, dtype=np.float) for c in coords]
 
     if len(dims) != len(coords):
         raise Exception('dims and coordinates must have the same length')
 
     # weight summing only over certain dimensions
-    w = np.nansum(img, axis=tuple(dims))
+    w = np.nansum(img, axis=tuple(dims), dtype=np.float)
 
     # as trick to avoid having to meshgrid any of the coordinates, we can use NumPy's array broadcasting. Because this
     # looks at the trailing array dimensions, we need to swap our desired axis to be the last dimension, multiply by the
     # coordinates to do the broadcasting, and then swap back
     moments = [np.nansum(np.swapaxes(np.swapaxes(img, ii, img.ndim-1) * c**order, ii, img.ndim-1),
-               axis=tuple(dims)) / w
+               axis=tuple(dims), dtype=np.float) / w
                for ii, c in zip(dims, coords)]
 
     return moments
@@ -1621,6 +1623,12 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
                 init_params[ii] = bounds[1][ii] - 1
             else:
                 init_params[ii] = 0.5 * (bounds[0][ii] + bounds[1][ii])
+
+    if np.any(np.isnan(init_params)):
+        raise Exception("init_params cannot include nans")
+
+    if np.any(np.isnan(bounds)):
+        raise Exception("bounds cannot include nans")
 
     def err_fn(p): return np.divide(model_fn(p)[to_use].ravel() - img[to_use].ravel(), sd[to_use].ravel())
     if model_jacobian is not None:
