@@ -892,7 +892,7 @@ def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, optio
     :param indices_init: [[ia1, ib1], [ia2, ib2], [ia3, ib3]]. ia indices are along the y-direction of the DMD pattern,
     starting with 0 which is the topmost when plotted. ib indices are long the x-direction starting with 0 which is the
     leftmost when plotted
-    :param options: {'tube_lens_f', 'cam_pix', 'dmd_pix', 'dmd2cam_mag_expected', 'objective_mag', 'na'}. Distances are
+    :param options: {'cam_pix', 'dmd_pix', 'dmd2cam_mag_expected'}. Distances are
     in meters.
     :param roi_size: size of ROI to fit each peak
     :param export_fname: file name (not including extension) to use when saving results
