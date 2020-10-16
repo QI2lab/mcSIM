@@ -10,6 +10,7 @@ import fit_psf as psf
 import affine
 import camera_noise
 import psd
+import camera_noise
 
 # general imports
 import pickle
@@ -199,17 +200,24 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
         nxy = dims['position']
         nt = dims['time']
 
+        # use this construction as zinds can be different for different folders
         if zinds_to_use is None:
-            zinds_to_use = range(nz)
-        nz_used = len(zinds_to_use)
+            zinds_to_use_temp = range(nz)
+        else:
+            zinds_to_use_temp = zinds_to_use
+        nz_used = len(zinds_to_use_temp)
 
         if tinds_to_use is None:
-            tinds_to_use = range(nt)
-        nt_used = len(tinds_to_use)
+            tinds_to_use_temp = range(nt)
+        else:
+            tinds_to_use_temp = tinds_to_use
+        nt_used = len(tinds_to_use_temp)
 
         if xyinds_to_use is None:
-            xyinds_to_use = range(nxy)
-        nxy_used = len(xyinds_to_use)
+            xyinds_to_use_temp = range(nxy)
+        else:
+            xyinds_to_use_temp = xyinds_to_use
+        nxy_used = len(xyinds_to_use_temp)
 
         if pixel_size is None:
             pixel_size = metadata['PixelSizeUm'][0]
@@ -269,9 +277,9 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
             frqs_guess = frqs_guess / pixel_size
 
             # analyze pictures
-            for ii in tinds_to_use:
-                for bb in xyinds_to_use:
-                    for aa in zinds_to_use:
+            for ii in tinds_to_use_temp:
+                for bb in xyinds_to_use_temp:
+                    for aa in zinds_to_use_temp:
                         tstart = time.process_time()
 
                         identifier = "%.0fnm_nt=%d_nxy=%d_nz=%d" % (excitation_wavelengths[kk] * 1e3, ii, bb, aa)
@@ -410,6 +418,7 @@ class sim_image_set():
                  default_to_guess_on_bad_phase_fit=True, max_phase_err=20*np.pi/180,
                  default_to_guess_on_low_mcnr=True, min_mcnr=1,
                  normalize_histograms=True, remove_background=True,
+                 size_near_fo_to_remove=0.05,
                  phases_guess=None, mod_depths_guess=None, pspec_params_guess=None,
                  use_fixed_phase=False, use_fixed_frq=False, find_frq_first=True,
                  log_file_fname=None, interactive_plotting=False):
@@ -451,6 +460,7 @@ class sim_image_set():
         self.global_phase_correction = global_phase_correction
         self.normalize_histograms = normalize_histograms
         self.remove_background = remove_background
+        self.size_near_fo_to_remove = size_near_fo_to_remove
         self.default_to_guess_on_bad_phase_fit = default_to_guess_on_bad_phase_fit
         self.max_phase_error = max_phase_err
         self.default_to_guess_on_low_mcnr = default_to_guess_on_low_mcnr
@@ -548,6 +558,11 @@ class sim_image_set():
 
             tend = time.time()
             print_tee("Removing background took %0.2fs" % (tend - tstart), self.log_file)
+        else:
+            # don't try and do anything clever with bg subtraction
+            # todo: just temporary
+            self.imgs = self.imgs - 100
+            self.imgs[self.imgs <= 0] = 1e-12
 
         # #############################################
         # store apodization mode. Don't store function because resampling can change image size
@@ -990,6 +1005,13 @@ class sim_image_set():
             # expand then shift (no shifting required for this one)
             components_shifted_ft[ii, 0] = tools.expand_fourier_sp(components_deconvolved_ft[ii, 0],
                                                                    mx=m_exp, my=m_exp, centered=True)
+
+            if self.size_near_fo_to_remove != 0:
+                to_remove = np.abs(ff_shift_upsample(-self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
+                components_shifted_ft[ii, 0][to_remove] = 0
+
+                to_remove = np.abs(ff_shift_upsample(self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
+                components_shifted_ft[ii, 0][to_remove] = 0
             # ###########################
             # m*O(f - f_o)S(f)
             # ###########################
@@ -1016,8 +1038,9 @@ class sim_image_set():
                 tools.expand_fourier_sp(components_deconvolved_ft[ii, 1], mx=m_exp, my=m_exp, centered=True),
                 self.frqs[ii], dx) * mask
 
-            # if self.remove_peaks_by_hand:
-            #     components_shifted_ft[ii, 1] = components_shifted_ft[ii, 1] * attenuation(ff_shift_upsample(-self.frqs[ii]))
+            if self.size_near_fo_to_remove != 0:
+                to_remove = np.abs(ff_shift_upsample(-self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
+                components_shifted_ft[ii, 1][to_remove] = 0
 
             # ###########################
             # m*O(f + f_o)S(f)
@@ -1045,6 +1068,9 @@ class sim_image_set():
                                            tools.expand_fourier_sp(components_deconvolved_ft[ii, 2], mx=m_exp, my=m_exp, centered=True),
                                            -self.frqs[ii], dx) * mask
 
+            if self.size_near_fo_to_remove != 0:
+                to_remove = np.abs(ff_shift_upsample(self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
+                components_shifted_ft[ii, 2][to_remove] = 0
             # if self.remove_peaks_by_hand:
             #     components_shifted_ft[ii, 2] = components_shifted_ft[ii, 2] * attenuation(ff_shift_upsample(self.frqs[ii]))
 
@@ -1403,6 +1429,8 @@ class sim_image_set():
 
                     if jj == 0:
                         plt.title('angle = %0.3fdeg, period=%0.3f' % (angle * 180 / np.pi, period))
+                ax.set_xlim([-self.fmax, self.fmax])
+                ax.set_ylim([self.fmax, -self.fmax])
         plt.suptitle('SIM images, power spectra')
 
         # plot real space images
@@ -1756,23 +1784,38 @@ class sim_image_set():
         # #######################
         # net weight
         # #######################
-        figh = plt.figure()
+        figh = plt.figure(figsize=figsize)
+        grid = plt.GridSpec(1, 2)
+        plt.suptitle('Net weight')
+
+        ax = plt.subplot(grid[0, 0])
         net_weight = np.sum(self.weights, axis=(0, 1)) / self.weight_norm
-        im = plt.imshow(net_weight, extent=extent_upsampled)
+        im = ax.imshow(net_weight, extent=extent_upsampled, norm=PowerNorm(gamma=0.1))
 
         figh.colorbar(im)
-
-        ax = plt.gca()
+        ax.set_title("non-linear scale")
         circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ)
 
         circ2 = matplotlib.patches.Circle((0, 0), radius=2*self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ2)
 
-        plt.title('Net weight')
+        ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
+        ax.set_ylim([2 * self.fmax, -2 * self.fmax])
 
-        plt.xlim([-2 * self.fmax, 2 * self.fmax])
-        plt.ylim([2 * self.fmax, -2 * self.fmax])
+        ax = plt.subplot(grid[0, 1])
+        ax.set_title("linear scale")
+        im = ax.imshow(net_weight, extent=extent_upsampled)
+
+        figh.colorbar(im)
+        circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ)
+
+        circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ2)
+
+        ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
+        ax.set_ylim([2 * self.fmax, -2 * self.fmax])
 
         figs.append(figh)
         fig_names.append('net_weight')
@@ -3331,8 +3374,8 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths, max_photons, 
     :param ground_truth: ground truth image of size ny x nx
     :param frqs: SIM frequencies, of size nangles x 2. frqs[ii] = [fx, fy]
     :param phases: SIM phases in radians. Of size nangles x nphases. Phases may be different for each angle.
-    :param mod_depths: SIM pattern modulation depths. Size nangles. Assume pattern modulation is the same for
-    all phases of a given angle
+    :param list mod_depths: SIM pattern modulation depths. Size nangles. If pass matrices, then mod depths can vary
+    spatially. Assume pattern modulation is the same for all phases of a given angle. Maybe pass list of numpy arrays
     :param max_photons: maximum photon number (i.e. photon number for pixels in ground_truth that = 1).
     :param cam_gains: gain of each pixel (or single value for all pixels)
     :param cam_offsets: offset of each pixel (or single value for all pixels)
@@ -3350,8 +3393,11 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths, max_photons, 
     if otf is None and not coherent_projection:
         raise Exception("If coherent_projection is false, OTF must be provided")
 
-    if mod_depths.size == nangles and nphases > 1:
-        mod_depths = np.concatenate([mod_depths[:, None]] * nphases, axis=1)
+    # if mod_depths.size == nangles and nphases > 1:
+    #     mod_depths = np.concatenate([mod_depths[:, None]] * nphases, axis=1)
+
+    if len(mod_depths) != nangles:
+        raise Exception("mod_depths must have length nangles")
 
     if amps is None:
         amps = np.ones((nangles, nphases))
@@ -3378,78 +3424,19 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths, max_photons, 
 
     for ii in range(nangles):
         for jj in range(nphases):
-            pattern = amps[ii, jj] * (1 + mod_depths[ii, jj] * np.cos(2*np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) +
-                                                                      phases[ii, jj]))
+            # pattern = amps[ii, jj] * (1 + mod_depths[ii, jj] * np.cos(2*np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) +
+            #                                                           phases[ii, jj]))
+            pattern = amps[ii, jj] * (1 + mod_depths[ii] * np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) +
+                                                        phases[ii, jj]))
+
             if not coherent_projection:
                 pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern)))
                 pattern = fft.fftshift(fft.ifft2(fft.ifftshift(pattern_ft * otf))).real
 
-            sim_imgs[ii, jj], snrs[ii, jj], real_max_photons[ii, jj] = simulated_img(ground_truth * pattern, max_photons, cam_gains,
+            sim_imgs[ii, jj], snrs[ii, jj], real_max_photons[ii, jj] = camera_noise.simulated_img(ground_truth * pattern, max_photons, cam_gains,
                                                            cam_offsets, cam_readout_noise_sds, pix_size, otf=otf, **kwargs)
 
     return sim_imgs, snrs, real_max_photons
-
-def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout_noise_sds,
-                  pix_size, otf=None, na=1.3, wavelength=0.5, photon_shot_noise=True, bin_size=1):
-    """
-    Convert ground truth image (with values between 0-1) to simulated camera image, including the effects of
-    photon shot noise and camera readout noise.
-
-    :param ground_truth: Relative intensity values of image
-    :param max_photons: Mean photons emitted by ber of photons will be different than expected. Furthermore, due to
-    the "blurring" of the point spread function and possible binning of the image, no point in the image may realize "max_photons"
-    :param cam_gains: gains at each camera pixel
-    :param cam_offsets: offsets of each camera pixel
-    :param cam_readout_noise_sds: standard deviation characterizing readout noise at each camera pixel
-    :param pix_size: pixel size in microns
-    :param otf: optical transfer function. If None, use na and wavelength to set values
-    :param na: numerical aperture. Only used if otf=None
-    :param wavelength: wavelength in microns. Only used if otf=None
-    :param photon_shot_noise: turn on/off photon shot-noise
-    :param bin_size: bin pixels before applying Poisson/camera noise. This is to allow defining a pattern on a
-    finer pixel grid.
-
-    :return img:
-    :return snr:
-    :return max_photons_real:
-    """
-    if np.any(ground_truth > 1) or np.any(ground_truth < 0):
-        warnings.warn('ground_truth image values should be in the range [0, 1] for max_photons to be correct')
-
-    img_size = ground_truth.shape
-
-    #### blur image with psf ####
-    if otf is None:
-        fx = tools.get_fft_frqs(img_size[1], pix_size)
-        fy = tools.get_fft_frqs(img_size[0], pix_size)
-        otf = psf.circ_aperture_otf(fx[None, :], fy[:, None], na, wavelength)
-
-    #gt_ft = fft.fftshift(fft.fft2(fft.fftshift(ground_truth)))
-    gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
-    img_blurred = max_photons * fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf))).real
-    img_blurred[img_blurred < 0] = 0
-
-    # can resample image by binning
-    img_blurred = tools.bin(img_blurred, (bin_size, bin_size), mode='sum')
-
-    max_photons_real = img_blurred.max()
-
-    #### add shot noise and camera noise ####
-    if photon_shot_noise:
-        img_shot_noise = np.random.poisson(img_blurred)
-    else:
-        img_shot_noise = img_blurred
-    readout_noise = np.random.randn(img_shot_noise.shape[0], img_shot_noise.shape[1]) * cam_readout_noise_sds
-
-    img = cam_gains * img_shot_noise + readout_noise + cam_offsets
-
-    # signal to noise ratio
-    sig = cam_gains * img_blurred
-    # assuming photon number large enough ~gaussian
-    noise = np.sqrt(cam_readout_noise_sds**2 + cam_gains**2 * img_blurred)
-    snr = sig / noise
-
-    return img, snr, max_photons_real
 
 # misc
 def print_tee(str, fid, end="\n"):
