@@ -334,7 +334,61 @@ def theta_phi2txty(theta, phi):
     ty = np.arctan(np.tan(theta) * np.sin(phi))
     return tx, ty
 
-# solve blaze condition and diffraction condition
+def uvector2txty(vx, vy, vz):
+    norm_factor = np.abs(1 / vz)
+    tx = np.arctan(vx * norm_factor)
+    ty = np.arctan(vy * norm_factor)
+
+    return tx, ty
+
+def txty2uvector(tx, ty, positive_z=True):
+    norm = 1 / (np.tan(tx)**2 + np.tan(ty)**2 + 1)
+    if positive_z:
+        return [np.tan(tx) / norm, np.tan(ty) / norm, 1 / norm]
+    else:
+        return [np.tan(tx) / norm, np.tan(ty) / norm, -1 / norm]
+
+# # utility functions for solving blaze + diffraction conditions
+def solve_max_diffraction_order(wavelength, d, gamma):
+    """
+    Find the maximum and minimum diffraction orders consistent with given parameters and the blaze condition
+
+    :param wavelength: wavelength of light
+    :param d: mirror pitch (in same units as wavelength)
+    :param gamma: mirror angle
+    :return nmax: maximum index of diffraction order
+    :return nmin: minimum index of diffraction order
+    """
+
+    # # solution for maximum order
+    # theta_a_opt = np.arctan( (np.cos(2*gamma) - 1) / np.sin(2*gamma))
+    #
+    # # this should = sqrt(2) * lambda / d * n when diffraction condition is satisfied
+    # f = lambda t: np.sin(t) - np.sin(t - 2*gamma)
+    #
+    # # must also check end points for possible extrema
+    # # ts in range [-np.pi/2 np.pi/2]
+    # if gamma > 0:
+    #     fopts = [f(-np.pi/2 + 2*gamma), f(np.pi/2), f(theta_a_opt)]
+    # elif gamma <= 0:
+    #     fopts = [f(-np.pi / 2), f(np.pi / 2 + 2*gamma), f(theta_a_opt)]
+    #
+    # # find actually extrema
+    # fmin = np.min(fopts)
+    # fmax = np.max(fopts)
+    #
+    # nmax = np.floor(fmax * d / np.sqrt(2) / wavelength)
+    # nmin = np.ceil(fmin * d / np.sqrt(2) / wavelength)
+
+    if gamma > 0:
+        nmax = int(np.floor(d / wavelength * np.sqrt(2) * np.sin(gamma)))
+        nmin = 1
+    if gamma <= 0:
+        nmax = -1
+        nmin = int(np.ceil(d / wavelength * np.sqrt(2) * np.sin(gamma)))
+
+    return nmax, nmin
+
 def solve_blaze_condition_1d(tm_in, gamma):
     """
     Get blaze angle for tp_in = 0 and tm_in. For all other applications, use get_blaze_2d()
@@ -344,6 +398,104 @@ def solve_blaze_condition_1d(tm_in, gamma):
     :return tm_out_blaze:
     """
     return tm_in - 2*gamma
+
+def solve_1color_1d(wavelength, d, gamma, n):
+    """
+    Solve for theta_in satisfying diffraction condition and blaze angle for a given diffraction order (if possible).
+
+    (1) theta_in - theta_out = 2*gamma
+    (2) sin(theta_in) - sin(theta_out) = sqrt(2) * wavelength / d * n
+    Which we can reduce to
+    sin(theta_in) [1 - cos(2*gamma)] - cos(theta_in) * sin(2*gamma) = sqrt(2) * wavelength / d * n
+
+    Solve this by first finding the maximum of sin(theta_in) - sin(theta_in - 2*gamma), then we can have 0, 1, or 2
+    solutions. One can be between [tin_min, tin_opt], and the other can be between [tin_opt, tin_max]
+
+    :param wavelength: wavelength of light
+    :param d: mirror pitch (in same units as wavelength)
+    :param gamma: angle mirror normal makes with DMD body normal
+    :param n: diffraction order index
+    :return tins: list of solutions for incoming angle
+    :return touts: list of solutions for outgoing angle
+    """
+    # point where derivative of sin(tin) - sin(tin - 2*gamma) = 0
+    tin_opt = np.arctan((1 - np.cos(2 * gamma)) / np.sin(2 * gamma))
+    # tin and tout must be in range [-np.pi/2, np.pi/2]
+
+    tin_min = np.max([-np.pi/2, -np.pi/2 + 2*gamma])
+    tin_max = np.min([np.pi/2, np.pi/2 + 2*gamma])
+    # can have on root for smaller values and one root for larger values
+
+    tout = lambda tin: tin - 2 * gamma
+    #fn = lambda tin: np.abs(np.sin(tin) - np.sin(tout(tin)) - np.sqrt(2) * wavelength / d * n)
+    fn = lambda tin: np.sin(tin) - np.sin(tout(tin)) - np.sqrt(2) * wavelength / d * n
+
+    try:
+        r1 = scipy.optimize.root_scalar(fn, bracket=(tin_opt, tin_max), xtol=1e-5)
+        root1 = r1.root
+    except ValueError:
+        root1 = None
+
+    try:
+        r2 = scipy.optimize.root_scalar(fn, bracket=(tin_min, tin_opt), xtol=1e-5)
+        root2 = r2.root
+    except ValueError:
+        root2 = None
+
+    # solutions
+    tins = [r for r in [root1, root2] if r is not None]
+    touts = [ti - 2 * gamma for ti in tins]
+
+    return tins, touts
+
+def solve_diffraction_input_1d(theta_out, wavelength, d, order):
+    """
+    Find input angle corresponding to given diffraction output angle, for 1D case
+
+    :param theta_out: desired output angle (in radians)
+    :param wavelength: wavelength of light
+    :param d: mirror pitch (in same units as wavelength)
+    :param order: index of diffraction order
+    :return theta_in: input angle
+    """
+    theta_in = np.arcsin(np.sin(theta_out) + np.sqrt(2) * wavelength / d * order)
+    return theta_in
+
+def plot_graphical_soln1d(d, gamma, wavelengths):
+    """
+    Plot graphical solution to Blaze condition + diffraction condition for 1D case
+
+    :param d: mirror pitch
+    :param gamma:
+    :param wavelengths:
+    :return fig: figure handle of resulting plot
+    """
+
+    if isinstance(wavelengths, float):
+        wavelengths = [wavelengths]
+
+    nmax = 5
+    tmin = np.max([-np.pi/2, -np.pi/2 + 2 * gamma])
+    tmax = np.min([np.pi/2 , np.pi/2 + 2 *gamma])
+    ts = np.linspace(tmin, tmax, 1000)
+
+    cmap = matplotlib.cm.get_cmap('Spectral')
+    phs = []
+
+    fig = plt.figure()
+    pht = plt.plot(ts * 180/np.pi, np.sin(ts) - np.sin(ts - 2*gamma))
+    phs.append(pht[0])
+    for ii, wvl in enumerate(wavelengths):
+        for n in np.arange(-nmax, nmax, 1):
+            pht = plt.plot(np.array([ts.min(), ts.max()]) * 180/np.pi, [np.sqrt(2) * wvl / d * n, np.sqrt(2) * wvl / d * n],
+                     color=cmap(ii / len(wavelengths)))
+            if n == -nmax:
+                phs.append(pht[0])
+
+    plt.xlabel('tin (degrees)')
+    plt.legend(phs, ['blaze condition'] + wavelengths)
+
+    return fig
 
 def solve_blaze_condition(tp_in, tm_in, gamma):
     """
@@ -442,140 +594,59 @@ def solve_diffraction_condition(tx_in, ty_in, dx, dy, wavelength, max_order=4):
 
     return tx_outs, ty_outs, nxs, nys
 
-# utility functions for solving blaze + diffraction conditions
-def solve_max_diffraction_order(wavelength, d, gamma):
+def solve_combined_condition(d, gamma, wavelength, order):
     """
-    Find the maximum and minimum diffraction orders consistent with given parameters and the Blaze condition assuming
-    1D situtation (tx = -ty)
+    Return functions for the simultaneous blaze/diffraction condition solution as a function of a1
 
-    Diffraction condition in this case is:
-    sin(theta_in) - sin(theta_out) = sqrt(2) * lambda / d * n
-
-    :param wavelength: wavelength of light
-    :param d: mirror pitch (in same units as wavelength)
-    :param gamma: mirror angle
-    :return nmax: maximum index of diffraction order
-    :return nmin: minimum index of diffraction order
-    """
-
-    # solution for maximum order
-    theta_a_opt = np.arctan( (np.cos(2*gamma) - 1) / np.sin(2*gamma))
-
-    # this should = sqrt(2) * lambda / d * n when diffraction condition is satisfied
-    f = lambda t: np.sin(t) - np.sin(t - 2*gamma)
-
-    # must also check end points for possible extrema
-    # ts in range [-np.pi/2 np.pi/2]
-    if gamma > 0:
-        fopts = [f(-np.pi/2 + 2*gamma), f(np.pi/2), f(theta_a_opt)]
-    elif gamma <= 0:
-        fopts = [f(-np.pi / 2), f(np.pi / 2 + 2*gamma), f(theta_a_opt)]
-
-    # find actually extrema
-    fmin = np.min(fopts)
-    fmax = np.max(fopts)
-
-    nmax = np.floor(fmax * d / np.sqrt(2) / wavelength)
-    nmin = np.ceil(fmin * d / np.sqrt(2) / wavelength)
-
-    return nmax, nmin
-
-def solve_1color(wavelength, d, gamma, n):
-    """
-    Solve for theta_in satisfying diffraction condition and blaze angle for a given diffraction order (if possible).
-
-    (1) theta_in - theta_out = 2*gamma
-    (2) sin(theta_in) - sin(theta_out) = sqrt(2) * wavelength / d * n
-    Which we can reduce to
-    sin(theta_in) [1 - cos(2*gamma)] - cos(theta_in) * sin(2*gamma) = sqrt(2) * wavelength / d * n
-
-    Solve this by first finding the maximum of sin(theta_in) - sin(theta_in - 2*gamma), then we can have 0, 1, or 2
-    solutions. One can be between [tin_min, tin_opt], and the other can be between [tin_opt, tin_max]
-
-    :param wavelength: wavelength of light
-    :param d: mirror pitch (in same units as wavelength)
-    :param gamma: angle mirror normal makes with DMD body normal
-    :param n: diffraction order index
-    :return tins: list of solutions for incoming angle
-    :return touts: list of solutions for outgoing angle
-    """
-    # point where derivative of sin(tin) - sin(tin - 2*gamma) = 0
-    tin_opt = np.arctan((1 - np.cos(2 * gamma)) / np.sin(2 * gamma))
-    # tin and tout must be in range [-np.pi/2, np.pi/2]
-    tin_min = np.max([-np.pi/2, -np.pi/2 + 2*gamma])
-    tin_max = np.min([np.pi/2, np.pi/2 + 2*gamma])
-    # can have on root for smaller values and one root for larger values
-
-    tout = lambda tin: tin - 2 * gamma
-    #fn = lambda tin: np.abs(np.sin(tin) - np.sin(tout(tin)) - np.sqrt(2) * wavelength / d * n)
-    fn = lambda tin: np.sin(tin) - np.sin(tout(tin)) - np.sqrt(2) * wavelength / d * n
-
-    try:
-        r1 = scipy.optimize.root_scalar(fn, bracket=(tin_opt, tin_max), xtol=1e-5)
-        root1 = r1.root
-    except ValueError:
-        root1 = None
-
-    try:
-        r2 = scipy.optimize.root_scalar(fn, bracket=(tin_min, tin_opt), xtol=1e-5)
-        root2 = r2.root
-    except ValueError:
-        root2 = None
-
-    # solutions
-    tins = [r for r in [root1, root2] if r is not None]
-    touts = [ti - 2 * gamma for ti in tins]
-
-    return tins, touts
-
-def solve_diffraction_input(theta_out, wavelength, d, order):
-    """
-    Find input angle corresponding to given diffraction output angle, for 1D case
-
-    :param theta_out: desired output angle (in radians)
-    :param wavelength: wavelength of light
-    :param d: mirror pitch (in same units as wavelength)
-    :param order: index of diffraction order
-    :return theta_in: input angle
-    """
-    theta_in = np.arcsin(np.sin(theta_out) + np.sqrt(2) * wavelength / d * order)
-    return theta_in
-
-def plot_graphical_soln1d(d, gamma, wavelengths):
-    """
-    Plot graphical solution to Blaze condition + diffraction condition for 1D case
-
-    :param d: mirror pitch
+    :param d:
     :param gamma:
-    :param wavelengths:
-    :return fig: figure handle of resulting plot
+    :param wavelength:
+    :param order:
+    :return a_fn:
+    :return b_fn:
+    :return a1_bounds:
+
     """
+    a3 = 1 / np.sqrt(2) / np.sin(gamma) * wavelength / d * order
+    a1_bounds = (-np.sqrt(1 - a3**2), np.sqrt(1 - a3**2))
+    # return positive solution
+    def a2_positive_fn(a1): return np.sqrt(1 - a1**2 - a3**2)
 
-    if isinstance(wavelengths, float):
-        wavelengths = [wavelengths]
+    def ax_fn(a1, positive=True):
+        a2 = a2_positive_fn(a1)
+        if not positive:
+            a2 = -a2
+        return np.cos(gamma) / np.sqrt(2) * a1 + 1 / np.sqrt(2) * a2 + np.sin(gamma) / np.sqrt(2) * a3
 
-    nmax = 5
-    tmin = np.max([-np.pi/2, -np.pi/2 + 2 * gamma])
-    tmax = np.min([np.pi/2 , np.pi/2 + 2 *gamma])
-    ts = np.linspace(tmin, tmax, 1000)
+    def ay_fn(a1, positive=True):
+        a2 = a2_positive_fn(a1)
+        if not positive:
+            a2 = -a2
+        return -np.cos(gamma) / np.sqrt(2) * a1 + 1 / np.sqrt(2) * a2 - np.sin(gamma) / np.sqrt(2) * a3
 
-    cmap = matplotlib.cm.get_cmap('Spectral')
-    phs = []
+    def az_fn(a1): return -np.sin(gamma) * a1 + np.cos(gamma) * a3
 
-    fig = plt.figure()
-    pht = plt.plot(ts * 180/np.pi, np.sin(ts) - np.sin(ts - 2*gamma))
-    phs.append(pht[0])
-    for ii, wvl in enumerate(wavelengths):
-        for n in np.arange(-nmax, nmax, 1):
-            pht = plt.plot(np.array([ts.min(), ts.max()]) * 180/np.pi, [np.sqrt(2) * wvl / d * n, np.sqrt(2) * wvl / d * n],
-                     color=cmap(ii / len(wavelengths)))
-            if n == -nmax:
-                phs.append(pht[0])
+    # b functions
+    def bx_fn(a1, positive=True):
+        a2 = a2_positive_fn(a1)
+        if not positive:
+            a2 = -a2
+        return np.cos(gamma) / np.sqrt(2) * a1 + 1 / np.sqrt(2) * a2 - np.sin(gamma) / np.sqrt(2) * a3
 
-    plt.xlabel('tin (degrees)')
-    plt.legend(phs, ['blaze condition'] + wavelengths)
+    def by_fn(a1, positive=True):
+        a2 = a2_positive_fn(a1)
+        if not positive:
+            a2 = -a2
+        return -np.cos(gamma) / np.sqrt(2) * a1 + 1 / np.sqrt(2) * a2 + np.sin(gamma) / np.sqrt(2) * a3
 
-    return fig
+    def bz_fn(a1):
+        return -np.sin(gamma) * a1 - np.cos(gamma) * a3
+
+    def a_fn(a1, positive=True): return(ax_fn(a1, positive), ay_fn(a1, positive), az_fn(a1))
+    def b_fn(a1, positive=True): return(bx_fn(a1, positive), by_fn(a1, positive), bz_fn(a1))
+
+    return a_fn, b_fn, a1_bounds
+
 
 # 1D simulation in x-y plane (i.e. theta_x = -theta_y)
 def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
@@ -1316,7 +1387,9 @@ if __name__ == "__main__":
     colors = [[0, 1, 1], [0, 1, 0], [1, 0, 0]]
 
     #tx_ins = np.array([30, 40]) * np.pi/180
-    tx_ins = np.array([74]) * np.pi/180
+    # tx_ins = np.array([74]) * np.pi/180
+    # ty_ins = np.array([70]) * np.pi/180
+    tx_ins = np.array([74]) * np.pi / 180
     ty_ins = np.array([70]) * np.pi/180
     _, t45_ins = angle2pm(tx_ins, ty_ins)
 
