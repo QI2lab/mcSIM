@@ -2555,6 +2555,28 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
 
     return patterns, vec_as, vec_bs, real_angles, real_periods
 
+def export_spots(dmd_size, xs=(960, 963), ys=(540, 540), radius=10, save_dir=None, fname=None, invert=False):
+    if not os.path.exists(save_dir):
+        os.mkdir(save_dir)
+
+    nx = dmd_size[0]
+    ny = dmd_size[1]
+    xx, yy = np.meshgrid(range(nx), range(ny))
+
+    # all mirrors on
+    mask = np.zeros((ny, nx))
+
+    for ii in range(len(xs)):
+        mask[np.sqrt((xx - xs[ii])**2 + (yy - ys[ii])**2) < radius] = 1
+
+    if invert:
+        mask = 1 - mask
+
+    if save_dir is not None:
+        im = Image.fromarray(mask.astype('bool'))
+        im.save(os.path.join(save_dir, fname))
+
+    return mask
 
 # spifi
 def spifi_1d_pattern(dmd_size, periods, ntimes, start_pos=None, strip_size=None, debug=False):
@@ -2705,12 +2727,55 @@ if __name__ == "__main__":
                                    angle_sep_tol=5*np.pi/180, max_solutions_to_search=200)
    '''
 
-    save_dir = "../calibration_patterns"
+    save_dir = "../spot_patterns"
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    export_affine_fit_pattern([nx, ny], radii=(1, 1.5, 5), save_dir=save_dir)
+    # export_affine_fit_pattern([nx, ny], radii=(1, 1.5, 5), save_dir=save_dir)
 
-    export_calibration_patterns([nx, ny], save_dir=save_dir)
+    # export_calibration_patterns([nx, ny], save_dir=save_dir)
+
+    seps = list(range(2, 9, 1)) + list(range(10, 200, 10)) + list(range(200, 1000, 100))
+    # seps = list(range(2, 9, 1)) + list(range(10, 120, 10)) + [200]
+    invert = False
+    # rads = [1, 1.5, 2, 3, 5]
+    rads = [1.5, 3]
+    index = 0
+    for ii, s in enumerate(seps):
+        for jj, r in enumerate(rads):
+
+
+            # along x
+            export_spots([nx, ny], xs=(nx//2 - s//2, nx//2 - s//2 + s),
+                         ys=(ny//2, ny//2), radius=r, save_dir=save_dir, invert=invert,
+                         fname="%03d_xsep_two_spots_sep=%0.2f_rad=%0.2f.png" % (index,s, r))
+            index += 1
+
+            export_spots([nx, ny], xs=(nx // 2 - s // 2, ),
+                         ys=(ny // 2, ), radius=r, save_dir=save_dir, invert=invert,
+                         fname="%03d_xsep_two_spots_sep=%0.2f_rad=%0.2f_spot1_only.png" % (index, s, r))
+            index += 1
+
+            export_spots([nx, ny], xs=(nx // 2 - s // 2 + s, ),
+                         ys=(ny // 2, ), radius=r, save_dir=save_dir, invert=invert,
+                         fname="%03d_xsep_two_spots_sep=%0.2f_rad=%0.2f_spot2_only.png" % (index, s, r))
+            index += 1
+
+            # along y
+            export_spots([nx, ny], xs=(nx // 2, nx // 2), invert=invert,
+                         ys=(ny // 2 - s // 2, ny // 2  - s // 2 + s), radius=r, save_dir=save_dir,
+                         fname="%03d_ysep_two_spots_sep=%0.2f_rad=%0.2f.png" % (index, s, r))
+            index += 1
+
+            export_spots([nx, ny], xs=(nx // 2,), invert=invert,
+                         ys=(ny // 2  - s // 2,), radius=r, save_dir=save_dir,
+                         fname="%03d_ysep_two_spots_sep=%0.2f_rad=%0.2f_spot1_only.png" % (index, s, r))
+            index += 1
+
+            export_spots([nx, ny], xs=(nx // 2,), invert=invert,
+                         ys=(ny // 2  - s // 2 + s,), radius=r, save_dir=save_dir,
+                         fname="%03d_ysep_two_spots_sep=%0.2f_rad=%0.2f_spot_two_only.png" % (index, s, r))
+            index += 1
 
     plt.show()
+
