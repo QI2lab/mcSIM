@@ -26,10 +26,8 @@ import affine
 import analysis_tools as tools
 import sim_reconstruction
 import fit_psf
-import camera_noise as cam
 
-def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, use_guess_frqs=True, peak_pix=2,
-                        convert_to_photons=False, offsets=None, gains=None, bg=100):
+def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, use_guess_frqs=True, peak_pix=2, bg=100):
     """
 
     :param imgs: nimgs x ny x nx
@@ -38,15 +36,15 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
     :param bool use_guess_frqs: if True, use guess frequencies computed from frq_vects_theory, if False use fitting
     procedure to find peak
     :param int peak_pix: number of pixels to use when calculating peak. Typically 2.
-    :param bool convert_to_photons: if True, convert ADC to photons using offsets and gains
-    :param offsets: offsets of pixels, array of size ny x nx
-    :param gains: gains of pixels. array of size ny x nx
+    :param float bg:
 
     :return intensity:
     :return intensity_unc:
     :return frq_vects_expt:
     """
     nimgs = frq_vects_theory.shape[0]
+    n1_vecs = frq_vects_theory.shape[1]
+    n2_vecs = frq_vects_theory.shape[2]
 
     intensity = np.zeros(frq_vects_theory.shape[:-1], dtype=np.complex) * np.nan
     intensity_unc = np.zeros(intensity.shape) * np.nan
@@ -67,12 +65,9 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
     elif imgs.shape[0] == 1:
         multiple_images = False
         icrop = imgs[0, roi[0]:roi[1], roi[2]:roi[3]]
-        if convert_to_photons:
-            img = cam.adc2photons(icrop, gains[roi[0]:roi[1], roi[2]:roi[3]],
-                                  offsets[roi[0]:roi[1], roi[2]:roi[3]])
-        else:
-            img = icrop - bg
-            img[img < 0] = 1e-6
+
+        img = icrop - bg
+        img[img < 0] = 1e-6
 
         img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img * window)))
         noise_power = sim_reconstruction.get_noise_power(img_ft, fxs, fys, fmax_img)
@@ -90,12 +85,8 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
             # img = img[0, roi[0]:roi[1], roi[2]:roi[3]] - bg
             # img[img < 0] = 1e-6
             icrop = imgs[ii, roi[0]:roi[1], roi[2]:roi[3]]
-            if convert_to_photons:
-                img = cam.adc2photons(icrop, gains[roi[0]:roi[1], roi[2]:roi[3]],
-                                      offsets[roi[0]:roi[1], roi[2]:roi[3]])
-            else:
-                img = icrop - bg
-                img[img < 0] = 1e-6
+            img = icrop - bg
+            img[img < 0] = 1e-6
 
             # fft
             img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img * window)))
@@ -107,14 +98,12 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
         min_sep = np.min(vnorms[vnorms > 0])
 
         # get experimental weights of fourier components
-        for aa in range(frq_vects_theory.shape[1]):
-            for bb in range(frq_vects_theory.shape[2]):
+        for aa in range(n1_vecs):
+            for bb in range(n2_vecs):
 
                 frq_vects_expt[ii, aa, bb] = frq_vects_theory[ii, aa, bb]
 
                 # only do fitting if peak size exceeds tolerance, and only fit one of a peak and its compliment
-                # if np.abs(intensity_theory[ii, aa, bb]) < tol or aa < bb:
-                #     continue
                 if aa < bb or vnorms[aa, bb] > fmax_img:
                     continue
 
@@ -143,6 +132,12 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
                                                                          peak_pixel_size=peak_pix)
 
                     intensity_unc[ii, aa, bb] = np.sqrt(noise_power) * peak_pix ** 2
+
+                    # handle complimentary point with aa > bb
+                    aa_neg = n1_vecs - 1 - aa
+                    bb_neg = n2_vecs - 1 - bb
+                    intensity[ii, aa_neg, bb_neg] = intensity[ii, aa, bb].conj()
+                    intensity_unc[ii, aa_neg, bb_neg] = intensity_unc[ii, aa, bb]
 
                 except:
                     pass
@@ -344,15 +339,18 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     ax = plt.subplot(grid[1, 3:])
     plt.title("otf")
-    if otf is not None:
-        ax.plot(fmags, np.abs(otf).ravel(), '.')
-
     plt.xlabel("Frequency (1/um)")
     plt.ylabel("otf")
 
+    ax.plot([0, fmax_img], [0, 0], 'k')
+    ax.plot([fmax_img, fmax_img], [0, 1], 'k')
+    if otf is not None:
+        ax.plot(fmags, np.abs(otf).ravel(), '.')
+
+
     return figh
 
-def plot_otf(frq_vects, fmax_img, otf, na=None, figsize=(20, 10)):
+def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
     """
     Plot complete OTF
     :param frq_vects:
@@ -361,48 +359,88 @@ def plot_otf(frq_vects, fmax_img, otf, na=None, figsize=(20, 10)):
     :param figsize:
     :return:
     """
+    if otf_unc is None:
+        otf_unc = np.zeros(otf.shape)
 
     fmag = np.linalg.norm(frq_vects, axis=-1).ravel()
+
+    fmag_interp = np.linspace(0, fmag.max(), 1000)
+    # only care about fmax value, so create na/wavelength that give us this
+    na = 1
+    wavelength = 2 * na / fmax_img
+    otf_ideal = fit_psf.circ_aperture_otf(fmag_interp, 0, na, wavelength)
+
 
     figh = plt.figure(figsize=figsize)
     grid = plt.GridSpec(2, 6)
 
     # 1D otf
-    ax = plt.subplot(grid[0, :2])
+    ax = plt.subplot(grid[0, :3])
     ylim = [-0.05, 1.2]
     plt.title("otf mag")
     plt.xlabel("Frequency (1/um)")
     plt.ylabel("otf")
 
-    plt.plot(fmag, np.abs(otf).ravel(), '.')
+    plt.plot(fmag_interp, otf_ideal, 'k')
+    plt.errorbar(fmag, np.abs(otf).ravel(), yerr=otf_unc.ravel(), fmt='.')
     xlim = ax.get_xlim()
     plt.plot(xlim, [0, 0], 'k')
     plt.plot([fmax_img, fmax_img], ylim, 'k')
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
 
+    # 1D log scale
+    ax = plt.subplot(grid[1, :3])
+    plt.title("otf mag (log scale)")
+    plt.xlabel("Frequency (1/um)")
+    plt.ylabel("otf")
+
+    plt.plot(fmag_interp, otf_ideal, 'k')
+    plt.errorbar(fmag, np.abs(otf).ravel(), yerr=otf_unc.ravel(), fmt='.')
+    xlim = ax.get_xlim()
+    ax.plot([fmax_img, fmax_img], ylim, 'k')
+    ax.set_xlim(xlim)
+    ax.set_ylim([1e-4, 1.2])
+
+    ax.set_yscale('log')
+
+
     # 2D otf
-    ax = plt.subplot(grid[0, 2:4])
+    ax = plt.subplot(grid[0, 3:6])
     plt.title("2D otf (log scale)")
+    plt.xlabel("fx (1/um)")
+    plt.ylabel("fy (1/um)")
     clims = [1e-3, 1]
 
     frqs_pos = np.array(frq_vects, copy=True)
     y_is_neg = frq_vects[..., 1] < 0
     frqs_pos[y_is_neg] = -frqs_pos[y_is_neg]
 
+    plt.plot([-fmax_img, fmax_img], [0, 0], 'k')
     plt.scatter(frqs_pos[..., 0].ravel(), frqs_pos[..., 1].ravel(),
                 c=np.log10(np.abs(otf).ravel()),
                 norm=matplotlib.colors.Normalize(vmin=np.log10(clims[0]), vmax=np.log10(clims[1])))
     cb = plt.colorbar()
     plt.clim(np.log10(clims))
 
-    plt.xlabel("fx (1/um)")
-    plt.ylabel("fy (1/um)")
+    circ = matplotlib.patches.Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='-')
+    ax.add_artist(circ)
+    ax.set_xlim([-fmax_img, fmax_img])
+    ax.set_ylim([-0.05 * fmax_img, fmax_img])
 
 
 
 
 
+    # plot phase
+    ax = plt.subplot(grid[1, 3:6])
+    plt.title("phase")
+    plt.xlabel("Frequency (1/um)")
+    plt.ylabel("phase")
 
+    ax.plot(fmag, np.angle(otf).ravel(), '.')
+
+    ylims = [-np.pi - 0.1, np.pi + 0.1]
+    ax.set_ylim(ylims)
 
     return figh
