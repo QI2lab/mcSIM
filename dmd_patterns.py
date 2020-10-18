@@ -1042,7 +1042,7 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
     return intensity_fc_xformed, efield_fc_xformed, ns, ms, vecs, vecs_xformed
 
 
-def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs, plot_log=True):
+def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs, plot_log=True, figsize=(20, 10)):
     """
     Display strength of fourier components for a given pattern. Display function for data generated with
     ``get_bandlimited_fourier_components()''. See that function for more information about parameters
@@ -1066,7 +1066,7 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
 
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
 
-    figh = plt.figure()
+    figh = plt.figure(figsize=figsize)
     plt.suptitle('Pattern fourier weights versus position and reciprocal lattice vector\n va=(%d, %d); vb=(%d, %d)' %
                  (vec_a[0], vec_a[1], vec_b[0], vec_b[1]))
 
