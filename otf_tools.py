@@ -10,6 +10,7 @@ of the imaging system on the coherent light.
 """
 
 import time
+# import sys
 import numpy as np
 from scipy import fft
 import scipy.signal
@@ -79,6 +80,8 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
     for ii in range(nimgs):
         tnow = time.process_time()
         print("%d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, tnow - tstart))
+        # sys.stdout.write("\033[F")
+        # sys.stdout.flush()
 
         if multiple_images:
             # subtract background and crop to ROI
@@ -170,7 +173,9 @@ def get_all_fourier_thry(vas, vbs, nmax, nphases, phase_index, dmd_size):
     tstart = time.process_time()
     for ii in range(npatterns):
         tnow = time.process_time()
-        print("%d/%d, time elapsed=%0.2fs" % (ii + 1, npatterns, tnow - tstart))
+        print("%d/%d, elapsed time = %0.2fs" % (ii + 1, npatterns, tnow - tstart))
+        # sys.stdout.write("\033[F")
+        # sys.stdout.flush()
         va = vas[ii]
         vb = vbs[ii]
 
@@ -195,7 +200,7 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
     :param frq_vects_dmd: frequency vectors in 1/mirrors in DMD space
     :param roi: region of interest within image
     :param affine_xform: affine transformation connecting image space and DMD space (using pixels as coordinates on both ends)
-    :param fmax_efield_ex: maximum electric field frequency that can pass throught he imaging system from the DMD to sample
+    :param fmax_efield_ex: maximum electric field frequency that can pass throught he imaging system from the DMD to sample, in 1/mirrors
     :param pixel_size_um: camera pixel size in um
     :param bool use_blaze_correction: whether or not to use blaze correction
     :param dmd_params: {"wavelength", "gamma", "wx", "wy", "theta_ins": [tx, ty], "theta_outs": [tx, ty]}
@@ -241,7 +246,7 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
     return intensity_theory, frq_vects_cam, frq_vects_um
 
 def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affine_xform, roi, nphases, phase_index,
-                 peak_int_exp=None, peak_int_theory=None, otf=None, figsize=(20, 10)):
+                 peak_int_exp=None, peak_int_exp_unc=None, peak_int_theory=None, otf=None, otf_unc=None, figsize=(20, 10)):
     """
     plot image and affine xformed pattern it corresponds to
     :param img: image ny x nx
@@ -320,21 +325,33 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     ax = plt.subplot(grid[1, :3])
     plt.title("peaks expt/theory")
+    plt.xlabel("Frequency (1/um)")
+    plt.ylabel("Intensity")
+
+    plt.plot([fmax_img, fmax_img], [0, 1], 'k')
+
     phs = []
     legend_entries = []
     fmags = np.linalg.norm(frq_vects, axis=-1).ravel()
-    if peak_int_exp is not None:
-        ph, = ax.plot(fmags, np.abs(peak_int_exp).ravel() / np.nanmax(np.abs(peak_int_exp)), '.')
-        phs.append(ph)
-        legend_entries.append("experiment")
 
     if peak_int_theory is not None:
         ph, = ax.plot(fmags, np.abs(peak_int_theory).ravel() / np.nanmax(np.abs(peak_int_theory)), '.')
         phs.append(ph)
         legend_entries.append("theory")
 
-    plt.xlabel("Frequency (1/um)")
-    plt.ylabel("Intensity")
+    if peak_int_exp is not None:
+        if peak_int_exp_unc is None:
+            peak_int_exp_unc = np.zeros(peak_int_exp.shape)
+
+        ph, = ax.errorbar(fmags, np.abs(peak_int_exp).ravel() / np.nanmax(np.abs(peak_int_exp)), yerr=peak_int_exp_unc.ravel(), format='x')
+        phs.append(ph)
+        legend_entries.append("experiment")
+
+
+    ax.set_ylim([1e-4, 1.2])
+    ax.set_xlim([-0.1 * fmax_img, 1.2 * fmax_img])
+    ax.set_yscale('log')
+
     plt.legend(phs, legend_entries)
 
     ax = plt.subplot(grid[1, 3:])
@@ -345,7 +362,12 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     ax.plot([0, fmax_img], [0, 0], 'k')
     ax.plot([fmax_img, fmax_img], [0, 1], 'k')
     if otf is not None:
-        ax.plot(fmags, np.abs(otf).ravel(), '.')
+        if otf_unc is None:
+            otf_unc = np.zeros(otf.shape)
+        ax.errorbar(fmags, np.abs(otf).ravel(), yerr=otf_unc.ravel(), fmt='.')
+
+    ax.set_ylim([-0.05, 1.2])
+    ax.set_xlim([-0.1 * fmax_img, 1.2 * fmax_img])
 
 
     return figh

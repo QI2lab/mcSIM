@@ -1067,8 +1067,8 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
 
     figh = plt.figure(figsize=figsize)
-    plt.suptitle('Pattern fourier weights versus position and reciprocal lattice vector\n va=(%d, %d); vb=(%d, %d)' %
-                 (vec_a[0], vec_a[1], vec_b[0], vec_b[1]))
+    plt.suptitle('Pattern fourier weights versus position and reciprocal lattice vector\n va=(%d, %d); vb=(%d, %d), max frq=1/%0.2f 1/mirrors' %
+                 (vec_a[0], vec_a[1], vec_b[0], vec_b[1], 1/fmax))
 
     nrows = 2
     ncols = 2
