@@ -1065,18 +1065,19 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
         plot_scale = lambda f: f
 
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
+    recp_va_reduced, recp_vb_reduced = reduce_recp_basis(vec_a, vec_b)
 
     figh = plt.figure(figsize=figsize)
-    plt.suptitle('Pattern fourier weights versus position and reciprocal lattice vector\n va=(%d, %d); vb=(%d, %d), max frq=1/%0.2f 1/mirrors' %
+    grid = plt.GridSpec(2, 6, wspace=0.4)
+    plt.suptitle('Pattern fourier weights versus position and reciprocal lattice vector\n va=(%d, %d); vb=(%d, %d),'
+                 ' max efield frq=1/%0.2f 1/mirrors' %
                  (vec_a[0], vec_a[1], vec_b[0], vec_b[1], 1/fmax))
 
-    nrows = 2
-    ncols = 2
     lims = [1e-4, 1]
     msize = 2
 
     # fourier components fo electric field
-    ax = plt.subplot(nrows, ncols, 1)
+    ax = plt.subplot(grid[0, :2])
     ax.set_facecolor((0., 0., 0.))
     ax.axis('equal')
 
@@ -1085,6 +1086,7 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
                 norm=matplotlib.colors.Normalize(vmin=plot_scale(lims[0])), vmax=plot_scale(lims[1]))
 
     plt.scatter([recp_va[0], recp_vb[0]], [recp_va[1], recp_vb[1]], edgecolor='r', facecolor='none')
+    plt.scatter([recp_va_reduced[0], recp_vb_reduced[0]], [recp_va_reduced[1], recp_vb_reduced[1]], edgecolor="m", facecolor="none")
 
     circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='r', fill=0, ls='-')
     ax.add_artist(circ)
@@ -1104,7 +1106,7 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
 
     extent = [ns[0] - 0.5, ns[-1] + 0.5, ms[-1] + 0.5, ms[0] - 0.5]
 
-    plt.subplot(nrows, ncols, 3)
+    plt.subplot(grid[0, 2:4])
     plt.imshow(plot_scale(np.abs(efield_fc)), extent=extent)
     plt.xlabel('recp vec as')
     plt.ylabel('recp vec bs')
@@ -1116,7 +1118,7 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
     plt.clim(plot_scale(lims))
 
     # intensity, real space
-    ax = plt.subplot(nrows, ncols, 2)
+    ax = plt.subplot(grid[1, :2])
     ax.set_facecolor((0., 0., 0.))
     ax.axis('equal')
 
@@ -1124,6 +1126,7 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
                 s=msize, c=plot_scale(np.abs(int_fc).ravel()),
                 norm=matplotlib.colors.Normalize(vmin=plot_scale(lims[0])), vmax=plot_scale(lims[1]))
     plt.scatter([recp_va[0], recp_vb[0]], [recp_va[1], recp_vb[1]], edgecolor='r', facecolor='none')
+    plt.scatter([recp_va_reduced[0], recp_vb_reduced[0]], [recp_va_reduced[1], recp_vb_reduced[1]], edgecolor="m", facecolor="none")
 
     circ = matplotlib.patches.Circle((0, 0), radius=(2*fmax), color='r', fill=0, ls='-')
     ax.add_artist(circ)
@@ -1144,7 +1147,7 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
         cb.set_label('fourier weight')
     plt.title('intensity fourier weights')
 
-    plt.subplot(nrows, ncols, 4)
+    plt.subplot(grid[1, 2:4])
     plt.imshow(plot_scale(np.abs(int_fc)), extent=extent)
     cb = plt.colorbar()
     plt.clim(plot_scale(lims))
@@ -1155,6 +1158,44 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
         cb.set_label('log10(fourier weight)')
     else:
         cb.set_label('fourier weight')
+
+    # efield and intensity 1D
+    ax = plt.subplot(grid[0, 4:])
+    plt.title("Fourier component amp vs frq")
+    plt.xlabel("Frequency (1/mirrors)")
+
+    ylim = [1e-4, 1.2]
+    plt.plot([fmax, fmax], ylim, 'k')
+    plt.plot([2*fmax, 2*fmax], ylim, 'k')
+
+    vec_mag = np.linalg.norm(vecs, axis=-1)
+    ph1, = plt.plot(vec_mag.ravel(), np.abs(int_fc).ravel(), '.')
+    ph2, = plt.plot(vec_mag.ravel(), np.abs(efield_fc).ravel(), 'x')
+    plt.yscale("log")
+
+    plt.ylim(ylim)
+    plt.xlim([-0.1 * 2 * fmax, 2.2 * fmax])
+
+    plt.legend([ph1, ph2], ["I", "E"])
+
+    # E/I phases 1D
+    ax = plt.subplot(grid[1, 4:])
+    plt.title("Fourier component phase vs frq")
+    plt.xlabel("Frequency (1/mirrors)")
+
+    ylim = [-np.pi - 0.2, np.pi + 0.2]
+    plt.plot([fmax, fmax], ylim, 'k')
+    plt.plot([2 * fmax, 2 * fmax], ylim, 'k')
+
+    to_plot_int = np.abs(int_fc) >= lims[0]
+    to_plot_e = np.logical_and(to_plot_int, vec_mag <= fmax)
+    ph1, = plt.plot(vec_mag[to_plot_int].ravel(), np.angle(int_fc[to_plot_int]).ravel(), '.')
+    ph2, = plt.plot(vec_mag[to_plot_e].ravel(), np.angle(efield_fc[to_plot_e]).ravel(), 'x')
+
+    plt.ylim(ylim)
+    plt.xlim([-0.1 * 2 * fmax, 2.2 * fmax])
+
+    plt.legend([ph1, ph2], ["I", "E"])
 
     return figh
 
