@@ -141,9 +141,9 @@ def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0
 def na2fwhm(na, wavelength):
     """
 
-    :param na:
+    :param na: numerical aperture
     :param wavelength:
-    :return:
+    :return fwhm: in same units as wavelength
     """
     return 0.5 * wavelength / na
 
@@ -154,6 +154,7 @@ def na2sigma(na, wavelength):
     :param wavelength:
     :return:
     """
+    #2 * sqrt{2*log(2)} * sigma = 0.5 * wavelength / NA
     sigma = na2fwhm(na, wavelength) / (2*np.sqrt(2 * np.log(2)))
     return sigma
 
@@ -919,6 +920,8 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
             plt.ylabel('fit')
         plt.setp(ax1.get_xticklabels(), visible=False)
         plt.setp(ax1.get_yticklabels(), visible=False)
+        plt.yticks([])
+        plt.xticks([])
 
         # plot data
         ax2 = plt.subplot(nrows, ncols, ncols + column_ind + 1)
@@ -927,6 +930,8 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
             plt.ylabel('img')
         plt.setp(ax2.get_xticklabels(), visible=False)
         plt.setp(ax2.get_yticklabels(), visible=False)
+        plt.yticks([])
+        plt.xticks([])
 
         ax3 = plt.subplot(nrows, ncols, 2 * ncols + column_ind + 1)
         plt.imshow(imgs[ii, :, :] - fit_img3d[0][ii, :, :], cmap='bone')
@@ -934,6 +939,8 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
             plt.ylabel('img - fit')
         plt.setp(ax3.get_xticklabels(), visible=False)
         plt.setp(ax3.get_yticklabels(), visible=False)
+        plt.yticks([])
+        plt.xticks([])
 
         # plot this one centered so x and y can appear on same plot
         ax4 = plt.subplot(nrows, ncols, 3 * ncols + column_ind + 1)
@@ -1049,6 +1056,7 @@ def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
     :param dz: spacing between image planes (um)
     :param fit_params: n x 6 array, [A, cx, cy, cz, NA, bg]
     :param rois: regions of interest
+
     :return psf_mean:
     :return psf_sd:
     """
@@ -1084,7 +1092,9 @@ def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
         cy = fp[2]
 
         # 3D PSF, shift to be centered
-        psf_temp = ndi.shift(img_roi, [-cz / dz, -cy / dx, -cx / dx], mode='constant', cval=np.nan)
+        # any points not present replaced by nans
+        psf_temp = ndi.shift(np.array(img_roi, dtype=np.float), [-cz / dz, -cy / dx, -cx / dx], mode='constant', cval=-1)
+        psf_temp[psf_temp == -1] = np.nan
 
         for jj in range(nz):
             ind_z = (izero - izero_shift) + jj
@@ -1093,35 +1103,37 @@ def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
             psf_shifted[ii, ind_z] = psf_temp[jj]
 
         # subtract background
-        # subtract background, but do not normalize
         # old way, but do not like because will not average noise in background nicely to zero. Essentially relying on
         # having most spots with similar amplitudes
-        psf_shifted[ii] = (psf_shifted[ii] - fp[5]) / fp[0]
+        # psf_shifted[ii] = (psf_shifted[ii] - fp[5]) / fp[0]
         # not sure that chi squared is such a useful thing. But assuming all fits look very similar, probably ok.
-        weights[ii] = fp[0] / chi_sqrs[ii]
+        # weights[ii] = fp[0] / chi_sqrs[ii]
 
-        # todo: implement something like Wiener filter
-        # noise = 1 # todo: estimate
-        # signal = 1 # need psf model to estimate this...
-        # todo: maybe want to multiple PSF by 1/A * e**(-noise/signal) + (1 - e**(-noise/signal)) which interpolates between 1/A and 1
-        # filter = 1 / fp[0] * np.exp(-noise / signal) + (1 - np.exp(-noise / signal))
-        # psf_shifted[ii] = (psf_shifted[ii] - fp[5]) * filter
-        # weights[ii] = signal / noise
+        psf_shifted[ii] = (psf_shifted[ii] - fp[5])
+        # weights[ii] = 1
 
     # weighted averaging
+    # with np.errstate(divide='ignore', invalid='ignore'):
+    #     psf_weighted = np.array([p * w for p, w in zip(psf_shifted, weights)])
+    #     weights_nan = np.transpose(np.tile(weights, [nzroi, nroi, nroi, 1]), [3, 0, 1, 2])
+    #     weights_nan[np.isnan(psf_weighted)] = np.nan
+    #     psf_mean = np.nansum(psf_weighted, axis=0) / np.nansum(weights_nan, axis=0)
+    #
+    #     # reliability weighted standard error
+    #     v1 = np.nansum(weights_nan, axis=0)
+    #     v2 = np.nansum(weights_nan ** 2, axis=0)
+    #     numerator = np.asarray([w * (pshift - psf_mean)**2 for w, pshift in zip(weights, psf_shifted)])
+    #     psf_sd = np.nansum(numerator, axis=0) / (v1 - v2/v1)
+
     with np.errstate(divide='ignore', invalid='ignore'):
-        psf_weighted = np.array([p * w for p, w in zip(psf_shifted, weights)])
-        weights_nan = np.transpose(np.tile(weights, [nzroi, nroi, nroi, 1]), [3, 0, 1, 2])
-        weights_nan[np.isnan(psf_weighted)] = np.nan
-        psf_mean = np.nansum(psf_weighted, axis=0) / np.nansum(weights_nan, axis=0)
+        not_nan = np.logical_not(np.isnan(psf_shifted))
+        norm = np.sum(fit_params[:, 0][:, None, None, None] * not_nan, axis=0)
+        psf_mean = np.nansum(psf_shifted, axis=0) / norm
+        psf_sd = np.sqrt(np.nansum((psf_shifted / fit_params[:, 0][:, None, None, None] - psf_mean)**2, axis=0) /
+                         np.sum(not_nan, axis=0))
+        psf_sdm = psf_sd / np.sqrt(np.sum(not_nan, axis=0))
 
-        # reliability weighted standard error
-        v1 = np.nansum(weights_nan, axis=0)
-        v2 = np.nansum(weights_nan ** 2, axis=0)
-        numerator = np.asarray([w * (pshift - psf_mean)**2 for w, pshift in zip(weights, psf_shifted)])
-        psf_sd = np.nansum(numerator, axis=0) / (v1 - v2/v1)
-
-    return psf_mean, psf_sd
+    return psf_mean, psf_sdm
 
 def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_na=None,
                    percentiles=(20, 15, 10, 5, 2.5), figsize=(20, 10), **kwargs):
@@ -1210,10 +1222,13 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
 
         # plot 2D fits
         figh = plt.figure(figsize=figsize, **kwargs)
+        gauss_fwhm = na2fwhm(pfit_g2d[4], wavelength)
+
         plt.suptitle('Smallest %0.1f percent of beads, %d points with 2D fit NA >= %0.3f\n'
-                     'Gauss NA = %0.2f(%.0f), Vectorial = %0.2f(%.0f)' %
+                     'Gauss NA = %0.2f(%.0f), Vectorial = %0.2f(%.0f)\nGauss FWHM=%0.0f(%.0f)nm' %
                      (p, len(rois_psf), na_min, pfit_g2d[4], np.sqrt(cov_g2[4, 4]) * 1e2,
-                      pfit_v2[4], np.sqrt(cov_v2[4, 4]) * 1e2))
+                      pfit_v2[4], np.sqrt(cov_v2[4, 4]) * 1e2,
+                      gauss_fwhm * 1e3, gauss_fwhm * 1e3 / pfit_g2d[4] * np.sqrt(cov_g2[4, 4])))
 
         plt.subplot(2, 2, 1)
         plt.imshow(psf2d, cmap='bone')
@@ -1221,30 +1236,39 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
 
         # plot data
         plt.subplot(2, 2, 3)
-        plt.plot(y, fn_g2(0, nx, dx)[0, ixz, :], '--', marker='o', color='r')
-        plt.plot(y, fn_v2(0, x.size, dx)[0, ixz, :], marker='s', color='orange')
-        if expected_na is not None:
-            plt.plot(y, vexp[ixz, :], '--', marker='>', color='g')
+        # plot zero
+        cmin = np.min([np.min(x) * np.sqrt(2), np.min(x) * np.sqrt(2)])
+        cmax = np.max([np.max(y) * np.sqrt(2), np.max(x) * np.sqrt(2)])
+        ph1, = plt.plot([cmin, cmax], [0, 0], 'k')
 
-        plt.errorbar(x, psf2d[ixz, :], yerr=psf2d_sd[ixz, :], fmt='.', color='k')
-        plt.errorbar(y, psf2d[:, ixz], yerr=psf2d_sd[:, ixz], fmt='.', color='b')
-        plt.errorbar(np.sqrt(x**2 + y**2), np.diag(psf2d), yerr=np.diag(psf2d_sd), fmt='.', color='m')
-        plt.errorbar(np.sqrt(x**2 + y**2), np.diag(np.rot90(psf2d)), yerr=np.diag(np.rot90(psf2d_sd)),
+        # plot fits
+        ph2, = plt.plot(y, fn_g2(0, nx, dx)[0, ixz, :], '--', marker='o', color='r')
+        ph3, = plt.plot(y, fn_v2(0, x.size, dx)[0, ixz, :], marker='s', color='orange')
+        if expected_na is not None:
+            ph4, = plt.plot(y, vexp[ixz, :], '--', marker='>', color='g')
+
+        # plot data
+        ph5 = plt.errorbar(x, psf2d[ixz, :], yerr=psf2d_sd[ixz, :], fmt='.', color='k')
+        ph6 = plt.errorbar(y, psf2d[:, ixz], yerr=psf2d_sd[:, ixz], fmt='.', color='b')
+        ph7 = plt.errorbar(np.sqrt(2)/2 * (x + y), np.diag(psf2d), yerr=np.diag(psf2d_sd), fmt='.', color='m')
+        ph8 = plt.errorbar(np.sqrt(2)/2 * (x + y), np.diag(np.rot90(psf2d)), yerr=np.diag(np.rot90(psf2d_sd)),
                      fmt='.', color='blueviolet')
 
         plt.xlabel('position (um)')
         if expected_na is None:
-            plt.legend(['gauss na=%0.2f' % pfit_g2d[4],
+            plt.legend([ph2, ph3, ph5, ph6, ph7, ph8], ['gauss na=%0.2f' % pfit_g2d[4],
                         'vectorial na=%0.2f' % pfit_g2d[4],
                         'x', 'y', 'x+y', 'x-y'])
         else:
-            plt.legend(['gauss na=%0.2f' % pfit_g2d[4],
+            plt.legend([ph2, ph3, ph4, ph5, ph6, ph7, ph8], ['gauss na=%0.2f' % pfit_g2d[4],
                         'vectorial na=%0.2f' % pfit_g2d[4],
                         'vectorial na=%0.2f' % expected_na, 'x', 'y', 'x+y', 'x-y'])
 
         # OTF
+        # correct problematic PSF points before calculating mtf
         psf2d[np.isnan(psf2d)] = 0
-        mtf = np.abs(fft.fftshift(fft.fft2(psf2d)))
+        psf2d[psf2d < 0] = 0
+        mtf = np.abs(fft.fftshift(fft.fft2(fft.ifftshift(psf2d))))
         fx = tools.get_fft_frqs(mtf.shape[0], dt=dx)
         fy = fx
         dfx = fx[1] - fx[0]
@@ -1265,13 +1289,14 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
         ax = plt.subplot(2, 2, 4)
 
         if expected_na is not None:
-            otf_ideal = circ_aperture_otf(fx, 0, expected_na, wavelength) * mtf[ixz, ixz]
-            plt.plot(fx, otf_ideal, '-')
+            finterp = np.linspace(np.min(fx) * np.sqrt(2), np.max(fx) * np.sqrt(2), 500)
+            otf_ideal = circ_aperture_otf(finterp, 0, expected_na, wavelength) * mtf[ixz, ixz]
+            plt.plot(finterp, otf_ideal, '-')
 
         plt.plot(fx, mtf[ixz, :], '.')
         plt.plot(fy, mtf[:, ixz], '.')
-        plt.plot(np.sqrt(fx ** 2 + fy ** 2), np.diag(mtf), '.')
-        plt.plot(np.sqrt(fx ** 2 + fy ** 2), np.diag(np.rot90(mtf)), '.')
+        plt.plot(np.sqrt(2)/2 * (fx + fy), np.diag(mtf), '.')
+        plt.plot(np.sqrt(2)/2 * (fx + fy), np.diag(np.rot90(mtf)), '.')
 
         xlim = ax.get_xlim()
         ylim = ax.get_ylim()
@@ -1657,7 +1682,7 @@ def display_autofit(imgs, imgs_unc, dx, dz, wavelength, ni, rois, centers, fit2d
     fp3d = np.asarray([f['fit_params'] for f in fit3ds])
     fp2d = np.asarray([f['fit_params'] for f in fit2ds])
 
-    figh1 = plot_fit_stats(fit2ds, fit3ds, figsize, **kwargs)
+    figh1 = plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs)
 
     fighs.append(figh1)
     fig_names.append(['NA_summary'])
@@ -1761,14 +1786,12 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
     # fit parameter summary
     figh = plt.figure(figsize=figsize, **kwargs)
     plt.suptitle("PSF fit parameter summary")
-
-    nrows = 2
-    ncols = 4
+    grid = plt.GridSpec(2, 4)
 
     # 3D PSF fits
     if fit3ds is not None:
         # histogram of NAs
-        plt.subplot(nrows, ncols, 1)
+        plt.subplot(grid[0, 0])
         edges = np.linspace(0, 1.5, 20)
         hcenters = 0.5 * (edges[1:] + edges[:-1])
         na_h, _ = np.histogram(fp3d[:, 4], edges)
@@ -1778,7 +1801,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
         plt.ylabel('#')
         plt.title('3D fits: histogram of NAs')
 
-        plt.subplot(nrows, ncols, 2)
+        plt.subplot(grid[0, 1])
         plt.errorbar(fp3d[:, 4], chisq_3d, xerr=np.sqrt(covs3d[:, 4, 4]), fmt='o')
         plt.xlim([-0.05, 1.55])
         plt.ylim([0.9 * chisq_3d.min(), 1.1 * chisq_3d.max()])
@@ -1787,7 +1810,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
         plt.ylabel('chi sqr')
         plt.title('3D fits: chi sqr vs. NA')
 
-        plt.subplot(nrows, ncols, 3)
+        plt.subplot(grid[0, 2])
         plt.errorbar(fp3d[:, 4], fp3d[:, 0], xerr=np.sqrt(covs3d[:, 4, 4]), yerr=np.sqrt(covs3d[:, 0, 0]), fmt='o')
         plt.xlim([-0.05, 1.55])
         plt.ylim([0, 1.2 * fp3d[:, 0].max()])
@@ -1796,7 +1819,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
         plt.ylabel('Amplitude')
         plt.title('3D fits: NA vs. amp')
 
-        plt.subplot(nrows, ncols, 4)
+        plt.subplot(grid[0, 3])
         plt.errorbar(fp3d[:, 4], fp3d[:, 5], xerr=np.sqrt(covs3d[:, 4, 4]), yerr=np.sqrt(covs3d[:, 5, 5]), fmt='o')
         plt.xlim([-0.05, 1.55])
         max_diff = fp3d[:, 5].max() - fp3d[:, 5].min()
@@ -1808,7 +1831,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
 
     # 2D
     if fit2ds is not None:
-        plt.subplot(nrows, ncols, 5)
+        plt.subplot(grid[1, 0])
         na_h2d, _ = np.histogram(fp2d[:, 4], edges)
         plt.plot(hcenters, na_h2d, '.-')
 
@@ -1816,7 +1839,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
         plt.ylabel('#')
         plt.title('2D fit: histogram of NAs')
 
-        plt.subplot(nrows, ncols, 6)
+        plt.subplot(grid[1, 1])
         plt.errorbar(fp2d[:, 4], chisq_2d, xerr=np.sqrt(covs_2d[:, 4, 4]), fmt='o')
         plt.xlim([-0.05, 1.55])
         plt.ylim([0.9 * chisq_2d.min(), 1.1 * chisq_2d.max()])
@@ -1825,7 +1848,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
         plt.ylabel('chi sqr')
         plt.title('2D fits: chi sqr vs. NA')
 
-        plt.subplot(nrows, ncols, 7)
+        plt.subplot(grid[1, 2])
         plt.errorbar(fp2d[:, 4], fp2d[:, 0], xerr=np.sqrt(covs_2d[:, 4, 4]), yerr=np.sqrt(covs_2d[:, 0, 0]), fmt='o')
         plt.xlim([-0.05, 1.55])
         plt.ylim([0, 1.2 * fp2d[:, 0].max()])
@@ -1834,7 +1857,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
         plt.ylabel('Amplitude')
         plt.title('2D fit: NA vs. amp')
 
-        plt.subplot(nrows, ncols, 8)
+        plt.subplot(grid[1, 3])
         plt.errorbar(fp2d[:, 4], fp2d[:, 5], xerr=np.sqrt(covs_2d[:, 4, 4]), yerr=np.sqrt(covs_2d[:, 5, 5]), fmt='o')
         plt.xlim([-0.05, 1.55])
         max_diff = fp2d[:, 5].max() - fp2d[:, 5].min()
@@ -1846,7 +1869,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
 
     return figh
 
-def plot_bead_locations(imgs, centers, fit3ds, fit2ds, figsize=(12, 8), **kwargs):
+def plot_bead_locations(imgs, centers, fit3ds, fit2ds, figsize=(20, 10), **kwargs):
     """
     Plot bead locations against maximum intensity projection
 
@@ -1864,7 +1887,7 @@ def plot_bead_locations(imgs, centers, fit3ds, fit2ds, figsize=(12, 8), **kwargs
     plt.title("Maximum intensity projection and NA map")
 
     max_int_proj = np.max(imgs, axis=0)
-    vmin = np.percentile(max_int_proj, 5)
+    vmin = np.percentile(max_int_proj, 0.05)
     vmax = np.percentile(max_int_proj, 99.99)
 
     plt.imshow(max_int_proj, vmin=vmin, vmax=vmax, cmap='bone')
