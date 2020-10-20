@@ -211,6 +211,7 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
     """
 
     frq_vects_cam = np.zeros(frq_vects_dmd.shape)
+    intensity_phases = np.zeros(efields.shape) * np.nan
     intensity_theory = np.zeros(efields.shape, dtype=np.complex) * np.nan
 
     # get new affine xform accounting for ROI
@@ -233,8 +234,8 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
         intensity_theory[ii] = dmd_patterns.get_int_fc(efields[ii] * otf_now)
         intensity_theory[ii] = intensity_theory[ii] / np.abs(intensity_theory[ii]).max()
 
-        frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], _ = \
-            affine.xform_sinusoid_params(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1], 0, xform_roi)
+        frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], intensity_phases[ii] = \
+            affine.xform_sinusoid_params(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1], np.angle(intensity_theory[ii]), xform_roi)
 
     # correct frequency vectors in camera space to be in real units
     frq_vects_um = frq_vects_cam / pixel_size_um
@@ -243,9 +244,31 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
     # vecs_xformed[ii, jj, 0], vecs_xformed[ii, jj, 1], _ = \
     #     affine.xform_sinusoid_params(vecs[ii, jj, 0], vecs[ii, jj, 1], 0, affine_xform)
 
-    return intensity_theory, frq_vects_cam, frq_vects_um
+    return intensity_theory, intensity_phases, frq_vects_cam, frq_vects_um
 
-def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affine_xform, roi, nphases, phase_index,
+def fit_phase_diff(phase_th, phase_expt, frqs):
+    def phase_diff_fn(phi1, phi2):
+        diff = np.array(np.mod(phi1 - phi2, 2*np.pi))
+        to_flip = np.abs(diff - 2*np.pi) < np.abs(diff)
+        diff[to_flip] = diff[to_flip] - 2*np.pi
+        return diff
+
+    def phase_xform_fn(phi, fx, fy, p): return np.mod(phi + 2 * np.pi * fx * p[0] + 2 * np.pi * fy * p[1], 2 * np.pi)
+
+    def min_fn(p): return np.nansum(np.abs(phase_diff_fn(phase_xform_fn(phase_th, frqs[:, 0], frqs[:, 1], p), phase_expt)))
+
+    results = scipy.optimize.minimize(min_fn, [0, 0])
+
+    figh = plt.figure()
+    plt.plot(np.linalg.norm(frqs, axis=-1), phase_xform_fn(phase_th, frqs[:, 0], frqs[:, 1], results["x"]), '.')
+    plt.plot(np.linalg.norm(frqs, axis=-1), np.mod(phase_th, 2*np.pi), '.')
+    plt.plot(np.linalg.norm(frqs, axis=-1), np.mod(phase_expt, 2*np.pi), 'x')
+    plt.legend(["th fit", "th", "expt"])
+
+    return figh, results
+
+
+def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affine_xform, roi, nphases, phase_index, fmax_in=None,
                  peak_int_exp=None, peak_int_exp_unc=None, peak_int_theory=None, otf=None, otf_unc=None, figsize=(20, 10)):
     """
     plot image and affine xformed pattern it corresponds to
@@ -312,19 +335,27 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     plt.imshow(np.abs(img_ft) ** 2, norm=PowerNorm(gamma=0.1), extent=extent)
 
     # to_plot = np.logical_not(np.isnan(intensity_exp_norm))
+    nmax = int(np.round((frq_vects.shape[1] - 1) * 0.5))
     plt.scatter(frq_vects[..., 0].ravel(), frq_vects[..., 1].ravel(), facecolor='none', edgecolor='r')
     plt.scatter(-frq_vects[..., 0].ravel(), -frq_vects[..., 1].ravel(), facecolor='none', edgecolor='m')
+    # plt.scatter(frq_vects[nmax, nmax + 1, 0], frq_vects[nmax, nmax + 1, 1], facecolor="none", edgecolor='k')
+    # plt.scatter(frq_vects[nmax, nmax - 1, 0], frq_vects[nmax, nmax - 1, 1], facecolor="none", edgecolor='k')
+    # plt.scatter(frq_vects[nmax, nmax + 2, 0], frq_vects[nmax, nmax + 2, 1], facecolor="none", edgecolor='k')
+    # plt.scatter(frq_vects[nmax, nmax - 2, 0], frq_vects[nmax, nmax - 2, 1], facecolor="none", edgecolor='k')
 
     circ = matplotlib.patches.Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='--')
     ax.add_artist(circ)
-    # circ2 = matplotlib.patches.Circle((0, 0), radius=fmax_in, color='k', fill=0, ls='--')
-    # ax.add_artist(circ2)
+
+    if fmax_in is not None:
+        circ2 = matplotlib.patches.Circle((0, 0), radius=(fmax_in/2), color='r', fill=0, ls='--')
+        ax.add_artist(circ2)
+
 
     plt.xlim([-fmax_img, fmax_img])
     plt.ylim([fmax_img, -fmax_img])
 
-    ax = plt.subplot(grid[1, :3])
-    plt.title("peaks expt/theory")
+    ax = plt.subplot(grid[1, :2])
+    plt.title("peaks amp expt/theory")
     plt.xlabel("Frequency (1/um)")
     plt.ylabel("Intensity")
 
@@ -343,18 +374,47 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
         if peak_int_exp_unc is None:
             peak_int_exp_unc = np.zeros(peak_int_exp.shape)
 
-        ph, = ax.errorbar(fmags, np.abs(peak_int_exp).ravel() / np.nanmax(np.abs(peak_int_exp)), yerr=peak_int_exp_unc.ravel(), format='x')
+        ph = ax.errorbar(fmags, np.abs(peak_int_exp).ravel() / np.nanmax(np.abs(peak_int_exp)),
+                         yerr=peak_int_exp_unc.ravel() / np.nanmax(np.abs(peak_int_exp)), fmt='x')
         phs.append(ph)
         legend_entries.append("experiment")
 
 
     ax.set_ylim([1e-4, 1.2])
-    ax.set_xlim([-0.1 * fmax_img, 1.2 * fmax_img])
+    ax.set_xlim([-0.1 * fmax_img, 1.1 * fmax_img])
     ax.set_yscale('log')
 
     plt.legend(phs, legend_entries)
 
-    ax = plt.subplot(grid[1, 3:])
+
+    # plot phase
+    ax = plt.subplot(grid[1, 2:4])
+    plt.title("peaks phase expt/theory")
+    plt.xlabel("Frequency (1/um)")
+    plt.ylabel("Intensity")
+
+    plt.plot([fmax_img, fmax_img], [-np.pi, np.pi], 'k')
+
+    phs = []
+    legend_entries = []
+    fmags = np.linalg.norm(frq_vects, axis=-1).ravel()
+
+    if peak_int_theory is not None:
+        ph, = ax.plot(fmags, np.angle(peak_int_theory).ravel(), '.')
+        phs.append(ph)
+        legend_entries.append("theory")
+
+    if peak_int_exp is not None:
+        ph, = ax.plot(fmags, np.angle(peak_int_exp).ravel(), 'x')
+        phs.append(ph)
+        legend_entries.append("experiment")
+
+    ax.set_xlim([-0.1 * fmax_img, 1.1 * fmax_img])
+
+    plt.legend(phs, legend_entries)
+
+    # plot otf
+    ax = plt.subplot(grid[1, 4:])
     plt.title("otf")
     plt.xlabel("Frequency (1/um)")
     plt.ylabel("otf")
@@ -367,8 +427,7 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
         ax.errorbar(fmags, np.abs(otf).ravel(), yerr=otf_unc.ravel(), fmt='.')
 
     ax.set_ylim([-0.05, 1.2])
-    ax.set_xlim([-0.1 * fmax_img, 1.2 * fmax_img])
-
+    ax.set_xlim([-0.1 * fmax_img, 1.1 * fmax_img])
 
     return figh
 
