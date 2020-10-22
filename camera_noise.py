@@ -362,17 +362,17 @@ def plot_camera_noise_results(dark_data, light_data, gains, nbins=600, figsize=(
     ax1.plot(bin_centers, hgains)
     ax1.set_xlabel('gains (ADU/e)')
     ax1.set_ylabel('counts')
-    ax1.set_title('histogram of pixel gains')
+    ax1.set_title('histogram of pixel gains, median=%0.2f' % (np.median(gains.ravel())))
 
     ax2 = plt.subplot(grid[0, 1])
     ax2.plot(bin_centers_offs, hmeans)
     ax2.set_xlabel('offsets (ADU)')
-    ax2.set_title('dark mean')
+    ax2.set_title('dark mean, median=%0.2f' % (np.median(offsets.ravel())))
 
     ax3 = plt.subplot(grid[1, 0])
     ax3.plot(bin_centers_vars, hvars)
     ax3.set_xlabel('variances (ADU^2)')
-    ax3.set_title('dark variances')
+    ax3.set_title('dark variances, median=%0.2f' % (np.median(vars.ravel())))
 
     ax4 = plt.subplot(grid[1, 1])
     ph1, = ax4.plot(bin_centers_stds_es, h_std_es)
