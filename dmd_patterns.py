@@ -237,7 +237,7 @@ def get_sim_unit_cell(vec_a, vec_b, nphases):
     """
 
     # ensure both vec_b components are divisible by nphases
-    if not (vec_b[0] / nphases).is_integer() or not (vec_b[1] / nphases).is_integer():
+    if not float(vec_b[0] / nphases).is_integer() or not float(vec_b[1] / nphases).is_integer():
         raise Exception("At least one component of vec_b was not divisible by nphases")
 
     # get full unit cell
@@ -288,15 +288,10 @@ def get_unit_cell(vec_a, vec_b):
     """
 
     # test that vec_a and vec_b components are integers
-    for v in vec_a:
-        if isinstance(v, float):
-            if not v.is_integer():
-                raise Exception("At least one component of vec_a cannot be interpreted as an integer")
-
-    for v in vec_b:
-        if isinstance(v, float):
-            if not v.is_integer():
-                raise Exception("At least one component of vec_b cannot be interpreted as an integer")
+    for vecs in [vec_a, vec_b]:
+        for v in vec_a:
+            if not float(v).is_integer():
+                raise Exception("At least one component of vec_a or vec_b cannot be interpreted as an integer")
 
     # copy vector data, so don't affect inputs
     vec_a = np.array(vec_a, copy=True, dtype=np.int)
@@ -415,9 +410,14 @@ def reduce2cell(point, va, vb):
     :param list or np.array vb:
     :return:
     """
+    for vec in [va, vb]:
+        for v in vec:
+            if not float(v).is_integer():
+                raise Exception("at least one component of va or vb could nto be interpreted as an integer.")
+
     point = np.array(point, copy=True)
-    va = np.array(va, copy=True)
-    vb = np.array(vb, copy=True)
+    va = np.array(va, copy=True, dtype=np.int)
+    vb = np.array(vb, copy=True, dtype=np.int)
 
     ra, rb = get_reciprocal_vects(va, vb)
     # need to round to avoid problems with machine precision
@@ -484,6 +484,10 @@ def convert_cell(cell1, x1, y1, va1, vb1, va2, vb2):
     :return y2:
     """
     # todo: add check that va1/vb1 and va2/vb2 describe same lattice
+    for vec in [va1, vb1, va2, vb2]:
+        for v in vec:
+            if not float(v).is_integer():
+                raise Exception("At least one component of va1, vb1, va2, or vb2 could not be interpreted as an integer")
 
     cell2, x2, y2 = get_unit_cell(va2, vb2)
     y1min = y1.min()
