@@ -269,7 +269,8 @@ def fit_phase_diff(phase_th, phase_expt, frqs):
 
 
 def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affine_xform, roi, nphases, phase_index, fmax_in=None,
-                 peak_int_exp=None, peak_int_exp_unc=None, peak_int_theory=None, otf=None, otf_unc=None, figsize=(20, 10)):
+                 peak_int_exp=None, peak_int_exp_unc=None, peak_int_theory=None, otf=None, otf_unc=None, to_use=None,
+                 figsize=(20, 10)):
     """
     plot image and affine xformed pattern it corresponds to
     :param img: image ny x nx
@@ -286,6 +287,11 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     :return fig_handle:
     """
+
+    if to_use is None:
+        to_use = np.ones(peak_int_exp.shape, dtype=np.bool)
+
+    fmags = np.linalg.norm(frq_vects, axis=-1)
 
     # generate DMD pattern
     pattern, _ = dmd_patterns.get_sim_pattern(dmd_size, va, vb, nphases, phase_index)
@@ -319,7 +325,7 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     angle = dmd_patterns.get_sim_angle(va, vb)
 
     plt.suptitle("period=%0.3f mirrors, angle=%0.2fdeg\n"
-                 "va=(%d, %d); vb=(%d, %d)" % (period, angle, va[0], va[1], vb[0], vb[1]))
+                 "va=(%d, %d); vb=(%d, %d)" % (period, angle * 180/np.pi, va[0], va[1], vb[0], vb[1]))
 
     plt.subplot(grid[0, 0:2])
     plt.imshow(img_roi)
@@ -336,8 +342,8 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     # to_plot = np.logical_not(np.isnan(intensity_exp_norm))
     nmax = int(np.round((frq_vects.shape[1] - 1) * 0.5))
-    plt.scatter(frq_vects[..., 0].ravel(), frq_vects[..., 1].ravel(), facecolor='none', edgecolor='r')
-    plt.scatter(-frq_vects[..., 0].ravel(), -frq_vects[..., 1].ravel(), facecolor='none', edgecolor='m')
+    plt.scatter(frq_vects[to_use, 0].ravel(), frq_vects[to_use, 1].ravel(), facecolor='none', edgecolor='r')
+    plt.scatter(-frq_vects[to_use, 0].ravel(), -frq_vects[to_use, 1].ravel(), facecolor='none', edgecolor='m')
     # plt.scatter(frq_vects[nmax, nmax + 1, 0], frq_vects[nmax, nmax + 1, 1], facecolor="none", edgecolor='k')
     # plt.scatter(frq_vects[nmax, nmax - 1, 0], frq_vects[nmax, nmax - 1, 1], facecolor="none", edgecolor='k')
     # plt.scatter(frq_vects[nmax, nmax + 2, 0], frq_vects[nmax, nmax + 2, 1], facecolor="none", edgecolor='k')
@@ -363,10 +369,9 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     phs = []
     legend_entries = []
-    fmags = np.linalg.norm(frq_vects, axis=-1).ravel()
 
     if peak_int_theory is not None:
-        ph, = ax.plot(fmags, np.abs(peak_int_theory).ravel() / np.nanmax(np.abs(peak_int_theory)), '.')
+        ph, = ax.plot(fmags[to_use], np.abs(peak_int_theory[to_use]).ravel() / np.nanmax(np.abs(peak_int_theory[to_use])), '.')
         phs.append(ph)
         legend_entries.append("theory")
 
@@ -374,8 +379,8 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
         if peak_int_exp_unc is None:
             peak_int_exp_unc = np.zeros(peak_int_exp.shape)
 
-        ph = ax.errorbar(fmags, np.abs(peak_int_exp).ravel() / np.nanmax(np.abs(peak_int_exp)),
-                         yerr=peak_int_exp_unc.ravel() / np.nanmax(np.abs(peak_int_exp)), fmt='x')
+        ph = ax.errorbar(fmags[to_use], np.abs(peak_int_exp[to_use]).ravel() / np.nanmax(np.abs(peak_int_exp)),
+                         yerr=peak_int_exp_unc[to_use].ravel() / np.nanmax(np.abs(peak_int_exp)), fmt='x')
         phs.append(ph)
         legend_entries.append("experiment")
 
@@ -391,21 +396,20 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     ax = plt.subplot(grid[1, 2:4])
     plt.title("peaks phase expt/theory")
     plt.xlabel("Frequency (1/um)")
-    plt.ylabel("Intensity")
+    plt.ylabel("phase")
 
     plt.plot([fmax_img, fmax_img], [-np.pi, np.pi], 'k')
 
     phs = []
     legend_entries = []
-    fmags = np.linalg.norm(frq_vects, axis=-1).ravel()
 
     if peak_int_theory is not None:
-        ph, = ax.plot(fmags, np.angle(peak_int_theory).ravel(), '.')
+        ph, = ax.plot(fmags[to_use], np.angle(peak_int_theory[to_use]).ravel(), '.')
         phs.append(ph)
         legend_entries.append("theory")
 
     if peak_int_exp is not None:
-        ph, = ax.plot(fmags, np.angle(peak_int_exp).ravel(), 'x')
+        ph, = ax.plot(fmags[to_use], np.angle(peak_int_exp[to_use]).ravel(), 'x')
         phs.append(ph)
         legend_entries.append("experiment")
 
@@ -424,7 +428,7 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     if otf is not None:
         if otf_unc is None:
             otf_unc = np.zeros(otf.shape)
-        ax.errorbar(fmags, np.abs(otf).ravel(), yerr=otf_unc.ravel(), fmt='.')
+        ax.errorbar(fmags[to_use], np.abs(otf[to_use]).ravel(), yerr=otf_unc[to_use].ravel(), fmt='.')
 
     ax.set_ylim([-0.05, 1.2])
     ax.set_xlim([-0.1 * fmax_img, 1.1 * fmax_img])
@@ -469,6 +473,8 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
     plt.plot([fmax_img, fmax_img], ylim, 'k')
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
+
+    ax.legend(["OTF ideal, fmax=%0.2f (1/um)" % fmax_img])
 
     # 1D log scale
     ax = plt.subplot(grid[1, :3])
