@@ -2013,7 +2013,9 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     """
     Find SIM frequency from image by maximizing
     C(f) =  \sum_k img_ft(k) x img_ft*(k+f) = F(img_ft) * F(img_ft*) = F(|img_ft|^2).
-    Note that there is ambiguity in the definition of this frequency, as -f will also be a peak. This function returns
+
+    Note that there is ambiguity in the definition of this frequency, as -f will also be a peak. If frq_guess is
+    provided, the peak closest to the guess will be returned. Otherwise, this function returns
     the frequency which has positive y-component. If the y-component is zero, it returns positive x-component.
 
     Function works in two steps: initially consider C(f) = |ft(img_ft)|^2 at the same frequency points as the DFT. Then,
@@ -2023,19 +2025,19 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     only one fft, whereas getting shifted fourier transform of the transform itself requires two (ifft, then fft again)
 
     :param img1: 2D real NumPy array
-    :param img2: 2D real NumPy array to be cross correlated with
+    :param img2: 2D real NumPy array to be cross correlated with img1
     :param options: dictionary of options {'pixel_size', 'wavelength', 'na'}.
     todo: wavelength/na only used to calculate fmax, so lets make fmax the argument instead
     :param exclude_res: frequencies less than this fraction of fmax are excluded from peak finding. Not
     :param frq_guess: frequency guess [fx, fy]. Can be None.
-    :param roi_pix_size: half-size of the region of interest around frq_guess used to estimate the peak location
+    :param roi_pix_size: half-size of the region of interest around frq_guess used to estimate the peak location. This
+    parameter is only used if frq_guess is provided.
+    :param use_jacobian: use the jacobian during the fitting procedure. Because jacobian calculation is expensive,
+    this does not speed up fitting.
 
     :return fit_frqs:
     :return mask: mask detailing region used in fitting
     """
-
-    # if np.any(np.iscomplex(img1)):
-    #     raise Exception('img must be real, but was complex.')
 
     # extract options
     dx = options['pixel_size']
@@ -2959,7 +2961,8 @@ def get_extent(y, x):
     extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
     return extent
 
-def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_size=31, figsize=(20, 10)):
+def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_size=31,
+                         peak_pixels=2, figsize=(20, 10)):
     """
     Display SIM parameter fitting results visually, in a way that is easy to inspect.
 
@@ -2996,22 +2999,28 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     period = 1 / np.sqrt(fx_sim ** 2 + fy_sim ** 2)
     angle = np.angle(fx_sim + 1j * fy_sim)
 
+    peak_cc = tools.get_peak_value(cc, fxs, fys, [fx_sim, fy_sim], peak_pixels)
+
+    peak1_dc = tools.get_peak_value(img1_ft, fxs, fys, [0, 0], peak_pixels)
+    peak2 = tools.get_peak_value(img2_ft, fxs, fys, [fx_sim, fy_sim], peak_pixels)
+
     extent = get_extent(fys, fxs)
 
     # create figure
     figh = plt.figure(figsize=figsize)
-    gspec = matplotlib.gridspec.GridSpec(ncols=14, nrows=2, figure=figh)
+    gspec = matplotlib.gridspec.GridSpec(ncols=14, nrows=2, hspace=0.3, figure=figh)
 
     # suptitle
-    str = '   fit: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um' % \
-          (period * 1e3, angle * 180 / np.pi, angle, fx_sim, fy_sim)
+    str = '      fit: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
+          (period * 1e3, angle * 180 / np.pi, angle, fx_sim, fy_sim, np.abs(peak_cc), np.angle(peak_cc) * 180/np.pi)
     if frqs_guess is not None:
         fx_g, fy_g = frqs_guess
         period_g = 1 / np.sqrt(fx_g ** 2 + fy_g ** 2)
         angle_g = np.angle(fx_g + 1j * fy_g)
+        peak_cc_g =  tools.get_peak_value(cc, fxs, fys, frqs_guess, peak_pixels)
 
-        str += '\nguess: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um' % \
-               (period_g * 1e3, angle_g * 180 / np.pi, angle_g, fx_g, fy_g)
+        str += '\nguess: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
+               (period_g * 1e3, angle_g * 180 / np.pi, angle_g, fx_g, fy_g, np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
     plt.suptitle(str)
 
     # #######################################
@@ -3071,7 +3080,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
 
     # ft 1
     ax3 = plt.subplot(gspec[1, 0:6])
-    ax3.set_title("fft 1 PS near DC")
+    ax3.set_title("fft 1 PS near DC, peak = %0.3g at %0.2fdeg" % (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
@@ -3086,7 +3095,11 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
 
     # ft 2
     ax4 = plt.subplot(gspec[1, 7:13])
-    ax4.set_title("fft 2 PS near fo")
+    ttl_str = "fft 2 PS near fo, peak = %0.3g at %0.2fdeg" % (np.abs(peak2), np.angle(peak2) * 180 / np.pi)
+    if frqs_guess is not None:
+        peak2_g = tools.get_peak_value(img2_ft, fxs, fys, frqs_guess, peak_pixels)
+        ttl_str += "\nguess peak = = %0.3g at %0.2fdeg" % (np.abs(peak2_g), np.angle(peak2_g) * 180 / np.pi)
+    ax4.set_title(ttl_str)
 
     im4 = ax4.imshow(np.abs(img2_ft[roi[0]:roi[1], roi[2]:roi[3]])**2,
                      interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi)
