@@ -667,7 +667,7 @@ def get_sim_phase(vec_a, vec_b, nphases, phase_index, pattern_size, origin='fft'
     :param int nphases: number of equal phase shifts for SIM pattern
     :param int phase_index: 0, ..., nphases-1
     :param list[int] pattern_size: [nx, ny]
-    :param list[int] origin: origin to use for computing the phase. If 'fft', will assume the coordinates are the same
+    :param str origin: origin to use for computing the phase. If 'fft', will assume the coordinates are the same
     as used in an FFT (i.e. before performing an ifftshift, with the 0 near the center). If 'corner', will
     suppose the origin is at pattern[0, 0].
 
@@ -742,6 +742,7 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
 def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_index, dmd_size,
                                   nmax=20, origin="fft", otf=None):
     """
+    Generate many Fourier components of pattern
 
     :param unit_cell:
     :param x:
@@ -754,7 +755,11 @@ def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_
     :param nmax:
     :param origin:
     :param otf: optical transfer function to apply
-    :return:
+
+    :return efield: evaluated at the frequencyes vecs = ns * recp_va + ms * recp_vb
+    :return ns:
+    :return ms:
+    :return vecs:
     """
 
     if otf is None:
@@ -773,9 +778,11 @@ def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_
     for ii in range(nmax, len(ns)):
         for jj in range(len(ms)):
 
-            # don't bother to calculate if pattern is smaller than 1 mirror
+            # maximum pattern size is f = 0.5 1/mirrors, after this Fourier transform repeats information
             v = rva * ns[ii] + rvb * ms[jj]
-            if np.linalg.norm(v) > 1:
+            # if np.linalg.norm(v) > 1:
+            # if np.linalg.norm(v) > 0.5:
+            if np.abs(v[0]) > 0.5 or np.abs(v[1]) > 0.5:
                 efield_fc[ii, jj] = 0
                 vecs[ii, jj] = v[:, 0]
             else:
@@ -797,6 +804,14 @@ def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_
     return efield_fc, ns, ms, vecs
 
 def get_int_fc(efield_fc):
+    """
+    Generate intensity fourier components from efield fourier components
+
+    :param efield_fc: electric field Fourier components nvec1 x nvec2 array,
+     where efield_fc[ii, jj] is the electric field at frequencies f = ii * v1 + jj * v2.
+
+    :return intensity_fc: intensity Fourier components at the same frequencies, f = ii * v1 + jj * v2
+    """
     ny, nx = efield_fc.shape
     if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
         raise Exception("not implemented for even sized arrays")
@@ -813,6 +828,7 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     Utility function for computing many electric field and intensity components of the Fourier pattern, including the
     effect of the Blaze angle and system numerical aperture
 
+    # todo: deprecate this in favor of get_int_fc() and get_efield_fourier_components()
     # todo: instead of setting nmax, just generate all e-field components that do not get blocked
     # todo: debating moving this function to simulate_dmd.py instead
 

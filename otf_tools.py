@@ -192,7 +192,7 @@ def get_all_fourier_thry(vas, vbs, nmax, nphases, phase_index, dmd_size):
 
     return efield_theory, ns, ms, frq_vects_dmd
 
-def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_efield_ex, pixel_size_um,
+def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_efield_ex, pixel_size_um, dmd_shape,
                                use_blaze_correction=False, dmd_params=None):
     """
 
@@ -205,7 +205,9 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
     :param bool use_blaze_correction: whether or not to use blaze correction
     :param dmd_params: {"wavelength", "gamma", "wx", "wy", "theta_ins": [tx, ty], "theta_outs": [tx, ty]}
 
-    :return intensity_theory:
+    :return intensity_theory: theoretical intensity using DMD coordinates
+    :return intensity_theory_xformed: theoretical intensity using camera ROI coordinates. Same magnitude but different
+    phase versus intensity_theory
     :return frq_vects_cam: frequency vectors in camera space in 1/pixels
     :return frq_vects_um: frequency vectors in camera space in 1/microns
     """
@@ -213,6 +215,8 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
     frq_vects_cam = np.zeros(frq_vects_dmd.shape)
     intensity_phases = np.zeros(efields.shape) * np.nan
     intensity_theory = np.zeros(efields.shape, dtype=np.complex) * np.nan
+    ny = roi[1] - roi[0]
+    nx = roi[3] - roi[2]
 
     # get new affine xform accounting for ROI
     xform_roi = affine.xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
@@ -225,17 +229,21 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
                                                dmd_params["theta_outs"][0] + dmd_params["wavelength"] * fx,
                                                dmd_params["theta_outs"][1] + dmd_params["wavelength"] * fy)
     else:
-        def otf(fx, fy):
+        def pupil(fx, fy):
             return np.sqrt(fx ** 2 + fy ** 2) <= fmax_efield_ex
 
     for ii in range(frq_vects_cam.shape[0]):
-        otf_now = otf(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1])
+        pupil_now = pupil(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1])
 
-        intensity_theory[ii] = dmd_patterns.get_int_fc(efields[ii] * otf_now)
+        intensity_theory[ii] = dmd_patterns.get_int_fc(efields[ii] * pupil_now)
         intensity_theory[ii] = intensity_theory[ii] / np.abs(intensity_theory[ii]).max()
 
+        # frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], intensity_phases[ii] = \
+        #     affine.xform_sinusoid_params(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1], np.angle(intensity_theory[ii]), xform_roi)
         frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], intensity_phases[ii] = \
-            affine.xform_sinusoid_params(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1], np.angle(intensity_theory[ii]), xform_roi)
+            affine.xform_sinusoid_params_roi(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1],
+                                         np.angle(intensity_theory[ii]), dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
+    intensity_theory_xformed = np.abs(intensity_theory) * np.exp(1j * intensity_phases)
 
     # correct frequency vectors in camera space to be in real units
     frq_vects_um = frq_vects_cam / pixel_size_um
@@ -244,7 +252,7 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
     # vecs_xformed[ii, jj, 0], vecs_xformed[ii, jj, 1], _ = \
     #     affine.xform_sinusoid_params(vecs[ii, jj, 0], vecs[ii, jj, 1], 0, affine_xform)
 
-    return intensity_theory, intensity_phases, frq_vects_cam, frq_vects_um
+    return intensity_theory, intensity_theory_xformed, frq_vects_cam, frq_vects_um
 
 def fit_phase_diff(phase_th, phase_expt, frqs):
     def phase_diff_fn(phi1, phi2):
@@ -304,6 +312,7 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     xform_roi = affine.xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
     img_coords = np.meshgrid(range(nx), range(ny))
     pattern_xformed = affine.affine_xform_mat(pattern, xform_roi, img_coords, mode="interp")
+    # pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
 
     # get fourier transform of image
     fxs = tools.get_fft_frqs(nx, pixel_size_um)
