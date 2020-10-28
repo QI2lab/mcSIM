@@ -1184,13 +1184,24 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
     plt.title("Fourier component amp vs frq")
     plt.xlabel("Frequency (1/mirrors)")
 
+    # only plot one of +/- f, and only plot if above certain threshold
+    vec_mag = np.linalg.norm(vecs, axis=-1)
+    nmax1 = int(np.round(0.5 * (int_fc.shape[0] - 1)))
+    nmax2 = int(np.round(0.5 * (int_fc.shape[1] - 1)))
+    to_use = np.ones(int_fc.shape, dtype=np.int)
+    xx, yy = np.meshgrid(range(-nmax2, nmax2 + 1), range(-nmax1, nmax1 + 1))
+    to_use[xx > yy] = 0
+    to_use[np.logical_and(xx == yy, yy < 0)] = 0
+
+    to_plot_int = np.logical_and(to_use, np.abs(int_fc) >= lims[0])
+    to_plot_e = np.logical_and(to_plot_int, vec_mag <= fmax)
+
     ylim = [1e-4, 1.2]
     plt.plot([fmax, fmax], ylim, 'k')
     plt.plot([2*fmax, 2*fmax], ylim, 'k')
 
-    vec_mag = np.linalg.norm(vecs, axis=-1)
-    ph1, = plt.plot(vec_mag.ravel(), np.abs(int_fc).ravel(), '.')
-    ph2, = plt.plot(vec_mag.ravel(), np.abs(efield_fc).ravel(), 'x')
+    ph1, = plt.plot(vec_mag[to_plot_int], np.abs(int_fc[to_plot_int]), '.')
+    ph2, = plt.plot(vec_mag[to_plot_e], np.abs(efield_fc[to_plot_e]), 'x')
     plt.yscale("log")
 
     plt.ylim(ylim)
@@ -1207,10 +1218,8 @@ def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs,
     plt.plot([fmax, fmax], ylim, 'k')
     plt.plot([2 * fmax, 2 * fmax], ylim, 'k')
 
-    to_plot_int = np.abs(int_fc) >= lims[0]
-    to_plot_e = np.logical_and(to_plot_int, vec_mag <= fmax)
-    ph1, = plt.plot(vec_mag[to_plot_int].ravel(), np.angle(int_fc[to_plot_int]).ravel(), '.')
-    ph2, = plt.plot(vec_mag[to_plot_e].ravel(), np.angle(efield_fc[to_plot_e]).ravel(), 'x')
+    ph1, = plt.plot(vec_mag[to_plot_int], np.angle(int_fc[to_plot_int]), '.')
+    ph2, = plt.plot(vec_mag[to_plot_e], np.angle(efield_fc[to_plot_e]), 'x')
 
     plt.ylim(ylim)
     plt.xlim([-0.1 * 2 * fmax, 2.2 * fmax])

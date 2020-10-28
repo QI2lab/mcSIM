@@ -28,6 +28,149 @@ import analysis_tools as tools
 import sim_reconstruction
 import fit_psf
 
+def frq2angles(frq_2d, wavelength, n):
+    """
+    Convert from frequency vectors (in angular spectrum representation) to angles
+
+    f = n/lambda * [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
+
+    :param frq_2d:
+    :param wavelength:
+    :param n:
+    :return phi:
+    :return theta:
+    """
+    frq_2d = np.array(frq_2d, copy=True)
+
+    # phi = np.arctan(wavelength / n * frq_2d[..., 1] / frq_2d[..., 0])
+    # phi[frq_2d[..., 0] == 0] = np.pi/2
+    phi = np.atleast_1d(np.angle(frq_2d[..., 0] + 1j * frq_2d[..., 1]))
+    theta = np.atleast_1d(np.arcsin(wavelength / n * np.linalg.norm(frq_2d, axis=-1)))
+
+    # ensure disallowed points return nans
+    disallowed = np.linalg.norm(frq_2d, axis=-1) > n/wavelength
+    phi[disallowed] = np.nan
+    theta[disallowed] = np.nan
+
+    return phi, theta
+
+def angles2frq(theta, phi, wavelength, n):
+    frq = n/wavelength * np.array([np.cos(phi) * np.sin(theta),
+                                   np.sin(phi) * np.sin(theta),
+                                   np.cos(theta)])
+    return frq
+
+def interfere_polarized(theta1, phi1, theta2, phi2, alpha):
+    """
+    Let the optical axis point along z. theta is the angle with respect to the optical axis,
+    and phi is the azimuthal angle of the ray. Alpha is the azimuthal angle of the polarization,
+    which we assume is initially orthogonal to the optical axis
+
+    The polarization vector is
+    p = [np.cos(alpha), np.sin(alpha), 0]
+    The s/p unit vectors are
+    ep = [np.cos(phi), np.sin(phi), 0]
+    es = [-np.sin(phi), np.cos(phi), 0]
+    after refracting through the lens, the polarization vector is
+    pr = (p.dot(ep)) * er + (p.odt(es)) * es
+    with er now pointing orthothogonal to the propogation of the refracted ray
+    er = [np.cos(phi) * np.cos(theta), np.sin(phi) * np.cos(theta), np.sin(theta)]
+
+    This function compute pr(theta1, phi1, alpha).dot(pr(theta2, phi2, alpha))
+
+    :param theta1: angle of first ray
+    :param phi1: azimuthal angle of first ray
+    :param theta2: angle of second ray
+    :param phi2: azimuthal angle of second ray
+    :param alpha: polarization angle
+
+    :return: dot product of the two polarization vectors
+    """
+    int = np.cos(alpha - phi1) * np.cos(alpha - phi2) * np.cos(phi1) * np.cos(phi2) * np.cos(theta1) * np.cos(theta2) + \
+        np.sin(alpha - phi1) * np.sin(alpha - phi2) * np.sin(phi1) * np.sin(phi2) + \
+        -np.cos(alpha - phi1) * np.sin(alpha - phi2) * np.cos(phi1) * np.sin(phi2) * np.cos(theta1) + \
+        -np.sin(alpha - phi1) * np.cos(alpha - phi2) * np.sin(phi1) * np.cos(phi2) * np.cos(theta2) + \
+        np.cos(alpha - phi1) * np.cos(alpha - phi2) * np.sin(phi1) * np.sin(phi2) * np.cos(theta1) * np.cos(theta2) + \
+        np.sin(alpha - phi1) * np.sin(alpha - phi2) * np.cos(phi1) * np.cos(phi2) + \
+        np.cos(alpha - phi1) * np.sin(alpha - phi2) * np.sin(phi1) * np.cos(phi2) * np.cos(theta1) + \
+        np.sin(alpha - phi1) * np.cos(alpha - phi2) * np.cos(phi1) * np.sin(phi2) * np.cos(theta2) + \
+        np.cos(alpha - phi1) * np.cos(alpha - phi2) * np.sin(theta1) * np.sin(theta2)
+
+
+    return int
+
+def interfere_unpolarized(theta1, phi1, theta2, phi2):
+    """
+    Intereference averaged over input polarization
+    :param theta1:
+    :param phi1:
+    :param theta2:
+    :param phi2:
+    :return:
+    """
+    int = 0.5 * np.cos(phi1 - phi2)**2 * (1 + np.cos(theta1) * np.cos(theta2)) + \
+          0.5 * np.cos(phi1 - phi2) * np.sin(theta1) * np.sin(theta2) + \
+          0.5 * np.sin(phi1 - phi2)**2 * (np.cos(theta1) + np.cos(theta2))
+
+    return int
+
+def get_int_fc(efield_fc):
+    """
+    Generate intensity fourier components from efield fourier components
+
+    :param efield_fc: electric field Fourier components nvec1 x nvec2 array,
+     where efield_fc[ii, jj] is the electric field at frequencies f = ii * v1 + jj * v2.
+
+    :return intensity_fc: intensity Fourier components at the same frequencies, f = ii * v1 + jj * v2
+    """
+    ny, nx = efield_fc.shape
+    if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
+        raise Exception("not implemented for even sized arrays")
+
+    intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
+
+    return intensity_fc
+
+def get_int_fc_pol(efield_fc, vecs, wavelength, n):
+    """
+    Calculate intensity from electric field including effect of polarization
+    :param efield_fc:
+    :param vecs:
+    :param wavelength:
+    :param n:
+    :return:
+    """
+    phis, thetas = frq2angles(vecs, wavelength, n)
+
+    # have to implement convolution. With no polarization correction, this should yield the same as
+    # intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
+    intensity_fc = np.zeros(efield_fc.shape, dtype=np.complex)
+    n1, n2 = intensity_fc.shape
+    n1max = int(np.round(0.5 * (n1 - 1)))
+    n2max = int(np.round(0.5 * (n2 - 1)))
+    for ii in range(n1max + 1):
+        for jj in range(n2max + 1):
+            overlaps1 = interfere_unpolarized(thetas[:(n1max + 1 + ii), :(n2max + 1 + jj)], phis[:(n1max + 1 + ii), :(n2max + 1 + jj)],
+                                              thetas[-(n1max + 1 + ii):, -(n2max + 1 + jj):], phis[-(n1max + 1 + ii):, -(n2max + 1 + jj):])
+            intensity_fc[ii, jj] = np.nansum(efield_fc[:(n1max + 1 + ii), :(n2max + 1 + jj)] * efield_fc[-(n1max + 1 + ii):, -(n2max + 1 + jj):].conj() * overlaps1)
+            #
+            overlaps2 = interfere_unpolarized(thetas[-(n1max + 1 + ii):, -(n2max + 1 + jj):], phis[-(n1max + 1 + ii):, -(n2max + 1 + jj):],
+                                              thetas[:(n1max + 1 + ii), :(n2max + 1 + jj)], phis[:(n1max + 1 + ii), :(n2max + 1 + jj)])
+            intensity_fc[2*n1max - ii, 2*n2max - jj] = np.nansum(efield_fc[-(n1max + 1 + ii):, -(n2max + 1 + jj):] * efield_fc[:(n1max + 1 + ii), :(n2max + 1 + jj)].conj() * overlaps2)
+            #
+            overlaps3 = interfere_unpolarized(thetas[:(n1max + 1 + ii), -(n2max + 1 + jj):], phis[:(n1max + 1 + ii), -(n2max + 1 + jj):],
+                                              thetas[-(n1max + 1 + ii):, :(n2max + 1 + jj)], phis[-(n1max + 1 + ii):, :(n2max + 1 + jj)])
+            intensity_fc[ii, 2*n2max - jj] = np.nansum(efield_fc[:(n1max + 1 + ii), -(n2max + 1 + jj):] * efield_fc[-(n1max + 1 + ii):, :(n2max + 1 + jj)].conj() * overlaps3)
+            #
+            overlaps4 = interfere_unpolarized(thetas[-(n1max + 1 + ii):, :(n2max + 1 + jj)], phis[-(n1max + 1 + ii):, :(n2max + 1 + jj)],
+                                              thetas[:(n1max + 1 + ii), -(n2max + 1 + jj):], phis[:(n1max + 1 + ii), -(n2max + 1 + jj):])
+            intensity_fc[2*n1max - ii, jj] = np.nansum(efield_fc[-(n1max + 1 + ii):, :(n2max + 1 + jj)] * efield_fc[:(n1max + 1 + ii), -(n2max + 1 + jj):].conj() * overlaps4)
+
+    return intensity_fc
+
+
+
+#
 def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, use_guess_frqs=True, peak_pix=2, bg=100):
     """
 
@@ -192,8 +335,8 @@ def get_all_fourier_thry(vas, vbs, nmax, nphases, phase_index, dmd_size):
 
     return efield_theory, ns, ms, frq_vects_dmd
 
-def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_efield_ex, pixel_size_um, dmd_shape,
-                               use_blaze_correction=False, dmd_params=None):
+def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, wavelength_ex, fmax_efield_ex, n, pixel_size_um, dmd_shape,
+                               use_blaze_correction=False, use_polarization_correction=False, dmd_params=None):
     """
 
     :param efields: nimgs x nvecs1 x nvecs2, electric field Fourier components from DMD pattern, with no blaze condition corrections.
@@ -213,17 +356,13 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
     """
 
     frq_vects_cam = np.zeros(frq_vects_dmd.shape)
+    frq_vects_um = np.zeros(frq_vects_dmd.shape)
     intensity_phases = np.zeros(efields.shape) * np.nan
     intensity_theory = np.zeros(efields.shape, dtype=np.complex) * np.nan
-    ny = roi[1] - roi[0]
-    nx = roi[3] - roi[2]
-
-    # get new affine xform accounting for ROI
-    xform_roi = affine.xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
 
     if use_blaze_correction:
         # todo: is frequency in the right units?
-        def otf(fx, fy):
+        def pupil(fx, fy):
             return simulate_dmd.blaze_envelope(dmd_params["wavelength"], dmd_params["gamma"], dmd_params["wx"],
                                                dmd_params["wy"], dmd_params["theta_ins"][0], dmd_params["theta_ins"][1],
                                                dmd_params["theta_outs"][0] + dmd_params["wavelength"] * fx,
@@ -232,21 +371,33 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, fmax_e
         def pupil(fx, fy):
             return np.sqrt(fx ** 2 + fy ** 2) <= fmax_efield_ex
 
+    tstart = time.process_time()
     for ii in range(frq_vects_cam.shape[0]):
+        tnow = time.process_time()
+        print("intensity %d/%d, elapsed time = %0.2fs" % (ii + 1, frq_vects_cam.shape[0], tnow - tstart))
         pupil_now = pupil(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1])
 
-        intensity_theory[ii] = dmd_patterns.get_int_fc(efields[ii] * pupil_now)
+        frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], _ = \
+            affine.xform_sinusoid_params_roi(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1],
+                                             0, dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
+        # correct frequency vectors in camera space to be in real units
+        frq_vects_um[ii] = frq_vects_cam[ii] / pixel_size_um
+
+        if use_polarization_correction:
+            intensity_theory[ii] = get_int_fc_pol(efields[ii] * pupil_now, frq_vects_um[ii], wavelength_ex, n)
+        else:
+            intensity_theory[ii] = get_int_fc(efields[ii] * pupil_now)
+
+
         intensity_theory[ii] = intensity_theory[ii] / np.abs(intensity_theory[ii]).max()
 
-        # frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], intensity_phases[ii] = \
-        #     affine.xform_sinusoid_params(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1], np.angle(intensity_theory[ii]), xform_roi)
-        frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], intensity_phases[ii] = \
-            affine.xform_sinusoid_params_roi(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1],
-                                         np.angle(intensity_theory[ii]), dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
+        _, _, intensity_phases[ii] = affine.xform_sinusoid_params_roi(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1],
+                                                                      np.angle(intensity_theory[ii]),
+                                                                      dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
     intensity_theory_xformed = np.abs(intensity_theory) * np.exp(1j * intensity_phases)
 
     # correct frequency vectors in camera space to be in real units
-    frq_vects_um = frq_vects_cam / pixel_size_um
+    # frq_vects_um = frq_vects_cam / pixel_size_um
 
     # vecs[ii, jj] = ns[ii] * recp_va[:, 0] + ms[jj] * recp_vb[:, 0]
     # vecs_xformed[ii, jj, 0], vecs_xformed[ii, jj, 1], _ = \
@@ -444,7 +595,7 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     return figh
 
-def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
+def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, figsize=(20, 10)):
     """
     Plot complete OTF
     :param frq_vects:
@@ -456,9 +607,16 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
     if otf_unc is None:
         otf_unc = np.zeros(otf.shape)
 
-    fmag = np.linalg.norm(frq_vects, axis=-1).ravel()
+    if to_use is None:
+        to_use = np.ones(otf.shape, dtype=np.int)
 
-    fmag_interp = np.linspace(0, fmag.max(), 1000)
+    nmax1 = int(np.round(0.5 * (otf.shape[1] - 1)))
+    nmax2 = int(np.round(0.5 * (otf.shape[2] - 1)))
+
+
+    fmag = np.linalg.norm(frq_vects, axis=-1)
+
+    fmag_interp = np.linspace(0, fmag[to_use].max(), 1000)
     # only care about fmax value, so create na/wavelength that give us this
     na = 1
     wavelength = 2 * na / fmax_img
@@ -469,14 +627,33 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
     grid = plt.GridSpec(2, 6)
 
     # 1D otf
-    ax = plt.subplot(grid[0, :3])
+    ax = plt.subplot(grid[0, :2])
     ylim = [-0.05, 1.2]
     plt.title("otf mag")
     plt.xlabel("Frequency (1/um)")
     plt.ylabel("otf")
 
     plt.plot(fmag_interp, otf_ideal, 'k')
-    plt.errorbar(fmag, np.abs(otf).ravel(), yerr=otf_unc.ravel(), fmt='.')
+    plt.errorbar(fmag[to_use], np.abs(otf[to_use]), yerr=otf_unc[to_use], color="b", fmt='.')
+    # plot main peak order
+    plt.errorbar(fmag[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]],
+                 np.abs(otf[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]]),
+                 yerr=otf_unc[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]],
+                 color="g", fmt=".")
+    plt.errorbar(fmag[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]],
+                 np.abs(otf[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]]),
+                 yerr=otf_unc[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]],
+                 color="g", fmt=".")
+    # plot secondary order
+    plt.errorbar(fmag[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]],
+                 np.abs(otf[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]]),
+                 yerr=otf_unc[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]],
+                 color="m", fmt=".")
+    plt.errorbar(fmag[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]],
+                 np.abs(otf[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]]),
+                 yerr=otf_unc[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]],
+                 color="m", fmt=".")
+
     xlim = ax.get_xlim()
     plt.plot(xlim, [0, 0], 'k')
     plt.plot([fmax_img, fmax_img], ylim, 'k')
@@ -486,13 +663,13 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
     ax.legend(["OTF ideal, fmax=%0.2f (1/um)" % fmax_img])
 
     # 1D log scale
-    ax = plt.subplot(grid[1, :3])
+    ax = plt.subplot(grid[1, :2])
     plt.title("otf mag (log scale)")
     plt.xlabel("Frequency (1/um)")
     plt.ylabel("otf")
 
     plt.plot(fmag_interp, otf_ideal, 'k')
-    plt.errorbar(fmag, np.abs(otf).ravel(), yerr=otf_unc.ravel(), fmt='.')
+    plt.errorbar(fmag[to_use], np.abs(otf[to_use]), yerr=otf_unc[to_use], fmt='.')
     xlim = ax.get_xlim()
     ax.plot([fmax_img, fmax_img], ylim, 'k')
     ax.set_xlim(xlim)
@@ -502,7 +679,7 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
 
 
     # 2D otf
-    ax = plt.subplot(grid[0, 3:6])
+    ax = plt.subplot(grid[0, 2:4])
     plt.title("2D otf (log scale)")
     plt.xlabel("fx (1/um)")
     plt.ylabel("fy (1/um)")
@@ -513,8 +690,8 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
     frqs_pos[y_is_neg] = -frqs_pos[y_is_neg]
 
     plt.plot([-fmax_img, fmax_img], [0, 0], 'k')
-    plt.scatter(frqs_pos[..., 0].ravel(), frqs_pos[..., 1].ravel(),
-                c=np.log10(np.abs(otf).ravel()),
+    plt.scatter(frqs_pos[to_use, 0].ravel(), frqs_pos[to_use, 1].ravel(),
+                c=np.log10(np.abs(otf[to_use]).ravel()),
                 norm=matplotlib.colors.Normalize(vmin=np.log10(clims[0]), vmax=np.log10(clims[1])))
     cb = plt.colorbar()
     plt.clim(np.log10(clims))
@@ -524,19 +701,34 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, figsize=(20, 10)):
     ax.set_xlim([-fmax_img, fmax_img])
     ax.set_ylim([-0.05 * fmax_img, fmax_img])
 
-
-
-
-
     # plot phase
-    ax = plt.subplot(grid[1, 3:6])
+    ax = plt.subplot(grid[1, 2:4])
     plt.title("phase")
     plt.xlabel("Frequency (1/um)")
     plt.ylabel("phase")
 
-    ax.plot(fmag, np.angle(otf).ravel(), '.')
+    ax.plot(fmag[to_use], np.angle(otf[to_use]).ravel(), '.')
 
     ylims = [-np.pi - 0.1, np.pi + 0.1]
     ax.set_ylim(ylims)
+
+    # plot 2D phase
+    ax = plt.subplot(grid[0, 4:])
+    plt.title("2D otf phase")
+    plt.xlabel("fx (1/um)")
+    plt.ylabel("fy (1/um)")
+    clims_phase = [-np.pi - 0.1, np.pi + 0.1]
+
+    plt.plot([-fmax_img, fmax_img], [0, 0], 'k')
+    plt.scatter(frqs_pos[to_use, 0].ravel(), frqs_pos[to_use, 1].ravel(),
+                c=np.angle(otf[to_use]),
+                norm=matplotlib.colors.Normalize(vmin=clims_phase[0], vmax=clims_phase[1]))
+    cb = plt.colorbar()
+    plt.clim(clims_phase)
+
+    circ = matplotlib.patches.Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='-')
+    ax.add_artist(circ)
+    ax.set_xlim([-fmax_img, fmax_img])
+    ax.set_ylim([-0.05 * fmax_img, fmax_img])
 
     return figh
