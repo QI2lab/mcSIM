@@ -11,6 +11,8 @@ from scipy import fft
 import scipy.ndimage as ndi
 import scipy.special as sp
 import scipy.integrate
+import scipy.interpolate
+from scipy import fft
 from skimage.feature import peak_local_max
 import skimage.filters
 
@@ -64,6 +66,62 @@ def get_background(img, npix):
     return bg
 
 # model OTF function
+def symm1d_to_2d(arr, fs, fmax, npts):
+    """
+    Convert a 1D function which is symmetric wrt to the radial variable to a 2D matrix. Useful helper function when
+    computing PSFs from 2D OTFs
+    :param arr:
+    :param fs:
+    :param df:
+    :return:
+    """
+
+    ny = 2 * npts + 1
+    nx = 2 * npts + 1
+    # fmax = fs.max()
+    dx = 1 / (2 * fmax)
+    dy = dx
+
+    not_nan = np.logical_not(np.isnan(arr))
+
+    fxs = tools.get_fft_frqs(nx, dx)
+    fys = tools.get_fft_frqs(ny, dy)
+    fmag = np.sqrt(fxs[None, :]**2 + fys[:, None]**2)
+    to_interp = np.logical_and(fmag >= fs[not_nan].min(), fmag <= fs[not_nan].max())
+
+
+    arr_out = np.zeros((ny, nx), dtype=arr.dtype)
+    arr_out[to_interp] = scipy.interpolate.interp1d(fs[not_nan], arr[not_nan])(fmag[to_interp])
+
+    return arr_out, fxs, fys
+
+
+
+def otf2psf(otf, dfx=1, dfy=1):
+    """
+
+    :param dfx:
+    :param dfy:
+    :param otf:
+    :return:
+    """
+    ny, nx = otf.shape
+    psf = fft.fftshift(fft.ifft2(fft.ifftshift(otf))).real
+    dx = 1 / (dfx * nx)
+    dy = 1 / (dfy * ny)
+    xs = tools.get_fft_pos(nx, dt=dx)
+    ys = tools.get_fft_pos(ny, dt=dy)
+
+    return psf, xs, ys
+
+def psf2otf(psf, dx=1, dy=1):
+    ny, nx = psf.shape
+    otf = fft.fftshift(fft.fft2(fft.ifftshift(psf)))
+    fxs = tools.get_fft_pos(nx, dt=dx)
+    fys = tools.get_fft_pos(ny, dt=dy)
+
+    return otf, fxs, fys
+
 def circ_aperture_pupil(fx, fy, na, wavelength):
     fmax = 0.5 / (0.5 * wavelength / na)
 
@@ -260,7 +318,8 @@ def airy_fn(x, y, p, wavelength):
     # evaluate airy function
     val = np.square(np.abs(np.divide(sp.j1(rho * k * p[3]), rho * k * p[3])))
     # normalize by value at zero
-    val_zero = np.square(np.abs(np.divide(sp.j1(1e-3 * 2*np.pi * p[3]), 1e-3 * 2*np.pi * p[3])))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        val_zero = np.square(np.abs(np.divide(sp.j1(1e-3 * 2*np.pi * p[3]), 1e-3 * 2*np.pi * p[3])))
 
     # add amplitude and offset
     val = p[0] * val / val_zero + p[4]
