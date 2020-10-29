@@ -140,38 +140,65 @@ def get_int_fc_pol(efield_fc, vecs, wavelength, n):
     :param n:
     :return:
     """
+    ny, nx = efield_fc.shape
+    if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
+        raise Exception("not implemented for even sized arrays")
+
+    # these expressions can be arrived at by factoring those found in interfere_unpolarized()
+    # see also eq. 9 in https://doi.org/10.1364/OE.22.011140
     phis, thetas = frq2angles(vecs, wavelength, n)
+    polx_a = np.sin(phis)**2 + np.cos(thetas) * np.cos(phis)**2
+    poly_a = np.sin(phis) * np.cos(phis) * (np.cos(thetas) - 1)
+    polz_a = np.cos(phis) * np.sin(thetas)
+    polx_b = np.sin(phis) * np.cos(phis) * (np.cos(thetas) - 1)
+    poly_b = np.cos(phis)**2 + np.cos(thetas) * np.sin(phis)**2
+    polz_b = np.sin(phis) * np.sin(thetas)
+
+    polx_a[np.isnan(polx_a)] = 0
+    poly_a[np.isnan(poly_a)] = 0
+    polz_a[np.isnan(polz_a)] = 0
+    polx_b[np.isnan(polx_b)] = 0
+    poly_b[np.isnan(poly_b)] = 0
+    polz_b[np.isnan(polz_b)] = 0
+
+    def conv(efield): return scipy.signal.fftconvolve(efield, np.flip(efield, axis=(0, 1)).conj(), mode='same')
+    intensity_fc = 0.5 * (conv(efield_fc * polx_a) + conv(efield_fc * poly_a) + conv(efield_fc * polz_a) +
+                          conv(efield_fc * polx_b) + conv(efield_fc * poly_b) + conv(efield_fc * polz_b))
+
+
 
     # have to implement convolution. With no polarization correction, this should yield the same as
     # intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
-    intensity_fc = np.zeros(efield_fc.shape, dtype=np.complex)
-    n1, n2 = intensity_fc.shape
-    n1max = int(np.round(0.5 * (n1 - 1)))
-    n2max = int(np.round(0.5 * (n2 - 1)))
-    for ii in range(n1max + 1):
-        for jj in range(n2max + 1):
-            overlaps1 = interfere_unpolarized(thetas[:(n1max + 1 + ii), :(n2max + 1 + jj)], phis[:(n1max + 1 + ii), :(n2max + 1 + jj)],
-                                              thetas[-(n1max + 1 + ii):, -(n2max + 1 + jj):], phis[-(n1max + 1 + ii):, -(n2max + 1 + jj):])
-            intensity_fc[ii, jj] = np.nansum(efield_fc[:(n1max + 1 + ii), :(n2max + 1 + jj)] * efield_fc[-(n1max + 1 + ii):, -(n2max + 1 + jj):].conj() * overlaps1)
-            #
-            overlaps2 = interfere_unpolarized(thetas[-(n1max + 1 + ii):, -(n2max + 1 + jj):], phis[-(n1max + 1 + ii):, -(n2max + 1 + jj):],
-                                              thetas[:(n1max + 1 + ii), :(n2max + 1 + jj)], phis[:(n1max + 1 + ii), :(n2max + 1 + jj)])
-            intensity_fc[2*n1max - ii, 2*n2max - jj] = np.nansum(efield_fc[-(n1max + 1 + ii):, -(n2max + 1 + jj):] * efield_fc[:(n1max + 1 + ii), :(n2max + 1 + jj)].conj() * overlaps2)
-            #
-            overlaps3 = interfere_unpolarized(thetas[:(n1max + 1 + ii), -(n2max + 1 + jj):], phis[:(n1max + 1 + ii), -(n2max + 1 + jj):],
-                                              thetas[-(n1max + 1 + ii):, :(n2max + 1 + jj)], phis[-(n1max + 1 + ii):, :(n2max + 1 + jj)])
-            intensity_fc[ii, 2*n2max - jj] = np.nansum(efield_fc[:(n1max + 1 + ii), -(n2max + 1 + jj):] * efield_fc[-(n1max + 1 + ii):, :(n2max + 1 + jj)].conj() * overlaps3)
-            #
-            overlaps4 = interfere_unpolarized(thetas[-(n1max + 1 + ii):, :(n2max + 1 + jj)], phis[-(n1max + 1 + ii):, :(n2max + 1 + jj)],
-                                              thetas[:(n1max + 1 + ii), -(n2max + 1 + jj):], phis[:(n1max + 1 + ii), -(n2max + 1 + jj):])
-            intensity_fc[2*n1max - ii, jj] = np.nansum(efield_fc[-(n1max + 1 + ii):, :(n2max + 1 + jj)] * efield_fc[:(n1max + 1 + ii), -(n2max + 1 + jj):].conj() * overlaps4)
+    # intensity_fc = np.zeros(efield_fc.shape, dtype=np.complex)
+    # n1, n2 = intensity_fc.shape
+    # n1max = int(np.round(0.5 * (n1 - 1)))
+    # n2max = int(np.round(0.5 * (n2 - 1)))
+    # for ii in range(n1max + 1):
+    #     for jj in range(n2max + 1):
+    #         overlaps1 = interfere_unpolarized(thetas[:(n1max + 1 + ii), :(n2max + 1 + jj)], phis[:(n1max + 1 + ii), :(n2max + 1 + jj)],
+    #                                           thetas[-(n1max + 1 + ii):, -(n2max + 1 + jj):], phis[-(n1max + 1 + ii):, -(n2max + 1 + jj):])
+    #         intensity_fc[ii, jj] = np.nansum(efield_fc[:(n1max + 1 + ii), :(n2max + 1 + jj)] * efield_fc[-(n1max + 1 + ii):, -(n2max + 1 + jj):].conj() * overlaps1)
+    #         #
+    #         overlaps2 = interfere_unpolarized(thetas[-(n1max + 1 + ii):, -(n2max + 1 + jj):], phis[-(n1max + 1 + ii):, -(n2max + 1 + jj):],
+    #                                           thetas[:(n1max + 1 + ii), :(n2max + 1 + jj)], phis[:(n1max + 1 + ii), :(n2max + 1 + jj)])
+    #         intensity_fc[2*n1max - ii, 2*n2max - jj] = np.nansum(efield_fc[-(n1max + 1 + ii):, -(n2max + 1 + jj):] * efield_fc[:(n1max + 1 + ii), :(n2max + 1 + jj)].conj() * overlaps2)
+    #         #
+    #         overlaps3 = interfere_unpolarized(thetas[:(n1max + 1 + ii), -(n2max + 1 + jj):], phis[:(n1max + 1 + ii), -(n2max + 1 + jj):],
+    #                                           thetas[-(n1max + 1 + ii):, :(n2max + 1 + jj)], phis[-(n1max + 1 + ii):, :(n2max + 1 + jj)])
+    #         intensity_fc[ii, 2*n2max - jj] = np.nansum(efield_fc[:(n1max + 1 + ii), -(n2max + 1 + jj):] * efield_fc[-(n1max + 1 + ii):, :(n2max + 1 + jj)].conj() * overlaps3)
+    #         #
+    #         overlaps4 = interfere_unpolarized(thetas[-(n1max + 1 + ii):, :(n2max + 1 + jj)], phis[-(n1max + 1 + ii):, :(n2max + 1 + jj)],
+    #                                           thetas[:(n1max + 1 + ii), -(n2max + 1 + jj):], phis[:(n1max + 1 + ii), -(n2max + 1 + jj):])
+    #         intensity_fc[2*n1max - ii, jj] = np.nansum(efield_fc[-(n1max + 1 + ii):, :(n2max + 1 + jj)] * efield_fc[:(n1max + 1 + ii), -(n2max + 1 + jj):].conj() * overlaps4)
 
     return intensity_fc
 
 
 
 #
-def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, use_guess_frqs=True, peak_pix=2, bg=100):
+def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img,
+                        to_use=None, use_guess_frqs=True, max_frq_shift_pix=1.5, force_start_from_guess=True,
+                        peak_pix=2, bg=100):
     """
 
     :param imgs: nimgs x ny x nx
@@ -186,6 +213,9 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
     :return intensity_unc:
     :return frq_vects_expt:
     """
+    if to_use is None:
+        to_use = np.ones(frq_vects_theory[:, :, :, 0].shape, dtype=np.int)
+
     nimgs = frq_vects_theory.shape[0]
     n1_vecs = frq_vects_theory.shape[1]
     n2_vecs = frq_vects_theory.shape[2]
@@ -222,9 +252,7 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
     tstart = time.process_time()
     for ii in range(nimgs):
         tnow = time.process_time()
-        print("%d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, tnow - tstart))
-        # sys.stdout.write("\033[F")
-        # sys.stdout.flush()
+        print("%d/%d, %d peaks, elapsed time = %0.2fs" % (ii + 1, nimgs, np.sum(to_use[ii]), tnow - tstart))
 
         if multiple_images:
             # subtract background and crop to ROI
@@ -250,27 +278,35 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img, us
                 frq_vects_expt[ii, aa, bb] = frq_vects_theory[ii, aa, bb]
 
                 # only do fitting if peak size exceeds tolerance, and only fit one of a peak and its compliment
-                if aa < bb or vnorms[aa, bb] > fmax_img:
+                if not to_use[ii, aa, bb]:
                     continue
 
                 # ensure we don't get (0, 0) in our ROI
-                if vnorms[aa, bb] == 0:
-                    size_away_zero = np.inf
-                else:
-                    size_away_zero = int(np.floor(vnorms[aa, bb] / dfx / np.sqrt(2) - 1))
+                # if vnorms[aa, bb] == 0:
+                #     size_away_zero = np.inf
+                # else:
+                #     size_away_zero = int(np.floor(vnorms[aa, bb] / dfx / np.sqrt(2) - 1))
+                #
+                # roi_half_size = int(
+                #     np.min([2, int(np.floor(min_sep / dfx / np.sqrt(2))) - 1, size_away_zero]))
 
-                roi_half_size = int(
-                    np.min([3, int(np.floor(min_sep / dfx / np.sqrt(2))) - 1, size_away_zero]))
+                max_frq_shift = np.min([max_frq_shift_pix * dfx, 0.5 * vnorms[aa, bb], 0.5 * min_sep])
 
                 # get experimental frequency
-                if roi_half_size < 1 or use_guess_frqs:
+                if (max_frq_shift/dfx) < 1 or use_guess_frqs or np.linalg.norm(frq_vects_expt[ii, aa, bb]) == 0:
                     # if can't get large enough ROI, then use our guess
                     pass
                 else:
                     # fit real fourier component in image space
+                    # only need wavelength and na to get fmax
                     frq_vects_expt[ii, aa, bb], mask = sim_reconstruction.fit_modulation_frq(
-                        img_ft, img_ft, sim_options, frq_guess=frq_vects_theory[ii, aa, bb],
-                        roi_pix_size=roi_half_size)
+                        img_ft, img_ft, {"pixel_size": pixel_size_um, "wavelength": 1, "na": 0.5 * fmax_img},
+                        frq_guess=frq_vects_theory[ii, aa, bb], max_frq_shift=max_frq_shift,
+                        force_start_from_guess=force_start_from_guess)
+
+                    sim_reconstruction.plot_correlation_fit(img_ft, img_ft, frq_vects_expt[ii, aa, bb],
+                                                            {"pixel_size": pixel_size_um, "wavelength": 1, "na": 0.5 * fmax_img},
+                                                            frqs_guess=frq_vects_theory[ii, aa, bb], roi_size=3)
 
                 try:
                     # get peak value and phase
@@ -451,6 +487,8 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
         to_use = np.ones(peak_int_exp.shape, dtype=np.bool)
 
     fmags = np.linalg.norm(frq_vects, axis=-1)
+    n1max = int(np.round(0.5 * (fmags.shape[0] - 1)))
+    n2max = int(np.round(0.5 * (fmags.shape[1] - 1)))
 
     # generate DMD pattern
     pattern, _ = dmd_patterns.get_sim_pattern(dmd_size, va, vb, nphases, phase_index)
@@ -483,9 +521,14 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     period = dmd_patterns.get_sim_period(va, vb)
     angle = dmd_patterns.get_sim_angle(va, vb)
+    frq_main_um = frq_vects[n1max, n2max + 1]
 
-    plt.suptitle("period=%0.3f mirrors, angle=%0.2fdeg\n"
-                 "va=(%d, %d); vb=(%d, %d)" % (period, angle * 180/np.pi, va[0], va[1], vb[0], vb[1]))
+    plt.suptitle("DMD period=%0.3f mirrors, angle=%0.2fdeg\n"
+                 "Camera period=%0.1fnm = 1/%0.3f um, angle=%0.2fdeg\n"
+                 "va=(%d, %d); vb=(%d, %d)" % (period, angle * 180/np.pi, 1 / np.linalg.norm(frq_main_um) * 1e3,
+                                               np.linalg.norm(frq_main_um),
+                                               np.mod(np.angle(frq_main_um[0] + 1j * frq_main_um[1]), 2*np.pi) * 180/np.pi,
+                                               va[0], va[1], vb[0], vb[1]))
 
     plt.subplot(grid[0, 0:2])
     plt.imshow(img_roi)
@@ -595,7 +638,7 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     return figh
 
-def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, figsize=(20, 10)):
+def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, wf_corrected=None, figsize=(20, 10)):
     """
     Plot complete OTF
     :param frq_vects:
@@ -616,7 +659,7 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, figsize=(20, 1
 
     fmag = np.linalg.norm(frq_vects, axis=-1)
 
-    fmag_interp = np.linspace(0, fmag[to_use].max(), 1000)
+    fmag_interp = np.linspace(0, fmax_img, 1000)
     # only care about fmax value, so create na/wavelength that give us this
     na = 1
     wavelength = 2 * na / fmax_img
@@ -670,6 +713,26 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, figsize=(20, 1
 
     plt.plot(fmag_interp, otf_ideal, 'k')
     plt.errorbar(fmag[to_use], np.abs(otf[to_use]), yerr=otf_unc[to_use], fmt='.')
+    # plot main peak order
+    plt.errorbar(fmag[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]],
+                 np.abs(otf[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]]),
+                 yerr=otf_unc[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]],
+                 color="g", fmt=".")
+    plt.errorbar(fmag[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]],
+                 np.abs(otf[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]]),
+                 yerr=otf_unc[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]],
+                 color="g", fmt=".")
+    # plot secondary order
+    plt.errorbar(fmag[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]],
+                 np.abs(otf[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]]),
+                 yerr=otf_unc[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]],
+                 color="m", fmt=".")
+    plt.errorbar(fmag[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]],
+                 np.abs(otf[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]]),
+                 yerr=otf_unc[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]],
+                 color="m", fmt=".")
+
+
     xlim = ax.get_xlim()
     ax.plot([fmax_img, fmax_img], ylim, 'k')
     ax.set_xlim(xlim)
@@ -677,6 +740,26 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, figsize=(20, 1
 
     ax.set_yscale('log')
 
+    # show widefield corrected/not peaks
+    ax = plt.subplot(grid[1, 4:])
+    ylim = [-0.05, 1.2]
+    plt.title("otf mag, widefield corrected/not")
+    plt.xlabel("Frequency (1/um)")
+    plt.ylabel("otf")
+
+    plt.plot(fmag_interp, otf_ideal, 'k')
+    phu = plt.errorbar(fmag[to_use], np.abs(otf[to_use]), yerr=otf_unc[to_use], color="b", fmt='.')
+
+    corrected = np.logical_and(wf_corrected, to_use)
+    phc = plt.errorbar(fmag[corrected], np.abs(otf[corrected]), yerr=otf_unc[corrected], color="r", fmt=".")
+
+    xlim = ax.get_xlim()
+    plt.plot(xlim, [0, 0], 'k')
+    plt.plot([fmax_img, fmax_img], ylim, 'k')
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+
+    plt.legend([phu, phc], ["uncorrected peaks", "corrected"])
 
     # 2D otf
     ax = plt.subplot(grid[0, 2:4])
