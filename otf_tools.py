@@ -281,15 +281,6 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img,
                 if not to_use[ii, aa, bb]:
                     continue
 
-                # ensure we don't get (0, 0) in our ROI
-                # if vnorms[aa, bb] == 0:
-                #     size_away_zero = np.inf
-                # else:
-                #     size_away_zero = int(np.floor(vnorms[aa, bb] / dfx / np.sqrt(2) - 1))
-                #
-                # roi_half_size = int(
-                #     np.min([2, int(np.floor(min_sep / dfx / np.sqrt(2))) - 1, size_away_zero]))
-
                 max_frq_shift = np.min([max_frq_shift_pix * dfx, 0.5 * vnorms[aa, bb], 0.5 * min_sep])
 
                 # get experimental frequency
@@ -399,18 +390,31 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, wavele
     if use_blaze_correction:
         # todo: is frequency in the right units?
         def pupil(fx, fy):
-            return simulate_dmd.blaze_envelope(dmd_params["wavelength"], dmd_params["gamma"], dmd_params["wx"],
-                                               dmd_params["wy"], dmd_params["theta_ins"][0], dmd_params["theta_ins"][1],
-                                               dmd_params["theta_outs"][0] + dmd_params["wavelength"] * fx,
-                                               dmd_params["theta_outs"][1] + dmd_params["wavelength"] * fy)
+            fx = np.atleast_1d(fx)
+            fy = np.atleast_1d(fy)
+            # frequency in 1/mirrors
+            if fx.size == 1:
+                tx_out = dmd_params["theta_outs"][0] + dmd_params["wavelength"] * fx / dmd_params["dx"]
+                ty_out = dmd_params["theta_outs"][1] + dmd_params["wavelength"] * fy / dmd_params["dy"]
+                return simulate_dmd.blaze_envelope(dmd_params["wavelength"], dmd_params["gamma"], dmd_params["wx"],
+                                                   dmd_params["wy"], dmd_params["theta_ins"][0], dmd_params["theta_ins"][1],
+                                                   tx_out, ty_out)
+            else:
+                ppl = np.zeros(fx.shape)
+                for ii in range(ppl.size):
+                    ind = np.unravel_index(ii, ppl.shape)
+                    ppl[ind] = pupil(fx[ind], fy[ind])
+                return ppl
+
+
     else:
         def pupil(fx, fy):
             return np.sqrt(fx ** 2 + fy ** 2) <= fmax_efield_ex
 
-    tstart = time.process_time()
+    # tstart = time.process_time()
     for ii in range(frq_vects_cam.shape[0]):
-        tnow = time.process_time()
-        print("intensity %d/%d, elapsed time = %0.2fs" % (ii + 1, frq_vects_cam.shape[0], tnow - tstart))
+        # tnow = time.process_time()
+        # print("intensity %d/%d, elapsed time = %0.2fs" % (ii + 1, frq_vects_cam.shape[0], tnow - tstart))
         pupil_now = pupil(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1])
 
         frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], _ = \
@@ -676,34 +680,32 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, wf_corrected=N
     plt.xlabel("Frequency (1/um)")
     plt.ylabel("otf")
 
-    plt.plot(fmag_interp, otf_ideal, 'k')
+    ph_ideal, = plt.plot(fmag_interp, otf_ideal, 'k')
     plt.errorbar(fmag[to_use], np.abs(otf[to_use]), yerr=otf_unc[to_use], color="b", fmt='.')
-    # plot main peak order
-    plt.errorbar(fmag[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]],
-                 np.abs(otf[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]]),
-                 yerr=otf_unc[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]],
-                 color="g", fmt=".")
-    plt.errorbar(fmag[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]],
-                 np.abs(otf[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]]),
-                 yerr=otf_unc[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]],
-                 color="g", fmt=".")
-    # plot secondary order
-    plt.errorbar(fmag[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]],
-                 np.abs(otf[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]]),
-                 yerr=otf_unc[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]],
-                 color="m", fmt=".")
-    plt.errorbar(fmag[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]],
-                 np.abs(otf[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]]),
-                 yerr=otf_unc[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]],
-                 color="m", fmt=".")
+
+    colors = ["g", "m", "r", "y", "c"]
+    phs = [ph_ideal]
+    labels = ["OTF ideal, fmax=%0.2f (1/um)" % fmax_img] + list(range(1, 6))
+    # plot main series peaks
+    for jj in range(1, 6):
+        ph = plt.errorbar(fmag[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]],
+                     np.abs(otf[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]]),
+                     yerr=otf_unc[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]],
+                     color=colors[jj - 1], fmt=".")
+        phs.append(ph)
+
+        plt.errorbar(fmag[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]],
+                     np.abs(otf[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]]),
+                     yerr=otf_unc[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]],
+                     color=colors[jj - 1], fmt=".")
+
+    plt.legend(phs, labels)
 
     xlim = ax.get_xlim()
     plt.plot(xlim, [0, 0], 'k')
     plt.plot([fmax_img, fmax_img], ylim, 'k')
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
-
-    ax.legend(["OTF ideal, fmax=%0.2f (1/um)" % fmax_img])
 
     # 1D log scale
     ax = plt.subplot(grid[1, :2])
@@ -713,25 +715,18 @@ def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, wf_corrected=N
 
     plt.plot(fmag_interp, otf_ideal, 'k')
     plt.errorbar(fmag[to_use], np.abs(otf[to_use]), yerr=otf_unc[to_use], fmt='.')
-    # plot main peak order
-    plt.errorbar(fmag[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]],
-                 np.abs(otf[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]]),
-                 yerr=otf_unc[:, nmax1, nmax2 + 1][to_use[:, nmax1, nmax2 + 1]],
-                 color="g", fmt=".")
-    plt.errorbar(fmag[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]],
-                 np.abs(otf[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]]),
-                 yerr=otf_unc[:, nmax1, nmax2 - 1][to_use[:, nmax1, nmax2 - 1]],
-                 color="g", fmt=".")
-    # plot secondary order
-    plt.errorbar(fmag[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]],
-                 np.abs(otf[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]]),
-                 yerr=otf_unc[:, nmax1, nmax2 + 2][to_use[:, nmax1, nmax2 + 2]],
-                 color="m", fmt=".")
-    plt.errorbar(fmag[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]],
-                 np.abs(otf[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]]),
-                 yerr=otf_unc[:, nmax1, nmax2 - 2][to_use[:, nmax1, nmax2 - 2]],
-                 color="m", fmt=".")
 
+    # plot main series peaks
+    for jj in range(1, 6):
+        plt.errorbar(fmag[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]],
+                     np.abs(otf[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]]),
+                     yerr=otf_unc[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]],
+                     color=colors[jj - 1], fmt=".")
+
+        plt.errorbar(fmag[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]],
+                     np.abs(otf[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]]),
+                     yerr=otf_unc[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]],
+                     color=colors[jj - 1], fmt=".")
 
     xlim = ax.get_xlim()
     ax.plot([fmax_img, fmax_img], ylim, 'k')
