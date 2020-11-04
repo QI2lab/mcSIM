@@ -131,65 +131,46 @@ def get_int_fc(efield_fc):
 
     return intensity_fc
 
-def get_int_fc_pol(efield_fc, vecs, wavelength, n):
+def get_int_fc_pol(efield_fc, vecs, wavelength, n, polarization_angle=None):
     """
     Calculate intensity from electric field including effect of polarization
     :param efield_fc:
     :param vecs:
     :param wavelength:
-    :param n:
+    :param n: index of refraction of medium
     :return:
     """
     ny, nx = efield_fc.shape
     if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
         raise Exception("not implemented for even sized arrays")
 
-    # these expressions can be arrived at by factoring those found in interfere_unpolarized()
-    # see also eq. 9 in https://doi.org/10.1364/OE.22.011140
     phis, thetas = frq2angles(vecs, wavelength, n)
-    polx_a = np.sin(phis)**2 + np.cos(thetas) * np.cos(phis)**2
-    poly_a = np.sin(phis) * np.cos(phis) * (np.cos(thetas) - 1)
-    polz_a = np.cos(phis) * np.sin(thetas)
-    polx_b = np.sin(phis) * np.cos(phis) * (np.cos(thetas) - 1)
-    poly_b = np.cos(phis)**2 + np.cos(thetas) * np.sin(phis)**2
-    polz_b = np.sin(phis) * np.sin(thetas)
-
-    polx_a[np.isnan(polx_a)] = 0
-    poly_a[np.isnan(poly_a)] = 0
-    polz_a[np.isnan(polz_a)] = 0
-    polx_b[np.isnan(polx_b)] = 0
-    poly_b[np.isnan(poly_b)] = 0
-    polz_b[np.isnan(polz_b)] = 0
-
     def conv(efield): return scipy.signal.fftconvolve(efield, np.flip(efield, axis=(0, 1)).conj(), mode='same')
-    intensity_fc = 0.5 * (conv(efield_fc * polx_a) + conv(efield_fc * poly_a) + conv(efield_fc * polz_a) +
-                          conv(efield_fc * polx_b) + conv(efield_fc * poly_b) + conv(efield_fc * polz_b))
 
+    if polarization_angle is None:
+        # these expressions can be arrived at by factoring those found in interfere_unpolarized()
+        # see also eq. 9 in https://doi.org/10.1364/OE.22.011140
+        polx_a = np.sin(phis)**2 + np.cos(thetas) * np.cos(phis)**2
+        poly_a = np.sin(phis) * np.cos(phis) * (np.cos(thetas) - 1)
+        polz_a = np.cos(phis) * np.sin(thetas)
+        polx_b = np.sin(phis) * np.cos(phis) * (np.cos(thetas) - 1)
+        poly_b = np.cos(phis)**2 + np.cos(thetas) * np.sin(phis)**2
+        polz_b = np.sin(phis) * np.sin(thetas)
 
+        polx_a[np.isnan(polx_a)] = 0
+        poly_a[np.isnan(poly_a)] = 0
+        polz_a[np.isnan(polz_a)] = 0
+        polx_b[np.isnan(polx_b)] = 0
+        poly_b[np.isnan(poly_b)] = 0
+        polz_b[np.isnan(polz_b)] = 0
 
-    # have to implement convolution. With no polarization correction, this should yield the same as
-    # intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
-    # intensity_fc = np.zeros(efield_fc.shape, dtype=np.complex)
-    # n1, n2 = intensity_fc.shape
-    # n1max = int(np.round(0.5 * (n1 - 1)))
-    # n2max = int(np.round(0.5 * (n2 - 1)))
-    # for ii in range(n1max + 1):
-    #     for jj in range(n2max + 1):
-    #         overlaps1 = interfere_unpolarized(thetas[:(n1max + 1 + ii), :(n2max + 1 + jj)], phis[:(n1max + 1 + ii), :(n2max + 1 + jj)],
-    #                                           thetas[-(n1max + 1 + ii):, -(n2max + 1 + jj):], phis[-(n1max + 1 + ii):, -(n2max + 1 + jj):])
-    #         intensity_fc[ii, jj] = np.nansum(efield_fc[:(n1max + 1 + ii), :(n2max + 1 + jj)] * efield_fc[-(n1max + 1 + ii):, -(n2max + 1 + jj):].conj() * overlaps1)
-    #         #
-    #         overlaps2 = interfere_unpolarized(thetas[-(n1max + 1 + ii):, -(n2max + 1 + jj):], phis[-(n1max + 1 + ii):, -(n2max + 1 + jj):],
-    #                                           thetas[:(n1max + 1 + ii), :(n2max + 1 + jj)], phis[:(n1max + 1 + ii), :(n2max + 1 + jj)])
-    #         intensity_fc[2*n1max - ii, 2*n2max - jj] = np.nansum(efield_fc[-(n1max + 1 + ii):, -(n2max + 1 + jj):] * efield_fc[:(n1max + 1 + ii), :(n2max + 1 + jj)].conj() * overlaps2)
-    #         #
-    #         overlaps3 = interfere_unpolarized(thetas[:(n1max + 1 + ii), -(n2max + 1 + jj):], phis[:(n1max + 1 + ii), -(n2max + 1 + jj):],
-    #                                           thetas[-(n1max + 1 + ii):, :(n2max + 1 + jj)], phis[-(n1max + 1 + ii):, :(n2max + 1 + jj)])
-    #         intensity_fc[ii, 2*n2max - jj] = np.nansum(efield_fc[:(n1max + 1 + ii), -(n2max + 1 + jj):] * efield_fc[-(n1max + 1 + ii):, :(n2max + 1 + jj)].conj() * overlaps3)
-    #         #
-    #         overlaps4 = interfere_unpolarized(thetas[-(n1max + 1 + ii):, :(n2max + 1 + jj)], phis[-(n1max + 1 + ii):, :(n2max + 1 + jj)],
-    #                                           thetas[:(n1max + 1 + ii), -(n2max + 1 + jj):], phis[:(n1max + 1 + ii), -(n2max + 1 + jj):])
-    #         intensity_fc[2*n1max - ii, jj] = np.nansum(efield_fc[-(n1max + 1 + ii):, :(n2max + 1 + jj)] * efield_fc[:(n1max + 1 + ii), -(n2max + 1 + jj):].conj() * overlaps4)
+        intensity_fc = 0.5 * (conv(efield_fc * polx_a) + conv(efield_fc * poly_a) + conv(efield_fc * polz_a) +
+                              conv(efield_fc * polx_b) + conv(efield_fc * poly_b) + conv(efield_fc * polz_b))
+    else:
+        polx = np.cos(polarization_angle - phis) * np.cos(phis) * np.cos(thetas) - np.sin(polarization_angle - phis) * np.sin(phis)
+        poly = np.cos(polarization_angle - phis) * np.sin(phis) * np.cos(thetas) + np.sin(polarization_angle - phis) * np.cos(phis)
+        polz = np.cos(polarization_angle - phis) * np.sin(thetas)
+        intensity_fc = conv(efield_fc * polx) + conv(efield_fc * poly) + conv(efield_fc * polz)
 
     return intensity_fc
 
