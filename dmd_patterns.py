@@ -2361,7 +2361,7 @@ def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4,
     im = Image.fromarray(all_off.astype('bool'))
     im.save(os.path.join(save_dir, "off.png"))
 
-    # circles of different radii
+    # circles of different radii centered in the middle of DMD
     xx, yy = np.meshgrid(range(nx), range(ny))
     xc = (nx - 1) / 2
     yc = (ny - 1) / 2
@@ -2412,6 +2412,16 @@ def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4,
 
     im = Image.fromarray(mask.astype('bool'))
     im.save(os.path.join(save_dir, "variable_pattern_periods=%d_to_%d.png" % (periods[0], periods[-1])))
+
+    # pattern with three corners
+    corner_size = 300
+    corner_pattern = np.zeros((ny, nx), dtype=np.bool)
+    corner_pattern[:corner_size, :corner_size] = 1
+    corner_pattern[:corner_size, -corner_size:] = 1
+    corner_pattern[-corner_size:, :corner_size] = 1
+
+    im = Image.fromarray(corner_pattern)
+    im.save(os.path.join(save_dir, "three_corners_%d_on.png") % corner_size)
 
 
 def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 5), save_dir=None):
@@ -2797,13 +2807,17 @@ if __name__ == "__main__":
                                    angle_sep_tol=5*np.pi/180, max_solutions_to_search=200)
    '''
 
+    save_dir = "../calibration_patterns"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    # export_affine_fit_pattern([nx, ny], radii=(1, 1.5, 5), save_dir=save_dir)
+
+    export_calibration_patterns([nx, ny], save_dir=save_dir)
+
+    '''
     save_dir = "../spot_patterns"
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-
-    # export_affine_fit_pattern([nx, ny], radii=(1, 1.5, 5), save_dir=save_dir)
-
-    # export_calibration_patterns([nx, ny], save_dir=save_dir)
 
     seps = list(range(2, 9, 1)) + list(range(10, 200, 10)) + list(range(200, 1000, 100))
     # seps = list(range(2, 9, 1)) + list(range(10, 120, 10)) + [200]
@@ -2846,6 +2860,6 @@ if __name__ == "__main__":
                          ys=(ny // 2  - s // 2 + s,), radius=r, save_dir=save_dir,
                          fname="%03d_ysep_two_spots_sep=%0.2f_rad=%0.2f_spot_two_only.png" % (index, s, r))
             index += 1
-
+   '''
     plt.show()
 
