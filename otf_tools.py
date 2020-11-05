@@ -37,6 +37,7 @@ def frq2angles(frq_2d, wavelength, n):
     :param frq_2d:
     :param wavelength:
     :param n:
+
     :return phi:
     :return theta:
     """
@@ -55,6 +56,15 @@ def frq2angles(frq_2d, wavelength, n):
     return phi, theta
 
 def angles2frq(theta, phi, wavelength, n):
+    """
+
+    :param theta:
+    :param phi:
+    :param float wavelength:
+    :param float n: index of refraction of medium
+
+    :return frq:
+    """
     frq = n/wavelength * np.array([np.cos(phi) * np.sin(theta),
                                    np.sin(phi) * np.sin(theta),
                                    np.cos(theta)])
@@ -116,7 +126,7 @@ def interfere_unpolarized(theta1, phi1, theta2, phi2):
 
 def get_int_fc(efield_fc):
     """
-    Generate intensity fourier components from efield fourier components
+    Generate intensity fourier components from efield fourier components ignoring polarization effects
 
     :param efield_fc: electric field Fourier components nvec1 x nvec2 array,
      where efield_fc[ii, jj] is the electric field at frequencies f = ii * v1 + jj * v2.
@@ -133,19 +143,27 @@ def get_int_fc(efield_fc):
 
 def get_int_fc_pol(efield_fc, vecs, wavelength, n, polarization_angle=None):
     """
-    Calculate intensity from electric field including effect of polarization
-    :param efield_fc:
-    :param vecs:
-    :param wavelength:
+    Calculate intensity from electric field including effect of polarization.
+
+    :param efield_fc: electric field Fourier components nvec1 x nvec2 array, where efield_fc[ii, jj]
+     is the electric field at frequencies f = ii * v1 + jj * v2.
+    :param vecs: nvec1 x nvec2 x 2
+    :param float wavelength: wavelength of excitation light. If vecs are given in 1/unit, then wavelength must be given
+    in unit.
     :param n: index of refraction of medium
-    :return:
+    :param polarization_angle: can either be an angle in radians, or "None" in which case assume unpolarized light.
+
+    :return intensity_fc: nvec1 x nvec2 x 2
     """
     ny, nx = efield_fc.shape
     if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
         raise Exception("not implemented for even sized arrays")
 
-    phis, thetas = frq2angles(vecs, wavelength, n)
+    # define convolution
     def conv(efield): return scipy.signal.fftconvolve(efield, np.flip(efield, axis=(0, 1)).conj(), mode='same')
+
+    # convert frequencies in distance units to polar angles
+    phis, thetas = frq2angles(vecs, wavelength, n)
 
     if polarization_angle is None:
         # these expressions can be arrived at by factoring those found in interfere_unpolarized()
@@ -167,20 +185,25 @@ def get_int_fc_pol(efield_fc, vecs, wavelength, n, polarization_angle=None):
         intensity_fc = 0.5 * (conv(efield_fc * polx_a) + conv(efield_fc * poly_a) + conv(efield_fc * polz_a) +
                               conv(efield_fc * polx_b) + conv(efield_fc * poly_b) + conv(efield_fc * polz_b))
     else:
+        # similar to above, but not 0.5 and simpler factorization because no averaging
         polx = np.cos(polarization_angle - phis) * np.cos(phis) * np.cos(thetas) - np.sin(polarization_angle - phis) * np.sin(phis)
         poly = np.cos(polarization_angle - phis) * np.sin(phis) * np.cos(thetas) + np.sin(polarization_angle - phis) * np.cos(phis)
         polz = np.cos(polarization_angle - phis) * np.sin(thetas)
+
+        polx[np.isnan(polx)] = 0
+        poly[np.isnan(poly)] = 0
+        polz[np.isnan(polz)] = 0
+
         intensity_fc = conv(efield_fc * polx) + conv(efield_fc * poly) + conv(efield_fc * polz)
 
     return intensity_fc
 
 
-
-#
 def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img,
                         to_use=None, use_guess_frqs=True, max_frq_shift_pix=1.5, force_start_from_guess=True,
                         peak_pix=2, bg=100):
     """
+    Calculate Fourier components from a set of images.
 
     :param imgs: nimgs x ny x nx
     :param vects: nimgs x nvecs1 x nvecs2 x 2
@@ -343,90 +366,88 @@ def get_all_fourier_thry(vas, vbs, nmax, nphases, phase_index, dmd_size):
 
     return efield_theory, ns, ms, frq_vects_dmd
 
-def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, wavelength_ex, fmax_efield_ex, n, pixel_size_um, dmd_shape,
+def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, wavelength_ex, fmax_efield_ex,
+                               index_of_refraction, pixel_size_um, dmd_shape,
                                use_blaze_correction=False, use_polarization_correction=False, dmd_params=None):
     """
 
-    :param efields: nimgs x nvecs1 x nvecs2, electric field Fourier components from DMD pattern, with no blaze condition corrections.
-    :param frq_vects_dmd: frequency vectors in 1/mirrors in DMD space
-    :param roi: region of interest within image
-    :param affine_xform: affine transformation connecting image space and DMD space (using pixels as coordinates on both ends)
-    :param fmax_efield_ex: maximum electric field frequency that can pass throught he imaging system from the DMD to sample, in 1/mirrors
-    :param pixel_size_um: camera pixel size in um
+    :param efields: nimgs x nvecs1 x nvecs2, electric field Fourier components from DMD pattern, with no blaze
+     condition corrections.
+    :param frq_vects_dmd: frequency vectors in 1/mirrors in DMD space. Size nimgs x nvecs1 x nvecs2 x 2
+    :param list[int] roi: region of interest within image. [ystart, yend, xstart, xend]
+    :param affine_xform: affine transformation connecting image space and DMD space
+     (using pixels as coordinates on both ends). This is a 3x3 matrix.
+    :param float fmax_efield_ex: maximum electric field frequency that can pass throught he imaging system from the
+     DMD to sample, in 1/mirrors
+    :param float pixel_size_um: camera pixel size in um
     :param bool use_blaze_correction: whether or not to use blaze correction
-    :param dmd_params: {"wavelength", "gamma", "wx", "wy", "theta_ins": [tx, ty], "theta_outs": [tx, ty]}
+    :param bool use_polarization_correction: whether or not to correct for polarization effects. Assumes input is
+    completely unpolarized. # todo: can add other polarization options
+    :param dmd_params: {"wavelength", "gamma", "wx", "wy", "theta_ins": [tx, ty], "theta_outs": [tx, ty]}. These can be
+    omitted if use_blaze_correction is False
 
-    :return intensity_theory: theoretical intensity using DMD coordinates
+    :return intensity_theory: theoretical intensity using DMD coordinates. nimgs x nvecs1 x nvecs2
     :return intensity_theory_xformed: theoretical intensity using camera ROI coordinates. Same magnitude but different
-    phase versus intensity_theory
-    :return frq_vects_cam: frequency vectors in camera space in 1/pixels
-    :return frq_vects_um: frequency vectors in camera space in 1/microns
+    phase versus intensity_theory. nimgs x nvecs1 x nvecs2. This is identical to intensity_theory in magnitude, but
+    different in phase
+    :return frq_vects_cam: frequency vectors in camera space in 1/pixels. nimgs x nvecs1 x nvecs2 x 2
+    :return frq_vects_um: frequency vectors in camera space in 1/microns. nimgs x nvecs1 x nvecs2 x 2
     """
 
-    frq_vects_cam = np.zeros(frq_vects_dmd.shape)
-    frq_vects_um = np.zeros(frq_vects_dmd.shape)
-    intensity_phases = np.zeros(efields.shape) * np.nan
-    intensity_theory = np.zeros(efields.shape, dtype=np.complex) * np.nan
-
+    # define pupil function
     if use_blaze_correction:
-        # todo: is frequency in the right units?
-        def pupil(fx, fy):
+        def pupil_fn(fx, fy):
             fx = np.atleast_1d(fx)
             fy = np.atleast_1d(fy)
-            # frequency in 1/mirrors
-            if fx.size == 1:
-                tx_out = dmd_params["theta_outs"][0] + dmd_params["wavelength"] * fx / dmd_params["dx"]
-                ty_out = dmd_params["theta_outs"][1] + dmd_params["wavelength"] * fy / dmd_params["dy"]
-                return simulate_dmd.blaze_envelope(dmd_params["wavelength"], dmd_params["gamma"], dmd_params["wx"],
-                                                   dmd_params["wy"], dmd_params["theta_ins"][0], dmd_params["theta_ins"][1],
-                                                   tx_out, ty_out)
-            else:
-                ppl = np.zeros(fx.shape)
-                for ii in range(ppl.size):
-                    ind = np.unravel_index(ii, ppl.shape)
-                    ppl[ind] = pupil(fx[ind], fy[ind])
-                return ppl
-
-
+            tx_out = dmd_params["theta_outs"][0] + dmd_params["wavelength"] * fx / dmd_params["dx"]
+            ty_out = dmd_params["theta_outs"][1] + dmd_params["wavelength"] * fy / dmd_params["dy"]
+            envelope = simulate_dmd.blaze_envelope(dmd_params["wavelength"], dmd_params["gamma"], dmd_params["wx"],
+                                               dmd_params["wy"], dmd_params["theta_ins"][0], dmd_params["theta_ins"][1],
+                                               tx_out, ty_out)
+            return envelope * (np.sqrt(fx ** 2 + fy ** 2) <= fmax_efield_ex)
     else:
-        def pupil(fx, fy):
+        def pupil_fn(fx, fy):
             return np.sqrt(fx ** 2 + fy ** 2) <= fmax_efield_ex
 
-    # tstart = time.process_time()
+    # compute pupil
+    pupil = pupil_fn(frq_vects_dmd[..., 0], frq_vects_dmd[..., 1])
+
+    # compute frequency vectors in camera space (1/pixels)
+    frq_vects_cam = np.zeros(frq_vects_dmd.shape)
+    frq_vects_cam[..., 0], frq_vects_cam[..., 1], _ = affine.xform_sinusoid_params_roi(
+        frq_vects_dmd[..., 0], frq_vects_dmd[..., 1], 0, dmd_shape, roi, affine_xform,
+        input_origin="fft", output_origin="fft")
+
+    # correct frequency vectors in camera space to be in real units (1/um)
+    frq_vects_um = frq_vects_cam / pixel_size_um
+
+    # calculate intensities for each image
+    intensity_theory = np.zeros(efields.shape, dtype=np.complex) * np.nan
     for ii in range(frq_vects_cam.shape[0]):
-        # tnow = time.process_time()
-        # print("intensity %d/%d, elapsed time = %0.2fs" % (ii + 1, frq_vects_cam.shape[0], tnow - tstart))
-        pupil_now = pupil(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1])
-
-        frq_vects_cam[ii, ..., 0], frq_vects_cam[ii, ..., 1], _ = \
-            affine.xform_sinusoid_params_roi(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1],
-                                             0, dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
-        # correct frequency vectors in camera space to be in real units
-        frq_vects_um[ii] = frq_vects_cam[ii] / pixel_size_um
-
         if use_polarization_correction:
-            intensity_theory[ii] = get_int_fc_pol(efields[ii] * pupil_now, frq_vects_um[ii], wavelength_ex, n)
+            intensity_theory[ii] = get_int_fc_pol(efields[ii] * pupil[ii], frq_vects_um[ii], wavelength_ex, index_of_refraction)
         else:
-            intensity_theory[ii] = get_int_fc(efields[ii] * pupil_now)
+            intensity_theory[ii] = get_int_fc(efields[ii] * pupil[ii])
 
+    # normalize to DC values
+    intensity_theory = intensity_theory / np.max(np.abs(intensity_theory), axis=(1, 2))[:, None, None]
 
-        intensity_theory[ii] = intensity_theory[ii] / np.abs(intensity_theory[ii]).max()
-
-        _, _, intensity_phases[ii] = affine.xform_sinusoid_params_roi(frq_vects_dmd[ii, ..., 0], frq_vects_dmd[ii, ..., 1],
-                                                                      np.angle(intensity_theory[ii]),
-                                                                      dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
+    # compute phase in new coordinates
+    _, _, intensity_phases = affine.xform_sinusoid_params_roi(frq_vects_dmd[..., 0], frq_vects_dmd[..., 1],
+                                                              np.angle(intensity_theory),
+                                                              dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
     intensity_theory_xformed = np.abs(intensity_theory) * np.exp(1j * intensity_phases)
-
-    # correct frequency vectors in camera space to be in real units
-    # frq_vects_um = frq_vects_cam / pixel_size_um
-
-    # vecs[ii, jj] = ns[ii] * recp_va[:, 0] + ms[jj] * recp_vb[:, 0]
-    # vecs_xformed[ii, jj, 0], vecs_xformed[ii, jj, 1], _ = \
-    #     affine.xform_sinusoid_params(vecs[ii, jj, 0], vecs[ii, jj, 1], 0, affine_xform)
 
     return intensity_theory, intensity_theory_xformed, frq_vects_cam, frq_vects_um
 
 def fit_phase_diff(phase_th, phase_expt, frqs):
+    """
+    Match theory and experimental phases as best as possible by modifying affine transformation
+    :param phase_th:
+    :param phase_expt:
+    :param frqs:
+    :return:
+    """
     def phase_diff_fn(phi1, phi2):
         diff = np.array(np.mod(phi1 - phi2, 2*np.pi))
         to_flip = np.abs(diff - 2*np.pi) < np.abs(diff)

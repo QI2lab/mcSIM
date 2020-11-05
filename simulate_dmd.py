@@ -139,25 +139,26 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
 
 def blaze_envelope(wavelength, gamma, wx, wy, tx_in, ty_in, tx_out, ty_out):
     """
-    Compute normalized blaze envelope function
+    Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
 
-    :param wavelength:
-    :param gamma:
-    :param wx:
-    :param wy:
-    :param tx_in:
-    :param ty_in:
-    :param tx_out:
-    :param ty_out:
-    :return:
+    :param wavelength: wavelength of light. Units are arbitrary, but must be the same for wavelength, wx, and wy
+    :param gamma: in radians
+    :param wx: mirror width in x-direction
+    :param wy: mirror width in y-direction
+    :param tx_in: arbitrary shape
+    :param ty_in: same shape as tx_in
+    :param tx_out: same shape as tx_in
+    :param ty_out: same shape as tx_in
+
+    :return envelope: same shape as tx_in
     """
 
     k = 2*np.pi / wavelength
     amb = get_unit_vector(tx_in, ty_in, 'in') - get_unit_vector(tx_out, ty_out, 'out')
 
-    val = sinc_fn(0.5 * k * wx * blaze_condition_fn(gamma, amb, 'plus')) \
-        * sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, amb, 'minus'))
-    return val
+    envelope = sinc_fn(0.5 * k * wx * blaze_condition_fn(gamma, amb, 'plus')) \
+             * sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, amb, 'minus'))
+    return envelope
 
 def blaze_condition_fn(gamma, amb, mode='plus'):
     """
@@ -169,49 +170,22 @@ def blaze_condition_fn(gamma, amb, mode='plus'):
     A_\pm = 0.5*(1 \pm cos(gamma)) * (a-b)_x + 0.5*(1 \mp cos(gamma)) * (a-b)_y \mp sin(gamma)/sqrt(2) * (a-b)_z
 
     :param gamma: angle micro-mirror normal makes with device normal
-    :param amb: incoming unit vector - outgoing unit vector, [vx, vy, vz]
+    :param amb: incoming unit vector - outgoing unit vector, [vx, vy, vz]. Will also accept a matrix of shape
+    n0 x n1 x ... x 3
     :param mode: 'plus' or 'minus'
     :return A:
     """
     if mode == 'plus':
-        A = 0.5 * (1 + np.cos(gamma)) * amb[0] + \
-            0.5 * (1 - np.cos(gamma)) * amb[1] - \
-            1 / np.sqrt(2) * np.sin(gamma) * amb[2]
+        A = 0.5 * (1 + np.cos(gamma)) * amb[..., 0] + \
+            0.5 * (1 - np.cos(gamma)) * amb[..., 1] - \
+            1 / np.sqrt(2) * np.sin(gamma) * amb[..., 2]
     elif mode == 'minus':
-        A = 0.5 * (1 - np.cos(gamma)) * amb[0] + \
-            0.5 * (1 + np.cos(gamma)) * amb[1] + \
-            1 / np.sqrt(2) * np.sin(gamma) * amb[2]
+        A = 0.5 * (1 - np.cos(gamma)) * amb[..., 0] + \
+            0.5 * (1 + np.cos(gamma)) * amb[..., 1] + \
+            1 / np.sqrt(2) * np.sin(gamma) * amb[..., 2]
     else:
         raise Exception("mode must be 'plus' or 'minus', but was '%s'" % mode)
     return A
-
-def get_unit_vector(tx, ty, mode='in'):
-    """
-    Get incoming or outgoing unit vector of light propogation parametrized by angles tx and ty
-
-    Let a represent an incoming vector, and b and outgoing one. Then we paraemtrize these by
-    a = az * [tan(tx_a), tan(ty_a), 1]
-    b = |bz| * [tan(tb_x), tan(tb_y), -1]
-    choosing negative z component for outgoing vectors is effectively taking a different
-    conventions for the angle between b and the z axis (compared with a and
-    the z-axis). We do this so that e.g. the law of reflection would give
-    theta_a = theta_b, instead of theta_a = -theta_b, which would hold if we
-    defined everything symmetrically.
-
-    :param tx:
-    :param ty:
-    :param mode: "in" or "out" depending on whether representing a vector pointing in the positive or negative z-direction
-    :return uvec: unit vector
-    """
-    if mode == 'in':
-        uvec = np.array([np.tan(tx), np.tan(ty), 1])
-    elif mode == 'out':
-        uvec = np.array([np.tan(tx), np.tan(ty), -1])
-    else:
-        raise Exception("mode must be 'in' or 'out', but was '%s'" % mode)
-
-    uvec = uvec / np.linalg.norm(uvec)
-    return uvec
 
 def sinc_fn(x):
     """
@@ -335,19 +309,55 @@ def theta_phi2txty(theta, phi):
     return tx, ty
 
 def uvector2txty(vx, vy, vz):
+    """
+    Convert unit vector from components to theta_x, theta_y representation. Inverse function for get_unit_vector()
+    :param vx:
+    :param vy:
+    :param vz:
+    :return:
+    """
     norm_factor = np.abs(1 / vz)
     tx = np.arctan(vx * norm_factor)
     ty = np.arctan(vy * norm_factor)
 
     return tx, ty
 
-def txty2uvector(tx, ty, positive_z=True):
-    norm = 1 / (np.tan(tx)**2 + np.tan(ty)**2 + 1)
-    if positive_z:
-        return [np.tan(tx) / norm, np.tan(ty) / norm, 1 / norm]
-    else:
-        return [np.tan(tx) / norm, np.tan(ty) / norm, -1 / norm]
+def get_unit_vector(tx, ty, mode='in'):
+    """
+    Get incoming or outgoing unit vector of light propogation parametrized by angles tx and ty
 
+    Let a represent an incoming vector, and b and outgoing one. Then we paraemtrize these by
+    a = az * [tan(tx_a), tan(ty_a), 1]
+    b = |bz| * [tan(tb_x), tan(tb_y), -1]
+    choosing negative z component for outgoing vectors is effectively taking a different
+    conventions for the angle between b and the z axis (compared with a and
+    the z-axis). We do this so that e.g. the law of reflection would give
+    theta_a = theta_b, instead of theta_a = -theta_b, which would hold if we
+    defined everything symmetrically.
+
+    :param tx: arbitrary size
+    :param ty: same size as tx
+    :param mode: "in" or "out" depending on whether representing a vector pointing in the positive or negative z-direction
+
+    :return uvec: unit vectors, array of size tx.size x 3
+    """
+    norm = np.sqrt(np.tan(tx)**2 + np.tan(ty)**2 + 1)
+    if mode == 'in':
+        ux = np.tan(tx)
+        uy = np.tan(ty)
+        uz = np.ones(tx.shape)
+    elif mode == 'out':
+        ux = np.tan(tx)
+        uy = np.tan(ty)
+        uz = -np.ones(tx.shape)
+    else:
+        raise Exception("mode must be 'in' or 'out', but was '%s'" % mode)
+
+    uvec = np.concatenate((ux[..., None], uy[..., None], uz[..., None]), axis=-1) / norm[..., None]
+
+    return uvec
+
+# todo: clean up these functions. probably several can combine
 # # utility functions for solving blaze + diffraction conditions
 def solve_max_diffraction_order(wavelength, d, gamma):
     """
