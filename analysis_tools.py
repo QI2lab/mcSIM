@@ -1380,6 +1380,9 @@ def gauss_fn(x, y, p):
     :param p: [A, cx, cy, sxrot, syrot, bg, theta]
     :return value:
     """
+    if len(p) != 7:
+        raise Exception("parameter list p must have length 7")
+
     xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])
     yrot = np.cos(p[6]) * (y - p[2]) + np.sin(p[6]) * (x - p[1])
     return p[0] * np.exp(-xrot ** 2 / (2 * p[3] ** 2) - yrot ** 2 / (2 * p[4] ** 2)) + p[5]
@@ -1393,6 +1396,9 @@ def gauss_jacobian(x, y, p):
     :param p: [A, cx, cy, sx, sy, bg, theta]
     :return value:
     """
+    if len(p) != 7:
+        raise Exception("parameter list p must have length 7")
+
     # useful functions that show up in derivatives
     xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])
     yrot = np.cos(p[6]) * (y - p[2]) + np.sin(p[6]) * (x - p[1])
@@ -1407,6 +1413,55 @@ def gauss_jacobian(x, y, p):
             p[0] * exps * yrot ** 2 / p[4] ** 3,
             np.ones(bcast_shape),
             p[0] * exps * xrot * yrot * (1 / p[3]**2 - 1 / p[4]**2)]
+
+def ngauss_fn(x, y, p):
+    """
+    Sum of n 2D gaussians
+    :param x:
+    :param y:
+    :param p: [A1, cx1, cx2, sx1, sx2, theta1, A2, ..., thetan, bg]
+    :return:
+    """
+    if len(p) % 6 != 1:
+        raise Exception("Parameters")
+
+    ngaussians = (len(p) - 1) // 6
+
+    val = 0
+    for ii in range(ngaussians - 1):
+        ps = np.concatenate((np.array(p[6*ii: 6*ii + 5]), np.array([0]), np.atleast_1d([p[ii * 6 + 5]])))
+        val += gauss_fn(x, y, ps)
+
+    # deal with last gaussian, which also gets background term
+    ps = np.concatenate((np.array(p[-7:-2]), np.atleast_1d(p[-1]), np.atleast_1d(p[-2])))
+    val += gauss_fn(x, y, ps)
+    return val
+
+def ngauss_jacobian(x, y, p):
+    """
+    Jacobian of the sum of n 2D gaussians
+    :param x:
+    :param y:
+    :param p:
+    :return:
+    """
+    if len(p) % 6 != 1:
+        raise Exception("Parameters")
+
+    ngaussians = (len(p) - 1) // 6
+
+    jac_list = []
+    for ii in range(ngaussians - 1):
+        ps = np.concatenate((np.array(p[6 * ii: 6 * ii + 5]), np.array([0]), np.atleast_1d([p[ii * 6 + 5]])))
+        jac_current = gauss_jacobian(x, y, ps)
+        jac_list += jac_current[:-2] + [jac_current[-1]]
+
+    # deal with last gaussian, which also gets background term
+    ps = np.concatenate((np.array(p[-7:-2]), np.atleast_1d(p[-1]), np.atleast_1d(p[-2])))
+    jac_current = gauss_jacobian(x, y, ps)
+    jac_list += jac_current[:-2] + [jac_current[-1]] + [jac_current[-2]]
+
+    return jac_list
 
 def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=None):
     """
@@ -1578,6 +1633,48 @@ def fit_gauss(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=Non
     def fit_fn(x, y): return gauss_fn(x, y, pfit)
 
     return result, fit_fn
+
+def fit_ngauss(img, ngaussians, init_params, fixed_params=None, sd=None, xx=None, yy=None, bounds=None):
+    """
+    Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
+    with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
+
+    :param img: 2D image to fit
+    :param init_params: [A1, cx1, cy1, sx1, sy1, theta1, A2, cx2, ..., thetan, bg]
+    :param fixed_params: list of boolean values, same size as init_params.
+    :param sd: uncertainty in parameters y. e.g. if experimental curves come from averages then should be the standard
+    deviation of the mean
+    :param xx: 2D array, same size as image (use this instead of 1D array because want to preserve ability to fit on
+    non-regularly spaced grids, etc.)
+    :param yy:
+    :param bounds: (lbs, ubs)
+    :return:
+    """
+
+    # get coordinates if not provided
+    if xx is None or yy is None:
+        xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
+
+    nparams = 6 * ngaussians + 1
+    # get default initial parameters
+    if init_params is None:
+        init_params = [None] * nparams
+    else:
+        init_params = copy.deepcopy(init_params)
+
+    if bounds is None:
+        bounds = [[-np.inf, xx.min(), yy.min(), 0, 0, -np.inf] * ngaussians + [-np.inf],
+                  [ np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf] * ngaussians + [np.inf]]
+
+    result = fit_model(img, lambda p: ngauss_fn(xx, yy, p), init_params, fixed_params=fixed_params,
+                       sd=sd, bounds=bounds, model_jacobian=lambda p: ngauss_jacobian(xx, yy, p))
+
+    pfit = result['fit_params']
+
+    def fn(x, y):
+        return ngauss_fn(x, y, pfit)
+
+    return result, fn
 
 def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=None, model_jacobian=None, **kwargs):
     """
