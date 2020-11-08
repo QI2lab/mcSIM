@@ -220,6 +220,24 @@ def xform_fn(fn, xform, out_coords):
     return img
 
 
+def xform_points(xs, ys, xform):
+    """
+    Transform a set of coordinates under the action of the affine transformation.
+    :param xs: array of x-coordinates of arbitrary shape
+    :param ys: array of y-coordinates, same shape as xs
+    :param xform: affine transformation, 3x3 matrix
+
+    :return xs_out: x-coordinates after affine transformation. Same shape as xs
+    :return ys_out: y-coordinates after affine transformation. Same shape as xs.
+    """
+    coord_vec_in = np.concatenate((xs.ravel()[None, :], ys.ravel()[None, :], np.ones((1, xs.size))), axis=0)
+    coord_vec_out = xform.dot(coord_vec_in)
+    xs_out = coord_vec_out[0, :].reshape(xs.shape)
+    ys_out = coord_vec_out[1, :].reshape(ys.shape)
+
+    return xs_out, ys_out
+
+
 # modify affine xform
 def xform_shift_center(xform, cobj_new=None, cimg_new=None):
     """
@@ -521,7 +539,7 @@ def fit_barrel_distortion(from_pts, to_pts):
     """
     raise Exception("todo: not implemented")
 
-
+# helper functions for dealing with an array of dots projected on a flat background
 def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_squared_relative_max=1.5, max_position_err=0.1, img_sd=None, debug=False):
     """
     Fit peak of fluorescence pattern
@@ -826,23 +844,25 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     no_nans = residual_dist_err.ravel()[np.logical_not(np.isnan(residual_dist_err.ravel()))]
     vmax = np.percentile(no_nans, 90)
     plt.imshow(residual_dist_err, vmin=0, vmax=vmax)
-    plt.title('residual position error')
+    plt.title('residual position error (pix)')
     plt.colorbar()
 
     plt.subplot(grid[1, 0])
     no_nans = sigma_mean_cam.ravel()[np.logical_not(np.isnan(sigma_mean_cam.ravel()))]
+    sigma_mean_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
     plt.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax)
-    plt.title('sigma (geometric mean)')
+    plt.title('mean sigma, median=%0.2f' % sigma_mean_median)
     plt.colorbar()
 
     plt.subplot(grid[1, 1])
     no_nans = amps.ravel()[np.logical_not(np.isnan(amps.ravel()))]
+    amp_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
     plt.imshow(amps, vmin=vmin, vmax=vmax)
-    plt.title('amplitudes')
+    plt.title('amplitudes, median=%0.0f' % amp_median)
     plt.colorbar()
 
     plt.subplot(grid[2, 0])
