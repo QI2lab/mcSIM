@@ -189,15 +189,30 @@ def blaze_condition_fn(gamma, amb, mode='plus'):
 
 def sinc_fn(x):
     """
-    Sinc function
+    Unnormalized sinc function, sinc(x) = sin(x) / x
 
     :param x:
-    :return sin(x) / x:
+    :return sinc(x):
     """
-    x = np.asarray(x)
-    y = np.asarray(np.sin(x) / x)
+    # x = np.asarray(x)
+    x = np.atleast_1d(x)
+    with np.errstate(divide='ignore'):
+        y = np.asarray(np.sin(x) / x)
     y[x == 0] = 1
     return y
+
+# convert between xyz and 123 coords
+def xyz2mirror(vx, vy, vz, gamma):
+    v1 = np.cos(gamma) / np.sqrt(2) * (vx - vy) - np.sin(gamma) * vz
+    v2 = 1 / np.sqrt(2) * (vx + vy)
+    v3 = np.sin(gamma) / np.sqrt(2) * (vx - vy) + np.cos(gamma) * vz
+    return v1, v2, v3
+
+def mirror2xyz(v1, v2, v3, gamma):
+    vx = np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 + np.sin(gamma) / np.sqrt(2) * v3
+    vy = -np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 - np.sin(gamma) / np.sqrt(2) * v3
+    vz = -np.sin(gamma) * v1 + np.cos(gamma) * v3
+    return vx, vy, vz
 
 # functions for converting between different angular representations
 def angle2xy(tp, tm):
@@ -231,7 +246,7 @@ def angle2pm(tx, ty):
 
     return tp, tm
 
-def txty2theta_phi(tx, ty):
+def txty2polar(tx, ty):
     """
     Convert between v = [tan(tx), tan(ty), 1] / sqrt(tan(tx)**2 + tan(ty)**2 + 1)
     and v = [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
@@ -288,7 +303,7 @@ def txty2theta_phi(tx, ty):
 
     return theta, phi
 
-def theta_phi2txty(theta, phi):
+def polar2txty(theta, phi):
     """
     Convert between v = [tan(tx), tan(ty), 1] / sqrt(tan(tx)**2 + tan(ty)**2 + 1)
     and v = [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
@@ -341,6 +356,8 @@ def get_unit_vector(tx, ty, mode='in'):
 
     :return uvec: unit vectors, array of size tx.size x 3
     """
+    tx = np.atleast_1d(tx)
+    ty = np.atleast_1d(ty)
     norm = np.sqrt(np.tan(tx)**2 + np.tan(ty)**2 + 1)
     if mode == 'in':
         ux = np.tan(tx)
@@ -399,18 +416,9 @@ def solve_max_diffraction_order(wavelength, d, gamma):
 
     return nmax, nmin
 
-def solve_blaze_condition_1d(tm_in, gamma):
-    """
-    Get blaze angle for tp_in = 0 and tm_in. For all other applications, use get_blaze_2d()
-
-    :param tm_in:
-    :param gamma:
-    :return tm_out_blaze:
-    """
-    return tm_in - 2*gamma
-
 def solve_1color_1d(wavelength, d, gamma, n):
     """
+    # todo: superseded by solve_combined_condition()
     Solve for theta_in satisfying diffraction condition and blaze angle for a given diffraction order (if possible).
 
     (1) theta_in - theta_out = 2*gamma
@@ -460,7 +468,9 @@ def solve_1color_1d(wavelength, d, gamma, n):
 
 def solve_diffraction_input_1d(theta_out, wavelength, d, order):
     """
-    Find input angle corresponding to given diffraction output angle, for 1D case
+    Find input angle corresponding to given diffraction output angle, for 1D case.
+
+    Helper function which wraps solve_diffraction_input()
 
     :param theta_out: desired output angle (in radians)
     :param wavelength: wavelength of light
@@ -468,141 +478,80 @@ def solve_diffraction_input_1d(theta_out, wavelength, d, order):
     :param order: index of diffraction order
     :return theta_in: input angle
     """
-    theta_in = np.arcsin(np.sin(theta_out) + np.sqrt(2) * wavelength / d * order)
+    # theta_in = np.arcsin(np.sin(theta_out) + np.sqrt(2) * wavelength / d * order)
+    theta_out = np.atleast_1d(theta_out)
+    tx_out, ty_out = angle2xy(np.zeros(theta_out.shape), theta_out)
+    tx_in, ty_in = solve_diffraction_input(tx_out, ty_out, d, d, wavelength, (order, -order))
+    _, theta_in = angle2pm(tx_in, ty_in)
+
     return theta_in
 
-def plot_graphical_soln1d(d, gamma, wavelengths):
+def solve_blaze(tp_in, tm_in, gamma):
     """
-    Plot graphical solution to Blaze condition + diffraction condition for 1D case
-
-    :param d: mirror pitch
-    :param gamma:
-    :param wavelengths:
-    :return fig: figure handle of resulting plot
-    """
-
-    if isinstance(wavelengths, float):
-        wavelengths = [wavelengths]
-
-    nmax = 5
-    tmin = np.max([-np.pi/2, -np.pi/2 + 2 * gamma])
-    tmax = np.min([np.pi/2 , np.pi/2 + 2 *gamma])
-    ts = np.linspace(tmin, tmax, 1000)
-
-    cmap = matplotlib.cm.get_cmap('Spectral')
-    phs = []
-
-    fig = plt.figure()
-    pht = plt.plot(ts * 180/np.pi, np.sin(ts) - np.sin(ts - 2*gamma))
-    phs.append(pht[0])
-    for ii, wvl in enumerate(wavelengths):
-        for n in np.arange(-nmax, nmax, 1):
-            pht = plt.plot(np.array([ts.min(), ts.max()]) * 180/np.pi, [np.sqrt(2) * wvl / d * n, np.sqrt(2) * wvl / d * n],
-                     color=cmap(ii / len(wavelengths)))
-            if n == -nmax:
-                phs.append(pht[0])
-
-    plt.xlabel('tin (degrees)')
-    plt.legend(phs, ['blaze condition'] + wavelengths)
-
-    return fig
-
-def solve_blaze_condition(tp_in, tm_in, gamma):
-    """
-    Find the blaze condition for arbitrary input angle. Don't know of a closed form solution to this problem.
+    Find the blaze condition for arbitrary input angle.
 
     :param tp_in: input angle in x+y plane in radians
     :param tm_in: input angle in x-y plane in radians
     :param gamma: DMD mirror angle in radians
-    :return tp_out: output angles (in general there will be two solutions)
+    :return tp_out: output angles
     :return tm_out:
     """
-    a = lambda tp, tm: get_unit_vector(tp, tm, mode='in')
-    b = lambda tp, tm: get_unit_vector(tp, tm, mode='out')
 
-    f1 = lambda tp, tm: a(tp_in, tm_in)[0] - b(tp, tm)[0]
-    f2 = lambda tp, tm: (a(tp_in, tm_in)[1] - b(tp, tm)[1]) / (a(tp_in, tm_in)[2] - b(tp, tm)[2]) - np.tan(gamma)
+    tx_in, ty_in = angle2xy(tp_in, tm_in)
+    avec = get_unit_vector(tx_in, ty_in, "in")
+    # convert to convenient coordinates and apply blaze
+    a1, a2, a3 = xyz2mirror(avec[..., 0], avec[..., 1], avec[..., 2], gamma)
+    bx, by, bz = mirror2xyz(a1, a2, -a3, gamma)
 
-    init_param = [tp_in, tm_in - 2*gamma]
-    min_fn = lambda p: np.abs(f1(p[0], p[1])) + np.abs(f2(p[0], p[1]))
-    param_min = scipy.optimize.fmin(min_fn, init_param, disp=False)
-
-    if min_fn(param_min) > 1e-2:
-        tp_out = np.nan
-        tm_out = np.nan
-    else:
-        tp_out, tm_out = param_min
+    # convert back to angles
+    tx_out, ty_out = uvector2txty(bx, by, bz)
+    tp_out, tm_out = angle2pm(tx_out, ty_out)
 
     return tp_out, tm_out
 
-def solve_diffraction_condition(tx_in, ty_in, dx, dy, wavelength, max_order=4):
+def solve_diffraction_input(tx_out, ty_out, dx, dy, wavelength, order):
     """
-    Solve for output diffraction peak angles, given input angles and wavelength.
+    Solve for diffraction input angle, given output angle
 
-    these occur where the following conditions are fulfilled:
-    tan(tx_in) / norm_in - tan(tx_out) / norm_out = lambda/dx * nx
-    tan(ty_in) / norm_in - tan(ty_out) / norm_out = lambda/dx * ny
-
-    :param tx_in: theta x incoming, in radians
-    :param ty_in:
+    :param tx_out:
+    :param ty_out:
     :param dx:
     :param dy:
-    :param wavelength: in the same units as dx, dy
-    :param max_order: will solve for all orders (i, j), for i and j in  [-max_order, ..., 0, ... max_order]
-
-    :return tx_outs:
-    :return ty_outs:
-    :return nx:
-    :return ny:
+    :param wavelength:
+    :param order:
+    :return:
     """
 
-    # expected diffraction peaks
-    # these functions are zero where diffraction condition is satisfied
-    norm_in = np.sqrt(np.tan(tx_in) ** 2 + np.tan(ty_in) ** 2 + 1)
-    cond_x = lambda tx_out, ty_out, nx: np.tan(tx_in) / norm_in - np.tan(tx_out) / np.sqrt(np.tan(tx_out)**2 + np.tan(ty_out)**2 + 1) - wavelength/dx * nx
-    cond_y = lambda tx_out, ty_out, ny: np.tan(ty_in) / norm_in - np.tan(ty_out) / np.sqrt(np.tan(tx_out)**2 + np.tan(ty_out)**2 + 1) - wavelength/dy * ny
+    bvec = get_unit_vector(np.atleast_1d(tx_out), np.atleast_1d(ty_out), "out")
+    ax = bvec[..., 0] + wavelength / dx * order[0]
+    ay = bvec[..., 1] + wavelength / dy * order[1]
+    az = np.sqrt(1 - ax**2 - ay**2)
 
-    # all the orders we want to solve for
-    nxs = np.arange(-max_order, max_order+1)
-    nys = np.arange(-max_order, max_order+1)
-    tx_outs = np.zeros((2*max_order + 1, 2*max_order + 1))
-    ty_outs = np.zeros((2*max_order + 1, 2*max_order + 1))
+    tx_in, ty_in = uvector2txty(ax, ay, az)
 
-    for ii in range(len(nys)):
-        for jj in range(len(nxs)):
-            # these will be overwritten if there is a solution
-            tx_out = np.nan
-            ty_out = np.nan
+    return tx_in, ty_in
 
-            nx = nxs[ii]
-            ny = nys[jj]
+def solve_diffraction_output(tx_in, ty_in, dx, dy, wavelength, order):
+    """
+    Solve for diffraction output angle, given input angle
 
-            cx = np.tan(tx_in) / norm_in - wavelength / dx * nx
-            cy = np.tan(ty_in) / norm_in - wavelength / dy * ny
-            cmat = np.array([[1 - cx**2, -cx**2], [-cy**2, 1 - cy**2]])
+    :param tx_out:
+    :param ty_out:
+    :param dx:
+    :param dy:
+    :param wavelength:
+    :param order: (nx, ny)
+    :return:
+    """
 
-            try:
-                tan_sqr_outs = np.linalg.solve(cmat, np.array([[cx**2], [cy**2]]))
-                #tan_sqr_outs = np.linalg.inv(cmat).dot(np.array([[cx**2], [cy**2]]))
+    avec = get_unit_vector(np.atleast_1d(tx_in), np.atleast_1d(ty_in), "in")
+    bx = avec[..., 0] - wavelength / dx * order[0]
+    by = avec[..., 1] - wavelength / dy * order[1]
+    bz = -np.sqrt(1 - bx**2 - by**2)
 
-                # not guaranteed the signs are correct
-                tx_out_abs = np.arctan(np.sqrt(tan_sqr_outs[0]))
-                ty_out_abs = np.arctan(np.sqrt(tan_sqr_outs[1]))
+    tx_out, ty_out = uvector2txty(bx, by, bz)
 
-                choices = [[tx_out_abs, ty_out_abs], [-tx_out_abs, ty_out_abs], [tx_out_abs, -ty_out_abs],
-                           [-tx_out_abs, -ty_out_abs]]
-                for c in choices:
-                    if np.abs(cond_x(c[0], c[1], nx)) < 1e-12 and np.abs(cond_y(c[0], c[1], ny)) < 1e-12:
-                        tx_out = c[0]
-                        ty_out = c[1]
-                        break
-            except np.linalg.LinAlgError:
-                pass
-
-            tx_outs[ii, jj] = tx_out
-            ty_outs[ii, jj] = ty_out
-
-    return tx_outs, ty_outs, nxs, nys
+    return tx_out, ty_out
 
 def solve_combined_condition(d, gamma, wavelength, order):
     """
@@ -659,6 +608,42 @@ def solve_combined_condition(d, gamma, wavelength, order):
 
 
 # 1D simulation in x-y plane (i.e. theta_x = -theta_y)
+def plot_graphical_soln1d(d, gamma, wavelengths):
+    """
+    Plot graphical solution to Blaze condition + diffraction condition for 1D case
+
+    :param d: mirror pitch
+    :param gamma:
+    :param wavelengths:
+    :return fig: figure handle of resulting plot
+    """
+
+    if isinstance(wavelengths, float):
+        wavelengths = [wavelengths]
+
+    nmax = 5
+    tmin = np.max([-np.pi/2, -np.pi/2 + 2 * gamma])
+    tmax = np.min([np.pi/2 , np.pi/2 + 2 *gamma])
+    ts = np.linspace(tmin, tmax, 1000)
+
+    cmap = matplotlib.cm.get_cmap('Spectral')
+    phs = []
+
+    fig = plt.figure()
+    pht = plt.plot(ts * 180/np.pi, np.sin(ts) - np.sin(ts - 2*gamma))
+    phs.append(pht[0])
+    for ii, wvl in enumerate(wavelengths):
+        for n in np.arange(-nmax, nmax, 1):
+            pht = plt.plot(np.array([ts.min(), ts.max()]) * 180/np.pi, [np.sqrt(2) * wvl / d * n, np.sqrt(2) * wvl / d * n],
+                     color=cmap(ii / len(wavelengths)))
+            if n == -nmax:
+                phs.append(pht[0])
+
+    plt.xlabel('tin (degrees)')
+    plt.legend(phs, ['blaze condition'] + wavelengths)
+
+    return fig
+
 def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
                 t45_ins, t45_out_offsets=None):
     """
@@ -692,15 +677,13 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
     tx_ins, ty_ins = angle2xy(0, t45_ins)
 
     # blaze condition
-    t45s_blaze_on = solve_blaze_condition_1d(t45_ins, gamma_on)
-    t45s_blaze_off = solve_blaze_condition_1d(t45_ins, gamma_off)
+    # t45s_blaze_on = solve_blaze_condition_1d(t45_ins, gamma_on)
+    # t45s_blaze_off = solve_blaze_condition_1d(t45_ins, gamma_off)
+    _, t45s_blaze_on = solve_blaze(np.zeros(t45_ins.shape), t45_ins, gamma_on)
+    _, t45s_blaze_off = solve_blaze(np.zeros(t45_ins.shape), t45_ins, gamma_off)
 
     # expected diffraction zero peak
     _, t45s_diff_zero = angle2pm(tx_ins, ty_ins)
-
-    # arrays to store info about diffraction peaks
-    peak_locs_all = np.zeros((len(t45_ins), 3, n_wavelens))
-    peak_heights_all = np.zeros(peak_locs_all.shape)
 
     # variables to store simulation output data
     efields = np.zeros((len(t45_ins), len(t45_out_offsets), n_wavelens), dtype=np.complex)
@@ -712,8 +695,10 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
     tys_out = np.zeros((len(t45_ins), len(t45_out_offsets)))
     # diffraction order predictions
     ndiff_orders = 10
+    nxs = np.array(range(-ndiff_orders, ndiff_orders + 1))
+    nys = -nxs
     diff_t45_out = np.zeros((len(t45_ins), n_wavelens, 2 * ndiff_orders + 1))
-    diff_n = np.zeros((2 * ndiff_orders + 1))
+    # diff_n = np.zeros((2 * ndiff_orders + 1))
 
     # loop over input angles
     for kk in range(len(t45_ins)):
@@ -728,11 +713,15 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
                             tx_ins[kk], ty_ins[kk], txs_out[kk], tys_out[kk], is_coherent=True)
 
             # get diffraction orders. Orders we want are along the antidiagonal
-            diff_tx_out, diff_ty_out, diff_nx, diff_ny = \
-                solve_diffraction_condition(tx_ins[kk], ty_ins[kk], dx, dy, wavelengths[ii], ndiff_orders)
-            tp, tm = angle2pm(diff_tx_out, diff_ty_out)
-            diff_t45_out[kk, ii] = np.diag(np.rot90(tm))
-            diff_n = diff_nx
+            # diff_tx_out, diff_ty_out, diff_nx, diff_ny = \
+            #     solve_diffraction_output(tx_ins[kk], ty_ins[kk], dx, dy, wavelengths[ii], ndiff_orders)
+            diff_tx_out = np.zeros(len(nxs))
+            diff_ty_out = np.zeros(len(nxs))
+            for aa in range(len(nxs)):
+                diff_tx_out[aa], diff_ty_out[aa] = solve_diffraction_output(tx_ins[kk], ty_ins[kk], dx, dy,
+                                                                            wavelengths[ii], (nxs[aa], nys[aa]))
+            # convert back to 1D angle
+            _, diff_t45_out[kk, ii] = angle2pm(diff_tx_out, diff_ty_out)
 
         # intensity = np.abs(efields[kk])**2
         # sinc_int_on = np.abs(sinc_efield_on[kk])**2
@@ -745,7 +734,7 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
             't45_ins': t45_ins, 'tx_ins': tx_ins, 'ty_ins': ty_ins,
             't45s_blaze_on': t45s_blaze_on, 't45s_blaze_off': t45s_blaze_off,
             't45s_out': t45s_out, 'txs_out': txs_out, 'tys_out': tys_out,
-            'diff_t45_out': diff_t45_out, 'diff_n': diff_n,
+            'diff_t45_out': diff_t45_out, 'diff_nxs': nxs, 'diff_nys': nys,
             'efields': efields, 'sinc_efield_on': sinc_efield_on,
             'sinc_efield_off': sinc_efield_off, 'diffraction_efield': diffraction_efield}
 
@@ -796,7 +785,7 @@ def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_s
     sinc_efield_off = data['sinc_efield_off']
     diffraction_efield = data['diffraction_efield']
     diff_t45_out = data['diff_t45_out']
-    diff_n = data['diff_n']
+    diff_n = data['diff_nxs']
     iz = int((len(diff_n) - 1) / 2)
 
     # get colors if not provided
@@ -815,12 +804,10 @@ def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_s
 
     for kk in range(len(t45_ins)):
         figh = plt.figure(figsize=figsize)
-
-        nrows = 2
-        ncols = 2
+        grid = plt.GridSpec(2, 2, hspace=0.5)
 
         # title
-        param_str = 'spacing = %0.2fum, w=%0.2fum \ntheta in = (%0.2f, %0.2f)deg = %0.2f deg (x-y) ' \
+        param_str = 'spacing = %0.2fum, w=%0.2fum, theta in = (%0.2f, %0.2f)deg = %0.2f deg (x-y) ' \
                     'gamma (on,off)=(%.1f, %.1f) deg\n theta blaze (on,off)=(%.2f, %.2f) deg in x-y dir' % \
                     (dx * 1e6, wx * 1e6,
                      tx_ins[kk] * 180 / np.pi, ty_ins[kk] * 180 / np.pi, t45_ins[kk] * 180 / np.pi,
@@ -835,7 +822,7 @@ def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_s
         # ######################################
         # plot diffracted output field
         # ######################################
-        ax = plt.subplot(nrows, ncols, 1)
+        ax = plt.subplot(grid[0, 0])
         phs = []
 
         for ii in range(n_wavelens):
@@ -868,12 +855,12 @@ def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_s
         plt.xlim([t45s_blaze_on[kk] * 180 / np.pi - 7.5, t45s_blaze_on[kk] * 180 / np.pi + 7.5])
         plt.xlabel('theta 45 (deg)')
         plt.ylabel('intensity (arb)')
-        plt.title('diffraction pattern along theta_x = -theta_y')
+        plt.title('diffraction pattern')
 
         # ###########################
         # plot sinc functions and wider angular range
         # ###########################
-        ax = plt.subplot(nrows, ncols, 2)
+        ax = plt.subplot(grid[0, 1])
 
         phs = []
         for ii in range(n_wavelens):
@@ -901,10 +888,10 @@ def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_s
         plt.legend(phs, leg)
         plt.xlabel('theta 45 (deg)')
         plt.ylabel('intensity (arb)')
-        plt.title('sinc envelopes along theta_x = -theta_y')
+        plt.title('sinc envelopes')
 
         # show pattern
-        plt.subplot(nrows, ncols, 3)
+        plt.subplot(grid[1, 0])
         plt.imshow(pattern)
 
         plt.title('DMD pattern')
@@ -969,8 +956,8 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
     tm_blaze_off = np.zeros(tptp_ins.shape)
     for ii in range(tptp_ins.size):
         ind = np.unravel_index(ii, tptp_ins.shape)
-        tp_blaze_on[ind], tm_blaze_on[ind] = solve_blaze_condition(tptp_ins[ind], tmtm_ins[ind], gamma_on)
-        tp_blaze_off[ind], tm_blaze_off[ind] = solve_blaze_condition(tptp_ins[ind], tmtm_ins[ind], gamma_off)
+        tp_blaze_on[ind], tm_blaze_on[ind] = solve_blaze(tptp_ins[ind], tmtm_ins[ind], gamma_on)
+        tp_blaze_off[ind], tm_blaze_off[ind] = solve_blaze(tptp_ins[ind], tmtm_ins[ind], gamma_off)
     tx_blaze_on, ty_blaze_on = angle2xy(tp_blaze_on, tm_blaze_on)
     tx_blaze_off, ty_blaze_off = angle2xy(tp_blaze_off, tm_blaze_off)
 
@@ -985,15 +972,22 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
     ndiff_orders = 7
     diff_tx_out = np.zeros((n_wavelens, len(ty_in), len(tx_in), 2*ndiff_orders + 1, 2*ndiff_orders + 1))
     diff_ty_out = np.zeros((n_wavelens, len(ty_in), len(tx_in), 2*ndiff_orders + 1, 2*ndiff_orders + 1))
-    diff_nx = np.zeros((2*ndiff_orders + 1, 2*ndiff_orders + 1))
-    diff_ny = np.zeros((2*ndiff_orders + 1, 2*ndiff_orders + 1))
+    # diff_nx = np.zeros((2*ndiff_orders + 1, 2*ndiff_orders + 1))
+    # diff_ny = np.zeros((2*ndiff_orders + 1, 2*ndiff_orders + 1))
+    diff_nx, diff_ny = np.meshgrid(range(-ndiff_orders, ndiff_orders + 1), range(-ndiff_orders, ndiff_orders + 1))
 
     for ii in range(len(ty_in)):
         for jj in range(len(tx_in)):
             for kk in range(n_wavelens):
                 # predicted diffraction orders
-                diff_tx_out[kk, ii, jj], diff_ty_out[kk, ii, jj], diff_nx, diff_ny = \
-                    solve_diffraction_condition(tx_in[jj], ty_in[ii], dx, dy, wavelengths[kk], ndiff_orders)
+                # diff_tx_out[kk, ii, jj], diff_ty_out[kk, ii, jj], diff_nx, diff_ny = \
+                #     solve_diffraction_output(tx_in[jj], ty_in[ii], dx, dy, wavelengths[kk], ndiff_orders)
+                for aa in range(diff_nx.shape[0]):
+                    for bb in range(diff_nx.shape[1]):
+                        diff_tx_out[kk, ii, jj, aa, bb], diff_ty_out[kk, ii, jj, aa, bb] = \
+                            solve_diffraction_output(tx_in[jj], ty_in[jj], dx, dy, wavelengths[kk],
+                                                     order=(diff_nx[aa, bb], diff_ny[aa, bb]))
+
 
                 # get output angles
                 tx_out[ii, jj], ty_out[ii, jj] = np.meshgrid(tx_blaze_on[ii, jj] + tout_offsets,
@@ -1046,7 +1040,7 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
     :return:
     """
 
-    if not os.path.exists(save_dir):
+    if saving and not os.path.exists(save_dir):
         os.mkdir(save_dir)
 
     # physical parameters
@@ -1254,6 +1248,7 @@ def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins):
 
     n_wavelens = len(wavelengths)
     max_orders = 15
+    nxs, nys = np.meshgrid(range(-max_orders, max_orders + 1), range(-max_orders, max_orders + 1))
     nangles = 60
 
     txtx_in, tyty_in = np.meshgrid(tx_ins, ty_ins)
@@ -1271,11 +1266,19 @@ def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins):
     ty_out = np.zeros(tyty_in.shape)
     for ii in range(txtx_in.size):
         ind = np.unravel_index(ii, txtx_in.shape)
-        tp_outs[ind], tm_outs[ind] = solve_blaze_condition(tp_in[ind], tm_in[ind], gamma)
+        tp_outs[ind], tm_outs[ind] = solve_blaze(tp_in[ind], tm_in[ind], gamma)
         tx_out[ind], ty_out[ind] = angle2xy(tp_outs[ind], tm_outs[ind])
         for jj in range(n_wavelens):
-            tx_out_temp, ty_out_temp, nxs, nys = solve_diffraction_condition(txtx_in[ind], tyty_in[ind], d, d,
-                                                                             wavelengths[jj], max_orders)
+            # tx_out_temp, ty_out_temp, nxs, nys = solve_diffraction_output(txtx_in[ind], tyty_in[ind], d, d,
+            #                                                               wavelengths[jj], max_orders)
+            tx_out_temp = np.zeros(nxs.size)
+            ty_out_temp = np.zeros(nys.size)
+            for aa in range(nxs.size[0]):
+                for bb in range(nys.size[1]):
+                    tx_out_temp[aa, bb], ty_out_temp[aa, bb] = solve_diffraction_output(txtx_in[ind], tyty_in[ind],
+                                                                                        dx, dy, wavelengths[jj],
+                                                                                        order=(nxs[aa, bb], nys[aa, bb]))
+
 
             tx_out_diff[jj, ind[0], ind[1]] = tx_out_temp
             ty_out_diff[jj, ind[0], ind[1]] = ty_out_temp
@@ -1399,9 +1402,10 @@ if __name__ == "__main__":
     #tx_ins = np.array([30, 40]) * np.pi/180
     # tx_ins = np.array([74]) * np.pi/180
     # ty_ins = np.array([70]) * np.pi/180
-    tx_ins = np.array([74]) * np.pi / 180
-    ty_ins = np.array([70]) * np.pi/180
+    tx_ins = np.array([35]) * np.pi / 180
+    ty_ins = np.array([30]) * np.pi/180
     _, t45_ins = angle2pm(tx_ins, ty_ins)
+    # t45_ins = 45 * np.pi/180
 
     # pixel spacing (DMD pitch)
     dx = 7.56e-6 # meters
