@@ -606,6 +606,66 @@ def solve_combined_condition(d, gamma, wavelength, order):
 
     return a_fn, b_fn, a1_bounds
 
+def solve_combined_onoff(d, gamma_on, wavelength_on, n_on, wavelength_off, n_off):
+    """
+    Solve overlap for two wavelengths, one incident on the ``on'' mirrors and the other on the
+     ``off'' mirrors
+
+    :param d: mirror pitch
+    :param gamma_on: mirror angle in ON state in radians. Assume that gamma_off = -gamma_on
+    :param wavelength_on: wavelength of light incident on ON mirrors. Must be in same units as d
+    :param n_on: diffraction order for ON mirrors
+    :param wavelength_off: wavelength of light incident on OFF mirrors. Must be in same units as d
+    :param n_off: diffraction order for OFF mirrors
+
+    :return b_vecs: output unit vectors. Two solution vectors, size 2 x 3
+    :return a_vecs_on: input unit vectors for ON mirrors
+    :return b_vecs_on: input unit vectors for OFF mirrors
+    """
+
+    b3_on = -1 / np.sqrt(2) / np.sin(gamma_on) * wavelength_on / d * n_on
+    b3_off = 1 / np.sqrt(2) / np.sin(gamma_on) * wavelength_off / d * n_off
+
+    # equate b_on and b_off, and solve for bz, bx, by
+    # (1) b3_on + b3_off = 2 * cos(gamma) * bz
+    # (2) b3_on - b3_off = np.sqrt(2) * np.sin(gamma) * (bx - by)
+    bz = 0.5 / np.cos(gamma_on) * (b3_on + b3_off)
+
+    # quadratic equation for bx from (2)
+    c1 = 1
+    c2 = -(b3_on - b3_off) / np.sqrt(2) / np.sin(gamma_on)
+    c3 = 0.5 * (bz**2 + (b3_on - b3_off)**2 / 2 / np.sin(gamma_on)**2 - 1)
+
+    bxs = np.array([0.5 * (-c2 + np.sqrt(c2**2 - 4 * c3)) / c1,
+                    0.5 * (-c2 - np.sqrt(c2**2 - 4 * c3)) / c1])
+
+    # apply eq. (2) again to get by (since lost information when we squared it to get quadratic eqn)
+    bys = bxs - (b3_on - b3_off) / np.sqrt(2) / np.sin(gamma_on)
+
+    # assemble b-vector
+    b_vecs = np.array([[bxs[0], bys[0], bz], [bxs[1], bys[1], bz]])
+
+    for ii in range(b_vecs.shape[0]):
+        if np.any(np.isnan(b_vecs[ii])):
+            b_vecs[ii, :] = np.nan
+
+    # get input unit vectors
+    a_vecs_on = np.zeros(b_vecs.shape)
+    a_vecs_off = np.zeros(b_vecs.shape)
+    for ii in range(b_vecs.shape[0]):
+        b1_on, b2_on, b3_on = xyz2mirror(b_vecs[ii, 0], b_vecs[ii, 1], b_vecs[ii, 2], gamma_on)
+        a1_on = b1_on
+        a2_on = b2_on
+        a3_on = -b3_on
+        a_vecs_on[ii] = mirror2xyz(a1_on, a2_on, a3_on, gamma_on)
+
+        b1_off, b2_off, b3_off = xyz2mirror(b_vecs[ii, 0], b_vecs[ii, 1], b_vecs[ii, 2], -gamma_on)
+        a1_off = b1_off
+        a2_off = b2_off
+        a3_off = -b3_off
+        a_vecs_off[ii] = mirror2xyz(a1_off, a2_off, a3_off, -gamma_on)
+
+    return b_vecs, a_vecs_on, a_vecs_off
 
 # 1D simulation in x-y plane (i.e. theta_x = -theta_y)
 def plot_graphical_soln1d(d, gamma, wavelengths):
