@@ -1004,7 +1004,7 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
         # plot this one centered so x and y can appear on same plot
         ax4 = plt.subplot(nrows, ncols, 3 * ncols + column_ind + 1)
         for cx, cut in zip(cx3d, fit_cut):
-            plt.plot(x - cx, cut[ii, :])
+            plt.plot(x - cx, cut[ii, :], '.-')
 
         if imgs_unc is not None:
             yerr_xx = imgs_unc[ii, cy_pix3d, :]
@@ -1192,6 +1192,11 @@ def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
                          np.sum(not_nan, axis=0))
         psf_sdm = psf_sd / np.sqrt(np.sum(not_nan, axis=0))
 
+    # the above doesn't do a good enough job of normalizing PSF
+    max_val = np.nanmax(psf_mean[psf_mean.shape[0]//2])
+    psf_mean = psf_mean / max_val
+    psf_sdm = psf_sdm / max_val
+
     return psf_mean, psf_sdm
 
 def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_na=None,
@@ -1264,11 +1269,15 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
         if expected_na is not None:
             pfit_exp = copy.deepcopy(pfit_v2)
             pfit_exp[4] = expected_na
+            # fixed_ps = [False, False, False, True, True, False]
+            fixed_ps = [True, False, False, True, True, False]
             result_exp_na, ffn_exp_na = fit_pixelated_psfmodel(psf2d[None, :, :], dx, dz, wavelength, ni,
                                                                model='vectorial', init_params=pfit_exp,
-                                                               fixed_params=[False, False, False, True, True, False],
+                                                               fixed_params=fixed_ps,
                                                                bounds=bounds)
             vexp = ffn_exp_na(np.array([0]), x.size, dx)[0]
+
+
 
         # Fit and plot 3D vectorial PSF model
         result_v, fn_v = fit_pixelated_psfmodel(psf, dx, dz, wavelength, ni, model='vectorial')
