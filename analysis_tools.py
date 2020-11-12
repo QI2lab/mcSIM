@@ -1678,6 +1678,9 @@ def fit_ngauss(img, ngaussians, init_params, fixed_params=None, sd=None, xx=None
 
 def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=None, model_jacobian=None, **kwargs):
     """
+    # todo: to be fully general, maybe should get rid of the img argument and only take model_fn. Then this function
+    # todo: can be used as a wrapper for least_squares, but adding the ability to fix parameters
+    # todo: added function below fit_least_squares(). This function should now call that one
     Fit 2D model function
     :param np.array img: nd array
     :param model_fn: function f(p)
@@ -1700,7 +1703,7 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
     if sd is None or np.all(np.isnan(sd)) or np.all(sd == 0):
         sd = np.ones(img.shape)
 
-    # handle undertainties that will cause fitting to fail
+    # handle uncertainties that will cause fitting to fail
     if np.any(sd == 0) or np.any(np.isnan(sd)):
         sd[sd == 0] = np.nanmean(sd[sd != 0])
         sd[np.isnan(sd)] = np.nanmean(sd[sd != 0])
@@ -1758,6 +1761,105 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
     # calculate chi squared
     nfree_params = np.sum(np.logical_not(fixed_params))
     red_chi_sq = np.sum(np.square(err_fn(pfit))) / (img[to_use].size - nfree_params)
+
+    # calculate covariances
+    try:
+        jacobian = fit_info['jac']
+        cov_free = red_chi_sq * np.linalg.inv(jacobian.transpose().dot(jacobian))
+    except np.linalg.LinAlgError:
+        cov_free = np.nan * np.zeros((jacobian.shape[1], jacobian.shape[1]))
+
+    cov = np.nan * np.zeros((len(init_params), len(init_params)))
+    ii_free = 0
+    for ii, fpi in enumerate(fixed_params):
+        jj_free = 0
+        for jj, fpj in enumerate(fixed_params):
+            if not fpi and not fpj:
+                cov[ii, jj] = cov_free[ii_free, jj_free]
+                jj_free += 1
+                if jj_free == nfree_params:
+                    ii_free += 1
+
+    result = {'fit_params': pfit, 'chi_squared': red_chi_sq, 'covariance': cov,
+              'init_params': init_params, 'fixed_params': fixed_params, 'bounds': bounds,
+              'cost': fit_info['cost'], 'optimality': fit_info['optimality'],
+              'nfev': fit_info['nfev'], 'njev': fit_info['njev'], 'status': fit_info['status'],
+              'success': fit_info['success'], 'message': fit_info['message']}
+
+    return result
+
+def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, model_jacobian=None, **kwargs):
+    """
+    Non-linear least squares fit, but with ability to fix parameters.
+
+    :param model_fn: function f(p)
+    :param list[float] init_params: p = [p1, p2, ..., pn]
+    :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None, no parameters will be fixed.
+    :param tuple[tuple[float]] bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
+    :param model_jacobian: Jacobian of the model function as a list, [df/dp[0], df/dp[1], ...]. If None, no jacobian used.
+    :param kwargs: additional key word arguments will be passed through to scipy.optimize.least_squares
+    :return:
+    """
+
+    # get default fixed parameters
+    if fixed_params is None:
+        fixed_params = [False for _ in init_params]
+
+    # default bounds
+    if bounds is None:
+        bounds = (tuple([-np.inf] * len(init_params)), tuple([np.inf] * len(init_params)))
+
+    # init_params = copy.deepcopy(init_params)
+    init_params = np.array(init_params, copy=True)
+    # ensure initial parameters within bounds, but don't touch if parameter is fixed
+    for ii in range(len(init_params)):
+        if (init_params[ii] < bounds[0][ii] or init_params[ii] > bounds[1][ii]) and not fixed_params[ii]:
+            if bounds[0][ii] == -np.inf:
+                init_params[ii] = bounds[0][ii] + 1
+            elif bounds[1][ii] == np.inf:
+                init_params[ii] = bounds[1][ii] - 1
+            else:
+                init_params[ii] = 0.5 * (bounds[0][ii] + bounds[1][ii])
+
+    if np.any(np.isnan(init_params)):
+        raise Exception("init_params cannot include nans")
+
+    if np.any(np.isnan(bounds)):
+        raise Exception("bounds cannot include nans")
+
+    # if some parameters are fixed, we need to hide them from the fit function to produce correct covariance, etc.
+    # awful list comprehension. The idea is this: map the "reduced" (i.e. not fixed) parameters onto the full parameter list.
+    # do this by looking at each parameter. If it is supposed to be "fixed" substitute the initial parameter. If not,
+    # then get the next value from pfree. We find the right index of pfree by summing the number of previously unfixed parameters
+    free_inds = [int(np.sum(np.logical_not(fixed_params[:ii]))) for ii in range(len(fixed_params))]
+
+    def pfree2pfull(pfree):
+        return np.array([pfree[free_inds[ii]] if not fp else init_params[ii] for ii, fp in enumerate(fixed_params)])
+
+    # map full parameters to reduced set
+    def pfull2pfree(pfull):
+        return np.array([p for p, fp in zip(pfull, fixed_params) if not fp])
+
+    # function to minimize the sum of squares of, now as a function of only the free parameters
+    def err_fn_pfree(pfree):
+        return model_fn(pfree2pfull(pfree))
+
+    if model_jacobian is not None:
+        def jac_fn_free(pfree): return pfull2pfree(model_jacobian(pfree2pfull(pfree))).transpose()
+    init_params_free = pfull2pfree(init_params)
+    bounds_free = (tuple(pfull2pfree(bounds[0])), tuple(pfull2pfree(bounds[1])))
+
+    # non-linear least squares fit
+    if model_jacobian is None:
+        fit_info = scipy.optimize.least_squares(err_fn_pfree, init_params_free, bounds=bounds_free, **kwargs)
+    else:
+        fit_info = scipy.optimize.least_squares(err_fn_pfree, init_params_free, bounds=bounds_free,
+                                                jac=jac_fn_free, x_scale='jac', **kwargs)
+    pfit = pfree2pfull(fit_info['x'])
+
+    # calculate chi squared
+    nfree_params = np.sum(np.logical_not(fixed_params))
+    red_chi_sq = np.sum(np.square(model_fn(pfit))) / (model_fn(init_params).size - nfree_params)
 
     # calculate covariances
     try:
