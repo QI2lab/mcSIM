@@ -470,8 +470,8 @@ def fit_affine_xform_points(from_pts, to_pts):
 
     :param list[list[float]] from_pts: list of lists [[x1, y1, ...], [x2, y2, ...]] or array, where each column represents roi_size point
     :param to_pts:
-    :return soln:
 
+    :return soln:
     :return np.array affine_mat:
     """
 
