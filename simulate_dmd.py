@@ -137,18 +137,19 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
 
     return efields, sinc_efield_on, sinc_efield_off, diffraction_efield
 
-def blaze_envelope(wavelength, gamma, wx, wy, tx_in, ty_in, tx_out, ty_out):
+def blaze_envelope(wavelength, gamma, wx, wy, tx_in, ty_in, tx_out, ty_out, n_vec=(1/np.sqrt(2), 1/np.sqrt(2), 0)):
     """
     Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
 
     :param wavelength: wavelength of light. Units are arbitrary, but must be the same for wavelength, wx, and wy
     :param gamma: in radians
-    :param wx: mirror width in x-direction
-    :param wy: mirror width in y-direction
+    :param wx: mirror width in x-direction. Same units as wavelength.
+    :param wy: mirror width in y-direction. Same units as wavelength.
     :param tx_in: arbitrary shape
     :param ty_in: same shape as tx_in
     :param tx_out: same shape as tx_in
     :param ty_out: same shape as tx_in
+    :param n_vec: unit vector about which the mirror swivels. Typically use (1, 1, 0) / np.sqrt(2)
 
     :return envelope: same shape as tx_in
     """
@@ -156,11 +157,11 @@ def blaze_envelope(wavelength, gamma, wx, wy, tx_in, ty_in, tx_out, ty_out):
     k = 2*np.pi / wavelength
     amb = get_unit_vector(tx_in, ty_in, 'in') - get_unit_vector(tx_out, ty_out, 'out')
 
-    envelope = sinc_fn(0.5 * k * wx * blaze_condition_fn(gamma, amb, 'plus')) \
-             * sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, amb, 'minus'))
+    envelope = sinc_fn(0.5 * k * wx * blaze_condition_fn(gamma, amb, 'plus', n_vec=n_vec)) \
+             * sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, amb, 'minus', n_vec=n_vec))
     return envelope
 
-def blaze_condition_fn(gamma, amb, mode='plus'):
+def blaze_condition_fn(gamma, amb, mode='plus', n_vec=(1/np.sqrt(2), 1/np.sqrt(2), 0)):
     """
     Return the dimensionsless part of the sinc function argument which determines the Blaze condition, which we refer
     to as A_+ and A_-
@@ -173,16 +174,25 @@ def blaze_condition_fn(gamma, amb, mode='plus'):
     :param amb: incoming unit vector - outgoing unit vector, [vx, vy, vz]. Will also accept a matrix of shape
     n0 x n1 x ... x 3
     :param mode: 'plus' or 'minus'
+    :param n_vec: unit vector about which the mirror swivels. Typically use (1, 1, 0) / np.sqrt(2)
+
     :return A:
     """
+    nx, ny, nz = n_vec
     if mode == 'plus':
-        A = 0.5 * (1 + np.cos(gamma)) * amb[..., 0] + \
-            0.5 * (1 - np.cos(gamma)) * amb[..., 1] - \
-            1 / np.sqrt(2) * np.sin(gamma) * amb[..., 2]
+        # Aold = 0.5 * (1 + np.cos(gamma)) * amb[..., 0] + \
+        #     0.5 * (1 - np.cos(gamma)) * amb[..., 1] - \
+        #     1 / np.sqrt(2) * np.sin(gamma) * amb[..., 2]
+        A = (nx ** 2 * (1 - np.cos(gamma)) + np.cos(gamma)) * amb[..., 0] + \
+            (nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma)) * amb[..., 1] + \
+            (nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma)) * amb[..., 2]
     elif mode == 'minus':
-        A = 0.5 * (1 - np.cos(gamma)) * amb[..., 0] + \
-            0.5 * (1 + np.cos(gamma)) * amb[..., 1] + \
-            1 / np.sqrt(2) * np.sin(gamma) * amb[..., 2]
+        # Aold = 0.5 * (1 - np.cos(gamma)) * amb[..., 0] + \
+        #     0.5 * (1 + np.cos(gamma)) * amb[..., 1] + \
+        #     1 / np.sqrt(2) * np.sin(gamma) * amb[..., 2]
+        A = (nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma)) * amb[..., 0] + \
+            (ny ** 2 * (1 - np.cos(gamma)) + np.cos(gamma)) * amb[..., 1] + \
+            (ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma)) * amb[..., 2]
     else:
         raise Exception("mode must be 'plus' or 'minus', but was '%s'" % mode)
     return A
@@ -200,6 +210,14 @@ def sinc_fn(x):
         y = np.asarray(np.sin(x) / x)
     y[x == 0] = 1
     return y
+
+#
+def get_rot_mat(n_vec, gamma):
+    nx, ny, nz = n_vec
+    mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma))- nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
+                    [nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma), ny**2 * (1 - np.cos(gamma)) + np.cos(gamma), ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma)],
+                    [nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma), ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma), nz**2 * (1 - np.cos(gamma)) + np.cos(gamma)]])
+    return mat
 
 # convert between xyz and 123 coords
 def xyz2mirror(vx, vy, vz, gamma):
@@ -698,6 +716,34 @@ def get_pupil_basis(b):
     # yb = yb / np.linalg.norm(yb)
 
     return xb, yb
+
+def frqs2pupil_xy(fx, fy, b, p, d, wavelength):
+    """
+    Convert from DMD pattern frequencies to (dimensionless) pupil coordinates
+    :param fx: 1/mirror
+    :param fy: 1/mirror
+    :param b: main diffraction order angle
+    :param p: unit vector pointing towards center of pupil
+    :param d: DMD pitch
+    :param wavelength: same units as DMD pitch
+    :return:
+    """
+    fx = np.atleast_1d(fx)
+    fy = np.atleast_1d(fy)
+
+    bf_xs, bf_ys, bf_zs = get_diffracted_output_uvect(b, fx, fy, wavelength, d)
+
+    # vector orthogonal to p
+    xp = np.array([p[2], 0, -p[0]]) / np.sqrt(p[0] ** 2 + p[2] ** 2)
+    yp = np.cross(p, xp)
+
+    # convert bfs to these coordinates
+    bf_xp = bf_xs * xp[0] + bf_ys * xp[1] + bf_zs * xp[2]
+    bf_yp = bf_xs * yp[0] + bf_ys * yp[1] + bf_zs * yp[2]
+    bf_p = bf_xs * p[0] + bf_ys * p[1] + bf_zs * p[2]
+
+    return bf_xp, bf_yp, bf_p
+
 
 def get_diffracted_output_uvect(bvec, fx, fy, wavelength, d):
     bfx = bvec[0] - wavelength / d * fx
