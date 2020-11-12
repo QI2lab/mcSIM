@@ -374,6 +374,26 @@ def get_unit_vector(tx, ty, mode='in'):
 
     return uvec
 
+def frq2uvector(a, wavelength, d, nx, ny, fx, fy):
+    """
+
+    :param a: input unit vector
+    :param wavelength:
+    :param d: mirror pitch, in same units as wavelength
+    :param nx: main x-diffraction order
+    :param ny: main y-diffraction order
+    :param fx: pattern x-frequency in 1/mirrors
+    :param fy: pattern y-frequency in 1/mirrors
+
+    :return bx:
+    :return by:
+    :return bz:
+    """
+    bx = a[..., 0] - wavelength / d * (nx + fx)
+    by = a[..., 1] - wavelength / d * (ny + fy)
+    bz = -np.sqrt(1 - bx**2 - by**2)
+    return bx, by, bz
+
 # todo: clean up these functions. probably several can combine
 # # utility functions for solving blaze + diffraction conditions
 def solve_max_diffraction_order(wavelength, d, gamma):
@@ -666,6 +686,26 @@ def solve_combined_onoff(d, gamma_on, wavelength_on, n_on, wavelength_off, n_off
         a_vecs_off[ii] = mirror2xyz(a1_off, a2_off, a3_off, -gamma_on)
 
     return b_vecs, a_vecs_on, a_vecs_off
+
+# pupil mapping
+def get_pupil_basis(b):
+    xb = np.array([b[2], 0, -b[0]]) / np.sqrt(b[0]**2 + b[2]**2)
+    yb = np.cross(b, xb)
+    # xb = -np.array([1 - 0.5 * b[0]**2, -0.5 * b[0] * b[1], -0.5 * b[0] * (1/b[2] + b[2])])
+    # xb = xb / np.linalg.norm(xb)
+    #
+    # yb = -np.array([-0.5 * b[0] * b[1], 1 - 0.5 * b[1]**2, -0.5 * b[1] * (1/b[2] + b[2])])
+    # yb = yb / np.linalg.norm(yb)
+
+    return xb, yb
+
+def get_diffracted_output_uvect(bvec, fx, fy, wavelength, d):
+    bfx = bvec[0] - wavelength / d * fx
+    bfy = bvec[1] - wavelength / d * fy
+    bfz = -np.sqrt(1 - bfx**2 - bfy**2)
+
+    return bfx, bfy, bfz
+
 
 # 1D simulation in x-y plane (i.e. theta_x = -theta_y)
 def plot_graphical_soln1d(d, gamma, wavelengths):
