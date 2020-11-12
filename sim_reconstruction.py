@@ -2009,8 +2009,13 @@ def find_images_to_combine(metadata_frame, root_path=""):
     return paths, slices, metadata
 
 # estimate frequency and phase of modulation pattern
-def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_pix_size=5, use_jacobian=False):
+def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_pix_size=5, use_jacobian=False,
+                       max_frq_shift=None, force_start_from_guess=False, keep_guess_if_better=True):
     """
+    todo: re the options argument only dx and the combination wavelength/na only used to calculate fmax
+    todo: make dx and fmax arguments instead
+    todo: drop roi_pix_size argument in favor of max_frq_shift
+
     Find SIM frequency from image by maximizing
     C(f) =  \sum_k img_ft(k) x img_ft*(k+f) = F(img_ft) * F(img_ft*) = F(|img_ft|^2).
 
@@ -2027,7 +2032,6 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     :param img1: 2D real NumPy array
     :param img2: 2D real NumPy array to be cross correlated with img1
     :param options: dictionary of options {'pixel_size', 'wavelength', 'na'}.
-    todo: wavelength/na only used to calculate fmax, so lets make fmax the argument instead
     :param exclude_res: frequencies less than this fraction of fmax are excluded from peak finding. Not
     :param frq_guess: frequency guess [fx, fy]. Can be None.
     :param roi_pix_size: half-size of the region of interest around frq_guess used to estimate the peak location. This
@@ -2060,22 +2064,26 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     fxfx, fyfy = np.meshgrid(fxs, fys)
     ff = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
+    if max_frq_shift is None:
+        max_frq_shift = dfx * roi_pix_size
+
     # mask
+    mask = np.ones(ft1.shape, dtype=np.bool)
     if frq_guess is None:
-        mask = np.ones(ft1.shape)
         mask[ff > fmax] = 0
         mask[ff < exclude_res * fmax] = 0
     else:
         # account for frq_guess
-        pix_x_guess = np.argmin(np.abs(fxs - frq_guess[0]))
-        pix_y_guess = np.argmin(np.abs(fys - frq_guess[1]))
-        mask = np.zeros(ft1.shape)
-        mask[pix_y_guess - roi_pix_size : pix_y_guess + roi_pix_size + 1,
-             pix_x_guess - roi_pix_size : pix_x_guess + roi_pix_size + 1] = 1
+        f_dist_guess = np.sqrt( (fxfx - frq_guess[0])**2 + (fyfy - frq_guess[1])**2)
+        mask[f_dist_guess > max_frq_shift] = 0
+
+        # pix_x_guess = np.argmin(np.abs(fxs - frq_guess[0]))
+        # pix_y_guess = np.argmin(np.abs(fys - frq_guess[1]))
+        # mask = np.zeros(ft1.shape, dtype=np.bool)
+        # mask[pix_y_guess - roi_pix_size : pix_y_guess + roi_pix_size + 1,
+        #      pix_x_guess - roi_pix_size : pix_x_guess + roi_pix_size + 1] = 1
 
     # cross correlation of Fourier transforms
-    # cc = np.abs(ft1 * ft2.conj())
-    #cc = np.abs(scipy.signal.fftconvolve(ft1, ft2.conj(), mode='same'))
     # WARNING: correlate2d uses a different convention for the frequencies of the output, which will not agree with the fft convention
     # take conjugates so this will give \sum ft1 * ft2.conj()
     # scipy.signal.correlate(g1, g2)(fo) seems to compute \sum_f g1^*(f) * g2(f - fo), but I want g1^*(f)*g2(f+fo)
@@ -2084,19 +2092,29 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     # get initial frq_guess by looking at cc at discrete frequency set and finding max
     max_ind = (cc * mask).argmax()
     subscript = np.unravel_index(max_ind, cc.shape)
-    # since img is real, also peak at [-fx, -fy]. Find those subscripts
-    # todo: could exactly calculate where these will be, but this is good enough for now.
-    a = np.argmin(np.abs(fxfx[subscript] + fxfx[0, :]))
-    b = np.argmin(np.abs(fyfy[subscript] + fyfy[:, 0]))
-    reflected_subscript = (b, a)
 
     if frq_guess is None:
-        subscript_list = [subscript, reflected_subscript]
-        # always return frequency with positive fy. If fy=0, return with positive fx.
+        # if not initial frq_guess, return frequency with positive fy. If fy=0, return with positive fx.
         # i.e. want to sort so that larger y-subscript is returned first
+        # since img is real, also peak at [-fx, -fy]. Find those subscripts
+        # todo: could exactly calculate where these will be, but this is good enough for now.
+        a = np.argmin(np.abs(fxfx[subscript] + fxfx[0, :]))
+        b = np.argmin(np.abs(fyfy[subscript] + fyfy[:, 0]))
+        reflected_subscript = (b, a)
+
+        subscript_list = [subscript, reflected_subscript]
+
         m = np.max(ft1.shape)
         subscript_list.sort(key=lambda x: x[0] * m + x[1], reverse=True)
         subscript, reflected_subscript = subscript_list
+
+        init_params = [fxfx[subscript], fyfy[subscript]]
+    else:
+        if force_start_from_guess:
+            init_params = frq_guess
+        else:
+            init_params = [fxfx[subscript], fyfy[subscript]]
+
 
     # do fitting
     img2 = fft.fftshift(fft.ifft2(fft.ifftshift(ft2)))
@@ -2112,7 +2130,7 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     # these work, but the cost of evaluating this is so large that it slows down the fitting. This is not surprising,
     # as evaluating the jacobian is equivalent to ~4 function evaluations. So even though having the jacobian reduces
     # the number of function evaluations by a factor of ~3, this increase wins.
-    # todo: need to check these now that added second fn to correlate
+    # todo: need to check these now that added second fn to correlator
     dfx_fft_shifted = lambda f: fft.fftshift(fft.fft2(-1j * 2 * np.pi * xx * np.exp(-1j * 2 * np.pi * (f[0] * xx + f[1] * yy)) * img2))
     dfy_fft_shifted = lambda f: fft.fftshift(fft.fft2(-1j * 2 * np.pi * yy * np.exp(-1j * 2 * np.pi * (f[0] * xx + f[1] * yy)) * img2))
     dfx_cc = lambda f: np.sum(ft2 * dfx_fft_shifted(f).conj())
@@ -2121,10 +2139,9 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     dfy_min_fn = lambda f: -2 * (cc_fn(f) * dfy_cc(f).conj()).real / fft_norm
     jac = lambda f: np.array([dfx_min_fn(f), dfy_min_fn(f)])
 
-    init_params = [fxfx[subscript], fyfy[subscript]]
     # enforce frequency fit in same box as guess
-    lbs = (init_params[0] - dfx * roi_pix_size, init_params[1] - dfy * roi_pix_size)
-    ubs = (init_params[0] + dfx * roi_pix_size, init_params[1] + dfy * roi_pix_size)
+    lbs = (init_params[0] - max_frq_shift, init_params[1] - max_frq_shift)
+    ubs = (init_params[0] + max_frq_shift, init_params[1] + max_frq_shift)
     bounds = ((lbs[0], ubs[0]), (lbs[1], ubs[1]))
 
     if use_jacobian:
@@ -2133,6 +2150,10 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
         result = scipy.optimize.minimize(min_fn, init_params, bounds=bounds)
 
     fit_frqs = result.x
+
+    # ensure we never get a worse point than our initial guess
+    if keep_guess_if_better and min_fn(init_params) < min_fn(fit_frqs):
+        fit_frqs = init_params
 
     return fit_frqs, mask
 
@@ -3011,16 +3032,16 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     gspec = matplotlib.gridspec.GridSpec(ncols=14, nrows=2, hspace=0.3, figure=figh)
 
     # suptitle
-    str = '      fit: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
-          (period * 1e3, angle * 180 / np.pi, angle, fx_sim, fy_sim, np.abs(peak_cc), np.angle(peak_cc) * 180/np.pi)
+    str = '      fit: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
+          (period * 1e3, 1/period, angle * 180 / np.pi, angle, fx_sim, fy_sim, np.abs(peak_cc), np.angle(peak_cc) * 180/np.pi)
     if frqs_guess is not None:
         fx_g, fy_g = frqs_guess
         period_g = 1 / np.sqrt(fx_g ** 2 + fy_g ** 2)
         angle_g = np.angle(fx_g + 1j * fy_g)
         peak_cc_g =  tools.get_peak_value(cc, fxs, fys, frqs_guess, peak_pixels)
 
-        str += '\nguess: period %0.3fnm at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
-               (period_g * 1e3, angle_g * 180 / np.pi, angle_g, fx_g, fy_g, np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
+        str += '\nguess: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
+               (period_g * 1e3, 1/period_g, angle_g * 180 / np.pi, angle_g, fx_g, fy_g, np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
     plt.suptitle(str)
 
     # #######################################
