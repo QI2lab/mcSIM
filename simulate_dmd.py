@@ -717,37 +717,40 @@ def get_pupil_basis(b):
 
     return xb, yb
 
-def frqs2pupil_xy(fx, fy, b, p, d, wavelength):
+def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
     """
     Convert from DMD pattern frequencies to (dimensionless) pupil coordinates
     :param fx: 1/mirror
     :param fy: 1/mirror
-    :param b: main diffraction order angle
-    :param p: unit vector pointing towards center of pupil
-    :param d: DMD pitch
+    :param bvec: main diffraction order angle
+    :param pvec: unit vector pointing towards center of pupil
+    :param dx: DMD pitch
+    :param dy: DMD pitch
     :param wavelength: same units as DMD pitch
     :return:
     """
     fx = np.atleast_1d(fx)
     fy = np.atleast_1d(fy)
 
-    bf_xs, bf_ys, bf_zs = get_diffracted_output_uvect(b, fx, fy, wavelength, d)
+    bf_xs, bf_ys, bf_zs = get_diffracted_output_uvect(bvec, fx, fy, wavelength, dx, dy)
 
     # vector orthogonal to p
-    xp = np.array([p[2], 0, -p[0]]) / np.sqrt(p[0] ** 2 + p[2] ** 2)
-    yp = np.cross(p, xp)
+    xp = np.array([pvec[2], 0, -pvec[0]]) / np.sqrt(pvec[0] ** 2 + pvec[2] ** 2)
+    yp = np.cross(pvec, xp)
 
     # convert bfs to these coordinates
     bf_xp = bf_xs * xp[0] + bf_ys * xp[1] + bf_zs * xp[2]
     bf_yp = bf_xs * yp[0] + bf_ys * yp[1] + bf_zs * yp[2]
-    bf_p = bf_xs * p[0] + bf_ys * p[1] + bf_zs * p[2]
+    bf_p = bf_xs * pvec[0] + bf_ys * pvec[1] + bf_zs * pvec[2]
 
     return bf_xp, bf_yp, bf_p
 
 
-def get_diffracted_output_uvect(bvec, fx, fy, wavelength, d):
-    bfx = bvec[0] - wavelength / d * fx
-    bfy = bvec[1] - wavelength / d * fy
+def get_diffracted_output_uvect(bvec, fx, fy, wavelength, dx, dy):
+    # bfx = bvec[0] - wavelength / dx * fx
+    # bfy = bvec[1] - wavelength / dy * fy
+    bfx = bvec[0] + wavelength / dx * fx
+    bfy = bvec[1] + wavelength / dy * fy
     bfz = -np.sqrt(1 - bfx**2 - bfy**2)
 
     return bfx, bfy, bfz
