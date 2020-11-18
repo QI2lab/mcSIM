@@ -180,16 +180,10 @@ def blaze_condition_fn(gamma, amb, mode='plus', n_vec=(1/np.sqrt(2), 1/np.sqrt(2
     """
     nx, ny, nz = n_vec
     if mode == 'plus':
-        # Aold = 0.5 * (1 + np.cos(gamma)) * amb[..., 0] + \
-        #     0.5 * (1 - np.cos(gamma)) * amb[..., 1] - \
-        #     1 / np.sqrt(2) * np.sin(gamma) * amb[..., 2]
         A = (nx ** 2 * (1 - np.cos(gamma)) + np.cos(gamma)) * amb[..., 0] + \
             (nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma)) * amb[..., 1] + \
             (nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma)) * amb[..., 2]
     elif mode == 'minus':
-        # Aold = 0.5 * (1 - np.cos(gamma)) * amb[..., 0] + \
-        #     0.5 * (1 + np.cos(gamma)) * amb[..., 1] + \
-        #     1 / np.sqrt(2) * np.sin(gamma) * amb[..., 2]
         A = (nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma)) * amb[..., 0] + \
             (ny ** 2 * (1 - np.cos(gamma)) + np.cos(gamma)) * amb[..., 1] + \
             (ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma)) * amb[..., 2]
