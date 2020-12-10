@@ -336,7 +336,11 @@ def get_all_fourier_thry(vas, vbs, nmax, nphases, phase_index, dmd_size):
     :param dmd_size:
     :param use_blaze_correction:
     :param dmd_params:
-    :return:
+
+    :return efield_theory:
+    :return ns:
+    :return ms:
+    :return frq_vects_dmd:
     """
     npatterns = len(vas)
 

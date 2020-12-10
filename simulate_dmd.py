@@ -551,7 +551,7 @@ def solve_diffraction_input(tx_out, ty_out, dx, dy, wavelength, order):
     :param dy:
     :param wavelength:
     :param order:
-    :return:
+    :return tx_in, ty_in:
     """
 
     bvec = get_unit_vector(np.atleast_1d(tx_out), np.atleast_1d(ty_out), "out")

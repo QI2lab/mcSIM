@@ -475,20 +475,25 @@ def export_camera_params(offsets, variances, gains, id="", save_dir=''):
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
 
+    # save to tiff file
+    if gains is not None:
+        im = Image.fromarray(gains)
+        im.save(os.path.join(save_dir, "%s_gain_map.tif" % id))
+
+    if offsets is not None:
+        im = Image.fromarray(offsets)
+        im.save(os.path.join(save_dir, "%s_offset_map.tif" % id))
+
+    if variances is not None:
+        im = Image.fromarray(variances)
+        im.save(os.path.join(save_dir, "%s_variance_map.tif" % id))
+
+    # pickle
     fname = os.path.join(save_dir, "%s_camera_parameters.pkl" % id)
     data = {'gains': gains, 'offsets': offsets, 'vars': variances}
     with open(fname, 'wb') as f:
         pickle.dump(data, f)
 
-    # also save to tiff file
-    im = Image.fromarray(gains)
-    im.save(os.path.join(save_dir, "%s_gain_map.tif" % id))
-
-    im = Image.fromarray(offsets)
-    im.save(os.path.join(save_dir, "%s_offset_map.tif" % id))
-
-    im = Image.fromarray(variances)
-    im.save(os.path.join(save_dir, "%s_variance_map.tif" % id))
 
 def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout_noise_sds,
                   pix_size, otf=None, na=1.3, wavelength=0.5, photon_shot_noise=True, bin_size=1):
