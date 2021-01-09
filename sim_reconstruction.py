@@ -484,10 +484,9 @@ class SimImageSet:
         # #############################################
         self.fx = tools.get_fft_frqs(self.nx, self.dx)
         self.fy = tools.get_fft_frqs(self.ny, self.dy)
-        self.fxfx, self.fyfy = np.meshgrid(self.fx, self.fy)
 
         if otf is None:
-            otf = psf.circ_aperture_otf(self.fxfx, self.fyfy, self.na, self.wavelength)
+            otf = psf.circ_aperture_otf(self.fx[None, :], self.fy[:, None], self.na, self.wavelength)
         self.otf = otf
 
         # #############################################
@@ -506,11 +505,8 @@ class SimImageSet:
             tstart = time.process_time()
 
             for ii in range(self.nangles):
-                for jj in range(self.nphases):
-                    if jj == 0:
-                        pass
-                    else:
-                        self.imgs[ii, jj] = match_histograms(self.imgs[ii, jj], self.imgs[ii, 0])
+                for jj in range(1, self.nphases):
+                    self.imgs[ii, jj] = match_histograms(self.imgs[ii, jj], self.imgs[ii, 0])
 
             tend = time.process_time()
             self.print_tee("Normalizing histograms took %0.2fs" % (tend - tstart), self.log_file)
@@ -557,6 +553,7 @@ class SimImageSet:
         sim_os = np.zeros((self.nangles, self.imgs.shape[-2], self.imgs.shape[-1]))
         for ii in range(self.nangles):
             sim_os[ii] = sim_optical_section(self.imgs[ii])
+        # todo: maybe want to weight by power/mod depth?
         self.imgs_os = np.mean(sim_os, axis=0)
 
         tend = time.process_time()
@@ -697,7 +694,7 @@ class SimImageSet:
                                                  fixed_params=[False, True, True, True])
 
         self.pspec_params_wf = fit_result['fit_params']
-        ff = np.sqrt(self.fxfx**2 + self.fyfy**2)
+        ff = np.sqrt(self.fx[None, :]**2 + self.fy[:, None]**2)
         sig = power_spectrum_fn([self.pspec_params_wf[0], self.pspec_params_wf[1], self.pspec_params_wf[2], 0], ff, 1)
         wf_snr = sig / wf_noise
         # deconvolution
@@ -716,81 +713,6 @@ class SimImageSet:
             self.log_file.close()
         except AttributeError:
             pass
-
-    def plot_figs(self):
-        """
-        Automate plotting and saving of figures
-        :return:
-        """
-        tstart = time.process_time()
-
-        saving = self.save_dir is not None
-
-        # todo: populate these
-        figs = []
-        fig_names = []
-
-        # plot images
-        figh = self.plot_sim_imgs(self.frqs_guess, figsize=self.figsize)
-
-        if saving:
-            figh.savefig(os.path.join(self.save_dir, "raw_images.png"))
-        if not self.hold_figs_open:
-            plt.close(figh)
-
-        # plot frequency fits
-        fighs, fig_names = self.plot_frequency_fits(figsize=self.figsize)
-        for fh, fn in zip(fighs, fig_names):
-            if saving:
-                fh.savefig(os.path.join(self.save_dir, "%s.png" % fn))
-            if not self.hold_figs_open:
-                plt.close(fh)
-
-        # plot power spectrum fits
-        fighs, fig_names = self.plot_power_spectrum_fits(figsize=self.figsize)
-        for fh, fn in zip(fighs, fig_names):
-            if saving:
-                fh.savefig(os.path.join(self.save_dir, "%s.png" % fn))
-            if not self.hold_figs_open:
-                plt.close(fh)
-
-        # widefield power spectrum fit
-        figh = plot_power_spectrum_fit(self.widefield_ft, self.otf,
-                                       {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                       self.pspec_params_wf, mask=self.mask_wf, figsize=self.figsize,
-                                       ttl_str="Widefield power spectrum")
-        if saving:
-            figh.savefig(os.path.join(self.save_dir, "power_spectrum_widefield.png"))
-        if not self.hold_figs_open:
-            plt.close(figh)
-
-        # plot filters used in reconstruction
-        fighs, fig_names = self.plot_reconstruction_diagnostics(figsize=self.figsize)
-        for fh, fn in zip(fighs, fig_names):
-            if saving:
-                fh.savefig(os.path.join(self.save_dir, "%s.png" % fn))
-            if not self.hold_figs_open:
-                plt.close(fh)
-
-        # plot reconstruction results
-        fig = self.plot_reconstruction(figsize=self.figsize)
-        if saving:
-            fig.savefig(os.path.join(self.save_dir, "sim_reconstruction.png"), dpi=400)
-        if not self.hold_figs_open:
-            plt.close(fig)
-
-        # plot otf
-        fig = self.plot_otf(figsize=self.figsize)
-        if saving:
-            fig.savefig(os.path.join(self.save_dir, "otf.png"))
-        if not self.hold_figs_open:
-            plt.close(fig)
-
-        tend = time.process_time()
-        # print_tee("plotting results took %0.2fs" % (tend - tstart), self.log_file)
-        print("plotting results took %0.2fs" % (tend - tstart))
-
-        return figs, fig_names
 
     def combine_components_fairSIM(self):
         # todo: get working
@@ -823,7 +745,7 @@ class SimImageSet:
         components_shifted_ft = np.zeros((self.nangles, 3, ny_upsample, nx_upsample), dtype=np.complex)
         snr_shifted = np.zeros(components_shifted_ft.shape)
         def ff_shift_upsample(f): return np.sqrt((fxfx - f[0]) ** 2 + (fyfy - f[1]) ** 2)
-        def ff_shift(f): return np.sqrt((self.fxfx - f[0]) ** 2 + (self.fyfy - f[1]) ** 2)
+        def ff_shift(f): return np.sqrt((self.fx[None, :] - f[0]) ** 2 + (self.fy[:, None] - f[1]) ** 2)
 
         for ii in range(self.nangles):
 
@@ -950,12 +872,8 @@ class SimImageSet:
         components_weighted = np.zeros(components_shifted_ft.shape, dtype=np.complex)
         weights = np.zeros(components_weighted.shape)
 
-        # attenuation function for residual peak
-        # sigma = self.remove_peak_sigma_pixels * dfx
-        # attenuation = lambda rr: 1 - np.exp(-(rr**2) / (2*sigma**2))
-
-        ff_shift = lambda f: np.sqrt((self.fxfx - f[0]) ** 2 + (self.fyfy - f[1]) ** 2)
-        ff_shift_upsample = lambda f: np.sqrt((fxfx - f[0]) ** 2 + (fyfy - f[1]) ** 2)
+        def ff_shift(f): return np.sqrt((self.fx[None, :] - f[0]) ** 2 + (self.fy[:, None] - f[1]) ** 2)
+        def ff_shift_upsample(f): return np.sqrt((fxfx - f[0]) ** 2 + (fyfy - f[1]) ** 2)
         ff_upsample = np.sqrt(fxfx**2 + fyfy**2)
 
         # shift and filter components
@@ -981,6 +899,7 @@ class SimImageSet:
 
                 to_remove = np.abs(ff_shift_upsample(self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
                 components_shifted_ft[ii, 0][to_remove] = 0
+
             # ###########################
             # m*O(f - f_o)S(f)
             # ###########################
@@ -1040,8 +959,6 @@ class SimImageSet:
             if self.size_near_fo_to_remove != 0:
                 to_remove = np.abs(ff_shift_upsample(self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
                 components_shifted_ft[ii, 2][to_remove] = 0
-            # if self.remove_peaks_by_hand:
-            #     components_shifted_ft[ii, 2] = components_shifted_ft[ii, 2] * attenuation(ff_shift_upsample(self.frqs[ii]))
 
         # correct for wrong global phases (on shifted components before weighting,
         # but then apply to weighted components)
@@ -1061,7 +978,6 @@ class SimImageSet:
         sim_sr_ft = np.nansum(components_weighted, axis=(0, 1)) / weight_norm
 
         # Fourier transform back to get real-space reconstructed image
-        # apod = self.get_apodization(self.apodization_ft_mode, sim_sr_ft.shape)
         apod = scipy.signal.windows.tukey(sim_sr_ft.shape[1], alpha=0.1)[None, :] * \
                scipy.signal.windows.tukey(sim_sr_ft.shape[0], alpha=0.1)[:, None]
 
@@ -1343,6 +1259,81 @@ class SimImageSet:
             print(string, end=end, file=fid)
 
     # plotting utility functions
+    def plot_figs(self):
+        """
+        Automate plotting and saving of figures
+        :return:
+        """
+        tstart = time.process_time()
+
+        saving = self.save_dir is not None
+
+        # todo: populate these
+        figs = []
+        fig_names = []
+
+        # plot images
+        figh = self.plot_sim_imgs(self.frqs_guess, figsize=self.figsize)
+
+        if saving:
+            figh.savefig(os.path.join(self.save_dir, "raw_images.png"))
+        if not self.hold_figs_open:
+            plt.close(figh)
+
+        # plot frequency fits
+        fighs, fig_names = self.plot_frequency_fits(figsize=self.figsize)
+        for fh, fn in zip(fighs, fig_names):
+            if saving:
+                fh.savefig(os.path.join(self.save_dir, "%s.png" % fn))
+            if not self.hold_figs_open:
+                plt.close(fh)
+
+        # plot power spectrum fits
+        fighs, fig_names = self.plot_power_spectrum_fits(figsize=self.figsize)
+        for fh, fn in zip(fighs, fig_names):
+            if saving:
+                fh.savefig(os.path.join(self.save_dir, "%s.png" % fn))
+            if not self.hold_figs_open:
+                plt.close(fh)
+
+        # widefield power spectrum fit
+        figh = plot_power_spectrum_fit(self.widefield_ft, self.otf,
+                                       {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                                       self.pspec_params_wf, mask=self.mask_wf, figsize=self.figsize,
+                                       ttl_str="Widefield power spectrum")
+        if saving:
+            figh.savefig(os.path.join(self.save_dir, "power_spectrum_widefield.png"))
+        if not self.hold_figs_open:
+            plt.close(figh)
+
+        # plot filters used in reconstruction
+        fighs, fig_names = self.plot_reconstruction_diagnostics(figsize=self.figsize)
+        for fh, fn in zip(fighs, fig_names):
+            if saving:
+                fh.savefig(os.path.join(self.save_dir, "%s.png" % fn))
+            if not self.hold_figs_open:
+                plt.close(fh)
+
+        # plot reconstruction results
+        fig = self.plot_reconstruction(figsize=self.figsize)
+        if saving:
+            fig.savefig(os.path.join(self.save_dir, "sim_reconstruction.png"), dpi=400)
+        if not self.hold_figs_open:
+            plt.close(fig)
+
+        # plot otf
+        fig = self.plot_otf(figsize=self.figsize)
+        if saving:
+            fig.savefig(os.path.join(self.save_dir, "otf.png"))
+        if not self.hold_figs_open:
+            plt.close(fig)
+
+        tend = time.process_time()
+        # print_tee("plotting results took %0.2fs" % (tend - tstart), self.log_file)
+        print("plotting results took %0.2fs" % (tend - tstart))
+
+        return figs, fig_names
+
     def plot_sim_imgs(self, frqs_sim_guess=None, figsize=(20, 10)):
         """
         Display SIM images for visual inspection
@@ -1829,7 +1820,7 @@ class SimImageSet:
         :return:
         """
         figh = plt.figure(figsize=figsize)
-        ff = np.sqrt(self.fxfx**2 + self.fyfy**2)
+        ff = np.sqrt(self.fx[None, :] ** 2 + self.fy[:, None] ** 2)
 
         otf_ideal = psf.circ_aperture_otf(ff, 0, self.na, self.wavelength)
 
