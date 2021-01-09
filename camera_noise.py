@@ -1,13 +1,17 @@
+"""
+Functions for calibrating noise and gain map of sCMOS camera, doing denoising of imaging data, or producing
+simulated camera data
+"""
 import os
+import time
+import warnings
 import numpy as np
 import pickle
-import time
 from scipy import fft
-import warnings
 from PIL import Image
-import tiffile
 import matplotlib.pyplot as plt
 
+import tiffile
 import analysis_tools as tools
 import fit_psf as psf
 
@@ -533,6 +537,7 @@ def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout
         otf = psf.circ_aperture_otf(fx[None, :], fy[:, None], na, wavelength)
 
     # blur image with otf/psf
+    # todo: maybe should add an "imaging forward model" function to fit_psf.py and call it here.
     gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
     img_blurred = max_photons * fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf))).real
     img_blurred[img_blurred < 0] = 0
@@ -561,6 +566,6 @@ def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout
 
     return img, snr, max_photons_real
 
-
-if __name__ == "__main__":
+def denoise(img, gains, offsets, vars):
     pass
+

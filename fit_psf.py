@@ -1,5 +1,7 @@
 """
-Fit point spread functions using a variety of models
+Functions for working with point-spread functions and optical transfer functions
+
+Functions for fitting PSF's from fluorescence images of beads (z-stacks or single planes)
 """
 import os
 import timeit
@@ -7,7 +9,6 @@ import pickle
 import copy
 
 import numpy as np
-from scipy import fft
 import scipy.ndimage as ndi
 import scipy.special as sp
 import scipy.integrate

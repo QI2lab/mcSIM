@@ -20,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 import re
 
-# I/O for text files
+# I/O for metadata files
 def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
     """
     Parse all micromanager metadata files in subdirectories of metadata_dir. MM metadata is stored as JSON
@@ -1123,6 +1123,22 @@ def segment_intersect(start1, end1, start2, end2):
         return None
 
 # working with regions of interest
+def get_extent(y, x):
+    """
+    Get extent required for plotting arrays using imshow in real coordinates. The resulting list can be
+    passed directly to imshow using the extent keyword.
+
+    Here we assume the values y and x are equally spaced and describe the center coordinate of each pixel
+
+    :param y: equally spaced y-coordinates
+    :param x: equally spaced x-coordinates
+    :return extent: [xstart, xend, yend, ystart]
+    """
+    dy = y[1] - y[0]
+    dx = x[1] - x[0]
+    extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
+    return extent
+
 def roi2full(coords_roi, roi):
     """
     coords_roi = [c1, c2, ...]

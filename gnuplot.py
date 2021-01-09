@@ -1,5 +1,5 @@
 """
-Export data in text files that can be read by gnuplot
+Functions which export data to text files that can be read by gnuplot
 """
 import os
 import numpy as np
