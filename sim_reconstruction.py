@@ -1002,8 +1002,7 @@ class SimImageSet:
         # e.g. could multiply each by expected phase values?
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
             joblib.delayed(fit_modulation_frq)(
-                fts1[ii, 0], fts2[ii, 0], {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                frq_guess=frq_guess[ii])
+                fts1[ii, 0], fts2[ii, 0], self.dx, self.fmax, frq_guess=frq_guess[ii])
             for ii in range(nangles)
         )
 
@@ -1164,7 +1163,7 @@ class SimImageSet:
 
                 if self.plot_diagnostics and ii == 0:
                     figh = plot_correlation_fit(self.imgs_ft[ii, jj], self.imgs_ft[ii, jj], frqs_sim[ii],
-                                                {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                                                self.dx, self.fmax,
                                                 frqs_guess=self.frqs_guess[ii], figsize=figsize,
                                                 ttl_str="Correlation fit, angle = %d, phase=0" % ii)
 
@@ -1797,15 +1796,15 @@ class SimImageSet:
 
             if self.find_frq_first:
                 figh = plot_correlation_fit(self.imgs_ft[ii, 0], self.imgs_ft[ii, 0], self.frqs[ii, :],
-                                            {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                                            self.dx, self.fmax,
                                             frqs_guess=self.frqs_guess[ii], figsize=figsize,
                                             ttl_str="Correlation fit, angle %d" % ii)
                 figs.append(figh)
                 fig_names.append("frq_fit_angle=%d_phase=%d" % (ii, 0))
             else:
-                figh = plot_correlation_fit(self.separated_components_ft[ii, 0], self.separated_components_ft[ii, 1], self.frqs[ii, :],
-                                            {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                            frqs_guess=self.frqs_guess[ii], figsize=figsize,
+                figh = plot_correlation_fit(self.separated_components_ft[ii, 0],
+                                            self.separated_components_ft[ii, 1], self.frqs[ii, :],
+                                            self.dx, self.fmax, frqs_guess=self.frqs_guess[ii], figsize=figsize,
                                             ttl_str="Correlation fit, angle %d" % ii)
                 figs.append(figh)
                 fig_names.append("frq_fit_angle=%d" % ii)
@@ -1915,11 +1914,9 @@ def sim_optical_section(imgs, axis=0):
     return img_os
 
 # estimate frequency of modulation patterns
-def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_pix_size=5, use_jacobian=False,
+def fit_modulation_frq(ft1, ft2, dx, fmax=None, exclude_res=0.7, frq_guess=None, roi_pix_size=5, use_jacobian=False,
                        max_frq_shift=None, force_start_from_guess=False, keep_guess_if_better=True):
     """
-    todo: re the options argument only dx and the combination wavelength/na only used to calculate fmax
-    todo: make dx and fmax arguments instead
     todo: drop roi_pix_size argument in favor of max_frq_shift
 
     Find SIM frequency from image by maximizing
@@ -1937,7 +1934,8 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
 
     :param ft1: 2D Fourier space image
     :param ft2: 2D Fourier space image to be cross correlated with ft1
-    :param options: dictionary of options {'pixel_size', 'wavelength', 'na'}.
+    :param dx: pixel size
+    :param fmax:
     :param exclude_res: frequencies less than this fraction of fmax are excluded from peak finding. Not
     :param frq_guess: frequency guess [fx, fy]. Can be None.
     :param roi_pix_size: half-size of the region of interest around frq_guess used to estimate the peak location. This
@@ -1950,11 +1948,7 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     """
 
     # extract options
-    dx = options['pixel_size']
     dy = dx
-    wavelength = options['wavelength']
-    na = options['na']
-    fmax = 1 / (0.5 * wavelength / na)
     ny, nx = ft1.shape
 
     # coords
@@ -1969,6 +1963,9 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     dfy = fys[1] - fys[0]
     fxfx, fyfy = np.meshgrid(fxs, fys)
     ff = np.sqrt(fxfx ** 2 + fyfy ** 2)
+
+    if fmax is None:
+        fmax = ff.max()
 
     if max_frq_shift is None:
         max_frq_shift = dfx * roi_pix_size
@@ -2063,7 +2060,7 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
 
     return fit_frqs, mask
 
-def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_size=31,
+def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None, roi_size=31,
                          peak_pixels=2, figsize=(20, 10), ttl_str=""):
     """
     Display SIM parameter fitting results visually, in a way that is easy to inspect.
@@ -2079,17 +2076,13 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     """
 
     # get physical parameters
-    dx = options['pixel_size']
     dy = dx
-    wavelength = options['wavelength']
-    na = options['na']
-    fmax = 1 / (0.5 * wavelength / na)
 
     # get frequency data
     fxs = tools.get_fft_frqs(img1_ft.shape[1], dx)
-    dfx = fxs[1] - fxs[0]
     fys = tools.get_fft_frqs(img1_ft.shape[0], dy)
-    dfy = fys[1] - fys[0]
+    if fmax is None:
+        fmax = np.sqrt(np.max(fxs)**2 + np.max(fys)**2)
 
     # power spectrum / cross correlation
     # cc = np.abs(img1_ft * img2_ft.conj())
