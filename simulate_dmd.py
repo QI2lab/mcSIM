@@ -113,6 +113,7 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
 
         # incoming minus outgoing unit vectors
         amb = amb_fn(tx_in, ty_in, txs_out[ii_subs], tys_out[ii_subs])
+        amb = amb[0]
 
         # get envelope functions for ON and OFF states
         sinc_efield_on[ii_subs] = mirror_int_fn(gamma_on, amb)
@@ -721,14 +722,25 @@ def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
     :param dx: DMD pitch
     :param dy: DMD pitch
     :param wavelength: same units as DMD pitch
-    :return:
+
+    :return bf_xp:
+    :return bf_yp:
+    :return bf_zp:
     """
+    if np.abs(np.linalg.norm(bvec) - 1) > 1e-12:
+        raise Exception("bvec was not a unit vector")
+
+    if np.abs(np.linalg.norm(pvec) - 1) > 1e-12:
+        raise Exception("pvec was not a unit vector")
+
+
     fx = np.atleast_1d(fx)
     fy = np.atleast_1d(fy)
 
     bf_xs, bf_ys, bf_zs = get_diffracted_output_uvect(bvec, fx, fy, wavelength, dx, dy)
 
     # vector orthogonal to p
+    # todo: this inverts x, as pvec[2] is usually negative in my convention...maybe better to change?
     xp = np.array([pvec[2], 0, -pvec[0]]) / np.sqrt(pvec[0] ** 2 + pvec[2] ** 2)
     yp = np.cross(pvec, xp)
 
@@ -738,7 +750,6 @@ def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
     bf_p = bf_xs * pvec[0] + bf_ys * pvec[1] + bf_zs * pvec[2]
 
     return bf_xp, bf_yp, bf_p
-
 
 def get_diffracted_output_uvect(bvec, fx, fy, wavelength, dx, dy):
     # bfx = bvec[0] - wavelength / dx * fx
