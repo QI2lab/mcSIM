@@ -21,7 +21,7 @@ import pandas as pd
 import re
 
 # I/O for text files
-def parse_mm_metadata(metadata_dir, file_pattern='*metadata*.txt'):
+def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
     """
     Parse all micromanager metadata files in subdirectories of metadata_dir. MM metadata is stored as JSON
     object in text file.
@@ -54,15 +54,8 @@ def parse_mm_metadata(metadata_dir, file_pattern='*metadata*.txt'):
     for k, entry in summary['IntendedDimensions'].items():
         dims[k] = entry
 
-    # nxy = summary['IntendedDimensions']['position']
-    # nz = summary['IntendedDimensions']['z']
-    # nchannels = summary['IntendedDimensions']['channel']
-    # ntimes = summary['IntendedDimensions']['time']
-
     for k, entry in summary['UserData'].items():
         dims[k] = entry['scalar']
-
-    # dims = {'nxy': nxy, 'nz': nz, 'nchannels': nchannels, 'ntimes': ntimes, 'nsim_patterns': nsim_patterns}
 
     # run through each metadata file to figure out settings for stage positions and individual images
     initialized = False
@@ -105,7 +98,7 @@ def parse_mm_metadata(metadata_dir, file_pattern='*metadata*.txt'):
                 if multipage_tiff_style:
                     # these
                     extra_titles = ['Frame', 'FrameIndex', 'PositionIndex', 'Slice', 'SliceIndex', 'ChannelIndex']
-
+                extra_titles += ["directory"]
                 initialized = True
 
             # accumulate data
@@ -115,7 +108,6 @@ def parse_mm_metadata(metadata_dir, file_pattern='*metadata*.txt'):
             for t in userdata_titles:
                 # todo: maybe need to modify this more generally for non-scalar types...
                 data_current.append(entry['UserData'][t]['scalar'])
-            data.append(data_current)
 
             if multipage_tiff_style:
                 # parse FrameKey information
@@ -132,25 +124,15 @@ def parse_mm_metadata(metadata_dir, file_pattern='*metadata*.txt'):
                     position_index = 0
 
                 data_current += [time_index, time_index, position_index, z_index, z_index, channel_index]
-                #slice_no = time_index * dims['nsim_patterns'] + img_no
 
-            # todo: ImageNumber is not what img_ft expect. Is same as SimIndex
-            # todo: ElapsedTime-ms repeats with SimIndex. Why?
-            # data.append([pos_index,
-            #              round(float(entry['XPositionUm']), 2),
-            #              round(float(entry['YPositionUm']), 2),
-            #              round(float(entry['ZPositionUm']), 2),
-            #              int(entry['UserData']['ChannelIndex']['scalar']),
-            #              int(entry['UserData']['SimIndex']['scalar']),
-            #              int(time_index),
-            #              round(entry['ElapsedTime-ms'], 2),
-            #              int(entry['ImageNumber']),
-            #              os.path.join(root_path, entry['FileName']),
-            #              int(slice_no)])
+            # this is also stored in "extra titles"
+            data_current += [os.path.dirname(filename)]
+
+
+            # combine all data
+            data.append(data_current)
 
     # have to do some acrobatics to get slice in file info
-
-    # image_metadata = pd.DataFrame(data, columns=['pos', 'x', 'y', 'z', 'channel', 'sim index', 'time index', 'elapsed time', 'img no', 'filename', 'slice in file'])
     userdata_titles = ['User' + t for t in userdata_titles]
     image_metadata = pd.DataFrame(data, columns=titles+userdata_titles+extra_titles)
 
@@ -169,7 +151,61 @@ def parse_mm_metadata(metadata_dir, file_pattern='*metadata*.txt'):
 
     return image_metadata, dims, summary
 
+def read_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy_indices=None, user_indices={}, dtype=np.uint16):
+    """
+    Load a set of images from MicroManager metadata, read using parse_mm_metadata()
 
+    :param md: metadata Pandas datable, as created by parse_mm_metadata()
+    :param time_indices:
+    :param channel_indices:
+    :param z_indices:
+    :param xy_indices:
+    :param user_indices: {"name": indices}
+    :param file_pattern:
+    :return:
+    """
+
+    # md, dims, summary = parse_mm_metadata(dir)
+
+    def check_array(arr, ls):
+        to_use = np.zeros(arr.shape, dtype=np.bool)
+        for l in ls:
+            to_use = np.logical_or(to_use, arr == l)
+
+        return to_use
+
+    to_use = np.ones(md.shape[0], dtype=np.bool)
+
+    if time_indices is not None:
+        if not isinstance(time_indices, list):
+            time_indices = [time_indices]
+        to_use = np.logical_and(to_use, check_array(md["FrameIndex"], time_indices))
+
+    if xy_indices is not None:
+        if not isinstance(xy_indices, list):
+            xy_indices = [xy_indices]
+        to_use = np.logical_and(to_use, check_array(md["PositionIndex"], xy_indices))
+
+    if z_indices is not None:
+        if not isinstance(z_indices, list):
+            z_indices = [z_indices]
+        to_use = np.logical_and(to_use, check_array(md["SliceIndex"], z_indices))
+
+    if channel_indices is not None:
+        if not isinstance(channel_indices, list):
+            channel_indices = [channel_indices]
+        to_use = np.logical_and(to_use, check_array(md["ChannelIndex"], channel_indices))
+
+    for k, v in user_indices.items():
+        if not isinstance(v, list):
+            v = [v]
+        to_use = np.logical_and(to_use, check_array(md[k], v))
+
+    fnames = [os.path.join(d, p) for d, p in zip(md["directory"][to_use], md["FileName"][to_use])]
+    slices = md["ImageIndexInFile"][to_use]
+    imgs = load_images(fnames, slices, dtype=dtype)
+
+    return imgs
 
 # I/O for image files
 def read_tiff(fname, slices=None, offset=None, skip=None, dtype=np.uint16):
@@ -246,7 +282,7 @@ def read_tiff(fname, slices=None, offset=None, skip=None, dtype=np.uint16):
 
     return np.asarray(imgs), tiff_metadata, other_metadata
 
-def load_images(fnames, slice_indices):
+def load_images(fnames, slice_indices, dtype=np.uint16):
     """
     Load multiple images and slices, definted by lists fnames and slice_indices,
     and return in same order as inputs. Automatically load all images from each file without multiple reads.
@@ -273,7 +309,7 @@ def load_images(fnames, slice_indices):
     imgs = [''] * len(fnames)
     for ii, fu in enumerate(fnames_unique):
         slices = slice_indices[inds_to_unique == ii]
-        imgs_curr, _, _ = read_tiff(fu, slices)
+        imgs_curr, _, _ = read_tiff(fu, slices, dtype=dtype)
 
         # this is necessary in case e.g. one file has images [1,3,7] and another has [2,6,10]
         for jj, ind in enumerate(inds[inds_to_unique == ii]):
