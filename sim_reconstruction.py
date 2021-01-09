@@ -313,8 +313,8 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                         imgs_sim = imgs_sim[:, :, roi[0]:roi[1], roi[2]:roi[3]]
 
                         # instantiate reconstruction object
-                        r = sim_image_set(sim_options, imgs_sim, frqs_guess, phases_guess=phases_guess, otf=otf,
-                                          save_dir=sim_diagnostics_path, **kwargs)
+                        r = SimImageSet(sim_options, imgs_sim, frqs_guess, phases_guess=phases_guess, otf=otf,
+                                        save_dir=sim_diagnostics_path, **kwargs)
 
                         # if not saving stack, maybe want to handle in class?
                         if saving and not save_tif_stack:
@@ -386,7 +386,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 
     return imgs_sr, imgs_wf, imgs_deconvolved, imgs_os
 
-class sim_image_set:
+class SimImageSet:
     def __init__(self, options, imgs, frq_sim_guess, otf=None, apodization_ft='tukey',
                  wiener_parameter=1, fbounds=(0.01, 1), fbounds_shift=(0.01, 1),
                  use_bayesian=False, use_wicker=True, normalize_histograms=True, background_counts=100,
@@ -2162,7 +2162,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
         fx_g, fy_g = frqs_guess
         period_g = 1 / np.sqrt(fx_g ** 2 + fy_g ** 2)
         angle_g = np.angle(fx_g + 1j * fy_g)
-        peak_cc_g =  tools.get_peak_value(cc, fxs, fys, frqs_guess, peak_pixels)
+        peak_cc_g = tools.get_peak_value(cc, fxs, fys, frqs_guess, peak_pixels)
 
         str += '\nguess: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
                (period_g * 1e3, 1/period_g, angle_g * 180 / np.pi, angle_g, fx_g, fy_g, np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
@@ -2498,35 +2498,9 @@ def get_mcnr(img_ft, frqs, fxs, fys, fmax):
     :return mcnr:
     """
 
-    # frequency coordinates
-    dfx = fxs[1] - fxs[0]
-    dfy = fys[1] - fys[0]
-    fxfx, fyfy = np.meshgrid(fxs, fys)
-
-    # find closest pixel
-    ix = np.argmin(np.abs(frqs[0] - fxs))
-    iy = np.argmin(np.abs(frqs[1] - fys))
-    ind = (iy, ix)
-
-    # get ROI around pixel for weighted averaging
-    roi = tools.get_centered_roi([iy, ix], [5, 5])
-    imgft_roi = img_ft[roi[0]:roi[1], roi[2]:roi[3]]
-    fxfx_roi = fxfx[roi[0]:roi[1], roi[2]:roi[3]]
-    fyfy_roi = fyfy[roi[0]:roi[1], roi[2]:roi[3]]
-
-    # estimate modulation depth from weighted average of pixels in ROI, based on overlap with pixel area centered at frqs
-    weights = np.zeros(fxfx_roi.shape)
-    for ii in range(fxfx_roi.shape[0]):
-        for jj in range(fyfy_roi.shape[1]):
-            weights[ii, jj] = tools.pixel_overlap([frqs[1], frqs[0]], [fyfy_roi[ii, jj], fxfx_roi[ii, jj]], [dfy, dfx])
-
-    peak_height = np.sqrt(np.average(np.abs(imgft_roi)**2, weights=weights))
-
-    # todo: this was the model for get_peak_value() function. Let's use it here.
-    # peak_height = tools.get_peak_value(img_ft, fxs, fys, 2)
-
-    # get noise and calculate mcnr
+    peak_height = np.abs(tools.get_peak_value(img_ft, fxs, fys, frqs, peak_pixel_size=1))
     noise = np.sqrt(get_noise_power(img_ft, fxs, fys, fmax))
+
     mcnr = peak_height / noise
 
     return mcnr
