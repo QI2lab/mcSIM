@@ -1,5 +1,5 @@
 """
-Tools for reconstructing SIM data
+Tools for reconstructing 2D SIM images, using 3-angles and 3-phases.
 """
 # from . import analysis_tools as tools
 # from . import fit_psf as psf
@@ -387,7 +387,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
     return imgs_sr, imgs_wf, imgs_deconvolved, imgs_os
 
 class SimImageSet:
-    def __init__(self, options, imgs, frq_sim_guess, otf=None, apodization_ft='tukey',
+    def __init__(self, options, imgs, frq_sim_guess, otf=None,
                  wiener_parameter=1, fbounds=(0.01, 1), fbounds_shift=(0.01, 1),
                  use_bayesian=False, use_wicker=True, normalize_histograms=True, background_counts=100,
                  do_global_phase_correction=True, determine_amplitudes=False, find_frq_first=True,
@@ -405,7 +405,6 @@ class SimImageSet:
         :param frq_sim_guess: 2 x nangles array of guess SIM frequency values
         :param otf: optical transfer function evaluated at the same frequencies as the fourier transforms of imgs.
          If None, estimate from NA.
-        :param apodization_ft: Apodization to be applied to the FT. If None, no apodization is used.
         :param wiener_parameter: Attenuation parameter for Wiener deconvolution. This will attenuate parts of the image
         where |otf(f)|^2 * SNR < wiener_parameter
         :param use_bayesian: Boolean. If True, use bayesian approach to estimate SIM frequency, phase, and modulation
@@ -521,12 +520,6 @@ class SimImageSet:
         # #############################################
         self.imgs = self.imgs - self.background_counts
         self.imgs[self.imgs <= 0] = 1e-12
-
-        # #############################################
-        # store apodization mode. Don't store function because resampling can change image size
-        # #############################################
-        # self.apodization_img_mode = apodization_img
-        self.apodization_ft_mode = apodization_ft
 
         # #############################################
         # Fourier transform SIM images
@@ -764,7 +757,8 @@ class SimImageSet:
         # widefield power spectrum fit
         figh = plot_power_spectrum_fit(self.widefield_ft, self.otf,
                                        {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                       self.pspec_params_wf, mask=self.mask_wf, figsize=self.figsize)
+                                       self.pspec_params_wf, mask=self.mask_wf, figsize=self.figsize,
+                                       ttl_str="Widefield power spectrum")
         if saving:
             figh.savefig(os.path.join(self.save_dir, "power_spectrum_widefield.png"))
         if not self.hold_figs_open:
@@ -905,8 +899,9 @@ class SimImageSet:
 
         sim_sr_ft = np.nansum(components_shifted_ft, axis=(0, 1))
 
-        # Fourier transform back to get real-space reconstructed image
-        apod = self.get_apodization(self.apodization_ft_mode, sim_sr_ft.shape)
+        # Fourier transform back to get real-space reconstructed image, use Tukey apodization filter
+        apod = scipy.signal.windows.tukey(sim_sr_ft.shape[1], alpha=0.1)[None, :] * \
+               scipy.signal.windows.tukey(sim_sr_ft.shape[0], alpha=0.1)[:, None]
 
         sim_sr = fft.fftshift(fft.ifft2(fft.ifftshift(sim_sr_ft * apod))).real
 
@@ -1066,7 +1061,9 @@ class SimImageSet:
         sim_sr_ft = np.nansum(components_weighted, axis=(0, 1)) / weight_norm
 
         # Fourier transform back to get real-space reconstructed image
-        apod = self.get_apodization(self.apodization_ft_mode, sim_sr_ft.shape)
+        # apod = self.get_apodization(self.apodization_ft_mode, sim_sr_ft.shape)
+        apod = scipy.signal.windows.tukey(sim_sr_ft.shape[1], alpha=0.1)[None, :] * \
+               scipy.signal.windows.tukey(sim_sr_ft.shape[0], alpha=0.1)[:, None]
 
         sim_sr = fft.fftshift(fft.ifft2(fft.ifftshift(sim_sr_ft * apod))).real
 
@@ -1252,7 +1249,8 @@ class SimImageSet:
                 if self.plot_diagnostics and ii == 0:
                     figh = plot_correlation_fit(self.imgs_ft[ii, jj], self.imgs_ft[ii, jj], frqs_sim[ii],
                                                 {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                                frqs_guess=self.frqs_guess[ii], figsize=figsize)
+                                                frqs_guess=self.frqs_guess[ii], figsize=figsize,
+                                                ttl_str="Correlation fit, angle = %d, phase=0" % ii)
 
                     debug_figs += [figh]
                     debug_fig_names += ['frq_fit_angle=%d' % (ii + 1)]
@@ -1267,29 +1265,6 @@ class SimImageSet:
         mod_depths = np.mean(ms, axis=1)
 
         return frqs_sim, phases, mod_depths, debug_figs, debug_fig_names
-
-    # helper functions
-    def get_apodization(self, mode, size):
-        """
-        Return apodization function of a given size
-        :param mode:
-        :param size:
-        :return:
-        """
-
-        ny, nx = size
-        if mode is None:
-            apodization = 1
-        elif mode == 'hann':
-            apodization = scipy.signal.windows.hann(nx)[None, :] * \
-                                   scipy.signal.windows.hann(ny)[:, None]
-        elif mode == 'tukey':
-            apodization = scipy.signal.windows.tukey(nx, alpha=0.1)[None, :] * \
-                         scipy.signal.windows.tukey(ny, alpha=0.1)[:, None]
-        else:
-            raise Exception("apodization mode '%s' is not supported." % mode)
-
-        return apodization
 
     # printing utility functions
     def print_parameters(self):
@@ -1382,13 +1357,13 @@ class SimImageSet:
         x = self.dx * (np.arange(self.nx) - self.nx / 2)
         y = self.dy * (np.arange(self.ny) - self.ny / 2)
 
-        extent = get_extent(y, x)
+        extent = tools.get_extent(y, x)
 
         # frequency coordinate data
         dfx = self.fx[1] - self.fx[0]
         dfy = self.fy[1] - self.fy[0]
 
-        extent_ft = get_extent(self.fx, self.fy)
+        extent_ft = tools.get_extent(self.fx, self.fy)
 
         # plot FT of sim images
         figh = plt.figure(figsize=figsize)
@@ -1399,8 +1374,8 @@ class SimImageSet:
         gamma = 0.1 # gamma for PowerNorm plot of power spectra
 
         # parameters for real space plot
-        vmin = np.percentile(self.imgs.ravel(), 2)
-        vmax = np.percentile(self.imgs.ravel(), 98)
+        vmin = np.percentile(self.imgs.ravel(), 0.1)
+        vmax = np.percentile(self.imgs.ravel(), 99.9)
         mean_int = np.mean(self.imgs, axis=(1, 2, 3))
         rel_int = mean_int / np.max(mean_int)
 
@@ -1453,37 +1428,43 @@ class SimImageSet:
         :return:
         """
 
-        extent_wf = get_extent(self.fy, self.fx)
+        extent_wf = tools.get_extent(self.fy, self.fx)
 
         # for reconstructed image, must check if has been resampled
         fx = tools.get_fft_frqs(self.img_sr.shape[1], 0.5 * self.dx)
         fy = tools.get_fft_frqs(self.img_sr.shape[0], 0.5 * self.dx)
 
-        extent_rec = get_extent(fy, fx)
+        extent_rec = tools.get_extent(fy, fx)
 
         gamma = 0.1
-        min_percentile = 2
-        max_percentile = 99.5
+        min_percentile = 0.1
+        max_percentile = 99.9
 
+        # create plot
         figh = plt.figure(figsize=figsize)
-        nrows = 2
-        ncols = 3
+        grid = plt.GridSpec(2, 3)
+        # todo: print more reconstruction information here
+        plt.suptitle("SIM reconstruction, w=%0.2f, wicker=%d" %
+                     (self.wiener_parameter, self.use_wicker))
 
-        plt.subplot(nrows, ncols, 1)
+        # widefield, real space
+        ax = plt.subplot(grid[0, 0])
 
         vmin = np.percentile(self.widefield.ravel(), min_percentile)
         vmax = np.percentile(self.widefield.ravel(), max_percentile)
         plt.imshow(self.widefield, vmin=vmin, vmax=vmax)
         plt.title('widefield')
 
-        plt.subplot(nrows, ncols, 2)
+        # deconvolved, real space
+        ax = plt.subplot(grid[0, 1])
 
         vmin = np.percentile(self.widefield_deconvolution.ravel(), min_percentile)
         vmax = np.percentile(self.widefield_deconvolution.ravel(), max_percentile)
         plt.imshow(self.widefield_deconvolution, vmin=vmin, vmax=vmax)
         plt.title('widefield deconvolved')
 
-        plt.subplot(nrows, ncols, 3)
+        # SIM, realspace
+        ax = plt.subplot(grid[0, 2])
 
         vmin = np.percentile(self.img_sr.ravel(), min_percentile)
         vmax = np.percentile(self.img_sr.ravel(), max_percentile)
@@ -1491,7 +1472,7 @@ class SimImageSet:
         plt.title('SIM reconstruction')
 
         # widefield Fourier space
-        ax = plt.subplot(nrows, ncols, 4)
+        ax = plt.subplot(grid[1, 0])
         plt.imshow(np.abs(self.widefield_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_wf)
 
         circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
@@ -1504,7 +1485,7 @@ class SimImageSet:
         plt.ylim([2 * self.fmax, -2 * self.fmax])
 
         # deconvolution Fourier space
-        ax = plt.subplot(nrows, ncols, 5)
+        ax = plt.subplot(grid[1, 1])
         plt.imshow(np.abs(self.widefield_deconvolution_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec)
         circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ)
@@ -1515,7 +1496,7 @@ class SimImageSet:
         plt.ylim([2 * self.fmax, -2 * self.fmax])
 
         # SIM fourier space
-        ax = plt.subplot(nrows, ncols, 6)
+        ax = plt.subplot(grid[1 ,2])
         plt.imshow(np.abs(self.img_sr_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec)
         circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ)
@@ -1528,7 +1509,8 @@ class SimImageSet:
 
         return figh
 
-    def plot_comparison_line_cut(self, start_coord, end_coord, figsize=(20, 10), plot_os_sim=False, plot_deconvolution=True):
+    def plot_comparison_line_cut(self, start_coord, end_coord, figsize=(20, 10),
+                                 plot_os_sim=False, plot_deconvolution=True):
         """
         Plot line cuts using the same regions in the widefield, deconvolved, and SR-SIM images
         :param start_coord: [xstart, ystart]
@@ -1610,12 +1592,12 @@ class SimImageSet:
         fy = tools.get_fft_frqs(2 * self.ny, 0.5 * self.dx)
 
         # plot different stages of inversion
-        extent = get_extent(self.fy, self.fx)
-        extent_upsampled = get_extent(fy, fx)
+        extent = tools.get_extent(self.fy, self.fx)
+        extent_upsampled = tools.get_extent(fy, fx)
 
         for ii in range(self.nangles):
             fig = plt.figure(figsize=figsize)
-            grid = plt.GridSpec(3, 6)
+            grid = plt.GridSpec(3, 5)
 
             for jj in range(self.nphases):
 
@@ -1711,27 +1693,9 @@ class SimImageSet:
                 plt.setp(ax.get_yticklabels(), visible=False)
 
                 # ####################
-                # weights (after shifting)
-                # ####################
-                ax = plt.subplot(grid[jj, 4])
-                im1 = plt.imshow(self.weights[ii, jj], norm=LogNorm(), extent=extent_upsampled)
-                fig.colorbar(im1)
-
-                circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-                ax.add_artist(circ)
-
-                plt.xlim([-2 * self.fmax, 2 * self.fmax])
-                plt.ylim([2 * self.fmax, -2 * self.fmax])
-
-                if jj == 0:
-                    plt.title('unnormalized weight')
-                plt.setp(ax.get_xticklabels(), visible=False)
-                plt.setp(ax.get_yticklabels(), visible=False)
-
-                # ####################
                 # normalized weights
                 # ####################
-                ax = plt.subplot(grid[jj, 5])
+                ax = plt.subplot(grid[jj, 4])
 
                 im2 = plt.imshow(self.weights[ii, jj] / self.weight_norm, norm=LogNorm(), extent=extent_upsampled)
                 im2.set_clim([1e-5, 1])
@@ -1749,10 +1713,10 @@ class SimImageSet:
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
 
             plt.suptitle('period=%0.3fnm at %0.3fdeg=%0.3frad, f=(%0.3f,%0.3f) 1/um\n'
-                         'mod=%0.3f, min mcnr=%0.3f\n'
+                         'mod=%0.3f, min mcnr=%0.3f, wiener param=%0.2f\n'
                          'phases (deg) =%0.2f, %0.2f, %0.2f, phase diffs (deg) =%0.2f, %0.2f, %0.2f' %
                          (self.periods[ii] * 1e3, self.angles[ii] * 180 / np.pi, self.angles[ii],
-                          self.frqs[ii, 0], self.frqs[ii, 1], self.mod_depths[ii], np.min(self.mcnr[ii]),
+                          self.frqs[ii, 0], self.frqs[ii, 1], self.mod_depths[ii], np.min(self.mcnr[ii]), self.wiener_parameter,
                           self.phases[ii, 0] * 180/np.pi, self.phases[ii, 1] * 180/np.pi, self.phases[ii, 2] * 180/np.pi,
                           0, np.mod(self.phases[ii, 1] - self.phases[ii, 0], 2*np.pi) * 180/np.pi,
                           np.mod(self.phases[ii, 2] - self.phases[ii, 0], 2*np.pi) * 180/np.pi))
@@ -1765,7 +1729,7 @@ class SimImageSet:
         # #######################
         figh = plt.figure(figsize=figsize)
         grid = plt.GridSpec(1, 2)
-        plt.suptitle('Net weight')
+        plt.suptitle('Net weight, Wiener param = %0.2f' % self.wiener_parameter)
 
         ax = plt.subplot(grid[0, 0])
         net_weight = np.sum(self.weights, axis=(0, 1)) / self.weight_norm
@@ -1814,17 +1778,18 @@ class SimImageSet:
         for ii in range(self.nangles):
             fig = plot_power_spectrum_fit(self.separated_components_ft[ii, 0], self.otf,
                                           {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                          self.power_spectrum_params[ii, 0], frq_sim=(0, 0), mask=self.pspec_masks[ii, 0], figsize=figsize)
+                                          self.power_spectrum_params[ii, 0], frq_sim=(0, 0), mask=self.pspec_masks[ii, 0],
+                                          figsize=figsize, ttl_str="Unshifted component, angle %d" % ii)
             debug_figs.append(fig)
-            debug_fig_names.append("power_spectrum_unshifted_component_angle_index=%d" % (ii + 1))
+            debug_fig_names.append("power_spectrum_unshifted_component_angle=%d" % ii)
 
             fig = plot_power_spectrum_fit(self.separated_components_ft[ii, 1], self.otf,
                                           {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
                                           self.power_spectrum_params[ii, 1], frq_sim=self.frqs[ii], mask=self.pspec_masks[ii, 1],
-                                          figsize=figsize)
+                                          figsize=figsize, ttl_str="Shifted component, angle %d" % ii)
 
             debug_figs.append(fig)
-            debug_fig_names.append("power_spectrum_shifted_component_angle_index=%d" % (ii + 1))
+            debug_fig_names.append("power_spectrum_shifted_component_angle=%d" % ii)
 
         return debug_figs, debug_fig_names
 
@@ -1840,18 +1805,19 @@ class SimImageSet:
         for ii in range(self.nangles):
 
             if self.find_frq_first:
-                for jj in range(self.nphases):
-                    figh = plot_correlation_fit(self.imgs_ft[ii, jj], self.imgs_ft[ii, jj], self.frqs[ii, :],
-                                                {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                                frqs_guess=self.frqs_guess[ii], figsize=figsize)
-                    figs.append(figh)
-                    fig_names.append("frq_fit_angle=%d_phase=%d" % (ii + 1, jj + 1))
+                figh = plot_correlation_fit(self.imgs_ft[ii, 0], self.imgs_ft[ii, 0], self.frqs[ii, :],
+                                            {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                                            frqs_guess=self.frqs_guess[ii], figsize=figsize,
+                                            ttl_str="Correlation fit, angle %d" % ii)
+                figs.append(figh)
+                fig_names.append("frq_fit_angle=%d_phase=%d" % (ii, 0))
             else:
                 figh = plot_correlation_fit(self.separated_components_ft[ii, 0], self.separated_components_ft[ii, 1], self.frqs[ii, :],
                                             {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                            frqs_guess=self.frqs_guess[ii], figsize=figsize)
+                                            frqs_guess=self.frqs_guess[ii], figsize=figsize,
+                                            ttl_str="Correlation fit, angle %d" % ii)
                 figs.append(figh)
-                fig_names.append("frq_fit_angle=%d" % (ii + 1))
+                fig_names.append("frq_fit_angle=%d" % ii)
 
         return figs, fig_names
 
@@ -1885,7 +1851,7 @@ class SimImageSet:
 
         plt.subplot(1, 2, 2)
         plt.title("2D OTF")
-        plt.imshow(self.otf, extent=get_extent(self.fy, self.fx))
+        plt.imshow(self.otf, extent=tools.get_extent(self.fy, self.fx))
 
         plt.suptitle("OTF")
 
@@ -2107,7 +2073,7 @@ def fit_modulation_frq(ft1, ft2, options, exclude_res=0.7, frq_guess=None, roi_p
     return fit_frqs, mask
 
 def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_size=31,
-                         peak_pixels=2, figsize=(20, 10)):
+                         peak_pixels=2, figsize=(20, 10), ttl_str=""):
     """
     Display SIM parameter fitting results visually, in a way that is easy to inspect.
 
@@ -2149,14 +2115,17 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     peak1_dc = tools.get_peak_value(img1_ft, fxs, fys, [0, 0], peak_pixels)
     peak2 = tools.get_peak_value(img2_ft, fxs, fys, [fx_sim, fy_sim], peak_pixels)
 
-    extent = get_extent(fys, fxs)
+    extent = tools.get_extent(fys, fxs)
 
     # create figure
     figh = plt.figure(figsize=figsize)
     gspec = matplotlib.gridspec.GridSpec(ncols=14, nrows=2, hspace=0.3, figure=figh)
 
+    str = ""
+    if ttl_str != "":
+        str += "%s\n" % ttl_str
     # suptitle
-    str = '      fit: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
+    str += '      fit: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
           (period * 1e3, 1/period, angle * 180 / np.pi, angle, fx_sim, fy_sim, np.abs(peak_cc), np.angle(peak_cc) * 180/np.pi)
     if frqs_guess is not None:
         fx_g, fy_g = frqs_guess
@@ -2175,7 +2144,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, options, frqs_guess=None, roi_s
     roi_cy = np.argmin(np.abs(fy_sim - fys))
     roi = tools.get_centered_roi([roi_cy, roi_cx], [roi_size, roi_size])
 
-    extent_roi = get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
+    extent_roi = tools.get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
     ax = plt.subplot(gspec[0, 0:6])
     ax.set_title("cross correlation, ROI")
@@ -2616,7 +2585,7 @@ def fit_power_spectrum(img_ft, otf, fxs, fys, fmax, fbounds, fbounds_shift=None,
 
     return fit_results, mask
 
-def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None, figsize=(20, 10)):
+def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None, figsize=(20, 10), ttl_str=""):
     """
     Plot results of fit_power_spectrum()
 
@@ -2663,7 +2632,7 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     # ######################
     # plot results
     # ######################
-    extent = get_extent(fys, fxs)
+    extent = tools.get_extent(fys, fxs)
 
     fig = plt.figure(figsize=figsize)
     grid = plt.GridSpec(2, 10)
@@ -2783,7 +2752,12 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ax4.set_ylabel('fy (1/um)')
     ax4.title.set_text('fit deconvolved')
 
-    plt.suptitle('m=%0.3g, A=%0.3g, alpha=%0.3f\nnoise=%0.3g, frq sim = (%0.2f, %0.2f) 1/um' % (pfit[-2], pfit[0], pfit[1], pfit[-1], frq_sim[0], frq_sim[1]))
+    sttl_str = ""
+    if ttl_str != "":
+        sttl_str += "%s\n" % ttl_str
+    sttl_str += 'm=%0.3g, A=%0.3g, alpha=%0.3f\nnoise=%0.3g, frq sim = (%0.2f, %0.2f) 1/um' % \
+                (pfit[-2], pfit[0], pfit[1], pfit[-1], frq_sim[0], frq_sim[1])
+    plt.suptitle(sttl_str)
 
     return fig
 
@@ -3156,21 +3130,6 @@ def get_sim_params_mcmc(img_ft, otf, frqs_guess, fx, fy, fmax, roi_size=81, fit_
     img_inferred = recombine_fn(mod_depth_inferred * model_fn(sx_inf, sy_inf, phi_inferred))
 
     return frqs_sim, phi_inferred, mod_depth_inferred, img_inferred, trace
-
-# visualization functions
-def get_extent(y, x):
-    """
-    Get extent required for plotting arrays using imshow in real coordinates. The resulting list can be
-    passed directly to imshow using the extent keyword.
-
-    :param y: equally spaced y-coordinates
-    :param x: equally spaced x-coordinates
-    :return extent: [xstart, xend, yend, ystart]
-    """
-    dy = y[1] - y[0]
-    dx = x[1] - x[0]
-    extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
-    return extent
 
 # create test data
 def get_test_pattern(img_size=(2048, 2048)):
