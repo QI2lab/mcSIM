@@ -606,12 +606,10 @@ class SimImageSet:
                 if self.find_frq_first:
                     self.frqs = self.estimate_sim_frqs(self.imgs_ft, self.imgs_ft, self.frqs_guess)
                 else:
-                    # todo: finish implementing
                     self.print_tee("doing phase demixing prior to frequency finding", self.log_file)
                     self.separated_components_ft = separate_components(self.imgs_ft, self.phases_guess, np.ones((self.nangles, self.nphases)))
                     imgs1 = np.expand_dims(self.separated_components_ft[:, 0], axis=1)
                     imgs2 = np.expand_dims(self.separated_components_ft[:, 1], axis=1)
-                    # todo: probably need some internal changes to this fn to get everything working...
                     self.frqs = self.estimate_sim_frqs(imgs1, imgs2, self.frqs_guess)
 
             tend = time.time()
@@ -639,7 +637,13 @@ class SimImageSet:
             self.mod_depths, self.power_spectrum_params, self.pspec_masks = self.estimate_mod_depths()
 
             if self.use_fixed_mod_depths:
-                self.mod_depths = self.mod_depths_guess
+                self.mod_depths = np.zeros((self.nangles, self.nphases))
+                self.mod_depths[:, 0] = 1
+                for jj in range(1, self.nphases):
+                    self.mod_depths[:, jj] = self.mod_depths_guess
+
+                    # also correct power spectrum params
+                    self.power_spectrum_params[:, jj, 2] = self.mod_depths[:, jj]
 
             tend = time.process_time()
             self.print_tee('estimated %d modulation depths in %0.2fs' % (self.nangles, tend - tstart), self.log_file)
@@ -772,7 +776,7 @@ class SimImageSet:
             snr_shifted[ii, 1] = np.abs(otf_shifted) ** 2
 
             # shift and expand
-            components_deconvolved_ft[ii, 1] = self.otf.conj() * self.separated_components_ft[ii, 1] / self.mod_depths[ii]
+            components_deconvolved_ft[ii, 1] = self.otf.conj() * self.separated_components_ft[ii, 1] / self.mod_depths[ii, 1]
 
             mask = ff_shift_upsample(-self.frqs[ii]) <= self.fmax
 
@@ -794,7 +798,7 @@ class SimImageSet:
             mask = ff_shift_upsample(self.frqs[ii]) <= self.fmax
 
             # deconvolve
-            components_deconvolved_ft[ii, 2] = self.otf.conj() * self.separated_components_ft[ii, 2] / self.mod_depths[ii]
+            components_deconvolved_ft[ii, 2] = self.otf.conj() * self.separated_components_ft[ii, 2] / self.mod_depths[ii, 2]
 
             # shift and expand
             components_shifted_ft[ii, 2] = tools.translate_ft(
@@ -848,50 +852,76 @@ class SimImageSet:
                             "O(f)*otf(f), O(f-fo)*otf(f), O(f+fo)*otf(f). But size of second dimension was not 3.")
 
         # upsample image before shifting
-        m_exp = 2
-        otf = tools.expand_fourier_sp(self.otf, mx=m_exp, my=m_exp, centered=True)
-        dx = self.dx / m_exp
-        ny_upsample = m_exp * self.ny
-        nx_upsample = m_exp * self.nx
+        f_upsample = 2
+        otf = tools.expand_fourier_sp(self.otf, mx=f_upsample, my=f_upsample, centered=True)
 
-        # frequency data
-        fx = tools.get_fft_frqs(nx_upsample, dx)
-        dfx = fx[1] - fx[0]
-        fy = tools.get_fft_frqs(ny_upsample, dx)
-        dfy = fy[1] - fy[0]
-        fxfx, fyfy = np.meshgrid(fx, fy)
+        # upsampled frequency data
+        fx_us = tools.get_fft_frqs(f_upsample * self.nx, self.dx / f_upsample)
+        dfx_us = fx_us[1] - fx_us[0]
+        fy_us = tools.get_fft_frqs(f_upsample * self.ny, self.dx / f_upsample)
+        dfy_us = fy_us[1] - fy_us[0]
 
-        # to store different params
-        # wiener filtering to divide by H(k)
+        def ff_shift(f): return np.sqrt((self.fx[None, :] - f[0]) ** 2 + (self.fy[:, None] - f[1]) ** 2)
+        def ff_shift_upsample(f): return np.sqrt((fx_us[None, :] - f[0]) ** 2 + (fy_us[:, None] - f[1]) ** 2)
+
+        # wiener filter deconvolution to divide by H(k)
         components_deconvolved_ft = np.zeros((self.nangles, 3, self.ny, self.nx), dtype=np.complex)
         snr = np.zeros(components_deconvolved_ft.shape)
         # shift to correct place in frq space
-        components_shifted_ft = np.zeros((self.nangles, 3, ny_upsample, nx_upsample), dtype=np.complex)
+        components_shifted_ft = np.zeros((self.nangles, 3, self.ny * f_upsample, self.nx * f_upsample), dtype=np.complex)
         snr_shifted = np.zeros(components_shifted_ft.shape)
         # weight and average
         components_weighted = np.zeros(components_shifted_ft.shape, dtype=np.complex)
         weights = np.zeros(components_weighted.shape)
 
-        def ff_shift(f): return np.sqrt((self.fx[None, :] - f[0]) ** 2 + (self.fy[:, None] - f[1]) ** 2)
-        def ff_shift_upsample(f): return np.sqrt((fxfx - f[0]) ** 2 + (fyfy - f[1]) ** 2)
-        ff_upsample = np.sqrt(fxfx**2 + fyfy**2)
-
         # shift and filter components
         for ii in range(self.nangles):
+            # loop over components, O(f)H(f), m*O(f - f_o)H(f), m*O(f + f_o)H(f)
+            for jj, eps in enumerate([0, 1, -1]):
+                params = list(self.power_spectrum_params[ii, jj, :-1]) + [0]
+                snr[ii, jj] = power_spectrum_fn(params, ff_shift(self.frqs[ii] * eps), 1) / self.noise_power[ii, jj]
+
+                # get shifted SNR
+                otf_shifted, _, _ = tools.translate_pix(otf, eps*self.frqs[ii], dx=dfx_us, dy=dfy_us, mode='no-wrap')
+                snr_shifted[ii, jj] = power_spectrum_fn(params, ff_shift_upsample((0, 0)), 1) / self.noise_power[ii, jj]
+
+                # weights
+                weights[ii, jj] = get_snr_weight(otf_shifted, snr_shifted[ii, jj])
+
+                # deconvolve
+                components_deconvolved_ft[ii, jj], _ = \
+                    wiener_deconvolution(self.separated_components_ft[ii, jj] / self.mod_depths[ii, jj], self.otf,
+                                         snr[ii, jj])
+
+                # shift and expand
+                components_shifted_ft[ii, jj] = tools.translate_ft(
+                    tools.expand_fourier_sp(components_deconvolved_ft[ii, jj], mx=f_upsample, my=f_upsample,
+                                            centered=True),
+                    eps * self.frqs[ii], self.dx / f_upsample)
+
+                # optionally remove frequency data around modulation frequency, to avoid artifacts
+                if self.size_near_fo_to_remove != 0:
+                    to_remove = np.abs(ff_shift_upsample(-self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
+                    components_shifted_ft[ii, jj][to_remove] = 0
+
+                    to_remove = np.abs(ff_shift_upsample(self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
+                    components_shifted_ft[ii, jj][to_remove] = 0
+
+            """
             # ###########################
             # O(f)H(f)
             # ###########################
             # signal-to-noise ratio and weights
             params = list(self.power_spectrum_params[ii, 0, :-1]) + [0]
             snr[ii, 0] = power_spectrum_fn(params, ff_shift([0, 0]), 1) / self.noise_power[ii, 0]
-            snr_shifted[ii, 0] = power_spectrum_fn(params, ff_upsample, 1) / self.noise_power[ii, 0]
-            weights[ii, 0] = generalized_wiener_filter(otf, snr_shifted[ii, 0])
+            snr_shifted[ii, 0] = power_spectrum_fn(params, ff_shift_upsample((0, 0)), 1) / self.noise_power[ii, 0]
+            weights[ii, 0] = get_snr_weight(otf, snr_shifted[ii, 0])
 
             # deconvolve
             components_deconvolved_ft[ii, 0], _ = wiener_deconvolution(self.separated_components_ft[ii, 0], self.otf, snr[ii, 0])
             # expand then shift (no shifting required for this one)
             components_shifted_ft[ii, 0] = tools.expand_fourier_sp(components_deconvolved_ft[ii, 0],
-                                                                   mx=m_exp, my=m_exp, centered=True)
+                                                                   mx=f_upsample, my=f_upsample, centered=True)
 
             if self.size_near_fo_to_remove != 0:
                 to_remove = np.abs(ff_shift_upsample(-self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
@@ -908,23 +938,19 @@ class SimImageSet:
             snr[ii, 1] = power_spectrum_fn(params, ff_shift(self.frqs[ii]), 1) / self.noise_power[ii, 1]
 
             # get shifted SNR
-            # pix_shift = [-int(np.round(self.frqs[ii, 0] / dfx)), -int(np.round(self.frqs[ii, 1] / dfy))]
-            otf_shifted, _, _ = tools.translate_pix(otf, self.frqs[ii], dx=dfx, dy=dfy, mode='no-wrap')
+            otf_shifted, _, _ = tools.translate_pix(otf, self.frqs[ii], dx=dfx_us, dy=dfy_us, mode='no-wrap')
 
-            snr_shifted[ii, 1] = power_spectrum_fn(params, ff_upsample, 1) / self.noise_power[ii, 1]
-            weights[ii, 1] = generalized_wiener_filter(otf_shifted, snr_shifted[ii, 1])
-
-            # mask off regions where know FT should be zero
-            mask = ff_shift_upsample(-self.frqs[ii]) <= self.fmax
+            snr_shifted[ii, 1] = power_spectrum_fn(params, ff_shift_upsample((0, 0)), 1) / self.noise_power[ii, 1]
+            weights[ii, 1] = get_snr_weight(otf_shifted, snr_shifted[ii, 1])
 
             # deconvolve
             components_deconvolved_ft[ii, 1], _ = \
-                wiener_deconvolution(self.separated_components_ft[ii, 1] / self.mod_depths[ii], self.otf, snr[ii, 1])
+                wiener_deconvolution(self.separated_components_ft[ii, 1] / self.mod_depths[ii, 1], self.otf, snr[ii, 1])
 
             # shift and expand
             components_shifted_ft[ii, 1] = tools.translate_ft(
-                tools.expand_fourier_sp(components_deconvolved_ft[ii, 1], mx=m_exp, my=m_exp, centered=True),
-                self.frqs[ii], dx) * mask
+                tools.expand_fourier_sp(components_deconvolved_ft[ii, 1], mx=f_upsample, my=f_upsample, centered=True),
+                self.frqs[ii], self.dx / f_upsample)
 
             if self.size_near_fo_to_remove != 0:
                 to_remove = np.abs(ff_shift_upsample(-self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
@@ -938,27 +964,24 @@ class SimImageSet:
             snr[ii, 2] = power_spectrum_fn(params, ff_shift(-self.frqs[ii]), 1) / self.noise_power[ii, 2]
 
             # get shifted SNR
-            # pix_shift = [-int(np.round(-self.frqs[ii, 0] / dfx)), -int(np.round(-self.frqs[ii, 1] / dfy))]
-            otf_shifted, _, _ = tools.translate_pix(otf, -self.frqs[ii], dx=dfx, dy=dfy, mode='no-wrap')
+            otf_shifted, _, _ = tools.translate_pix(otf, -self.frqs[ii], dx=dfx_us, dy=dfy_us, mode='no-wrap')
 
-            snr_shifted[ii, 2] = power_spectrum_fn(params, ff_upsample, 1) / self.noise_power[ii, 2]
-            weights[ii, 2] = generalized_wiener_filter(otf_shifted, snr_shifted[ii, 2])
-
-            # mask portions we know are zero
-            mask = ff_shift_upsample(self.frqs[ii]) <= self.fmax
+            snr_shifted[ii, 2] = power_spectrum_fn(params, ff_shift_upsample((0, 0)), 1) / self.noise_power[ii, 2]
+            weights[ii, 2] = get_snr_weight(otf_shifted, snr_shifted[ii, 2])
 
             # deconvolve
             components_deconvolved_ft[ii, 2], _ = \
-                wiener_deconvolution(self.separated_components_ft[ii, 2] / self.mod_depths[ii], self.otf, snr[ii, 2])
+                wiener_deconvolution(self.separated_components_ft[ii, 2] / self.mod_depths[ii, 2], self.otf, snr[ii, 2])
 
             # shift and expand
             components_shifted_ft[ii, 2] = tools.translate_ft(
-                                           tools.expand_fourier_sp(components_deconvolved_ft[ii, 2], mx=m_exp, my=m_exp, centered=True),
-                                           -self.frqs[ii], dx) * mask
+                                           tools.expand_fourier_sp(components_deconvolved_ft[ii, 2], mx=f_upsample, my=f_upsample, centered=True),
+                                           -self.frqs[ii], self.dx / f_upsample)
 
             if self.size_near_fo_to_remove != 0:
                 to_remove = np.abs(ff_shift_upsample(self.frqs[ii])) < self.size_near_fo_to_remove * np.linalg.norm(self.frqs[ii])
                 components_shifted_ft[ii, 2][to_remove] = 0
+        """
 
         # correct for wrong global phases (on shifted components before weighting,
         # but then apply to weighted components)
@@ -996,7 +1019,6 @@ class SimImageSet:
         :return peak_heights_relative: Height of the fit peak relative to the DC peak.
         """
         nangles = fts1.shape[0]
-        nphases = fts1.shape[1]
 
         # todo: maybe should take some average/combination of the widefield images to try and improve signal
         # e.g. could multiply each by expected phase values?
@@ -1008,27 +1030,6 @@ class SimImageSet:
 
         frqs, _ = zip(*results)
         frqs = np.reshape(np.asarray(frqs), [nangles, 2])
-
-        # estimate for each phase individually
-        # results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-        #     joblib.delayed(fit_modulation_frq)(
-        #         fts1[ii, jj], fts2[ii, jj], {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-        #         frq_guess=frq_guess[ii])
-        #     for ii in range(nangles) for jj in range(nphases)
-        # )
-
-        # frqs, _ = zip(*results)
-        # frqs = np.reshape(np.asarray(frqs), [nangles, nphases, 2])
-
-        # frqs = np.zeros((nangles, nphases, 2))
-        # for ii in range(self.nangles):
-        #     for jj in range(self.nphases):
-        #         frqs[ii, jj, :], mask = \
-        #              fit_modulation_frq(fts1[ii, jj], fts2[ii, jj], {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-        #                                 frq_guess=frq_guess[ii])
-
-        # get frequency and angle estimates
-        # frqs = np.mean(frqs, axis=1)
 
         return frqs
 
@@ -1050,7 +1051,8 @@ class SimImageSet:
 
             for ii in range(self.nangles):
                 phases[ii], amps[ii] = fit_phase_wicker(self.imgs_ft[ii], self.otf, frqs[ii], self.dx, self.fmax,
-                                                        phases_guess=phase_guess[ii], fit_amps=self.determine_amplitudes)
+                                                        phases_guess=phase_guess[ii],
+                                                        fit_amps=self.determine_amplitudes)
         else:
             if phase_guess is None:
                 phase_guess = np.zeros((self.nangles, self.nphases))
@@ -1061,6 +1063,7 @@ class SimImageSet:
                                                          phase_guess=phase_guess[ii, jj], origin="center")
                     amps[ii, jj] = 1
 
+        # check if phase fit was too bad, and default to guess values
         if (phase_guess is not None) and self.default_to_guess_on_bad_phase_fit:
             phase_guess_diffs = np.mod(phase_guess - phase_guess[:, 0][:, None], 2*np.pi)
             phase_diffs = np.mod(phases - phases[:, 0][:, None], 2*np.pi)
@@ -1078,24 +1081,22 @@ class SimImageSet:
                     str += "\nfit phase diffs="
                     for jj in range(self.nphases):
                         str += "%0.2fdeg, " % (phase_diffs[ii, jj] * 180/np.pi)
-                    # str += "\nguesses="
-                    # for jj in range(self.nphases):
-                    #     str += "%0.2fdeg, " % (phase_guess_diffs[ii, jj] * 180/np.pi)
 
-                    # warnings.warn(str)
                     self.print_tee(str, self.log_file)
 
         return phases, amps
 
     def estimate_mod_depths(self):
+        # todo: this function is the slowest part of reconstruction right now
 
         # first average power spectrum of \sum_{angles} O(f)H(f) to get exponent
         component_zero = np.nanmean(self.separated_components_ft[:, 0], axis=0)
         noise = get_noise_power(component_zero, self.fx, self.fy, self.fmax)
 
-        fit_results_avg, mask_avg = fit_power_spectrum(component_zero, self.otf, self.fx, self.fy, self.fmax, self.fbounds,
-                                               init_params=[None, None, 1, noise],
-                                               fixed_params=[False, False, True, True])
+        fit_results_avg, mask_avg = fit_power_spectrum(component_zero, self.otf, self.fx, self.fy,
+                                                       self.fmax, self.fbounds,
+                                                       init_params=[None, None, 1, noise],
+                                                       fixed_params=[False, False, True, True])
         fit_params_avg = fit_results_avg['fit_params']
         exponent = fit_params_avg[1]
 
@@ -1131,7 +1132,10 @@ class SimImageSet:
                     raise Exception("not implemented for nphases > 3")
 
         # extract mod depths from the structure
-        mod_depths = power_spectrum_params[:, 1, 2]
+        mod_depths = np.zeros((self.nangles, self.nphases))
+        mod_depths[:, 0] = 1
+        for jj in range(1, self.nphases):
+            mod_depths[:, jj] = power_spectrum_params[:, 1, 2]
 
         return mod_depths, power_spectrum_params, masks
 
@@ -1203,7 +1207,7 @@ class SimImageSet:
                 self.log_file)
 
             # modulation depth
-            self.print_tee("modulation depth=%0.3f" % self.mod_depths[ii], self.log_file)
+            self.print_tee("modulation depth=%0.3f" % self.mod_depths[ii, 1], self.log_file)
             self.print_tee("minimum mcnr=%0.3f" % np.min(self.mcnr[ii]), self.log_file)
 
             # phase information
@@ -1577,17 +1581,17 @@ class SimImageSet:
         figs = []
         fig_names = []
 
-        # check if image has been upsampled
-        fx = tools.get_fft_frqs(2 * self.nx, 0.5 * self.dx)
-        fy = tools.get_fft_frqs(2 * self.ny, 0.5 * self.dx)
+        # upsampled frequency
+        fx_us = tools.get_fft_frqs(2 * self.nx, 0.5 * self.dx)
+        fy_us = tools.get_fft_frqs(2 * self.ny, 0.5 * self.dx)
 
         # plot different stages of inversion
         extent = tools.get_extent(self.fy, self.fx)
-        extent_upsampled = tools.get_extent(fy, fx)
+        extent_upsampled = tools.get_extent(fy_us, fx_us)
 
         for ii in range(self.nangles):
             fig = plt.figure(figsize=figsize)
-            grid = plt.GridSpec(3, 5)
+            grid = plt.GridSpec(3, 4)
 
             for jj in range(self.nphases):
 
@@ -1655,6 +1659,13 @@ class SimImageSet:
                 circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
                 ax.add_artist(circ)
 
+                if jj == 1:
+                    circ2 = matplotlib.patches.Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--')
+                    ax.add_artist(circ2)
+                elif jj == 2:
+                    circ2 = matplotlib.patches.Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--')
+                    ax.add_artist(circ2)
+
                 if jj == 0:
                     plt.title('shifted component')
                 plt.setp(ax.get_xticklabels(), visible=False)
@@ -1664,28 +1675,9 @@ class SimImageSet:
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
 
                 # ####################
-                # SNR
-                # ####################
-                ax = plt.subplot(grid[jj, 3])
-                im0 = plt.imshow(self.snr_shifted[ii, jj], norm=LogNorm(), extent=extent_upsampled)
-
-                fig.colorbar(im0)
-
-                circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-                ax.add_artist(circ)
-
-                plt.xlim([-2 * self.fmax, 2 * self.fmax])
-                plt.ylim([2 * self.fmax, -2 * self.fmax])
-
-                if jj == 0:
-                    plt.title('SNR')
-                plt.setp(ax.get_xticklabels(), visible=False)
-                plt.setp(ax.get_yticklabels(), visible=False)
-
-                # ####################
                 # normalized weights
                 # ####################
-                ax = plt.subplot(grid[jj, 4])
+                ax = plt.subplot(grid[jj, 3])
 
                 im2 = plt.imshow(self.weights[ii, jj] / self.weight_norm, norm=LogNorm(), extent=extent_upsampled)
                 im2.set_clim([1e-5, 1])
@@ -1693,6 +1685,13 @@ class SimImageSet:
 
                 circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
                 ax.add_artist(circ)
+
+                if jj == 1:
+                    circ2 = matplotlib.patches.Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--')
+                    ax.add_artist(circ2)
+                elif jj == 2:
+                    circ2 = matplotlib.patches.Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--')
+                    ax.add_artist(circ2)
 
                 if jj == 0:
                     plt.title('normalized weight')
@@ -1706,7 +1705,7 @@ class SimImageSet:
                          'mod=%0.3f, min mcnr=%0.3f, wiener param=%0.2f\n'
                          'phases (deg) =%0.2f, %0.2f, %0.2f, phase diffs (deg) =%0.2f, %0.2f, %0.2f' %
                          (self.periods[ii] * 1e3, self.angles[ii] * 180 / np.pi, self.angles[ii],
-                          self.frqs[ii, 0], self.frqs[ii, 1], self.mod_depths[ii], np.min(self.mcnr[ii]), self.wiener_parameter,
+                          self.frqs[ii, 0], self.frqs[ii, 1], self.mod_depths[ii, 1], np.min(self.mcnr[ii]), self.wiener_parameter,
                           self.phases[ii, 0] * 180/np.pi, self.phases[ii, 1] * 180/np.pi, self.phases[ii, 2] * 180/np.pi,
                           0, np.mod(self.phases[ii, 1] - self.phases[ii, 0], 2*np.pi) * 180/np.pi,
                           np.mod(self.phases[ii, 2] - self.phases[ii, 0], 2*np.pi) * 180/np.pi))
@@ -1725,13 +1724,32 @@ class SimImageSet:
         net_weight = np.sum(self.weights, axis=(0, 1)) / self.weight_norm
         im = ax.imshow(net_weight, extent=extent_upsampled, norm=PowerNorm(gamma=0.1))
 
-        figh.colorbar(im)
+        figh.colorbar(im, ticks=[1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 1e-2, 1e-3, 1e-4, 1e-5])
+
         ax.set_title("non-linear scale")
         circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ)
 
         circ2 = matplotlib.patches.Circle((0, 0), radius=2*self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ2)
+
+        circ3 = matplotlib.patches.Circle(self.frqs[0], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ3)
+
+        circ4 = matplotlib.patches.Circle(-self.frqs[0], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ4)
+
+        circ5 = matplotlib.patches.Circle(self.frqs[1], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ5)
+
+        circ6 = matplotlib.patches.Circle(-self.frqs[1], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ6)
+
+        circ7 = matplotlib.patches.Circle(self.frqs[2], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ7)
+
+        circ8 = matplotlib.patches.Circle(-self.frqs[2], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ8)
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -1746,6 +1764,24 @@ class SimImageSet:
 
         circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ2)
+
+        circ3 = matplotlib.patches.Circle(self.frqs[0], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ3)
+
+        circ4 = matplotlib.patches.Circle(-self.frqs[0], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ4)
+
+        circ5 = matplotlib.patches.Circle(self.frqs[1], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ5)
+
+        circ6 = matplotlib.patches.Circle(-self.frqs[1], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ6)
+
+        circ7 = matplotlib.patches.Circle(self.frqs[2], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ7)
+
+        circ8 = matplotlib.patches.Circle(-self.frqs[2], radius=self.fmax, color='k', fill=0, ls='--')
+        ax.add_artist(circ8)
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -1865,7 +1901,8 @@ class SimImageSet:
                               'components_deconvolved_ft',
                               'components_shifted_ft',
                               'snr', 'snr_shifted', 'weight_norm',
-                              'img_sr', 'img_sr_ft', 'fxfx', 'fyfy', 'log_file',
+                              'img_sr', 'img_sr_ft', 'log_file',
+                              'mask_wf',
                               'pspec_masks']
         # get dictionary object with images removed
         results_dict = {}
@@ -2468,9 +2505,6 @@ def power_spectrum_fn(p, fmag, otf):
     :return:
     """
 
-    # val = p[4]**2 * (p[0]**2 * np.abs(fmag) ** (-2 * p[1]) +
-    #                  p[2]**2 * np.abs(fmag) ** (-2 * p[3])) * \
-    #       np.abs(otf)**2 + p[5]
     val = p[2]**2 * p[0]**2 * np.abs(fmag) ** (-2 * p[1]) * np.abs(otf)**2 + p[3]
 
     return val
@@ -2562,11 +2596,6 @@ def fit_power_spectrum(img_ft, otf, fxs, fys, fmax, fbounds, fbounds_shift=None,
     fit_results = tools.fit_model(ps, fit_fn, init_params, fixed_params=fixed_params,
                                   bounds=bounds, model_jacobian=jac_fn)
 
-    # todo: fitting after taking log works ok for initial fit, but does not give good fit for modulation depth. Why?
-    # log_ps = np.log(ps)
-    # fit_fn_log = lambda p: np.log(fit_fn(p))
-    # fit_results = tools.fit_model(log_ps, fit_fn_log, init_params, fixed_params=fixed_params, bounds=bounds)
-
     return fit_results, mask
 
 def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None, figsize=(20, 10), ttl_str=""):
@@ -2620,6 +2649,13 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
 
     fig = plt.figure(figsize=figsize)
     grid = plt.GridSpec(2, 10)
+
+    sttl_str = ""
+    if ttl_str != "":
+        sttl_str += "%s\n" % ttl_str
+    sttl_str += 'm=%0.3g, A=%0.3g, alpha=%0.3f\nnoise=%0.3g, frq sim = (%0.2f, %0.2f) 1/um' % \
+                (pfit[-2], pfit[0], pfit[1], pfit[-1], frq_sim[0], frq_sim[1])
+    plt.suptitle(sttl_str)
 
     # ######################
     # plot power spectrum x otf vs frequency in 1D
@@ -2736,13 +2772,6 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ax4.set_ylabel('fy (1/um)')
     ax4.title.set_text('fit deconvolved')
 
-    sttl_str = ""
-    if ttl_str != "":
-        sttl_str += "%s\n" % ttl_str
-    sttl_str += 'm=%0.3g, A=%0.3g, alpha=%0.3f\nnoise=%0.3g, frq sim = (%0.2f, %0.2f) 1/um' % \
-                (pfit[-2], pfit[0], pfit[1], pfit[-1], frq_sim[0], frq_sim[1])
-    plt.suptitle(sttl_str)
-
     return fig
 
 # inversion functions
@@ -2807,21 +2836,23 @@ def separate_components(imgs_ft, phases, mod_depths=None, amps=None):
     """
     nangles, nphases, ny, nx = imgs_ft.shape
 
+    # default parameters
     if mod_depths is None:
         mod_depths = np.ones((nangles, nphases))
 
     if amps is None:
         amps = np.ones((nangles, nphases))
 
+    # check parameters
     if nphases != 3:
-        raise Exception("noisy_inversion() is only implemented for nphases=3, but nphases=%d" % nphases)
+        raise Exception("only implemented for nphases=3, but nphases=%d" % nphases)
 
     components_ft = np.empty((nangles, nphases, ny, nx), dtype=np.complex) * np.nan
 
+    # try to do inversion
     for ii in range(nangles):
         kmat = get_kmat(phases[ii], mod_depths[ii], amps[ii])
 
-        # try to do inversion
         try:
             kmat_inv = np.linalg.inv(kmat)
             components_ft[ii] = mult_img_matrix(imgs_ft[ii], kmat_inv)
@@ -2880,45 +2911,37 @@ def wiener_deconvolution(img, otf, sn_power_ratio, snr_includes_otf=False):
 
     return img_deconvolved, wfilter
 
-def rl_deconvolution(img_ft, otf):
-    # todo: doesn't skimage only operate on uint8 images?
-    img = fft.fftshift(fft.ifft2(fft.ifftshift(img_ft)))
-
-    psf = np.abs(fft.fftshift(fft.ifft2(otf)))
-    img_deconv = skimage.restoration.richardson_lucy(img, psf, iterations=50, clip=False)
-    img_deconv_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_deconv)))
-
-    return img_deconv_ft
-
-def generalized_wiener_filter(otf, sn_power_ratio):
+def get_snr_weight(otf, snr):
     """
     Return filter which is the OTF times the ratio of signal to noise power. This is a weighting factor.
 
-    img_ft[k] * |otf(k)|**2 * signal_power/noise_power
+    w[k] = |otf(k)|**2 * signal_power/noise_power
 
     :param otf: optical transfer function.
-    :param sn_power_ratio: ratio of signal power to noise power spectral density. Can be supplied as either a single
+    :param snr: ratio of signal power to noise power spectral density. Can be supplied as either a single
      number, or an array of the same size as otf
     :return filter: array the same size as otf
     """
     # filter
-    wfilter = sn_power_ratio * np.abs(otf)**2
+    weight = snr * np.abs(otf) ** 2
 
     # deal with any diverging points by averaging nearest pixels
-    if np.any(np.isinf(wfilter)):
-        xx, yy = np.meshgrid(range(wfilter.shape[1]), range(wfilter.shape[0]))
-        xinds = xx[np.isinf(wfilter)]
-        yinds = yy[np.isinf(wfilter)]
+    if np.any(np.isinf(weight)):
+        xx, yy = np.meshgrid(range(weight.shape[1]), range(weight.shape[0]))
+        xinds = xx[np.isinf(weight)]
+        yinds = yy[np.isinf(weight)]
 
         # todo: not handling case where these points might be outside ROI
         for xi, yi in zip(xinds, yinds):
-            wfilter[yi, xi] = np.mean([wfilter[yi + 1, xi], wfilter[yi - 1, xi], wfilter[yi, xi+1], wfilter[yi, xi-1]])
+            weight[yi, xi] = np.mean([weight[yi + 1, xi], weight[yi - 1, xi], weight[yi, xi+1], weight[yi, xi-1]])
 
-    return wfilter
+    return weight
 
 def estimate_snr(img_ft, fxs, fys, fmax, filter_size=5):
     """
     estimate signal to noise ratio from image
+    # todo: never got this to work satisfactorally...
+
     :param img_ft:
     :param fxs:
     :param fys:
