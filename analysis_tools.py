@@ -1544,7 +1544,8 @@ def fit_gauss(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=Non
     non-regularly spaced grids, etc.)
     :param yy:
     :param bounds: (lbs, ubs)
-    :return:
+    :return dict results:
+    :return fit_fn:
     """
 
     # get coordinates if not provided

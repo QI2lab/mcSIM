@@ -32,7 +32,37 @@ def adc2photons(img, gain_map, bg_map):
     photons[photons <= 0] = np.finfo(float).eps
     return photons
 
-def estimate_camera_noise(files, description="", calculate_correlations=False, n_chunk_size=50):
+def get_pixel_distrubtion(files, inds, dtype=np.uint16):
+    """
+    Get all pixel values for inds
+    :param files: [fname1, fname2, ...]
+    :param inds: ((iy1, ix1), ..., (iyn, ixn))
+    :return:
+    """
+    tstart = time.time()
+
+    dist = []
+    for ii, f in enumerate(files):
+        tnow = time.time()
+        print("started file %d/%d, elapsed time=%0.2fs" % (ii + 1, len(files), tnow - tstart))
+
+        # don't reread first image
+        imgs = tiffile.imread(f, multifile=False)
+
+        nimgs_current = imgs.shape[0]
+
+        dist_current = np.zeros((nimgs_current, len(inds)), dtype=dtype)
+        for jj in range(len(inds)):
+            dist_current[:, jj] = imgs[:, inds[jj][0], inds[jj][1]]
+
+        dist.append(dist_current)
+
+    dist = np.concatenate(dist, axis=0)
+
+    return dist
+
+
+def get_pixel_statistics(files, description="", calculate_correlations=False, n_chunk_size=50):
     """
     Estimate camera readout noise from a set of images taken in zero light conditions
     :param list[str] files: list of file names
