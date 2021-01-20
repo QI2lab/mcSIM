@@ -27,6 +27,7 @@ from functools import partial
 
 import psfmodels as psfm
 
+import fit
 import analysis_tools as tools
 # from . import analysis_tools as tools
 
@@ -695,7 +696,7 @@ def fit_cont_psfmodel(img, wavelength, ni, model='gaussian',
         to_use = np.logical_not(np.isnan(img))
         bg = np.mean(img[to_use].ravel())
         A = np.max(img[to_use].ravel()) - bg
-        cz, cy, cx = tools.get_moments(img, order=1, coords=[zz[:, 0, 0], yy[0, :, 0], xx[0, 0, :]])
+        cz, cy, cx = fit.get_moments(img, order=1, coords=[zz[:, 0, 0], yy[0, :, 0], xx[0, 0, :]])
 
         # iz = np.argmin(np.abs(zz[:, 0, 0] - cz))
         # m2y, m2x = tools.get_moments(img, order=2, coords=[yy[0, :, 0], xx[0, 0, :]])
@@ -717,7 +718,7 @@ def fit_cont_psfmodel(img, wavelength, ni, model='gaussian',
                   (np.inf, xx.max(), yy.max(), zz.max(), ni, np.inf))
 
     # fitting
-    result = tools.fit_model(img, lambda p: model_fn(xx, yy, zz, p), init_params,
+    result = fit.fit_model(img, lambda p: model_fn(xx, yy, zz, p), init_params,
                              fixed_params=fixed_params, sd=sd, bounds=bounds)
 
     # model function at fit parameters
@@ -775,7 +776,7 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
         bg = np.mean(img[to_use].ravel())
         A = np.max(img[to_use].ravel()) - bg
 
-        cz, cy, cx = tools.get_moments(img, order=1, coords=[z, y, x])
+        cz, cy, cx = fit.get_moments(img, order=1, coords=[z, y, x])
 
         # iz = np.argmin(np.abs(z - cz))
         # m2y, m2x = tools.get_moments(img[iz], order=2, coords=[y, x])
@@ -812,7 +813,7 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
         raise Exception("Model should be 'vectorial', 'gibson-lanni', or 'gaussian', but was '%s'" % model)
 
     # fitting
-    result = tools.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
+    result = fit.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
                              fixed_params=fixed_params, sd=sd, bounds=bounds, jac='3-point', x_scale='jac')
 
     # model function at fit parameters
@@ -1530,14 +1531,14 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
     # do fitting in parallel
     if imgs_sd is not None:
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-                joblib.delayed(tools.fit_gauss)(imgs[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
+                joblib.delayed(fit.fit_gauss)(imgs[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
                                                 sd=imgs_sd[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
                                                 init_params=[None, c_rois[ii, 2], c_rois[ii, 1], 0.5, 0.5, 0, 0])
                                                 for ii in range(len(rois))
                 )
     else:
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-            joblib.delayed(tools.fit_gauss)(imgs[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
+            joblib.delayed(fit.fit_gauss)(imgs[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
                                             init_params=[None, c_rois[ii, 2], c_rois[ii, 1], 0.5, 0.5, 0, 0])
             for ii in range(len(rois))
         )
