@@ -405,13 +405,13 @@ def fit_sum_gauss(img, ngaussians, init_params, fixed_params=None, sd=None, xx=N
         bounds = [[-np.inf, xx.min(), yy.min(), 0, 0, -np.inf] * ngaussians + [-np.inf],
                   [ np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf] * ngaussians + [np.inf]]
 
-    result = fit_model(img, lambda p: ngauss_fn(xx, yy, p), init_params, fixed_params=fixed_params,
+    result = fit_model(img, lambda p: sum_gauss_fn(xx, yy, p), init_params, fixed_params=fixed_params,
                        sd=sd, bounds=bounds, model_jacobian=lambda p: ngauss_jacobian(xx, yy, p))
 
     pfit = result['fit_params']
 
     def fn(x, y):
-        return ngauss_fn(x, y, pfit)
+        return sum_gauss_fn(x, y, pfit)
 
     return result, fn
 
@@ -520,7 +520,7 @@ def gauss_jacobian(x, y, p):
             p[0] * exps * xrot * yrot * (1 / p[3]**2 - 1 / p[4]**2)]
 
 
-def ngauss_fn(x, y, p):
+def sum_gauss_fn(x, y, p):
     """
     Sum of n 2D gaussians
     :param x:
