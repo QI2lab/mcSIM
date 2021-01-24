@@ -11,7 +11,6 @@ from PIL import Image
 import PIL.TiffTags
 import tiffile
 import os
-import copy
 import glob
 #import libtiff
 import datetime
@@ -19,6 +18,8 @@ import json
 from pathlib import Path
 import pandas as pd
 import re
+
+import fit
 
 # I/O for metadata files
 def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
@@ -854,7 +855,7 @@ def estimate_background(img):
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
     # fit to gaussian
-    fit_results, fit_fn = fit_half_gauss1d(h, x=bin_centers, init_params=[None, None, None, 0, None, None],
+    fit_results, fit_fn = fit.fit_half_gauss1d(h, x=bin_centers, init_params=[None, None, None, 0, None, None],
                                            fixed_params=[0, 0, 0, 1, 0, 0],
                                            bounds=((0, bin_centers.min(), 0, 0, 0, 0),
                                                    (np.inf, bin_centers.max(), bin_centers.max() - bin_centers.min(),

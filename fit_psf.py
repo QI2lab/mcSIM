@@ -1,7 +1,9 @@
 """
-Functions for working with point-spread functions and optical transfer functions
+Functions for fitting PSF's from fluorescence images of beads (z-stacks or single planes) and tools for working with
+point-spread functions and optical transfer functions more generally.
 
-Functions for fitting PSF's from fluorescence images of beads (z-stacks or single planes)
+For fitting z-stack images of spots, the primary functions that will be called by an external script are autofit_psfs()
+and display_autofit().
 """
 import os
 import timeit
@@ -16,20 +18,19 @@ import scipy.interpolate
 from scipy import fft
 from skimage.feature import peak_local_max
 import skimage.filters
+import joblib
+from functools import partial
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.colors import PowerNorm
 import matplotlib.gridspec
 import matplotlib.cm
-import joblib
-from functools import partial
 
-import psfmodels as psfm
+import psfmodels as psfm #https://pypi.org/project/psfmodels/, https://github.com/tlambert03/PSFmodels-py
 
 import fit
 import analysis_tools as tools
-# from . import analysis_tools as tools
 
 def get_background(img, npix):
     """
@@ -96,8 +97,6 @@ def symm1d_to_2d(arr, fs, fmax, npts):
     arr_out[to_interp] = scipy.interpolate.interp1d(fs[not_nan], arr[not_nan])(fmag[to_interp])
 
     return arr_out, fxs, fys
-
-
 
 def otf2psf(otf, dfx=1, dfy=1):
     """
@@ -443,209 +442,6 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
 
     return val
 
-# pupil and phase retrieval
-class pupil():
-    def __init__(self, nx, dx, wavelength, na, psf, zs=np.array([0]), n=1.5, mag=100, mode='abbe'):
-        """
-
-        :param nx:
-        :param dx:
-        :param wavelength:
-        :param na:
-        :param psf:
-        :param zs:
-        :param n: index of refraction in object space
-        :param mag: magnification
-        :param mode: 'abbe' or 'herschel'
-        """
-        self.nx = nx
-        self.dx = dx
-        self.wavelength = wavelength
-        self.n = n
-        self.mag = mag
-        self.na = na
-        self.psf = psf
-        self.zs = zs
-        if self.zs.size != self.psf.shape[0]:
-            raise Exception("first dimension of psf does not match z size")
-        # efield max frequency
-        self.fmax = self.na / self.wavelength
-
-        #
-        self.x = self.dx * (np.arange(self.nx) - self.nx // 2)
-        self.y = self.x
-
-        # frequency data
-        self.fx = tools.get_fft_frqs(self.nx, self.dx)
-        self.fy = tools.get_fft_frqs(self.nx, self.dx)
-        self.fxfx, self.fyfy = np.meshgrid(self.fx, self.fy)
-        self.ff = np.sqrt(self.fxfx**2 + self.fyfy**2)
-
-        # we must divide this by the magnification, because we are working in image space (i.e. we typically write
-        # all of our integrals after making the transforming x-> x/(M*n) and kx -> kx*M*n, which makes the dimensions
-        # of image space the same as object space
-        kperp = np.sqrt((2 * np.pi * self.fxfx) ** 2 + (2 * np.pi * self.fyfy) ** 2) / self.mag
-        keff = 2 * np.pi / self.wavelength
-        self.sin_tp = kperp / keff
-        self.cos_tp = np.sqrt(1 - self.sin_tp**2)
-        if mode == 'abbe':
-            self.apodization = self.cos_tp ** (-1/2) * (1 - (self.mag / self.n * self.sin_tp)**2) ** (-1/4)
-        elif mode == 'herschel':
-            # 1 / cos(theta')
-            self.apodization = self.cos_tp ** (-1)
-        elif mode == 'none':
-            self.apodization = 1
-        else:
-            raise Exception("mode must be 'abbe' or 'herschel', but was '%s'" % mode)
-
-        # initialize pupil with random phases
-        # absorb apodization into pupil
-        self.pupil = self.apodization * np.exp(1j * np.random.uniform(-np.pi, np.pi, size=(nx, nx)))
-        self.pupil[self.ff > self.fmax] = 0
-
-        self.iteration = 0
-        self.mean_err = []
-
-        # use norm so we can keep the pupil magnitude fixed at 1, no matter what the normalization of the PSF is.
-        # based on fact we expect sum_f |g(f)|^2 / N = sum_r |g(r)|^2 = sum_r psf(r)
-        # this norm is not changed by any operation
-        # actually not totally true, because the pupil cropping operation can change it...
-        #self.norm = np.sqrt(np.sum(np.abs(self.pupil)**2) / self.nx**2 / np.sum(self.psf))
-        self.norm = 1
-
-    def get_defocus(self, z):
-        """
-
-        :param z:
-        :return:
-        """
-        # kz = (self.mag**2 * self.n) * (2*np.pi / self.wavelength) * self.cos_tp
-        kz = (self.mag ** 2 / self.n) * (2 * np.pi / self.wavelength) * self.cos_tp
-        kz[np.isnan(kz)] = 0
-        return np.exp(-1j * kz * z)
-
-    def get_amp_psf(self, z, normalize=True):
-        """
-
-        :param z:
-        :return:
-        """
-        # recall that iffshift is the inverse of fftshift. Since we have centered pupil with fftshift, now
-        # need to uncenter it.
-        amp_psf = fft.fftshift(fft.ifft2(fft.ifftshift(self.pupil * self.get_defocus(z))))
-        if normalize:
-            amp_psf = amp_psf / self.norm
-        return amp_psf
-
-    def get_pupil(self, amp_psf, normalize=True):
-        """
-
-        :param amp_psf:
-        :return:
-        """
-        pupil = fft.fftshift(fft.fft2(fft.ifftshift(amp_psf)))
-        if normalize:
-            pupil = pupil * self.norm
-        return pupil
-
-    def iterate_pupil(self):
-        """
-
-        :return:
-        """
-
-        # get amplitude psf
-        psf_e = np.zeros(self.psf.shape, dtype=np.complex)
-        psf_e_new = np.zeros(self.psf.shape, dtype=np.complex)
-        pupils_new_phase = np.zeros(self.psf.shape, dtype=np.complex)
-        for ii in range(self.zs.size):
-            psf_e[ii] = self.get_amp_psf(self.zs[ii])
-            # new amplitude psf from phase of transformed pupil and amplitude of measured psf
-            psf_e_new[ii] = np.sqrt(self.psf[ii]) * np.exp(1j * np.angle(psf_e[ii]))
-            # weird issue with numpy square root for very small positive numbers
-            # think probably related to https://github.com/numpy/numpy/issues/11448
-            psf_e_new[ii][np.isnan(psf_e_new[ii])] = 0
-
-            # get new pupil by transforming, then undoing defocus
-            xform = self.get_pupil(psf_e_new[ii]) * self.get_defocus(self.zs[ii]).conj()
-            pupils_new_phase[ii] = np.angle(xform)
-
-        # get error
-        self.mean_err.append(np.nanmean(np.abs(np.abs(psf_e)**2 - self.psf) / np.nanmax(self.psf)))
-
-        # pupil_new = scipy.ndimage.gaussian_filter(pupil_new_mag, sigma=1) * np.exp(1j * pupil_new_phase)
-        phase = np.angle(np.mean(np.exp(1j * pupils_new_phase), axis=0))
-        self.pupil = np.abs(self.pupil) * np.exp(1j * phase)
-        # this should already be enforced by the initial pupil, but can't hurt
-        self.pupil[self.ff > self.fmax] = 0
-        self.iteration += 1
-
-    def show_current_pupil(self):
-
-        extent_real = [self.x[0] - 0.5*self.dx, self.x[-1] + 0.5*self.dx, self.y[-1] + 0.5*self.dx, self.y[0] - 0.5*self.dx]
-
-        df = self.fx[1] - self.fx[0]
-        extent_ft = [self.fx[0] - 0.5*df, self.fx[-1] + 0.5*df, self.fy[-1] + 0.5*df, self.fy[0] - 0.5*df]
-
-        #
-        psf_e = np.zeros(self.psf.shape, dtype=np.complex)
-        for ii in range(self.zs.size):
-            psf_e[ii] = self.get_amp_psf(self.zs[ii])
-
-        psf_i = np.abs(psf_e) ** 2
-
-        figh = plt.figure()
-        plt.suptitle('iteration = %d' % self.iteration)
-        nrows = 3
-        ncols = self.zs.size
-
-        for ii in range(ncols):
-            plt.subplot(nrows, ncols, ii + 1)
-            plt.imshow(self.psf[ii] / np.nanmax(self.psf), extent=extent_real)
-            plt.title('PSF / max at z=%0.3fum' % self.zs[ii])
-
-            plt.subplot(nrows, ncols, ncols + ii + 1)
-            plt.imshow(psf_i[ii] / np.nanmax(psf_i), extent=extent_real)
-            plt.title('PSF from pupil / max')
-
-            plt.subplot(nrows, ncols, 2*ncols + ii + 1)
-            plt.imshow((self.psf[ii] - psf_i[ii]) / np.nanmax(self.psf))
-            plt.title('(PSF - PSF from pupil) / max(psf')
-            plt.colorbar()
-
-        figh = plt.figure()
-        nrows = 2
-        ncols = 3
-        zind = np.argmin(np.abs(self.zs))
-
-        plt.subplot(nrows, ncols, 1)
-        plt.imshow(np.abs(psf_e[zind]), extent=extent_real)
-        plt.title('PSF amp, magnitude')
-
-        plt.subplot(nrows, ncols, 4)
-        plt.imshow(np.angle(psf_e[zind]) / np.pi, vmin=-1, vmax=1, extent=extent_real)
-        plt.title('PSF phase (pi)')
-
-        plt.subplot(nrows, ncols, 2)
-        plt.imshow(np.abs(self.pupil), extent=extent_ft)
-        plt.xlim([-1.2 * self.fmax, 1.2 * self.fmax])
-        plt.ylim([-1.2 * self.fmax, 1.2 * self.fmax])
-        plt.title('Pupil, magnitude')
-
-        plt.subplot(nrows, ncols, 5)
-        phase = np.unwrap(np.angle(self.pupil))
-        phase[self.ff > self.fmax] = np.nan
-
-        plt.imshow(phase / np.pi, vmin=-1, vmax=1, extent=extent_ft)
-        plt.xlim([-1.2 * self.fmax, 1.2 * self.fmax])
-        plt.ylim([-1.2 * self.fmax, 1.2 * self.fmax])
-        plt.title('Pupil, phase/pi')
-
-        plt.subplot(nrows, ncols, 3)
-        plt.semilogy(self.mean_err)
-        plt.xlabel('iteration')
-        plt.ylabel('mean PSF err / max(PSF)')
-
 # pixelation function
 def pixelate_model(nx, dxy, z, p, wavelength, fn, ni=1.5, sf=1):
     # todo:
@@ -735,10 +531,10 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
     """
     3D non-linear least squares fit using one of the point spread function models from psfmodels package.
 
-    # todo: make sure ni implemented correctly. if want to use different ni, have to be careful because this will
-    # shift the focus position away from z=0
-    # todo: make over sampling setable and ensure this works correctly with all functions
-    # todo: pixelated version of gaussian and born-wolf (b-w will be very slow!)
+    The x/y coordinates are assumed to match the convention of get_coords(), i.e. they are (arange(nx) / nx//2) * d
+
+    # todo: make sure ni implemented correctly. if want to use different ni, have to be careful because this will shift the focus position away from z=0
+    # todo: make sure oversampling (sf) works correctly with all functions
 
     :param img: Nz x Ny x Nx image stack
     :param dxy: dx and dy in microns
@@ -820,6 +616,52 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
     fit_fn = lambda z, nx, dxy: model_fn(z, nx, dxy, result['fit_params'])
 
     return result, fit_fn
+
+def localize_radial_symm(img):
+    """
+    Perform 2D localization using the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
+
+    :param img:
+
+    :return xc:
+    :return yc:
+    """
+    ny, nx = img.shape
+    x = np.arange(nx)
+    y = np.arange(ny)
+
+    # gradients taken at point between four pixels, i.e. (xk, yk) = (j + 0.5, i + 0.5)
+    # using the Roberts cross operator
+    yk = 0.5 * (y[:-1] + y[1:])
+    xk = 0.5 * (x[:-1] + x[1:])
+    # gradients along 45 degree rotated directions
+    grad_uk = img[1:, 1:] - img[:-1, :-1]
+    grad_vk = img[:-1, :-1] - img[:-1, 1:]
+    grad_xk = 1 / np.sqrt(2) * (grad_uk - grad_vk)
+    grad_yk = 1 / np.sqrt(2) * (grad_uk + grad_vk)
+    with np.errstate(invalid="ignore"):
+        # slope of the gradient at this point
+        mk = grad_yk / grad_xk
+
+        # line passing through through (xk, yk) with slope mk is y = yk + mk*(x - xk)
+        # minimimum distance of points (xc, yc) is dk**2 = [(yk - yc) - mk*(xk -xc)]**2 / (mk**2 + 1)
+
+        # compute weights by (1) increasing weight where gradient is large and (2) decreasing weight for points far away
+        # from the centroid (as small slope errors can become large as the line is extended to the centroi)
+        # approximate distance between (xk, yk) and (xc, yc) by assuming (xc, yc) is centroid of the gradient
+        grad_norm = np.sqrt(grad_xk**2 + grad_yk**2)
+        dkc = np.sqrt((np.sum(xk[None, :] * grad_norm))**2 + (np.sum(yk[:, None] * grad_norm))**2) / np.sum(grad_norm)
+        # weights
+        wk = (grad_xk**2 + grad_yk**2) / dkc
+
+        # minimize chi^2 = \sum_k dk**2 * wk
+        delta = np.nansum(mk * wk / (mk**2 + 1))**2 - np.nansum(mk**2 * wk / (mk**2 + 1)) * np.nansum(wk / (mk**2 + 1))
+        xc = (np.nansum(mk * wk * (yk[:, None] - mk * xk[None, :]) / (mk**2 + 1)) * np.nansum(wk / (mk**2 + 1)) -
+              np.nansum(mk * wk / (mk**2 + 1)) * np.nansum((yk - mk * xk ) * wk / (mk**2 + 1))) / delta
+        yc = (np.nansum(mk * wk * (yk[:, None] - mk * xk[None, :]) / (mk**2 + 1)) * np.nansum(mk * wk / (mk**2 + 1)) -
+              np.nansum(mk**2 * wk / (mk**2 + 1)) * np.nansum((yk - mk * xk ) * wk / (mk**2 + 1))) / delta
+
+    return xc, yc
 
 # utility functions
 def get_coords(ns, drs):
@@ -2161,6 +2003,3 @@ def compare_psf_eval_time(nreps=5):
     print('min time Vectorial = %0.9f' % np.min(tv))
     print('min time Born-Wolf numerical integration = %0.9f' % np.min(tbw))
     print('min time Airy function = %0.9f' % np.min(tairy))
-
-if __name__ == "__main__":
-    pass
