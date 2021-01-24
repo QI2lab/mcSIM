@@ -580,7 +580,8 @@ def solve_diffraction_output(tx_in, ty_in, dx, dy, wavelength, order):
     avec = get_unit_vector(np.atleast_1d(tx_in), np.atleast_1d(ty_in), "in")
     bx = avec[..., 0] - wavelength / dx * order[0]
     by = avec[..., 1] - wavelength / dy * order[1]
-    bz = -np.sqrt(1 - bx**2 - by**2)
+    with np.errstate(invalid="ignore"):
+        bz = -np.sqrt(1 - bx**2 - by**2)
 
     tx_out, ty_out = uvector2txty(bx, by, bz)
 
@@ -1387,7 +1388,11 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
 def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins):
     """
     Determine Blaze and diffraction angles in 2D for provided input angles. For each input angle, identify the
-    diffraction order which is closest to the blaze condition
+    diffraction order which is closest to the blaze condition.
+
+    todo: This function assumes input angles are the same for all of the supplied wavelengths.
+    In practice, want to use different input angles, but keep output angle fixed.
+    Want to sample output angles...
 
     :param list[float] wavelengths: list of wavelength, in um
     :param float gamma: micromirror angle in "on" position, in radians
@@ -1415,7 +1420,7 @@ def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins):
     # difference angle between diffraction orders and blaze angles
     tx_out_diff = np.zeros((n_wavelens, txtx_in.shape[0], txtx_in.shape[1], 2 * max_orders + 1, 2 * max_orders + 1))
     ty_out_diff = np.zeros(tx_out_diff.shape)
-    cost = np.zeros(txtx_in.shape)
+    cost = np.zeros((n_wavelens,) + txtx_in.shape)
     nx_closest = np.zeros((n_wavelens, txtx_in.shape[0], txtx_in.shape[1]))
     ny_closest = np.zeros(nx_closest.shape)
 
@@ -1441,23 +1446,24 @@ def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins):
                                                                                         dx, dy, wavelengths[jj],
                                                                                         order=(nxs[aa, bb], nys[aa, bb]))
 
-            tx_out_diff[jj, ind[0], ind[1]] = tx_out_temp
-            ty_out_diff[jj, ind[0], ind[1]] = ty_out_temp
+            tx_out_diff[jj][ind] = tx_out_temp
+            ty_out_diff[jj][ind] = ty_out_temp
 
             # find nearest diffraction order
             try:
-                imin = np.nanargmin((tx_out_temp - tx_out[ind]) ** 2 + (ty_out_temp - ty_out[ind]) ** 2)
-                indmin = np.unravel_index(imin, (2 * max_orders + 1, 2 * max_orders + 1))
+                # identify nearest diffraction order to
+                costs_temp = np.sqrt((tx_out_diff[jj][ind] - tx_out[ind]) ** 2 +
+                                     (ty_out_diff[jj][ind] - ty_out[ind]) ** 2)
+                indmin = np.unravel_index(np.nanargmin(costs_temp), (2 * max_orders + 1, 2 * max_orders + 1))
 
-                cost[jj, ind] = np.sqrt((tx_out_temp[indmin[0], indmin[1]] - tx_out[ind]) ** 2 +
-                                        (ty_out_temp[indmin[0], indmin[1]] - ty_out[ind]) ** 2)
+                cost[jj][ind] = costs_temp[indmin]
 
-                nx_closest[jj, ind] = int(nxs[indmin])
-                ny_closest[jj, ind] = int(nys[indmin])
+                nx_closest[jj][ind] = int(nxs[indmin])
+                ny_closest[jj][ind] = int(nys[indmin])
             except ValueError:
-                cost[jj, ind] = np.nan
-                nx_closest[jj, ind] = np.nan
-                ny_closest[jj, ind] = np.nan
+                cost[jj][ind] = np.nan
+                nx_closest[jj][ind] = np.nan
+                ny_closest[jj][ind] = np.nan
 
     data = {'wavelengths': wavelengths, 'gamma': gamma, 'dx': dx, 'dy': dy,
             'tx_out_diff': tx_out_diff, 'ty_out_diff': ty_out_diff,
@@ -1467,183 +1473,118 @@ def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins):
             'tx_ins': tx_ins, 'ty_ins': ty_ins}
     return data
 
-def display_2d_angles(data):
+def display_2d(wavelengths, gamma, dx, max_diff_order=7, colors=None, angle_increment=0.1, figsize=(16, 8)):
     """
-    Plot graphical solutions to Blaze condition and diffraction condition obtained from simulate_2d_angles()
-    :param **data:
+    Create manipulatable plot to explore DMD diffraction for different input angles in several colors
+
+    :param wavelengths: list of wavelengths (in um)
+    :param gamma: DMD mirror angle in radians
+    :param dx: DMD mirror pitch (in um)
+    :param max_diff_order: maximum diffraction order to simulate
+    :param colors: list of colors to plot various wavelengths in
+    :param angle_increment: angle increment for sliders, in degrees
+    :param figsize:
     :return:
     """
-    wavelengths = data['wavelengths']
-    gamma = data['gamma']
-    dx = data['dx']
-    dy = data['dy']
-    tx_out_diff = data['tx_out_diff']
-    ty_out_diff = data['ty_out_diff']
-    cost = data['cost']
-    nx_closest = data['nx_closest']
-    ny_closest = data['ny_closest']
-    tp_outs = data['tp_outs']
-    tm_outs = data['tm_outs']
-    tx_out = data['tx_out']
-    ty_out = data['ty_out']
-    tx_ins = data['tx_ins']
-    ty_ins = data['ty_ins']
+    # turn interactive mode off, or have problems with plot freezing
+    plt.ioff()
 
-
+    if not isinstance(wavelengths, list):
+        wavelengths = list(wavelengths)
     n_wavelens = len(wavelengths)
-    max_orders = int((tx_out_diff.shape[-1] - 1) / 2)
-    nangles = tx_ins.size
 
-    # plot blaze condition and diffraction angle
-    figh1 = plt.figure()
-    grid = plt.GridSpec(2, n_wavelens + 1)
-    plt.suptitle("Blaze and diffraction angle comparison, versus input angle")
+    if colors is None:
+        cmap = matplotlib.cm.get_cmap('jet')
+        if n_wavelens > 1:
+            colors = [cmap(ii / (n_wavelens - 1)) for ii in range(n_wavelens)]
+        else:
+            colors = ["k"]
 
-    dtx = tx_ins[1] - tx_ins[0]
-    dty = ty_ins[1] - ty_ins[0]
-    extent = [(tx_ins[0] - 0.5 * dtx) * 180 / np.pi,
-              (tx_ins[-1] + 0.5 * dtx) * 180 / np.pi,
-              (ty_ins[-1] + 0.5 * dty) * 180 / np.pi,
-              (ty_ins[0] - 0.5 * dty) * 180 / np.pi]
-
-    for ii in range(n_wavelens):
-        ax = plt.subplot(grid[0, ii])
-        plt.title("Angular difference %0dnm\nlog scale" % (wavelengths[ii] * 1e3))
-        plt.imshow(np.log(cost[ii] * 180 / np.pi), extent=extent)
-        plt.colorbar()
-        plt.xlabel('tx in (deg)')
-        plt.ylabel('ty in (deg)')
-
-        ax = plt.subplot(grid[1, ii])
-        plt.title("linear scale")
-        plt.imshow(cost[ii] * 180 / np.pi, extent=extent)
-        plt.colorbar()
-        plt.xlabel('tx in (deg)')
-        plt.ylabel('ty in (deg)')
-
-    ax = plt.subplot(grid[0, -1])
-    plt.title("Net angular difference\nlog scale" % (wavelengths[ii] * 1e3))
-    plt.imshow(np.log(np.sum(cost, axis=0) * 180 / np.pi), extent=extent)
-    plt.colorbar()
-    plt.xlabel('tx in (deg)')
-    plt.ylabel('ty in (deg)')
-
-    ax = plt.subplot(grid[1, ii])
-    plt.title("linear scale")
-    plt.imshow(np.sum(cost, axis=0) * 180 / np.pi, extent=extent)
-    plt.colorbar()
-    plt.xlabel('tx in (deg)')
-    plt.ylabel('ty in (deg)')
-
-
-    # choose colors for points
-    cmap = matplotlib.cm.get_cmap('jet')
-    if n_wavelens > 1:
-        colors = [cmap(ii / (n_wavelens - 1)) for ii in range(n_wavelens)]
-    else:
-        colors = ["k"]
+    # diffraction orders to compute
+    norders = 2 * max_diff_order + 1
+    nxs, nys = np.meshgrid(range(-max_diff_order, max_diff_order + 1), range(-max_diff_order, max_diff_order + 1))
 
     # plot showing diffraction orders for each input angle, with a moveable slider
-    figh2, ax = plt.subplots()
-    plt.suptitle("Diffraction orders and blaze condition versus output angle")
+    figh = plt.figure(figsize=figsize)
+    plt.suptitle("Diffraction output and blaze condition versus input angle")
 
-    plt.subplots_adjust(left=0.25, bottom=0.25)
-
-    phs = []
-    for jj in range(n_wavelens):
-        ph = ax.scatter(tx_out_diff[jj, 0, 0] * 180 / np.pi, ty_out_diff[jj, 0, 0] * 180 / np.pi,
-                   edgecolor=colors[jj], facecolor='none')
-        phs.append(ph)
-
-    phb = ax.scatter(tx_out[0, 0] * 180 / np.pi, ty_out[0, 0] * 180 / np.pi, color='r')
-    phs.append(phb)
-
-    titles = ["%dnm" % w for w in wavelengths]
-    titles += ["blaze angle"]
-
-    ax.set_xlabel('tx out (deg)')
-    ax.set_ylabel('ty out (deg)')
-    ax.set_xlim([-90, 90])
-    ax.set_ylim([-90, 90])
-
+    # build sliders
     axcolor = 'lightgoldenrodyellow'
-    ax_x = plt.axes([0.25, 0.1, 0.65, 0.03], facecolor=axcolor)
-    ax_y = plt.axes([0.25, 0.15, 0.65, 0.03], facecolor=axcolor)
+    slider_axes_x = []
+    sliders_x = []
+    slider_axes_y = []
+    sliders_y = []
+    slider_height = 0.03
+    slider_width = 0.65
+    slider_hspace = 0.02
+    slider_hstart = 0.1
+    for ii in range(n_wavelens):
+        slider_axes_x.append(plt.axes([0.5 * (1 - slider_width), slider_hstart + 2 * ii * (slider_hspace + slider_height), slider_width, slider_height],facecolor=axcolor))
+        sliders_x.append(matplotlib.widgets.Slider(slider_axes_x[ii], 'tx in %dnm' % (wavelengths[ii] * 1e3), -90, 90, valinit=0, valstep=angle_increment))
 
-    tx_in_slider = matplotlib.widgets.Slider(ax_x, 'tx in index', 0, nangles - 1, valinit=0, valstep=1)
-    ty_in_slider = matplotlib.widgets.Slider(ax_y, 'ty in index', 0, nangles - 1, valinit=0, valstep=1)
+        slider_axes_y.append(plt.axes([0.5 * (1 - slider_width), slider_hstart + (2 * ii + 1) * (slider_hspace + slider_height), slider_width, slider_height], facecolor=axcolor))
+        sliders_y.append(matplotlib.widgets.Slider(slider_axes_y[ii], 'ty in %dnm' % (wavelengths[ii] * 1e3), -90, 90, valinit=0, valstep=angle_increment))
 
+    # plt.subplots_adjust(left=0.25, bottom=0.25)
+
+    # build main axis
+    # [left, bottom, width, height]
+    hsep = 0.05
+    ax = plt.axes([0.2, slider_hstart + (2 * n_wavelens + 1) * (slider_hspace + slider_height) + hsep, 0.6, 0.4])
+
+    # function called when sliders are moved on plot
     def update(val):
-        xlim = ax.get_xlim()
-        ylim = ax.get_ylim()
         ax.clear()
-        ix = int(tx_in_slider.val)
-        iy = int(ty_in_slider.val)
 
+        # plot along main line
         ax.plot([-90, 90], [90, -90], 'k')
+        # get slider values and plot diffraction orders
         for jj in range(n_wavelens):
-            ax.scatter(tx_out_diff[jj, iy, ix] * 180 / np.pi, ty_out_diff[jj, iy, ix] * 180 / np.pi,
-                       edgecolor=colors[jj], facecolor='none')
-        ax.scatter(tx_out[iy, ix] * 180 / np.pi, ty_out[iy, ix] * 180 / np.pi, color='r')
+            # read input angles from sliders
+            tx_in = sliders_x[jj].val * np.pi/180
+            ty_in = sliders_y[jj].val * np.pi/180
 
-        ax.set_xlim(xlim)
-        ax.set_ylim(ylim)
-        ax.set_title('(tx, ty) = (%0.2f, %0.2f) deg' % (tx_ins[ix] * 180 / np.pi, ty_ins[iy] * 180 / np.pi))
-        figh2.canvas.draw_idle()
+            # solve diffraction output
+            tx_out_diff = np.zeros((norders, norders))
+            ty_out_diff = np.zeros((norders, norders))
+            for aa in range(norders):
+                for bb in range(norders):
+                    tx_out_diff[aa, bb], ty_out_diff[aa, bb] = solve_diffraction_output(tx_in, ty_in,
+                                                                                        dx, dx, wavelengths[jj],
+                                                                                        order=(nxs[aa, bb], nys[aa, bb]))
 
-    tx_in_slider.on_changed(update)
-    ty_in_slider.on_changed(update)
+            ax.scatter(tx_out_diff * 180 / np.pi, ty_out_diff * 180 / np.pi, edgecolor=colors[jj], facecolor='none')
 
-    return figh1, figh2
+            # solve blaze output for gamma
+            tp_in, tm_in = angle2pm(tx_in, ty_in)
+            tp_out, tm_out = solve_blaze(tp_in, tm_in, gamma)
+            tx_out, ty_out = angle2xy(tp_out, tm_out)
+            ax.scatter(tx_out * 180 / np.pi, ty_out * 180 / np.pi, color=colors[jj])
 
-if __name__ == "__main__":
-    # example 2/4 color 1D/2D simulation
+            # solve blaze output for -gamma
+            tp_in, tm_in = angle2pm(tx_in, ty_in)
+            tp_out, tm_out = solve_blaze(tp_in, tm_in, -gamma)
+            tx_out, ty_out = angle2xy(tp_out, tm_out)
+            ax.scatter(tx_out * 180 / np.pi, ty_out * 180 / np.pi, marker='x', color=colors[jj])
 
-    # wavelengths = [405e-9, 473e-9, 532e-9, 635e-9]
-    # colors = [[0, 0, 1], [0, 1, 1], [0, 1, 0], [1, 0, 0]]
-    wavelengths = [473e-9, 532e-9, 635e-9]
-    colors = [[0, 1, 1], [0, 1, 0], [1, 0, 0]]
+        ax.set_xlabel('tx out (deg)')
+        ax.set_ylabel('ty out (deg)')
+        ax.set_xlim([-90, 90])
+        ax.set_ylim([-90, 90])
+        # ax.set_title('input (tx, ty) = (%0.2f, %0.2f) deg\nblaze output (tx, ty) = (%0.2f, %0.2f) deg'
+        #              % (tx_ins[ix] * 180 / np.pi, ty_ins[iy] * 180 / np.pi,
+        #                 tx_out[iy, ix] * 180 / np.pi, ty_out[iy, ix] * 180 / np.pi))
+        figh.canvas.draw_idle()
 
-    #tx_ins = np.array([30, 40]) * np.pi/180
-    # tx_ins = np.array([74]) * np.pi/180
-    # ty_ins = np.array([70]) * np.pi/180
-    tx_ins = np.array([35]) * np.pi / 180
-    ty_ins = np.array([30]) * np.pi/180
-    _, t45_ins = angle2pm(tx_ins, ty_ins)
-    # t45_ins = 45 * np.pi/180
+    for txs in sliders_x:
+        txs.on_changed(update)
+    for tys in sliders_y:
+        tys.on_changed(update)
 
-    # pixel spacing (DMD pitch)
-    dx = 7.56e-6 # meters
-    dy = dx
-    # pixel size, inferred from coverage fraction
-    coverage_f = 0.92
-    wx = np.sqrt(coverage_f) * dx
-    wy = wx
-    # on and off angle of mirrors from the normal plane of the DMD body
-    gamma_on = 12 * np.pi/180
-    gamma_off = -12 * np.pi/180
+    # call once to ensure displays something
+    update(0)
 
-    # create pattern
-    nx = 10
-    ny = 10
+    plt.show()
 
-    # set pattern for DMD to be simulated
-    # pattern = np.ones((ny, nx))
-    [xx, yy] = np.meshgrid(range(nx), range(ny))
-    theta_pattern = -np.pi/4
-    period = 3 * np.sqrt(2)
-    #
-    pattern = np.cos(2 * np.pi / period * (xx * np.cos(theta_pattern) + yy * np.sin(theta_pattern)))
-    pattern[pattern < 0] = 0
-    pattern[pattern > 0] = 1
+    return figh
 
-    save_dir = 'data/dmd_simulation'
-
-    # sample 1D simulation
-    # data1d = simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, t45_ins)
-    # plot_1d_sim(data1d, colors, saving=False, save_dir=save_dir)
-
-    # sample 2D simulation
-    data2d = simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_ins, ty_ins,
-                         tout_offsets=np.linspace(-25, 25, 150) * np.pi / 180)
-    plot_2d_sim(data2d, saving=False, save_dir=save_dir)
