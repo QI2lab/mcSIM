@@ -529,12 +529,13 @@ def export_camera_params(offsets, variances, gains, id="", save_dir=''):
         pickle.dump(data, f)
 
 
-def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout_noise_sds,
-                  pix_size, otf=None, na=1.3, wavelength=0.5, photon_shot_noise=True, bin_size=1):
+def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout_noise_sds, pix_size=None, otf=None, na=1.3,
+                  wavelength=0.5, photon_shot_noise=True, bin_size=1, use_otf=False):
     """
     Convert ground truth image (with values between 0-1) to simulated camera image, including the effects of
     photon shot noise and camera readout noise.
 
+    :param use_otf:
     :param ground_truth: Relative intensity values of image
     :param max_photons: Mean photons emitted by ber of photons will be different than expected. Furthermore, due to
     the "blurring" of the point spread function and possible binning of the image, no point in the image
@@ -560,17 +561,20 @@ def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout
 
     img_size = ground_truth.shape
 
-    # get OTF
-    if otf is None:
-        fx = tools.get_fft_frqs(img_size[1], pix_size)
-        fy = tools.get_fft_frqs(img_size[0], pix_size)
-        otf = psf.circ_aperture_otf(fx[None, :], fy[:, None], na, wavelength)
+    if use_otf:
+        # get OTF
+        if otf is None:
+            fx = tools.get_fft_frqs(img_size[1], pix_size)
+            fy = tools.get_fft_frqs(img_size[0], pix_size)
+            otf = psf.circ_aperture_otf(fx[None, :], fy[:, None], na, wavelength)
 
-    # blur image with otf/psf
-    # todo: maybe should add an "imaging forward model" function to fit_psf.py and call it here.
-    gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
-    img_blurred = max_photons * fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf))).real
-    img_blurred[img_blurred < 0] = 0
+        # blur image with otf/psf
+        # todo: maybe should add an "imaging forward model" function to fit_psf.py and call it here.
+        gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
+        img_blurred = max_photons * fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf))).real
+        img_blurred[img_blurred < 0] = 0
+    else:
+        img_blurred = max_photons * ground_truth
 
     # resample image by binning
     img_blurred = tools.bin(img_blurred, (bin_size, bin_size), mode='sum')
@@ -584,7 +588,7 @@ def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout
         img_shot_noise = img_blurred
 
     # add camera noise and convert from photons to ADU
-    readout_noise = np.random.randn(img_shot_noise.shape[0], img_shot_noise.shape[1]) * cam_readout_noise_sds
+    readout_noise = np.random.standard_normal(img_shot_noise.shape) * cam_readout_noise_sds
 
     img = cam_gains * img_shot_noise + readout_noise + cam_offsets
 
