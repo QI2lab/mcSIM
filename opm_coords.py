@@ -159,6 +159,8 @@ def gaussian3d_pixelated_psf(x, y, z, ds, normal, p, sf=3):
     Gaussian function, accounting for image pixelation in the xy plane. This function mimics the style of the
     PSFmodels functions.
 
+    todo: vectorize appropriately
+
     :param dx: pixel size in um
     :param nx: number of pixels (must be odd)
     :param z: coordinates of z-planes to evaluate function at
@@ -201,7 +203,7 @@ if __name__ == "__main__":
     # theta = 90 * np.pi / 180
     normal = np.array([0, -np.sin(theta), np.cos(theta)])
     # number of different pictures, separated by dz in the z-coordinate system
-    dy = 5 * dx * np.cos(theta)
+    dy = 2 * dx * np.cos(theta)
     dz = dx * np.sin(theta)
     gn = np.arange(0, 15, dy)
     nz = len(gn)
@@ -220,21 +222,38 @@ if __name__ == "__main__":
                               np.random.uniform(x.min(), x.max(), size=(nc, 1))), axis=1)
 
 
-    imgs = np.zeros((nz, nx, nx))
+    imgs_opm = np.zeros((nz, nx, nx))
     for ii in range(nz):
         for jj in range(nx):
             for kk in range(nc):
                 params = [1, centers[kk, 2], centers[kk, 1], centers[kk, 0], 0.3, 1.2, 0]
-                imgs[ii, :, jj] += gaussian3d_pixelated_psf(x[jj], y[ii], z, dx, normal, params, sf=3)
+                imgs_opm[ii, :, jj] += gaussian3d_pixelated_psf(x[jj], y[ii], z, dx, normal, params, sf=3)
 
     # add shot-noise and gaussian readout noise
     nphotons = 100
     bg = 100
     gain = 2
-    imgs, _, _ = cam.simulated_img(imgs, nphotons, gain, bg, 5, use_otf=False)
+    noise = 5
+    imgs_opm, _, _ = cam.simulated_img(imgs_opm, nphotons, gain, bg, noise, use_otf=False)
 
-    xi, yi, zi, imgs_unskew = interp_pts(imgs, dx, dy, theta, mode="row-interp")
-    _, _, _, imgs_unskew2 = interp_pts(imgs, dx, dy, theta, mode="ortho-interp")
+    # interpolate images
+    xi, yi, zi, imgs_unskew = interp_pts(imgs_opm, dx, dy, theta, mode="row-interp")
+    _, _, _, imgs_unskew2 = interp_pts(imgs_opm, dx, dy, theta, mode="ortho-interp")
+    dxi = xi[1] - xi[0]
+    dyi = yi[1] - yi[0]
+    dzi = zi[1]- zi[0]
+
+    # get gt in interpolated space
+    imgs_square = np.zeros((len(zi), len(yi), len(xi)))
+    for ii in range(len(zi)):
+        for jj in range(len(xi)):
+            for kk in range(nc):
+                params = [1, centers[kk, 2], centers[kk, 1], centers[kk, 0], 0.3, 1.2, 0]
+                imgs_square[ii, :, jj] += gaussian3d_pixelated_psf(xi[jj], yi, zi[ii], dxi, np.array([0, 0, 1]), params, sf=3)
+    # add noise
+    imgs_square, _, _ = cam.simulated_img(imgs_square, nphotons, gain, bg, noise, use_otf=False)
+    # nan-mask region outside what we get from the OPM
+    imgs_square[np.isnan(imgs_unskew)] = np.nan
 
     # plot raw data
     plt.figure()
@@ -247,7 +266,7 @@ if __name__ == "__main__":
 
         ax = plt.subplot(nrows, ncols, ii + 1)
         ax.set_title("%0.2fum" % gn[ii])
-        ax.imshow(imgs[ii], vmin=bg, vmax=bg + gain * nphotons, extent=extent)
+        ax.imshow(imgs_opm[ii], vmin=bg, vmax=bg + gain * nphotons, extent=extent)
 
         if ii == 0:
             plt.xlabel("x'")
@@ -259,8 +278,6 @@ if __name__ == "__main__":
     ncols = 6
     nrows = 6
     for ii in range(36):
-        dxi = xi[1] - xi[0]
-        dyi = yi[1]- yi[0]
         extent = [xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi,
                   yi[-1] + 0.5 * dyi, yi[0] - 0.5 * dyi]
 
@@ -278,8 +295,6 @@ if __name__ == "__main__":
     ncols = 6
     nrows = 6
     for ii in range(36):
-        dxi = xi[1] - xi[0]
-        dyi = yi[1]- yi[0]
         extent = [xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi,
                   yi[-1] + 0.5 * dyi, yi[0] - 0.5 * dyi]
 
@@ -294,9 +309,6 @@ if __name__ == "__main__":
     # maximum intensity projection
     plt.figure()
     plt.suptitle("Max int projection, row interp")
-    dxi = xi[1] - xi[0]
-    dyi = yi[1] - yi[0]
-    dzi = zi[1] - zi[0]
 
     plt.subplot(1, 3, 1)
     plt.imshow(np.nanmax(imgs_unskew, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons,
@@ -325,9 +337,6 @@ if __name__ == "__main__":
     # ortho interp
     plt.figure()
     plt.suptitle("Max int projection, ortho interp")
-    dxi = xi[1] - xi[0]
-    dyi = yi[1] - yi[0]
-    dzi = zi[1] - zi[0]
 
     plt.subplot(1, 3, 1)
     plt.imshow(np.nanmax(imgs_unskew2, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons,
@@ -347,6 +356,34 @@ if __name__ == "__main__":
 
     plt.subplot(1, 3, 3)
     plt.imshow(np.nanmax(imgs_unskew2, axis=2), vmin=bg, vmax=bg + gain * nphotons,
+               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
+    plt.plot(centers[:, 1], centers[:, 0], 'rx')
+    plt.xlabel("Y (um)")
+    plt.ylabel("Z (um)")
+    plt.title("YZ")
+
+    # ground truth in these coords
+    plt.figure()
+    plt.suptitle("gt")
+
+    plt.subplot(1, 3, 1)
+    plt.imshow(np.nanmax(imgs_square, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons,
+               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[-1] + 0.5 * dxi, xi[0] - 0.5 * dxi])
+    plt.plot(centers[:, 1], centers[:, 2], 'rx')
+    plt.xlabel("Y (um)")
+    plt.ylabel("X (um)")
+    plt.title("XY")
+
+    plt.subplot(1, 3, 2)
+    plt.imshow(np.nanmax(imgs_square, axis=1), vmin=bg, vmax=bg + gain * nphotons,
+               extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
+    plt.plot(centers[:, 2], centers[:, 0], 'rx')
+    plt.xlabel("X (um)")
+    plt.ylabel("Z (um)")
+    plt.title("XZ")
+
+    plt.subplot(1, 3, 3)
+    plt.imshow(np.nanmax(imgs_square, axis=2), vmin=bg, vmax=bg + gain * nphotons,
                extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
     plt.plot(centers[:, 1], centers[:, 0], 'rx')
     plt.xlabel("Y (um)")
