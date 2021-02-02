@@ -120,7 +120,7 @@ class pupil():
         self.psf = psf
         self.zs = zs
         if self.zs.size != self.psf.shape[0]:
-            raise Exception("first dimension of psf does not match z size")
+            raise ValueError("first dimension of psf does not match z size")
         # efield max frequency
         self.fmax = self.na / self.wavelength
 
@@ -149,7 +149,7 @@ class pupil():
         elif mode == 'none':
             self.apodization = 1
         else:
-            raise Exception("mode must be 'abbe' or 'herschel', but was '%s'" % mode)
+            raise ValueError("mode must be 'abbe' or 'herschel', but was '%s'" % mode)
 
         # initialize pupil with random phases
         # absorb apodization into pupil

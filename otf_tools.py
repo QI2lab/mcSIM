@@ -135,7 +135,7 @@ def get_int_fc(efield_fc):
     """
     ny, nx = efield_fc.shape
     if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
-        raise Exception("not implemented for even sized arrays")
+        raise ValueError("not implemented for even sized arrays")
 
     intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
 
@@ -157,7 +157,7 @@ def get_int_fc_pol(efield_fc, vecs, wavelength, n, polarization_angle=None):
     """
     ny, nx = efield_fc.shape
     if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
-        raise Exception("not implemented for even sized arrays")
+        raise ValueError("not implemented for even sized arrays")
 
     # define convolution
     def conv(efield): return scipy.signal.fftconvolve(efield, np.flip(efield, axis=(0, 1)).conj(), mode='same')

@@ -71,13 +71,13 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
 
     # check input arguments are sensible
     if not np.all(np.logical_or(pattern == 0, pattern == 1)):
-        raise Exception('pattern must be binary. All entries should be 0 or 1.')
+        raise TypeError('pattern must be binary. All entries should be 0 or 1.')
 
     if dx < wx or dy < wy:
-        raise Exception('w must be <= d.')
+        raise ValueError('w must be <= d.')
 
     if txs_out.size != tys_out.size:
-        raise Exception('txs_out and tys_out should be the same size')
+        raise ValueError('txs_out and tys_out should be the same size')
 
     # k-vector for wavelength
     k = 2*np.pi/wavelength
@@ -189,7 +189,7 @@ def blaze_condition_fn(gamma, amb, mode='plus', n_vec=(1/np.sqrt(2), 1/np.sqrt(2
             (ny ** 2 * (1 - np.cos(gamma)) + np.cos(gamma)) * amb[..., 1] + \
             (ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma)) * amb[..., 2]
     else:
-        raise Exception("mode must be 'plus' or 'minus', but was '%s'" % mode)
+        raise ValueError("mode must be 'plus' or 'minus', but was '%s'" % mode)
     return A
 
 def sinc_fn(x):
@@ -381,7 +381,7 @@ def get_unit_vector(tx, ty, mode='in'):
         uy = np.tan(ty)
         uz = -np.ones(tx.shape)
     else:
-        raise Exception("mode must be 'in' or 'out', but was '%s'" % mode)
+        raise ValueError("mode must be 'in' or 'out', but was '%s'" % mode)
 
     uvec = np.concatenate((ux[..., None], uy[..., None], uz[..., None]), axis=-1) / norm[..., None]
 
@@ -729,10 +729,10 @@ def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
     :return bf_zp:
     """
     if np.abs(np.linalg.norm(bvec) - 1) > 1e-12:
-        raise Exception("bvec was not a unit vector")
+        raise ValueError("bvec was not a unit vector")
 
     if np.abs(np.linalg.norm(pvec) - 1) > 1e-12:
-        raise Exception("pvec was not a unit vector")
+        raise ValueError("pvec was not a unit vector")
 
 
     fx = np.atleast_1d(fx)

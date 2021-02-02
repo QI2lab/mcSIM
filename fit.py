@@ -56,10 +56,10 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
                 init_params[ii] = 0.5 * (bounds[0][ii] + bounds[1][ii])
 
     if np.any(np.isnan(init_params)):
-        raise Exception("init_params cannot include nans")
+        raise ValueError("init_params cannot include nans")
 
     if np.any(np.isnan(bounds)):
-        raise Exception("bounds cannot include nans")
+        raise ValueError("bounds cannot include nans")
 
     def err_fn(p): return np.divide(model_fn(p)[to_use].ravel() - img[to_use].ravel(), sd[to_use].ravel())
     if model_jacobian is not None:
@@ -154,10 +154,10 @@ def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, mod
                 init_params[ii] = 0.5 * (bounds[0][ii] + bounds[1][ii])
 
     if np.any(np.isnan(init_params)):
-        raise Exception("init_params cannot include nans")
+        raise ValueError("init_params cannot include nans")
 
     if np.any(np.isnan(bounds)):
-        raise Exception("bounds cannot include nans")
+        raise ValueError("bounds cannot include nans")
 
     # if some parameters are fixed, we need to hide them from the fit function to produce correct covariance, etc.
     # awful list comprehension. The idea is this: map the "reduced" (i.e. not fixed) parameters onto the full parameter list.
@@ -239,7 +239,7 @@ def get_moments(img, order=1, coords=None, dims=None):
     coords = [np.array(c, dtype=np.float) for c in coords]
 
     if len(dims) != len(coords):
-        raise Exception('dims and coordinates must have the same length')
+        raise ValueError('dims and coordinates must have the same length')
 
     # weight summing only over certain dimensions
     w = np.nansum(img, axis=tuple(dims), dtype=np.float)
@@ -485,7 +485,7 @@ def gauss_fn(x, y, p):
     :return value:
     """
     if len(p) != 7:
-        raise Exception("parameter list p must have length 7")
+        raise ValueError("parameter list p must have length 7")
 
     xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])
     yrot = np.cos(p[6]) * (y - p[2]) + np.sin(p[6]) * (x - p[1])
@@ -502,7 +502,7 @@ def gauss_jacobian(x, y, p):
     :return value:
     """
     if len(p) != 7:
-        raise Exception("parameter list p must have length 7")
+        raise ValueError("parameter list p must have length 7")
 
     # useful functions that show up in derivatives
     xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])
@@ -529,7 +529,7 @@ def sum_gauss_fn(x, y, p):
     :return:
     """
     if len(p) % 6 != 1:
-        raise Exception("Parameters")
+        raise ValueError("Parameter list should have remainder 1 mod 6")
 
     ngaussians = (len(p) - 1) // 6
 
@@ -552,7 +552,7 @@ def ngauss_jacobian(x, y, p):
     :return:
     """
     if len(p) % 6 != 1:
-        raise Exception("Parameters")
+        raise ValueError("Parameter array had wrong length")
 
     ngaussians = (len(p) - 1) // 6
 
@@ -588,7 +588,7 @@ def poly(xx, yy, params, max_orders=(1, 1)):
     norders = nx * ny
 
     if len(params) != (norders + 2):
-        raise Exception('params is not equal to norders')
+        raise ValueError('params is not equal to norders')
 
     cx = params[0]
     cy = params[1]

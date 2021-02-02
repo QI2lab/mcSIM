@@ -86,7 +86,7 @@ def export_gnuplot_rgb(fname, mat, x=None, y=None):
     nc, ny, nx = mat.shape
 
     if nc != 3:
-        raise Exception("Matrix was wrong shape. Should be 3 x ny x nx, where first three are RGB")
+        raise ValueError("Matrix was wrong shape. Should be 3 x ny x nx, where first three are RGB")
 
     if x is None or y is None:
         x, y = np.meshgrid(range(nx), range(ny))

@@ -46,7 +46,7 @@ def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
 
     # ensure both vec_b components are divisible by nphases
     if not (vec_b[0] / nphases).is_integer() or not (vec_b[1] / nphases).is_integer():
-        raise Exception("At least one component of vec_b was not divisible by nphases")
+        raise ValueError("At least one component of vec_b was not divisible by nphases")
 
     cell, x, y = get_sim_unit_cell(vec_a, vec_b, nphases)
 
@@ -238,7 +238,7 @@ def get_sim_unit_cell(vec_a, vec_b, nphases):
 
     # ensure both vec_b components are divisible by nphases
     if not float(vec_b[0] / nphases).is_integer() or not float(vec_b[1] / nphases).is_integer():
-        raise Exception("At least one component of vec_b was not divisible by nphases")
+        raise ValueError("At least one component of vec_b was not divisible by nphases")
 
     # get full unit cell
     cell, x_cell, y_cell = get_unit_cell(vec_a, vec_b)
@@ -262,7 +262,7 @@ def get_sim_unit_cell(vec_a, vec_b, nphases):
 
     with np.errstate(invalid='ignore'):
         if np.nansum(cell) != np.sum(cell >= 0) / nphases:
-            raise Exception("Cell does not have appropriate number of 'on' pixels")
+            raise ValueError("Cell does not have appropriate number of 'on' pixels")
 
     return cell, x_cell, y_cell
 
@@ -291,7 +291,7 @@ def get_unit_cell(vec_a, vec_b):
     for vecs in [vec_a, vec_b]:
         for v in vec_a:
             if not float(v).is_integer():
-                raise Exception("At least one component of vec_a or vec_b cannot be interpreted as an integer")
+                raise ValueError("At least one component of vec_a or vec_b cannot be interpreted as an integer")
 
     # copy vector data, so don't affect inputs
     vec_a = np.array(vec_a, copy=True, dtype=np.int)
@@ -299,7 +299,7 @@ def get_unit_cell(vec_a, vec_b):
 
     # check vectors are linearly independent
     if np.cross(vec_a, vec_b) == 0:
-        raise Exception("vec_a and vec_b are linearly dependent.")
+        raise ValueError("vec_a and vec_b are linearly dependent.")
 
     # square array containing unit cell, with points not in unit cell nans
     dy = np.abs(vec_a[1]) + np.abs(vec_b[1])
@@ -413,7 +413,7 @@ def reduce2cell(point, va, vb):
     for vec in [va, vb]:
         for v in vec:
             if not float(v).is_integer():
-                raise Exception("at least one component of va or vb could nto be interpreted as an integer.")
+                raise ValueError("at least one component of va or vb could nto be interpreted as an integer.")
 
     point = np.array(point, copy=True)
     va = np.array(va, copy=True, dtype=np.int)
@@ -487,7 +487,7 @@ def convert_cell(cell1, x1, y1, va1, vb1, va2, vb2):
     for vec in [va1, vb1, va2, vb2]:
         for v in vec:
             if not float(v).is_integer():
-                raise Exception("At least one component of va1, vb1, va2, or vb2 could not be interpreted as an integer")
+                raise ValueError("At least one component of va1, vb1, va2, or vb2 could not be interpreted as an integer")
 
     cell2, x2, y2 = get_unit_cell(va2, vb2)
     y1min = y1.min()
@@ -578,7 +578,7 @@ def get_reciprocal_vects(vec_a, vec_b, mode='frequency'):
 
     # best to check this directly, as sometimes due to numerical issues np.linalg.inv() will not throw error
     if np.cross(vec_a_temp[:, 0], vec_b_temp[:, 0]) == 0:
-        raise Exception('vec_a_temp and vec_b_temp are linearly dependent,'
+        raise ValueError('vec_a_temp and vec_b_temp are linearly dependent,'
                         ' so their reciprocal vectors could not be computed.')
 
     A_mat = np.concatenate([vec_a_temp.transpose(), vec_b_temp.transpose()], 0)
@@ -587,7 +587,7 @@ def get_reciprocal_vects(vec_a, vec_b, mode='frequency'):
         reciprocal_vect1 = inv_a[:, 0][:, None]
         reciprocal_vect2 = inv_a[:, 1][:, None]
     except np.linalg.LinAlgError:
-        raise Exception('vec_a_temp and vec_b_temp are linearly dependent,'
+        raise ValueError('vec_a_temp and vec_b_temp are linearly dependent,'
                         ' so their reciprocal vectors could not be computed.')
 
     if mode == 'angular-frequency':
@@ -596,7 +596,7 @@ def get_reciprocal_vects(vec_a, vec_b, mode='frequency'):
     elif mode == 'frequency':
         pass
     else:
-        raise Exception("'mode' should be 'frequency' or 'angular-frequency', but was '%s'" % mode)
+        raise ValueError("'mode' should be 'frequency' or 'angular-frequency', but was '%s'" % mode)
 
     return reciprocal_vect1, reciprocal_vect2
 
@@ -721,7 +721,7 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
         pass
     elif origin == 'fft':
         if dmd_size is None:
-            raise Exception("dmd_size was None, but must be specified when origin is 'fft'")
+            raise TypeError("dmd_size was None, but must be specified when origin is 'fft'")
 
         # now correct for
         nx, ny = dmd_size
@@ -733,7 +733,7 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
         phase = phase + 2 * np.pi * center_coord.dot(frq_vector)
 
     else:
-        raise Exception("origin must be 'corner' or 'fft', but was '%s'" % origin)
+        raise ValueError("origin must be 'corner' or 'fft', but was '%s'" % origin)
 
     fcomponent = np.abs(fcomponent) * np.exp(1j * phase)
 
@@ -814,7 +814,7 @@ def get_int_fc(efield_fc):
     """
     ny, nx = efield_fc.shape
     if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
-        raise Exception("not implemented for even sized arrays")
+        raise ValueError("not implemented for even sized arrays")
 
     intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
 
@@ -862,7 +862,7 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     """
 
     if dmd_params is None and include_blaze_correction is True:
-        raise Exception("dmd_params must be supplied as include_blaze_correction is True")
+        raise ValueError("dmd_params must be supplied as include_blaze_correction is True")
 
     if dmd_params is not None:
         wavelength = dmd_params["wavelength"]
@@ -985,7 +985,7 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
     """
 
     if dmd_params is None and include_blaze_correction is True:
-        raise Exception("dmd_params must be supplied as include_blaze_correction is True")
+        raise ValueError("dmd_params must be supplied as include_blaze_correction is True")
 
     if dmd_params is not None:
         wavelength = dmd_params["wavelength"]
@@ -1395,7 +1395,7 @@ def binarize(pattern_gray, mode="floyd-steinberg"):
     pattern_gray = copy.deepcopy(pattern_gray)
 
     if np.any(pattern_gray) > 1 or np.any(pattern_gray) < 0:
-        raise Exception("pattern values must be in [0, 1]")
+        raise ValueError("pattern values must be in [0, 1]")
 
     ny, nx = pattern_gray.shape
 
@@ -1468,7 +1468,7 @@ def binarize(pattern_gray, mode="floyd-steinberg"):
     elif mode == "round":
         pattern_bin = np.asarray(np.round(pattern_gray), dtype=np.bool)
     else:
-        raise Exception("mode must be 'floyd-steinberg', 'random', or 'round' but was '%s'" % mode)
+        raise ValueError("mode must be 'floyd-steinberg', 'random', or 'round' but was '%s'" % mode)
 
     return pattern_bin
 
@@ -1502,7 +1502,7 @@ def min_angle_diff(angle1, angle2, mode='normal'):
         angle_diff[to_switch] = angle_diff_pi[to_switch]
 
     else:
-        raise Exception("'mode' must be 'normal' or 'half', but was '%s'" % mode)
+        raise ValueError("'mode' must be 'normal' or 'half', but was '%s'" % mode)
 
     return angle_diff
 
@@ -1831,7 +1831,7 @@ def find_rational_approx_angle(angle, nmax):
         angle_pos = 2*np.pi - angle_2p
         case = 4
     else:
-        raise Exception('disallowed angle')
+        raise ValueError('disallowed angle')
 
     slope = np.tan(angle_pos)
     slope_inverted = False
@@ -2674,7 +2674,7 @@ def spifi_1d_pattern(dmd_size, periods, ntimes, start_pos=None, strip_size=None,
     :return mask:
     """
     if np.any(np.mod(periods, 2) != 0):
-        raise Exception('only even periods are allowed')
+        raise ValueError('only even periods are allowed')
 
     # nx and ny are size of non-zero section of pattern
     nx, ny = dmd_size
