@@ -191,7 +191,7 @@ def affine_xform_mat(mat, xform, img_coords, mode='nearest'):
         mat_out = scipy.interpolate.RectBivariateSpline(xo, yo, mat.transpose()).ev(xos, yos)
         mat_out[np.logical_not(to_use)] = 0
     else:
-        raise Exception("'mode' must be 'nearest' or 'interp' but was %s" % mode)
+        raise ValueError("'mode' must be 'nearest' or 'interp' but was %s" % mode)
 
     return mat_out
 
@@ -396,7 +396,7 @@ def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat,
     elif input_origin == "edge":
         phase_o = phase
     else:
-        raise Exception("input origin must be 'fft' or 'edge' but was '%s'" % input_origin)
+        raise ValueError("input origin must be 'fft' or 'edge' but was '%s'" % input_origin)
 
     # affine transformation, where here we take coordinate origins at the corners
     fx_xform, fy_xform, phase_i = xform_sinusoid_params(fx, fy, phase_o, affine_mat)
@@ -418,7 +418,7 @@ def xform_sinusoid_params_roi(fx, fy, phase, object_size, img_roi, affine_mat,
         phase_rp = xform_phase_translation(fx_xform, fy_xform, phase_i, [cx, cy])
         phase_xform = phase_rp
     else:
-        raise Exception("output_origin must be 'fft' or 'edge' but was '%s'" % output_origin)
+        raise ValueError("output_origin must be 'fft' or 'edge' but was '%s'" % output_origin)
 
     return fx_xform, fy_xform, phase_xform
 
@@ -511,7 +511,7 @@ def fit_affine_xform_mask(img, mask, init_params=None):
     if init_params is None:
         init_params = [1, 0, 0, 0, 1, 0]
 
-    raise Exception("Function not finished!")
+    raise NotImplementedError("Function not finished!")
     # todo: need to binarize img
     # todo: OR maybe better idea: look at cross correlation and maximize this
     xform_fn = lambda p: np.array([[p[0], p[1], p[2]], [p[3], p[4], p[5]], [0, 0, 1]])
@@ -537,7 +537,7 @@ def fit_barrel_distortion(from_pts, to_pts):
     :param to_pts:
     :return:
     """
-    raise Exception("todo: not implemented")
+    raise NotImplementedError("todo: not implemented")
 
 # helper functions for dealing with an array of dots projected on a flat background
 def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_squared_relative_max=1.5, max_position_err=0.1, img_sd=None, debug=False):

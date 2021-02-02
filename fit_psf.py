@@ -182,7 +182,7 @@ def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0
     if defocus_um != 0:
 
         if dx is None or wavelength is None or ni is None:
-            raise Exception("if defocus != 0, dx, wavelength, ni must be provided")
+            raise TypeError("if defocus != 0, dx, wavelength, ni must be provided")
 
         k = 2*np.pi / wavelength * ni
         defocus_fn = np.exp(1j * defocus_um * np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2), dtype=np.complex)))
@@ -281,7 +281,7 @@ def gaussian3d_pixelated_psf(nx, dx, z, p, wavelength, ni, sf=3):
     """
 
     if np.mod(nx, 2) == 0:
-        raise Exception("pixel size must be odd.")
+        raise Valueerror("pixel size must be odd.")
 
     # we will add amplitude and background back in at the end
     pt = [1, p[1], p[2], p[3], p[4], 0]
@@ -418,27 +418,27 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
     :return:
     """
     if 'NA' in kwargs.keys():
-        raise Exception("'NA' is not allowed to be passed as a named parameter. It is specified in p.")
+        raise ValueError("'NA' is not allowed to be passed as a named parameter. It is specified in p.")
 
     model_params = {'NA': p[4], 'sf': sf}
     model_params.update(kwargs)
 
     if model == 'vectorial':
         if sf != 1:
-            raise Exception('vectorial model not implemented for sf=/=1')
+            raise NotImplementedError('vectorial model not implemented for sf=/=1')
         psf_norm = psfm.vectorial_psf(0, 1, dxy, wvl=wavelength, params=model_params, normalize=False)
         val = psfm.vectorial_psf(z - p[3], nx, dxy, wvl=wavelength, params=model_params, normalize=False)
         val = p[0] / psf_norm * ndi.shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
     elif model == 'gibson-lanni':
         if sf != 1:
-            raise Exception('gibson-lanni model not implemented for sf=/=1')
+            raise NotImplementedError('gibson-lanni model not implemented for sf=/=1')
         psf_norm = psfm.scalar_psf(0, 1, dxy, wvl=wavelength, params=model_params, normalize=False)
         val = psfm.scalar_psf(z - p[3], nx, dxy, wvl=wavelength, params=model_params, normalize=False)
         val = p[0] / psf_norm * ndi.shift(val, [0, p[2] / dxy, p[1] / dxy], mode='nearest') + p[5]
     elif model == 'gaussian':
         val = gaussian3d_pixelated_psf(nx, dxy, z, p, wavelength, ni, sf)
     else:
-        raise Exception("model must be 'gibson-lanni', 'vectorial', or 'gaussian' but was '%s'" % model)
+        raise ValueError("model must be 'gibson-lanni', 'vectorial', or 'gaussian' but was '%s'" % model)
 
     return val
 
@@ -474,7 +474,7 @@ def fit_cont_psfmodel(img, wavelength, ni, model='gaussian',
     elif model == 'born-wolf':
         model_fn = lambda x, y, z, p: born_wolf_psf(x, y, z, p, wavelength, ni)
     else:
-        raise Exception("model must be 'gaussian' or 'born-wolf' but was '%s'" % model)
+        raise ValueError("model must be 'gaussian' or 'born-wolf' but was '%s'" % model)
 
     # get default coordinates
     if xx is None or yy is None or zz is None:
@@ -553,10 +553,10 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
     # check size
     nz, ny, nx = img.shape
     if not ny == nx:
-        raise Exception('x- and y-size of img must be equal')
+        raise ValueError('x- and y-size of img must be equal')
 
     if not np.mod(nx, 2) == 1:
-        raise Exception('x- and y-size of img must be odd')
+        raise ValueError('x- and y-size of img must be odd')
 
     # get default initial parameters
     if init_params is None:
@@ -606,7 +606,7 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
     if model == 'vectorial' or model =='gibson-lanni' or model=='gaussian':
         model_fn = lambda z, nx, dxy, p: model_psf(nx, dxy, z, p, wavelength, ni, sf=sf, model=model)
     else:
-        raise Exception("Model should be 'vectorial', 'gibson-lanni', or 'gaussian', but was '%s'" % model)
+        raise ValueError("Model should be 'vectorial', 'gibson-lanni', or 'gaussian', but was '%s'" % model)
 
     # fitting
     result = fit.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
@@ -710,7 +710,7 @@ def get_strehl_ratio(design_na, fit_na, wavelength, model='born-wolf'):
         psf_design = airy_fn(xx, yy, [1, 0, 0, design_na, 0], wavelength=wavelength)[None, :, :]
         psf_fit = airy_fn(xx, yy, [1, 0, 0, fit_na, 0], wavelength=wavelength)[None, :, :]
     else:
-        raise Exception("model must be 'born-wolf', 'gibson-lanni', or 'vectorial', but value was %s" % model)
+        raise ValueError("model must be 'born-wolf', 'gibson-lanni', or 'vectorial', but was %s" % model)
 
     psf_design_area = dx ** 2 * np.sum(np.sum(psf_design[0]))
     psf_fit_area = dx ** 2 * np.sum(np.sum(psf_fit[0]))
@@ -785,7 +785,7 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
             xxi, zzi = np.meshgrid(x, z)
             fit_cut.append(np.squeeze(born_wolf_psf(xxi, cy * np.ones(xxi.shape), zzi, fp, wavelength, ni)))
         else:
-            raise Exception("model must be 'gaussian', 'born-wolf', 'gibson-lanni', or 'vectorial', but was '%s'." % m)
+            raise ValueError("model must be 'gaussian', 'born-wolf', 'gibson-lanni', or 'vectorial', but was '%s'." % m)
 
     strs = ['%s, sf=%d, NA=%0.3f(%.0f), chi sq=%0.3f, zc=%0.3f(%.0f)um, xc=%0.3f(%.0f)um, yc=%0.3f(%.0f)um,' \
             ' amp=%0.2f(%.0f), bg=%0.2f(%.0f)' % \
@@ -975,7 +975,7 @@ def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
     zpsf = get_coords([nzroi], [dz])[0]
     izero = np.argmin(np.abs(zpsf))
     if not np.abs(zpsf[izero]) < 1e-10:
-        raise Exception("z coordinates do not include zero")
+        raise ValueError("z coordinates do not include zero")
 
     psf_shifted = np.zeros((len(rois), nzroi, nroi, nroi)) * np.nan
     weights = np.zeros((len(rois)))
@@ -1947,7 +1947,7 @@ def test_fits(wavelength=0.635, na=1.35, ni=1.5, dx=0.065, nx=19, dz=0.1, nz=11,
         img_noisy = img_gtruth + noise
         result, ffn = fit_pixelated_psfmodel(img_noisy, dx, dz, wavelength, ni, model='vectorial')
     else:
-        raise Exception("model must be 'gaussian', 'sampled-gaussian', 'born-wolf', 'gibson-lanni', or 'vectorial', but was %s" % model)
+        raise ValueError("model must be 'gaussian', 'sampled-gaussian', 'born-wolf', 'gibson-lanni', or 'vectorial', but was %s" % model)
     fitp = result['fit_params']
     chi_sqr = result['chi_squared']
     cov = result['covariance']

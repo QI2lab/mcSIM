@@ -36,14 +36,14 @@ def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
     """
 
     if not os.path.exists(metadata_dir):
-        raise Exception("Path '%s' does not exists." % metadata_dir)
+        raise FileExistsError("Path '%s' does not exists." % metadata_dir)
 
     # todo: are there cases where there are multiple metadata files for one dataset?
     metadata_paths = list(Path(metadata_dir).glob('**/' + file_pattern))
     metadata_paths = sorted(metadata_paths)
 
     if metadata_paths == []:
-        raise Exception("No metadata files matching pattern '%s' found." % file_pattern)
+        raise FileExistsError("No metadata files matching pattern '%s' found." % file_pattern)
 
     # open first metadata and get roi_size few important pieces of information
     with open(metadata_paths[0], 'r') as f:
@@ -268,7 +268,7 @@ def read_tiff(fname, slices=None, offset=None, skip=None, dtype=np.uint16):
     elif slices is None and offset is not None and skip is not None:
         slices = range(offset, n_frames, skip)
     else:
-        raise Exception('incompatible arguments provided for slices, offsets, and skip. '
+        raise ValueError('incompatible arguments provided for slices, offsets, and skip. '
                         'Either provide slices and no skip or offset, or provide roi_size skip and offset but no slices.')
 
     # load images
@@ -317,7 +317,7 @@ def load_images(fnames, slice_indices, dtype=np.uint16):
             imgs[ind] = imgs_curr[jj, :, :]
 
     if any([isinstance(im, str) for im in imgs]):
-        raise Exception()
+        raise ValueError()
     imgs = np.asarray(imgs)
 
     return imgs
@@ -340,7 +340,7 @@ def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata
     """
 
     if not isinstance(dtype, str):
-        raise Exception("dtype must be a string, e.g. 'uint16'")
+        raise TypeError("dtype must be a string, e.g. 'uint16'")
 
     # convert numpy array images to PIL.Image
     # if img.ndim == 2:
@@ -352,7 +352,7 @@ def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata
     #     img_reshaped = img.reshape([n, img.shape[-2], img.shape[-1]])
     #     im_list = [Image.fromarray(img_reshaped[ii].astype(dtype)) for ii in range(img_reshaped.shape[0])]
     # else:
-    #     raise Exception('number of dimensions was %d, but must be >1.' % img.ndim)
+    #     raise ValueError('number of dimensions was %d, but must be >1.' % img.ndim)
 
     # coerce metadata # todo: this has not worked so far...
     # ifd = ImageFileDirectory_v2()
@@ -449,7 +449,7 @@ def tiffs2stack(fname_out, dir_path, fname_exp="*.tif", dtype=np.float,
     nxy = np.max(positions) + 1
 
     if nxy > 1:
-        raise Exception("Not implemented for nxy != 1")
+        raise NotImplementedError("Not implemented for nxy != 1")
 
     # read image to get image size
     im_first, _, _ = read_tiff(files[0], dtype=dtype)
@@ -485,7 +485,7 @@ def get_unique_name(fname, mode='file'):
         fname_root = fname
         ext = ''
     else:
-        raise Exception("'mode' must be 'file' or 'dir', but was '%s'" % mode)
+        raise ValueError("'mode' must be 'file' or 'dir', but was '%s'" % mode)
 
     ii = 1
     while os.path.exists(fname):
@@ -618,7 +618,7 @@ def elliptical_grid(params, xx, yy, units='mean'):
         elif units == 'mean':
             distance_grid = distance_grid / np.sqrt(aspect_ratio)
         else:
-            raise Exception("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
+            raise ValueError("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
     else:
         if units == 'minor':
             distance_grid = distance_grid / aspect_ratio
@@ -627,7 +627,7 @@ def elliptical_grid(params, xx, yy, units='mean'):
         elif units == 'mean':
             distance_grid = distance_grid / np.sqrt(aspect_ratio)
         else:
-            raise Exception("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
+            raise ValueError("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
 
     return distance_grid
 
@@ -695,7 +695,7 @@ def bin(img, bin_size, mode='sum'):
         ny, nx = img.shape
 
         if ny % ny_bin != 0 or nx % nx_bin != 0:
-            raise Exception('bin size must evenly divide image size.')
+            raise ValueError('bin size must evenly divide image size.')
 
         # size of image after binning
         nx_s = int(nx/nx_bin)
@@ -715,7 +715,7 @@ def bin(img, bin_size, mode='sum'):
         elif mode == 'mean':
             m_binned = m_binned / (nx_bin * ny_bin)
         else:
-            raise Exception("mode must be either 'sum' or 'mean' but was '%s'" % mode)
+            raise ValueError("mode must be either 'sum' or 'mean' but was '%s'" % mode)
 
     # 1D "image"
     elif img.ndim == 1:
@@ -724,7 +724,7 @@ def bin(img, bin_size, mode='sum'):
         nx = img.size
 
         if nx % nx_bin != 0:
-            raise Exception('bin size must evenly divide image size.')
+            raise ValueError('bin size must evenly divide image size.')
         nx_s = int(nx / nx_bin)
 
         bin_mat_x = sp.kron(sp.identity(nx_s), np.ones((1, nx_bin)))
@@ -735,10 +735,10 @@ def bin(img, bin_size, mode='sum'):
         elif mode == 'mean':
             m_binned = m_binned / nx_bin
         else:
-            raise Exception("mode must be either 'sum' or 'mean' but was '%s'" % mode)
+            raise ValueError("mode must be either 'sum' or 'mean' but was '%s'" % mode)
 
     else:
-        raise Exception("Only 1D, 2D, or 3D arrays allowed")
+        raise ValueError("Only 1D, 2D, or 3D arrays allowed")
 
     return m_binned
 
@@ -795,7 +795,7 @@ def toeplitz_filter_mat(filter, img_size, mode='valid'):
 
             first_col = np.pad(np.flip(filter), (0, nx - 1), mode='constant', constant_values=0)
         else:
-            raise Exception("mode must be 'valid' or 'full' but was '%s'" % mode)
+            raise ValueError("mode must be 'valid' or 'full' but was '%s'" % mode)
 
         # todo: might want to try and generate directly as sparse matrix
         mat = sp.csc_matrix(scipy.linalg.toeplitz(first_col, r=first_row))
@@ -878,7 +878,7 @@ def resample(img, nx=2, ny=2):
     :return:
     """
     if not isinstance(nx, int) or not isinstance(ny, int):
-        raise Exception('nx and ny must be ints')
+        raise TypeError('nx and ny must be ints')
 
     block = np.ones((ny, nx))
     img_resampled = np.kron(img, block)
@@ -1305,7 +1305,7 @@ def get_fft_frqs(length, dt=1, centered=True, mode='symmetric'):
     elif mode == 'positive':
         frqs[frqs < 0] = frqs[frqs < 0] + 1 / dt
     else:
-        raise Exception("mode must be 'symmetric' or 'positive', but was '%s'" % mode)
+        raise ValueError("mode must be 'symmetric' or 'positive', but was '%s'" % mode)
 
     return frqs
 
@@ -1341,7 +1341,7 @@ def get_fft_pos(length, dt=1, centered=True, mode='symmetric'):
     elif mode == 'positive':
         pos[pos < 0] = pos[pos < 0] + length
     else:
-        raise Exception("mode must be 'symmetric' or 'positive', but was '%s'" % mode)
+        raise ValueError("mode must be 'symmetric' or 'positive', but was '%s'" % mode)
 
     if centered:
         pass
@@ -1422,7 +1422,7 @@ def translate_pix(img, shifts, dx=1, dy=1, mode='wrap', pad_val=0):
     :return:
     """
     # if not isinstance(shifts[0], int) or not isinstance(shifts[1], int):
-    #     raise Exception('pix_shifts must be integers.')
+    #     raise TypeError('pix_shifts must be integers.')
 
     sx = int(np.round(-shifts[0] / dx))
     sy = int(np.round(-shifts[1] / dy))
@@ -1448,7 +1448,7 @@ def translate_pix(img, shifts, dx=1, dy=1, mode='wrap', pad_val=0):
 
         img = img * mask + pad_val * (1 - mask)
     else:
-        raise Exception("'mode' must be 'wrap' or 'no-wrap' but was '%s'" % mode)
+        raise ValueError("'mode' must be 'wrap' or 'no-wrap' but was '%s'" % mode)
 
     return img, -sx, -sy
 
