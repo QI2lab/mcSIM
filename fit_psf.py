@@ -16,7 +16,7 @@ import scipy.special as sp
 import scipy.integrate
 import scipy.interpolate
 from scipy import fft
-from skimage.feature import peak_local_max
+import skimage.feature
 import skimage.filters
 import joblib
 from functools import partial
@@ -875,7 +875,7 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
     ncols = 9
     spec = matplotlib.gridspec.GridSpec(ncols=ncols, nrows=nrows, figure=figh)
 
-    gamma = 0.1
+    gamma = 0.6
     extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, z[-1] + 0.5 * dz, z[0] - 0.5 * dz]
 
     # ax = plt.subplot(nrows, ncols, 1)
@@ -1243,37 +1243,49 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
     return fighs, fignames, data
 
 # automatically process image
-def find_candidate_beads(img, filter_xy_pix=1, filter_z_pix=0.5, min_distance=1, abs_thresh_std=1, max_num_peaks=300):
+def find_candidate_beads(img, filter_xy_pix=1, filter_z_pix=0.5, min_distance=1, abs_thresh_std=1,
+                         max_thresh=-np.inf, max_num_peaks=np.inf,
+                         mode="max_filter"):
     """
     Find candidate beads in image. Based on function from mesoSPIM-PSFanalysis
-    :return:
+
+    :param img: 2D or 3D image
+    :param filter_xy_pix: standard deviation of Gaussian filter applied to image in xy plane before peak finding
+    :param filter_z_pix:
+    :param min_distance: minimum allowable distance between peaks
+    :param abs_thresh_std: absolute threshold for identifying peaks, as a multiple of the image standard deviation
+    :param abs_thresh: absolute threshold, in raw counts. If both abs_thresh_std and abs_thresh are provided, the
+    maximum value will be used
+    :param max_num_peaks: maximum number of peaks to find.
+
+    :return centers: np.array([[cz, cy, cx], ...])
     """
 
-    # filter to limit of NA
-    #res = 0.5 * wavelength / NA
-    # half because this is std, not full width
-    # filter_size_pix = 0.5 * res/dx
-    #filter_size_pix = 1
-
-    # todo: think might be better to do some filtering in z direction also
+    # gaussian filter to smooth image before peak finding
     if img.ndim == 3:
-        smoothed = skimage.filters.gaussian(img, [filter_z_pix, filter_xy_pix, filter_xy_pix],
-                                            output=None, mode='nearest', cval=0,
-                                            multichannel=None, preserve_range=True)
-
-        # if img.shape[0] > 1:
-        #     exclude_border = (True, True, True)
-        # else:
-        #     exclude_border = (False, True, True)
-
+        filter_sds = [filter_z_pix, filter_xy_pix, filter_xy_pix]
+    elif img.ndim == 2:
+        filter_sds = filter_xy_pix
     else:
-        smoothed = skimage.filters.gaussian(img, filter_xy_pix, output=None, mode='nearest', cval=0,
-                                            multichannel=None, preserve_range=True)
-        # exclude_border = (0, 1, 1)
+        raise ValueError("img should be a 2 or 3 dimensional array, but was %d dimensional" % img.ndim)
 
-    abs_threshold = smoothed.mean() + abs_thresh_std * img.std()
-    centers = peak_local_max(smoothed, min_distance=min_distance, threshold_abs=abs_threshold,
-                             exclude_border=False, num_peaks=max_num_peaks)
+    smoothed = skimage.filters.gaussian(img, filter_sds, output=None, mode='nearest', cval=0,
+                                        multichannel=None, preserve_range=True)
+
+    # set threshold value
+    abs_threshold = np.max([smoothed.mean() + abs_thresh_std * img.std(), max_thresh])
+
+    if mode == "max_filter":
+        centers = skimage.feature.peak_local_max(smoothed, min_distance=min_distance, threshold_abs=abs_threshold,
+                                                 exclude_border=False, num_peaks=max_num_peaks)
+    elif mode == "threshold":
+        ispeak = smoothed > abs_threshold
+        # get indices of points above threshold
+        coords = np.meshgrid(*[range(img.shape[ii]) for ii in range(img.ndim)], indexing="ij")
+        centers = np.concatenate([c[ispeak][:, None] for c in coords], axis=1)
+    else:
+        raise ValueError("mode must be 'max_filter', or 'threshold', but was '%s'" % mode)
+
     return centers
 
 def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.7,

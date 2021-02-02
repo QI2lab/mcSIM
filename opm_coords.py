@@ -4,6 +4,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import camera_noise as cam
+import fit_psf as psf
 
 def nearest_pt_line(pt, slope, pt_line):
     """
@@ -215,8 +216,8 @@ if __name__ == "__main__":
     xp = dx * np.arange(nx)
     yp = xp
 
+    # generate random spots
     nc = 10
-    # centers = np.array([[z.mean(), y.mean(), x.mean()], [z.mean() + 0.2, y.mean() - 0.8, x.mean() + 1.5]])
     centers = np.concatenate((np.random.uniform(0.25 * z.max(), 0.75 * z.max(), size=(nc, 1)),
                               np.random.uniform(0.25 * y.max(), 0.75 * y.max(), size=(nc, 1)),
                               np.random.uniform(x.min(), x.max(), size=(nc, 1))), axis=1)
@@ -226,7 +227,7 @@ if __name__ == "__main__":
     for ii in range(nz):
         for jj in range(nx):
             for kk in range(nc):
-                params = [1, centers[kk, 2], centers[kk, 1], centers[kk, 0], 0.3, 1.2, 0]
+                params = [1, centers[kk, 2], centers[kk, 1], centers[kk, 0], 0.3, 0.4, 0]
                 imgs_opm[ii, :, jj] += gaussian3d_pixelated_psf(x[jj], y[ii], z, dx, normal, params, sf=3)
 
     # add shot-noise and gaussian readout noise
@@ -236,12 +237,36 @@ if __name__ == "__main__":
     noise = 5
     imgs_opm, _, _ = cam.simulated_img(imgs_opm, nphotons, gain, bg, noise, use_otf=False)
 
+    # identify candidate points in opm data
+    centers_guess_inds = psf.find_candidate_beads(imgs_opm, filter_xy_pix=1, filter_z_pix=0.5, max_thresh=250, mode="threshold")
+    xc = x[centers_guess_inds[:, 2]]
+    yc = y[centers_guess_inds[:, 0], centers_guess_inds[:, 1]]
+    zc = z[centers_guess_inds[:, 1]] # z-position is determined by the y'-index in OPM image
+    centers_guess = np.concatenate((zc[:, None], yc[:, None], xc[:, None]), axis=1)
+    # eliminate multiple points too close together
+    min_z_dist = 1
+    min_xy_dist = 0.3
+    counter = 0
+    while 1:
+        z_dists = np.abs(centers_guess[counter][0] - centers_guess[:, 0])
+        z_dists[counter] = np.inf
+        xy_dists = np.sqrt((centers_guess[counter][1] - centers_guess[:, 1])**2 + (centers_guess[counter][2] - centers_guess[:, 2])**2)
+        xy_dists[counter] = np.inf
+
+        throw_away = np.logical_and(z_dists < min_z_dist, xy_dists < min_xy_dist)
+        centers_guess = centers_guess[np.logical_not(throw_away)]
+        centers_guess_inds = centers_guess_inds[np.logical_not(throw_away)]
+
+        counter += 1
+        if counter >= len(centers_guess):
+            break
+
     # interpolate images
     xi, yi, zi, imgs_unskew = interp_pts(imgs_opm, dx, dy, theta, mode="row-interp")
     _, _, _, imgs_unskew2 = interp_pts(imgs_opm, dx, dy, theta, mode="ortho-interp")
     dxi = xi[1] - xi[0]
     dyi = yi[1] - yi[0]
-    dzi = zi[1]- zi[0]
+    dzi = zi[1] - zi[0]
 
     # get gt in interpolated space
     imgs_square = np.zeros((len(zi), len(yi), len(xi)))
@@ -267,6 +292,11 @@ if __name__ == "__main__":
         ax = plt.subplot(nrows, ncols, ii + 1)
         ax.set_title("%0.2fum" % gn[ii])
         ax.imshow(imgs_opm[ii], vmin=bg, vmax=bg + gain * nphotons, extent=extent)
+
+        # plot guess localizations
+        to_plot = centers_guess_inds[:, 0] == ii
+        if np.any(to_plot):
+            plt.plot(dx * centers_guess_inds[to_plot][:, 2], dx * centers_guess_inds[to_plot][:, 1], 'gx')
 
         if ii == 0:
             plt.xlabel("x'")
@@ -306,89 +336,81 @@ if __name__ == "__main__":
             plt.xlabel("x")
             plt.ylabel("y")
 
-    # maximum intensity projection
+    # maximum intensity projection comparisons
     plt.figure()
-    plt.suptitle("Max int projection, row interp")
+    grid = plt.GridSpec(3, 3)
+    plt.suptitle("Maximum intensity projection comparison")
 
-    plt.subplot(1, 3, 1)
-    plt.imshow(np.nanmax(imgs_unskew, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[-1] + 0.5 * dxi, xi[0] - 0.5 * dxi])
+    ax = plt.subplot(grid[0, 0])
+    plt.imshow(np.nanmax(imgs_unskew, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi])
     plt.plot(centers[:, 1], centers[:, 2], 'rx')
+    plt.plot(centers_guess[:, 1], centers_guess[:, 2], 'gx')
     plt.xlabel("Y (um)")
-    plt.ylabel("X (um)")
+    plt.ylabel("row interp\nX (um)")
     plt.title("XY")
 
-    plt.subplot(1, 3, 2)
-    plt.imshow(np.nanmax(imgs_unskew, axis=1), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
+    ax = plt.subplot(grid[0, 1])
+    plt.imshow(np.nanmax(imgs_unskew, axis=1), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 2], centers[:, 0], 'rx')
+    plt.plot(centers_guess[:, 2], centers_guess[:, 0], 'gx')
     plt.xlabel("X (um)")
     plt.ylabel("Z (um)")
     plt.title("XZ")
 
-    plt.subplot(1, 3, 3)
-    plt.imshow(np.nanmax(imgs_unskew, axis=2), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
+    ax = plt.subplot(grid[0, 2])
+    plt.imshow(np.nanmax(imgs_unskew, axis=2), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 1], centers[:, 0], 'rx')
+    plt.plot(centers_guess[:, 1], centers_guess[:, 0], 'gx')
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
     plt.title("YZ")
 
-    # ortho interp
-    plt.figure()
-    plt.suptitle("Max int projection, ortho interp")
-
-    plt.subplot(1, 3, 1)
-    plt.imshow(np.nanmax(imgs_unskew2, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[-1] + 0.5 * dxi, xi[0] - 0.5 * dxi])
+    # orthogonal interp
+    ax = plt.subplot(grid[1, 0])
+    plt.imshow(np.nanmax(imgs_unskew2, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi])
     plt.plot(centers[:, 1], centers[:, 2], 'rx')
     plt.xlabel("Y (um)")
-    plt.ylabel("X (um)")
-    plt.title("XY")
+    plt.ylabel("othogonal interp\nX (um)")
 
-    plt.subplot(1, 3, 2)
-    plt.imshow(np.nanmax(imgs_unskew2, axis=1), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
+    ax = plt.subplot(grid[1, 1])
+    plt.imshow(np.nanmax(imgs_unskew2, axis=1), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 2], centers[:, 0], 'rx')
     plt.xlabel("X (um)")
     plt.ylabel("Z (um)")
-    plt.title("XZ")
 
-    plt.subplot(1, 3, 3)
-    plt.imshow(np.nanmax(imgs_unskew2, axis=2), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
+    ax = plt.subplot(grid[1, 2])
+    plt.imshow(np.nanmax(imgs_unskew2, axis=2), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 1], centers[:, 0], 'rx')
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
-    plt.title("YZ")
 
     # ground truth in these coords
-    plt.figure()
-    plt.suptitle("gt")
-
-    plt.subplot(1, 3, 1)
-    plt.imshow(np.nanmax(imgs_square, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[-1] + 0.5 * dxi, xi[0] - 0.5 * dxi])
+    ax = plt.subplot(grid[2, 0])
+    plt.imshow(np.nanmax(imgs_square, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi])
     plt.plot(centers[:, 1], centers[:, 2], 'rx')
     plt.xlabel("Y (um)")
-    plt.ylabel("X (um)")
-    plt.title("XY")
+    plt.ylabel("ground truth\nX (um)")
 
-    plt.subplot(1, 3, 2)
-    plt.imshow(np.nanmax(imgs_square, axis=1), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
+    ax = plt.subplot(grid[2, 1])
+    plt.imshow(np.nanmax(imgs_square, axis=1), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 2], centers[:, 0], 'rx')
     plt.xlabel("X (um)")
     plt.ylabel("Z (um)")
-    plt.title("XZ")
 
-    plt.subplot(1, 3, 3)
-    plt.imshow(np.nanmax(imgs_square, axis=2), vmin=bg, vmax=bg + gain * nphotons,
-               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[-1] + 0.5 * dzi, zi[0] - 0.5 * dzi])
+    ax = plt.subplot(grid[2, 2])
+    plt.imshow(np.nanmax(imgs_square, axis=2), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+               extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 1], centers[:, 0], 'rx')
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
-    plt.title("YZ")
 
     # plot coordinates
     plt.figure()
