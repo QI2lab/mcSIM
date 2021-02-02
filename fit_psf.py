@@ -281,7 +281,7 @@ def gaussian3d_pixelated_psf(nx, dx, z, p, wavelength, ni, sf=3):
     """
 
     if np.mod(nx, 2) == 0:
-        raise Valueerror("pixel size must be odd.")
+        raise ValueError("pixel size must be odd.")
 
     # we will add amplitude and background back in at the end
     pt = [1, p[1], p[2], p[3], p[4], 0]
