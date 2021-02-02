@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import camera_noise as cam
 import fit_psf as psf
+import fit
+import analysis_tools as tools
 
 def nearest_pt_line(pt, slope, pt_line):
     """
@@ -32,12 +34,12 @@ def get_lab_coords(nx, dx, theta, gn):
     :param nx:
     :param dx:
     :param theta:
-    :param gn:
+    :param gn: list of y-displacements for each scan position
     :return:
     """
-    x = np.arange(nx) * dx
-    y = gn[:, None] + np.arange(nx)[None, :] * dx * np.cos(theta)
-    z = np.arange(nx) * dx * np.sin(theta)
+    x = dx * np.arange(nx)[None, None, :]
+    y = gn[:, None, None] + dx * np.cos(theta) * np.arange(nx)[None, :, None]
+    z = dx * np.sin(theta) * np.arange(nx)[None, :, None]
 
     return x, y, z
 
@@ -160,7 +162,7 @@ def gaussian3d_pixelated_psf(x, y, z, ds, normal, p, sf=3):
     Gaussian function, accounting for image pixelation in the xy plane. This function mimics the style of the
     PSFmodels functions.
 
-    todo: vectorize appropriately
+    vectorized, i.e. can rely on obeying broadcasting rules for x,y,z
 
     :param dx: pixel size in um
     :param nx: number of pixels (must be odd)
@@ -198,37 +200,47 @@ def gaussian3d_pixelated_psf(x, y, z, ds, normal, p, sf=3):
     return psf
 
 if __name__ == "__main__":
-    nx = 101
-    dx = 0.115 # pixel size
-    theta = 30 * np.pi / 180
-    # theta = 90 * np.pi / 180
-    normal = np.array([0, -np.sin(theta), np.cos(theta)])
-    # number of different pictures, separated by dz in the z-coordinate system
-    dy = 2 * dx * np.cos(theta)
-    dz = dx * np.sin(theta)
-    gn = np.arange(0, 15, dy)
-    nz = len(gn)
+    # ###############################
+    # setup parametesr
+    # ###############################
+    figsize = (16, 8)
+    nx = 201
+    dc = 0.115 # camera pixel size
+    theta = 30 * np.pi / 180 # light sheet angle to coverslip
+    normal = np.array([0, -np.sin(theta), np.cos(theta)]) # normal of camera pixel
+    #
+    dz = dc * np.sin(theta) # distance planes above coverslip
+    dy = 2 * dc * np.cos(theta)  # stage scanning step
+    gn = np.arange(0, 30, dy) # stage positions, todo: allow to be unequally spaced
+    npos = len(gn)
 
+    # ###############################
+    # get coordinates
+    # ###############################
     # picture coordinates in coverslip frame
-    x, y, z = get_lab_coords(nx, dx, theta, gn)
+    x, y, z = get_lab_coords(nx, dc, theta, gn)
 
     # picture coordinates
-    xp = dx * np.arange(nx)
+    xp = dc * np.arange(nx)
     yp = xp
 
+    # ###############################
     # generate random spots
+    # ###############################
     nc = 10
     centers = np.concatenate((np.random.uniform(0.25 * z.max(), 0.75 * z.max(), size=(nc, 1)),
                               np.random.uniform(0.25 * y.max(), 0.75 * y.max(), size=(nc, 1)),
                               np.random.uniform(x.min(), x.max(), size=(nc, 1))), axis=1)
+    sigma_xy = 0.3
+    sigma_z = 1.2
 
-
-    imgs_opm = np.zeros((nz, nx, nx))
-    for ii in range(nz):
-        for jj in range(nx):
-            for kk in range(nc):
-                params = [1, centers[kk, 2], centers[kk, 1], centers[kk, 0], 0.3, 0.4, 0]
-                imgs_opm[ii, :, jj] += gaussian3d_pixelated_psf(x[jj], y[ii], z, dx, normal, params, sf=3)
+    # ###############################
+    # generate synthetic OPM data
+    # ###############################
+    imgs_opm = np.zeros((npos, nx, nx))
+    for kk in range(nc):
+        params = [1, centers[kk, 2], centers[kk, 1], centers[kk, 0], sigma_xy, sigma_z, 0]
+        imgs_opm += gaussian3d_pixelated_psf(x, y, z, dc, normal, params, sf=3)
 
     # add shot-noise and gaussian readout noise
     nphotons = 100
@@ -236,15 +248,19 @@ if __name__ == "__main__":
     gain = 2
     noise = 5
     imgs_opm, _, _ = cam.simulated_img(imgs_opm, nphotons, gain, bg, noise, use_otf=False)
+    vmin = np.percentile(imgs_opm, 1)
+    vmax = np.percentile(imgs_opm, 99)
 
+    # ###############################
     # identify candidate points in opm data
+    # ###############################
     centers_guess_inds = psf.find_candidate_beads(imgs_opm, filter_xy_pix=1, filter_z_pix=0.5, max_thresh=250, mode="threshold")
-    xc = x[centers_guess_inds[:, 2]]
-    yc = y[centers_guess_inds[:, 0], centers_guess_inds[:, 1]]
-    zc = z[centers_guess_inds[:, 1]] # z-position is determined by the y'-index in OPM image
+    xc = x[0, 0, centers_guess_inds[:, 2]]
+    yc = y[centers_guess_inds[:, 0], centers_guess_inds[:, 1], 0]
+    zc = z[0, centers_guess_inds[:, 1], 0] # z-position is determined by the y'-index in OPM image
     centers_guess = np.concatenate((zc[:, None], yc[:, None], xc[:, None]), axis=1)
     # eliminate multiple points too close together
-    min_z_dist = 1
+    min_z_dist = 1.5
     min_xy_dist = 0.3
     counter = 0
     while 1:
@@ -253,57 +269,122 @@ if __name__ == "__main__":
         xy_dists = np.sqrt((centers_guess[counter][1] - centers_guess[:, 1])**2 + (centers_guess[counter][2] - centers_guess[:, 2])**2)
         xy_dists[counter] = np.inf
 
-        throw_away = np.logical_and(z_dists < min_z_dist, xy_dists < min_xy_dist)
-        centers_guess = centers_guess[np.logical_not(throw_away)]
-        centers_guess_inds = centers_guess_inds[np.logical_not(throw_away)]
+        combine = np.logical_and(z_dists < min_z_dist, xy_dists < min_xy_dist)
+        centers_guess[counter] = np.mean(centers_guess[combine], axis=0)
+        centers_guess = centers_guess[np.logical_not(combine)]
+
+        centers_guess_inds[counter] = np.round(np.mean(centers_guess_inds[combine], axis=0))
+        centers_guess_inds = centers_guess_inds[np.logical_not(combine)]
 
         counter += 1
         if counter >= len(centers_guess):
             break
 
-    # interpolate images
-    xi, yi, zi, imgs_unskew = interp_pts(imgs_opm, dx, dy, theta, mode="row-interp")
-    _, _, _, imgs_unskew2 = interp_pts(imgs_opm, dx, dy, theta, mode="ortho-interp")
+    # ###############################
+    # do localization
+    # ###############################
+    centers_fit = np.zeros(centers_guess.shape)
+    fit_results = []
+    # roi sizes
+    xy_size = 3 * sigma_xy
+    z_size = 3 * sigma_z
+    nxp = int(np.ceil(xy_size / dc))
+    nyp = int(np.ceil(z_size / dc / np.cos(theta)))
+    nzp = int(np.ceil(xy_size / dc / np.sin(theta)))
+    # get rois
+    rois = np.array([tools.get_centered_roi(c, [nzp, nyp, nxp]) for c in centers_guess_inds])
+    # ensure rois stay within bounds
+    for ll in range(3):
+        rois[:, 2*ll][rois[:, 2*ll] < 0] = 0
+        rois[:, 2*ll + 1][rois[:, 2*ll + 1] >= imgs_opm.shape[ll]] = imgs_opm.shape[ll] - 1
+
+    nroi = len(rois)
+    # fit rois
+    for ii, roi in enumerate(rois):
+        img_roi = imgs_opm[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]]
+        x_roi = x[:, :, roi[4]:roi[5]] # only roi on last one because x has only one entry on first two dims
+        y_roi = y[roi[0]:roi[1], roi[2]:roi[3], :]
+        z_roi = z[:, roi[2]:roi[3]:, ]
+
+        # gaussian fitting localization
+        def model_fn(p): return gaussian3d_pixelated_psf(x_roi, y_roi, z_roi, dc, normal, p, sf=3)
+        init_params = [np.max(img_roi), centers_guess[ii, 2], centers_guess[ii, 1], centers_guess[ii, 0], 0.2, 1, np.mean(img_roi)]
+        results = fit.fit_model(img_roi, model_fn, init_params)
+
+        # store results
+        fit_results.append(results)
+        centers_fit[ii, 0] = results["fit_params"][3]
+        centers_fit[ii, 1] = results["fit_params"][2]
+        centers_fit[ii, 2] = results["fit_params"][1]
+
+        # plot localization fit diagnostic
+        if ii == 0:
+            fit_volume = model_fn(results["fit_params"])
+
+            figh = plt.figure()
+            grid = plt.GridSpec(2, nzp)
+            for ii in range(roi[1] - roi[0]):
+                ax = plt.subplot(grid[0, ii])
+                plt.imshow(img_roi[ii], vmin=vmin, vmax=vmax)
+
+                ax = plt.subplot(grid[1, ii])
+                plt.imshow(fit_volume[ii], vmin=vmin, vmax=vmax)
+
+    # todo: radiallity localization
+
+    # ###############################
+    # interpolate images so are on grids in coverslip coordinate system
+    # ###############################
+    xi, yi, zi, imgs_unskew = interp_pts(imgs_opm, dc, dy, theta, mode="row-interp")
+    _, _, _, imgs_unskew2 = interp_pts(imgs_opm, dc, dy, theta, mode="ortho-interp")
     dxi = xi[1] - xi[0]
     dyi = yi[1] - yi[0]
     dzi = zi[1] - zi[0]
 
-    # get gt in interpolated space
+    # ###############################
+    # get ground truth image in coverslip coordinates
+    # ###############################
     imgs_square = np.zeros((len(zi), len(yi), len(xi)))
-    for ii in range(len(zi)):
-        for jj in range(len(xi)):
-            for kk in range(nc):
-                params = [1, centers[kk, 2], centers[kk, 1], centers[kk, 0], 0.3, 1.2, 0]
-                imgs_square[ii, :, jj] += gaussian3d_pixelated_psf(xi[jj], yi, zi[ii], dxi, np.array([0, 0, 1]), params, sf=3)
+    for kk in range(nc):
+        params = [1, centers[kk, 2], centers[kk, 1], centers[kk, 0], sigma_xy, sigma_z, 0]
+        imgs_square += gaussian3d_pixelated_psf(xi[None, None, :], yi[None, :, None], zi[:, None, None], dxi, np.array([0, 0, 1]), params, sf=3)
     # add noise
     imgs_square, _, _ = cam.simulated_img(imgs_square, nphotons, gain, bg, noise, use_otf=False)
     # nan-mask region outside what we get from the OPM
     imgs_square[np.isnan(imgs_unskew)] = np.nan
 
-    # plot raw data
-    plt.figure()
-    plt.suptitle("Raw data")
-    ncols = int(np.ceil(np.sqrt(nz)) + 1)
-    nrows = int(np.ceil(nz / ncols))
-    for ii in range(nz):
-        extent = [xp[0] - 0.5 * dx, xp[-1] + 0.5 * dx,
-                  yp[-1] + 0.5 * dx, yp[0] - 0.5 * dx]
+    # ###############################
+    # plot results
+    # ###############################
+
+    # ###############################
+    # plot raw OPM data
+    # ###############################
+    plt.figure(figsize=figsize)
+    plt.suptitle("Raw OPM data")
+    ncols = int(np.ceil(np.sqrt(npos)) + 1)
+    nrows = int(np.ceil(npos / ncols))
+    for ii in range(npos):
+        extent = [xp[0] - 0.5 * dc, xp[-1] + 0.5 * dc,
+                  yp[-1] + 0.5 * dc, yp[0] - 0.5 * dc]
 
         ax = plt.subplot(nrows, ncols, ii + 1)
-        ax.set_title("%0.2fum" % gn[ii])
-        ax.imshow(imgs_opm[ii], vmin=bg, vmax=bg + gain * nphotons, extent=extent)
+        ax.set_title("dy'=%0.2fum" % gn[ii])
+        ax.imshow(imgs_opm[ii], vmin=vmin, vmax=vmax, extent=extent)
 
         # plot guess localizations
         to_plot = centers_guess_inds[:, 0] == ii
         if np.any(to_plot):
-            plt.plot(dx * centers_guess_inds[to_plot][:, 2], dx * centers_guess_inds[to_plot][:, 1], 'gx')
+            plt.plot(dc * centers_guess_inds[to_plot][:, 2], dc * centers_guess_inds[to_plot][:, 1], 'gx')
 
         if ii == 0:
             plt.xlabel("x'")
             plt.ylabel("y'")
 
-    # plot interpolated data
-    plt.figure()
+    # ###############################
+    # plot interpolated data, using row interpolation
+    # ###############################
+    plt.figure(figsize=figsize)
     plt.suptitle("interpolated data, row interp")
     ncols = 6
     nrows = 6
@@ -313,14 +394,16 @@ if __name__ == "__main__":
 
         ax = plt.subplot(nrows, ncols, ii + 1)
         ax.set_title("z = %0.2fum" % zi[2 * ii])
-        ax.imshow(imgs_unskew[2 * ii], vmin=bg, vmax=bg + gain * nphotons, extent=extent)
+        ax.imshow(imgs_unskew[2 * ii], vmin=vmin, vmax=vmax, extent=extent)
 
         if ii == 0:
             plt.xlabel("x")
             plt.ylabel("y")
 
-    # plot interpolated data, using other scheme
-    plt.figure()
+    # ###############################
+    # plot interpolated data, using orthogonal interpolation
+    # ###############################
+    plt.figure(figsize=figsize)
     plt.suptitle("interpolated data, ortho-interp")
     ncols = 6
     nrows = 6
@@ -330,98 +413,118 @@ if __name__ == "__main__":
 
         ax = plt.subplot(nrows, ncols, ii + 1)
         ax.set_title("z = %0.2fum" % zi[2 * ii])
-        ax.imshow(imgs_unskew2[2 * ii], vmin=bg, vmax=bg + gain * nphotons, extent=extent)
+        ax.imshow(imgs_unskew2[2 * ii], vmin=vmin, vmax=vmax, extent=extent)
 
         if ii == 0:
             plt.xlabel("x")
             plt.ylabel("y")
 
+    # ###############################
     # maximum intensity projection comparisons
-    plt.figure()
+    # plot both interpolated data, ground truth, and localization results
+    # ###############################
+    plt.figure(figsize=figsize)
     grid = plt.GridSpec(3, 3)
     plt.suptitle("Maximum intensity projection comparison")
 
     ax = plt.subplot(grid[0, 0])
-    plt.imshow(np.nanmax(imgs_unskew, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_unskew, axis=0).transpose(), vmin=vmin, vmax=vmax, origin="lower",
                extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi])
     plt.plot(centers[:, 1], centers[:, 2], 'rx')
     plt.plot(centers_guess[:, 1], centers_guess[:, 2], 'gx')
+    plt.plot(centers_fit[:, 1], centers_fit[:, 2], 'mx')
     plt.xlabel("Y (um)")
     plt.ylabel("row interp\nX (um)")
     plt.title("XY")
 
     ax = plt.subplot(grid[0, 1])
-    plt.imshow(np.nanmax(imgs_unskew, axis=1), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_unskew, axis=1), vmin=vmin, vmax=vmax, origin="lower",
                extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 2], centers[:, 0], 'rx')
     plt.plot(centers_guess[:, 2], centers_guess[:, 0], 'gx')
+    plt.plot(centers_fit[:, 2], centers_fit[:, 0], 'mx')
     plt.xlabel("X (um)")
     plt.ylabel("Z (um)")
     plt.title("XZ")
 
     ax = plt.subplot(grid[0, 2])
-    plt.imshow(np.nanmax(imgs_unskew, axis=2), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_unskew, axis=2), vmin=vmin, vmax=vmax, origin="lower",
                extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 1], centers[:, 0], 'rx')
     plt.plot(centers_guess[:, 1], centers_guess[:, 0], 'gx')
+    plt.plot(centers_fit[:, 1], centers_fit[:, 0], 'mx')
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
     plt.title("YZ")
 
     # orthogonal interp
     ax = plt.subplot(grid[1, 0])
-    plt.imshow(np.nanmax(imgs_unskew2, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_unskew2, axis=0).transpose(), vmin=vmin, vmax=vmax, origin="lower",
                extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi])
     plt.plot(centers[:, 1], centers[:, 2], 'rx')
+    plt.plot(centers_guess[:, 1], centers_guess[:, 2], 'gx')
+    plt.plot(centers_fit[:, 1], centers_fit[:, 2], 'mx')
     plt.xlabel("Y (um)")
     plt.ylabel("othogonal interp\nX (um)")
 
     ax = plt.subplot(grid[1, 1])
-    plt.imshow(np.nanmax(imgs_unskew2, axis=1), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_unskew2, axis=1), vmin=vmin, vmax=vmax, origin="lower",
                extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 2], centers[:, 0], 'rx')
+    plt.plot(centers_guess[:, 2], centers_guess[:, 0], 'gx')
+    plt.plot(centers_fit[:, 2], centers_fit[:, 0], 'mx')
     plt.xlabel("X (um)")
     plt.ylabel("Z (um)")
 
     ax = plt.subplot(grid[1, 2])
-    plt.imshow(np.nanmax(imgs_unskew2, axis=2), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_unskew2, axis=2), vmin=vmin, vmax=vmax, origin="lower",
                extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 1], centers[:, 0], 'rx')
+    plt.plot(centers_guess[:, 1], centers_guess[:, 0], 'gx')
+    plt.plot(centers_fit[:, 1], centers_fit[:, 0], 'mx')
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
 
     # ground truth in these coords
     ax = plt.subplot(grid[2, 0])
-    plt.imshow(np.nanmax(imgs_square, axis=0).transpose(), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_square, axis=0).transpose(), vmin=vmin, vmax=vmax, origin="lower",
                extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi])
     plt.plot(centers[:, 1], centers[:, 2], 'rx')
+    plt.plot(centers_guess[:, 1], centers_guess[:, 2], 'gx')
+    plt.plot(centers_fit[:, 1], centers_fit[:, 2], 'mx')
     plt.xlabel("Y (um)")
     plt.ylabel("ground truth\nX (um)")
 
     ax = plt.subplot(grid[2, 1])
-    plt.imshow(np.nanmax(imgs_square, axis=1), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_square, axis=1), vmin=vmin, vmax=vmax, origin="lower",
                extent=[xi[0] - 0.5 * dxi, xi[-1] + 0.5 * dxi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 2], centers[:, 0], 'rx')
+    plt.plot(centers_guess[:, 2], centers_guess[:, 0], 'gx')
+    plt.plot(centers_fit[:, 2], centers_fit[:, 0], 'mx')
     plt.xlabel("X (um)")
     plt.ylabel("Z (um)")
 
     ax = plt.subplot(grid[2, 2])
-    plt.imshow(np.nanmax(imgs_square, axis=2), vmin=bg, vmax=bg + gain * nphotons, origin="lower",
+    plt.imshow(np.nanmax(imgs_square, axis=2), vmin=vmin, vmax=vmax, origin="lower",
                extent=[yi[0] - 0.5 * dyi, yi[-1] + 0.5 * dyi, zi[0] - 0.5 * dzi, zi[-1] + 0.5 * dzi])
     plt.plot(centers[:, 1], centers[:, 0], 'rx')
+    plt.plot(centers_guess[:, 1], centers_guess[:, 0], 'gx')
+    plt.plot(centers_fit[:, 1], centers_fit[:, 0], 'mx')
     plt.xlabel("Y (um)")
     plt.ylabel("Z (um)")
 
-    # plot coordinates
-    plt.figure()
+    # ###############################
+    # plot coordinates to compare original picture coordinates with interpolation grid
+    # ###############################
+    plt.figure(figsize=figsize)
     grid = plt.GridSpec(1, 2)
-    plt.suptitle("Coordinates, dy=%0.2fum, dx=%0.2fum, dyi=%0.2f, dzi=%0.2f, theta=%0.2fdeg" % (dy, dx, dyi, dzi, theta * 180/np.pi))
+    plt.suptitle("Coordinates, dy=%0.2fum, dx=%0.2fum, dyi=%0.2f, dzi=%0.2f, theta=%0.2fdeg" % (dy, dc, dyi, dzi, theta * 180 / np.pi))
 
     ax = plt.subplot(grid[0, 0])
     ax.set_title("YZ plane")
     yiyi, zizi = np.meshgrid(yi, zi)
     plt.plot(yiyi, zizi, 'bx')
-    plt.plot(y, np.tile(z[None, :],[nz, 1]), 'k.')
+    plt.plot(y.ravel(), np.tile(z, [y.shape[0], 1, 1]).ravel(), 'k.')
     plt.plot(centers[:, 1], centers[:, 0], 'rx')
     plt.xlabel("y")
     plt.ylabel("z")
@@ -431,9 +534,10 @@ if __name__ == "__main__":
     ax.set_title("XY plane")
     yiyi, xixi = np.meshgrid(yi, xi)
     plt.plot(yiyi, xixi, 'bx')
-    for ii in range(nx):
-        for jj in range(nz):
-            plt.plot(y[jj], x[ii] * np.ones(y[jj].shape), 'k.')
+    plt.plot(np.tile(y, [1, 1, x.shape[2]]).ravel(), np.tile(x, [y.shape[0], y.shape[1], 1]).ravel(), 'k.')
+    # for ii in range(nx):
+    #     for jj in range(nz):
+    #         plt.plot(y[jj], x[ii] * np.ones(y[jj].shape), 'k.')
     plt.plot(centers[:,1], centers[:, 2], 'rx')
     plt.xlabel("y")
     plt.ylabel("x")
