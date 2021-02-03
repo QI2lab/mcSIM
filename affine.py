@@ -17,6 +17,7 @@ import scipy.interpolate
 import pickle
 
 import analysis_tools as tools
+import fit
 # from . import analysis_tools as tools
 
 
@@ -578,7 +579,7 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_sq
         cell = img[roi[0]:roi[1], roi[2]:roi[3]]
         cell_sd = img_sd[roi[0]:roi[1], roi[2]:roi[3]]
         xx, yy = np.meshgrid(range(roi[2], roi[3]), range(roi[0], roi[1]))
-        result, fit_fn = tools.fit_gauss(cell, sd=cell_sd, xx=xx, yy=yy)
+        result, fit_fn = fit.fit_gauss(cell, sd=cell_sd, xx=xx, yy=yy)
         pfit = result['fit_params']
         chi_sq = result['chi_squared']
 
@@ -703,7 +704,7 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_sq
             cell = img[ystart:yend, xstart:xend]
             cell_sd = img_sd[ystart:yend, xstart:xend]
 
-            result, fit_fn = tools.fit_gauss(cell, sd=cell_sd, xx=xx, yy=yy)
+            result, fit_fn = fit.fit_gauss(cell, sd=cell_sd, xx=xx, yy=yy)
             pfit = result['fit_params']
             chi_sq = result['chi_squared']
 
@@ -796,7 +797,8 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     bgs = fps[:, :, 5]
     sigma_mean_cam = np.sqrt(fps[:, :, 3] * fps[:, :, 4])
     sigma_asymmetry_cam = (fps[:, :, 3] - fps[:, :, 4]) / (fps[:, :, 3] + fps[:, :, 4]) * 2
-    angles = np.mod(fps[:, :, 6], 2*np.pi)
+    with np.errstate(invalid="ignore"):
+        angles = np.mod(fps[:, :, 6], 2*np.pi)
 
     xdmd = dmd_centers[:, :, 0]
     ydmd = dmd_centers[:, :, 1]
