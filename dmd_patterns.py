@@ -2189,7 +2189,7 @@ def export_pattern_set(dmd_size, vec_as, vec_bs, nphases=3, invert=False, pitch=
         os.mkdir(save_dir)
 
     patterns, vec_as, vec_bs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle = \
-        vects2pattern_data(dmd_size, vec_as, vec_bs, nphases=3, wavelength=None, invert=invert, pitch=pitch)
+        vects2pattern_data(dmd_size, vec_as, vec_bs, nphases=nphases, wavelength=None, invert=invert, pitch=pitch)
 
     nangles, _, _, _ = patterns.shape
 
@@ -2424,7 +2424,7 @@ def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4,
     im.save(os.path.join(save_dir, "three_corners_%d_on.png") % corner_size)
 
 
-def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 5), save_dir=None):
+def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 2), save_dir=None):
     """
     Create DMD patterns useful for determining the affine transformation between the DMD and the camera
 
@@ -2514,18 +2514,12 @@ def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 5), save_dir=None):
         yend3 = ystart3 + corner_size
         mask[ystart3:yend3, xstart3:xend3] = 1
 
-        mask_half_on = np.array(mask, copy=True)
-        mask_half_on[dmd_size[1]//2 - 30: dmd_size[1]//2 + 30, :] = 1
-
         if save_dir is not None:
             im = Image.fromarray(mask.astype('bool'))
             im.save(os.path.join(save_dir, "affine_cal_sparse_on_points_r=%.1f.png" % r))
 
             im = Image.fromarray((1-mask).astype('bool'))
             im.save(os.path.join(save_dir, "affine_cal_sparse_off_points_r=%.1f.png" % r))
-
-            im = Image.fromarray(mask_half_on.astype('bool'))
-            im.save(os.path.join(save_dir, "affine_cal_strip_on_points_r=%.1f.png" % r))
 
         masks.append(mask)
 
@@ -2731,7 +2725,7 @@ def spifi_1d_pattern(dmd_size, periods, ntimes, start_pos=None, strip_size=None,
 
 
 def export_spifi_patterns(dmd_size, periods, ntimes, start_pos=None, strip_size=None,
-                          debug=False, export_path='spifi_patterns'):
+                          debug=False, save_dir='spifi_patterns'):
     """
     Export spifi patterns to export_path. Store images as separate PNG's, and also as TIF stack. Pickle useful data.
 
@@ -2741,125 +2735,33 @@ def export_spifi_patterns(dmd_size, periods, ntimes, start_pos=None, strip_size=
     :param start_pos:
     :param strip_size:
     :param bool debug:
-    :param str export_path:
+    :param str save_dir:
     :return:
     """
 
     # create directory to save results
-    if not os.path.exists(export_path):
-        os.mkdir(export_path)
+    if not os.path.exists(save_dir):
+        os.mkdir(save_dir)
 
     # generate pattern
     spifi_pattern, region_mask = spifi_1d_pattern(dmd_size, periods, ntimes, start_pos=start_pos,
                                                   strip_size=strip_size, debug=debug)
 
     # export useful useful data
-    fname = os.path.join(export_path, 'spifi_data.pkl')
+    fname = os.path.join(save_dir, 'spifi_data.pkl')
     data = {'periods': periods, 'ntimes': ntimes, 'region_mask': region_mask}
     with open(fname, 'wb') as f:
         pickle.dump(data, f)
 
     # export patterns as tif stack
-    fpath = os.path.join(export_path, 'spifi_1d_pattern_nperiods=%d_ntimes=%d.tif' % (len(periods), ntimes))
-    tools.save_tiff(spifi_pattern, fpath, dtype=np.bool)
+    fpath = os.path.join(save_dir, 'spifi_1d_pattern_nperiods=%d_ntimes=%d.tif' % (len(periods), ntimes))
+    tools.save_tiff(spifi_pattern, fpath, dtype="uint8")
 
     # save as png files
     for ii in range(spifi_pattern.shape[0]):
-        fpath = os.path.join(export_path, "spifi%d_1d_pattern_nperiods=%d_ntimes=%d"
+        fpath = os.path.join(save_dir, "spifi%d_1d_pattern_nperiods=%d_ntimes=%d"
                              % (ii, len(periods), ntimes)) + ".png"
 
         # need to convert so not float to save as PNG
         im = Image.fromarray(spifi_pattern[ii].astype('bool'))
         im.save(fpath)
-
-
-if __name__ == "__main__":
-
-    # define DMD size
-    nx = 1920
-    ny = 1080
-
-    # get calibration patterns
-    # export_calibration_patterns([nx, ny], 'calibration_patterns')
-
-    # affine transformation calibration patterns
-    # masks, radii, centers = export_affine_fit_pattern([nx, ny], 'affine_calibration')
-
-    '''
-    # get spifi pattern
-    spifi_periods = [2, 4, 6, 8, 10, 12, 18, 20, 24, 30, 36, 40, 60, 72, 90, 120, 180, 360]
-    ntimes = 360
-    #spifi_periods = [4, 6, 10]
-    #ntimes = 30
-    export_spifi_patterns([nx, ny], spifi_periods, ntimes, start_pos=300, strip_size=40, debug=True)
-    '''
-
-    '''
-    save_dir = '../sim_patterns/2020_07_31_multicolor_sim_patterns_new'
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    # define SIM patterns
-    data = export_all_pattern_sets([nx, ny], [6], 3, 3, avec_max_size=30, bvec_max_size=30,
-                                   save_dir=save_dir,
-                                   plot_results=True, wavelengths=[473, 532, 635], invert=[False, True, False],
-                                   ptol_relative=0.025,
-                                   angle_sep_tol=5*np.pi/180, max_solutions_to_search=200)
-   '''
-
-    save_dir = "../calibration_patterns"
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    # export_affine_fit_pattern([nx, ny], radii=(1, 1.5, 5), save_dir=save_dir)
-
-    export_calibration_patterns([nx, ny], save_dir=save_dir)
-
-    '''
-    save_dir = "../spot_patterns"
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    seps = list(range(2, 9, 1)) + list(range(10, 200, 10)) + list(range(200, 1000, 100))
-    # seps = list(range(2, 9, 1)) + list(range(10, 120, 10)) + [200]
-    invert = False
-    # rads = [1, 1.5, 2, 3, 5]
-    rads = [1.5, 3]
-    index = 0
-    for ii, s in enumerate(seps):
-        for jj, r in enumerate(rads):
-
-
-            # along x
-            export_spots([nx, ny], xs=(nx//2 - s//2, nx//2 - s//2 + s),
-                         ys=(ny//2, ny//2), radius=r, save_dir=save_dir, invert=invert,
-                         fname="%03d_xsep_two_spots_sep=%0.2f_rad=%0.2f.png" % (index,s, r))
-            index += 1
-
-            export_spots([nx, ny], xs=(nx // 2 - s // 2, ),
-                         ys=(ny // 2, ), radius=r, save_dir=save_dir, invert=invert,
-                         fname="%03d_xsep_two_spots_sep=%0.2f_rad=%0.2f_spot1_only.png" % (index, s, r))
-            index += 1
-
-            export_spots([nx, ny], xs=(nx // 2 - s // 2 + s, ),
-                         ys=(ny // 2, ), radius=r, save_dir=save_dir, invert=invert,
-                         fname="%03d_xsep_two_spots_sep=%0.2f_rad=%0.2f_spot2_only.png" % (index, s, r))
-            index += 1
-
-            # along y
-            export_spots([nx, ny], xs=(nx // 2, nx // 2), invert=invert,
-                         ys=(ny // 2 - s // 2, ny // 2  - s // 2 + s), radius=r, save_dir=save_dir,
-                         fname="%03d_ysep_two_spots_sep=%0.2f_rad=%0.2f.png" % (index, s, r))
-            index += 1
-
-            export_spots([nx, ny], xs=(nx // 2,), invert=invert,
-                         ys=(ny // 2  - s // 2,), radius=r, save_dir=save_dir,
-                         fname="%03d_ysep_two_spots_sep=%0.2f_rad=%0.2f_spot1_only.png" % (index, s, r))
-            index += 1
-
-            export_spots([nx, ny], xs=(nx // 2,), invert=invert,
-                         ys=(ny // 2  - s // 2 + s,), radius=r, save_dir=save_dir,
-                         fname="%03d_ysep_two_spots_sep=%0.2f_rad=%0.2f_spot_two_only.png" % (index, s, r))
-            index += 1
-   '''
-    plt.show()
-

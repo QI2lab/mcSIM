@@ -944,7 +944,3 @@ def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, optio
     plt.show()
 
     return data, fig
-
-
-if __name__ == '__main__':
-    pass
