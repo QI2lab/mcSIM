@@ -18,7 +18,6 @@ from scipy import fft
 import scipy.signal
 import pickle
 import copy
-
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 import matplotlib.patches
@@ -26,9 +25,6 @@ import matplotlib.patches
 import analysis_tools as tools
 import affine
 import simulate_dmd
-# from . import analysis_tools as tools
-# from . import affine
-# from . import simulate_dmd
 
 
 def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
@@ -2097,7 +2093,7 @@ def plot_sim_pattern_sets(patterns, vas, vbs, wavelength=None, pitch=7560):
     nangles, nphases, ny, nx = patterns.shape
 
     _, vas, vbs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle = \
-        vects2pattern_data([nx, ny], vas, vbs, nphases=3, wavelength=wavelength, generate_patterns=False, pitch=pitch)
+        vects2pattern_data([nx, ny], vas, vbs, nphases=nphases, wavelength=wavelength, generate_patterns=False, pitch=pitch)
 
     # display summary of patterns
     nrows = nphases + 1
@@ -2629,139 +2625,3 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
 
     return patterns, vec_as, vec_bs, real_angles, real_periods
 
-def export_spots(dmd_size, xs=(960, 963), ys=(540, 540), radius=10, save_dir=None, fname=None, invert=False):
-    if not os.path.exists(save_dir):
-        os.mkdir(save_dir)
-
-    nx = dmd_size[0]
-    ny = dmd_size[1]
-    xx, yy = np.meshgrid(range(nx), range(ny))
-
-    # all mirrors on
-    mask = np.zeros((ny, nx))
-
-    for ii in range(len(xs)):
-        mask[np.sqrt((xx - xs[ii])**2 + (yy - ys[ii])**2) < radius] = 1
-
-    if invert:
-        mask = 1 - mask
-
-    if save_dir is not None:
-        im = Image.fromarray(mask.astype('bool'))
-        im.save(os.path.join(save_dir, fname))
-
-    return mask
-
-# spifi
-def spifi_1d_pattern(dmd_size, periods, ntimes, start_pos=None, strip_size=None, debug=False):
-    """
-    Create 1D spifi patterns using blocks of DMD.
-
-    :param list[int] dmd_size: [nx, ny]
-    :param list[int] periods: list of temporal periods for each block
-    :param int ntimes: total number of times
-    :param start_pos: position on DMD to start giving frequency data. All points before this will be excluded.
-    :param strip_size: size of each 1D region
-    :param bool debug:
-
-    :return patterns:
-    :return mask:
-    """
-    if np.any(np.mod(periods, 2) != 0):
-        raise ValueError('only even periods are allowed')
-
-    # nx and ny are size of non-zero section of pattern
-    nx, ny = dmd_size
-
-    # nx can be smaller than full DMD
-    if start_pos is not None:
-        nx = nx - start_pos
-
-    nslices = len(periods)
-    # size of each region
-    if strip_size is None:
-        dx = int(np.ceil(nx / nslices))
-    else:
-        dx = strip_size
-
-    # loop over frequency regions
-    patterns = np.zeros((ntimes, ny, nx), dtype=np.uint8)
-    mask = np.zeros((ny, nx)) * np.nan
-    xstarts = np.zeros((nslices))
-    for ii in range(nslices):
-        period = int(periods[ii])
-        max_reps = int(np.ceil(ntimes / period))
-
-        xstart = dx * ii
-        xend = dx * (ii + 1)
-        mask[:, xstart:xend] = ii
-        xstarts[ii] = xstart + start_pos
-
-        # set time reps
-        for jj in range(max_reps):
-            tstart = period * jj
-            tend = period * jj + int(0.5 * period)
-            patterns[tstart:tend, :, xstart:xend] = 1
-
-    if start_pos is not None:
-        patterns = np.concatenate((np.zeros((ntimes, ny, start_pos), dtype=np.bool), patterns), axis=2)
-        mask = np.concatenate((np.nan * np.zeros((ny, start_pos)), mask), axis=1)
-
-    # check periods
-    if debug:
-        plt.figure()
-        nrows = 5
-        ncols = 5
-        # plot different frequency regions vs. time
-        for ii in range(int(np.min([nslices, 24]))):
-            plt.subplot(nrows, ncols, ii + 1)
-            plt.plot(patterns[:, 0, int(xstarts[ii])], '.-')
-            plt.title("period = %d" % periods[ii])
-        plt.subplot(nrows, ncols, 25)
-        plt.imshow(mask)
-        plt.title('frq regions')
-
-    return patterns, mask
-
-
-def export_spifi_patterns(dmd_size, periods, ntimes, start_pos=None, strip_size=None,
-                          debug=False, save_dir='spifi_patterns'):
-    """
-    Export spifi patterns to export_path. Store images as separate PNG's, and also as TIF stack. Pickle useful data.
-
-    :param list[int] dmd_size: [nx, ny]
-    :param periods:
-    :param ntimes:
-    :param start_pos:
-    :param strip_size:
-    :param bool debug:
-    :param str save_dir:
-    :return:
-    """
-
-    # create directory to save results
-    if not os.path.exists(save_dir):
-        os.mkdir(save_dir)
-
-    # generate pattern
-    spifi_pattern, region_mask = spifi_1d_pattern(dmd_size, periods, ntimes, start_pos=start_pos,
-                                                  strip_size=strip_size, debug=debug)
-
-    # export useful useful data
-    fname = os.path.join(save_dir, 'spifi_data.pkl')
-    data = {'periods': periods, 'ntimes': ntimes, 'region_mask': region_mask}
-    with open(fname, 'wb') as f:
-        pickle.dump(data, f)
-
-    # export patterns as tif stack
-    fpath = os.path.join(save_dir, 'spifi_1d_pattern_nperiods=%d_ntimes=%d.tif' % (len(periods), ntimes))
-    tools.save_tiff(spifi_pattern, fpath, dtype="uint8")
-
-    # save as png files
-    for ii in range(spifi_pattern.shape[0]):
-        fpath = os.path.join(save_dir, "spifi%d_1d_pattern_nperiods=%d_ntimes=%d"
-                             % (ii, len(periods), ntimes)) + ".png"
-
-        # need to convert so not float to save as PNG
-        im = Image.fromarray(spifi_pattern[ii].astype('bool'))
-        im.save(fpath)
