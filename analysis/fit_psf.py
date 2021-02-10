@@ -1366,7 +1366,8 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
     print("Found %d candidates" % len(centers))
 
     # get ROI's for each peak
-    rois = np.array([tools.crop_roi(tools.get_centered_roi(c, [nz_roi, ny_roi, nx_roi]), imgs.shape) for c in centers])
+    # rois = np.array([tools.crop_roi(tools.get_centered_roi(c, [nz_roi, ny_roi, nx_roi]), imgs.shape) for c in centers])
+    rois = np.array([tools.get_centered_roi(c, [nz_roi, ny_roi, nx_roi], min_vals=[0, 0, 0], max_vals=np.array(imgs.shape) - 1) for c in centers])
 
     # discard rois that get cropped by the edge of the image
     nys = rois[:, 3] - rois[:, 2]

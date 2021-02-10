@@ -1170,7 +1170,7 @@ def full2roi(coords_full, roi):
 
     return coords_roi
 
-def get_centered_roi(centers, sizes):
+def get_centered_roi(centers, sizes, min_vals=None, max_vals=None):
     """
     Get end points of an roi centered about centers (as close as possible) with length sizes.
     If the ROI size is odd, the ROI will be perfectly centered. Otherwise, the centering will
@@ -1183,10 +1183,15 @@ def get_centered_roi(centers, sizes):
 
     :param centers: list of centers [c1, c2, ..., cn]
     :param sizes: list of sizes [s1, s2, ..., sn]
+    :param min_values: list of minimimum allowed index values for each dimension
+    :param max_values: list of maximum allowed index values for each dimension
     :return roi: [start_0, end_0, start_1, end_1, ..., start_n, end_n]
     """
     roi = []
-    for c, n in zip(centers, sizes):
+    # for c, n in zip(centers, sizes):
+    for ii in range(len(centers)):
+        c = centers[ii]
+        n = sizes[ii]
 
         # get ROI closest to centered
         end_test = np.round(c + (n - 1) / 2) + 1
@@ -1201,33 +1206,18 @@ def get_centered_roi(centers, sizes):
             end = end_test
             start = end - n
 
+        if min_vals is not None:
+            if start < min_vals[ii]:
+                start = min_vals[ii]
+
+        if max_vals is not None:
+            if end > max_vals[ii]:
+                end = max_vals[ii]
+
         roi.append(int(start))
         roi.append(int(end))
 
     return roi
-
-def crop_roi(roi, image_size):
-    """
-    Crop ROI so it fits in an image of roi_size given size.
-    :param roi:
-    :param image_size:
-    :return:
-    """
-    cropped_roi = []
-    for ii, n in enumerate(image_size):
-
-        start = roi[2*ii]
-        if start < 0:
-            start = 0
-
-        end = roi[2*ii+1]
-        if end > n:
-            end = n
-
-        cropped_roi.append(start)
-        cropped_roi.append(end)
-
-    return cropped_roi
 
 def map_intervals(vals, from_intervals, to_intervals):
     """
