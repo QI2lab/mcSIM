@@ -1385,14 +1385,14 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
     # do fitting in parallel
     if imgs_sd is not None:
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-                joblib.delayed(fit.fit_gauss)(imgs[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
+                joblib.delayed(fit.fit_gauss2d)(imgs[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
                                                 sd=imgs_sd[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
                                                 init_params=[None, c_rois[ii, 2], c_rois[ii, 1], 0.5, 0.5, 0, 0])
                                                 for ii in range(len(rois))
                 )
     else:
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-            joblib.delayed(fit.fit_gauss)(imgs[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
+            joblib.delayed(fit.fit_gauss2d)(imgs[centers[ii, 0], rois[ii, 2]:rois[ii, 3], rois[ii, 4]:rois[ii, 5]],
                                             init_params=[None, c_rois[ii, 2], c_rois[ii, 1], 0.5, 0.5, 0, 0])
             for ii in range(len(rois))
         )

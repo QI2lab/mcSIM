@@ -34,6 +34,12 @@ Code for extracting optical transfer function from measurement of the strength o
 ### [analysis/psd.py](analysis/psd.py)
 Code for doing the periodic/smooth image decomposition, an alternative to apodization for the Fourier transform. This code is taken from https://github.com/jacobkimmel/ps_decomp (with permission), and included here for convenience.
 
+### [analysis/fit.py](analysis/fit.py)
+Useful tools for fitting, used in fit_psf.py and elsewhere.
+
+### [analysis/analysis_tools.py](analysis/analysis_tools.py)
+Miscellaneous tools for IO, reading metadata, image processing, etc.
+
 # Examples
 Scripts illustrated examples of different DMD simulations and analysis are stored in [examples](examples). Associated 
 data is located in [examples/data](examples/data)

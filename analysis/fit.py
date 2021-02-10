@@ -312,7 +312,7 @@ def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=
     return result, fit_fn
 
 
-def fit_gauss(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=None, bounds=None):
+def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=None, bounds=None):
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
@@ -373,7 +373,7 @@ def fit_gauss(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=Non
     return result, fit_fn
 
 
-def fit_sum_gauss(img, ngaussians, init_params, fixed_params=None, sd=None, xx=None, yy=None, bounds=None):
+def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx=None, yy=None, bounds=None):
     """
     Fit 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
@@ -406,7 +406,7 @@ def fit_sum_gauss(img, ngaussians, init_params, fixed_params=None, sd=None, xx=N
                   [ np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf] * ngaussians + [np.inf]]
 
     result = fit_model(img, lambda p: sum_gauss_fn(xx, yy, p), init_params, fixed_params=fixed_params,
-                       sd=sd, bounds=bounds, model_jacobian=lambda p: ngauss_jacobian(xx, yy, p))
+                       sd=sd, bounds=bounds, model_jacobian=lambda p: sum_gauss_jacobian(xx, yy, p))
 
     pfit = result['fit_params']
 
@@ -543,7 +543,8 @@ def sum_gauss_fn(x, y, p):
     val += gauss_fn(x, y, ps)
     return val
 
-def ngauss_jacobian(x, y, p):
+
+def sum_gauss_jacobian(x, y, p):
     """
     Jacobian of the sum of n 2D gaussians
     :param x:
