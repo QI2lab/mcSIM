@@ -28,45 +28,8 @@ import matplotlib.gridspec
 import matplotlib.cm
 
 import psfmodels as psfm #https://pypi.org/project/psfmodels/, https://github.com/tlambert03/PSFmodels-py
-
 import fit
 import analysis_tools as tools
-
-def get_background(img, npix):
-    """
-    Use polynomial fit across subregions of image to model background.
-
-    :param img: a 2D image, size ny, nx
-    :param npix: size of image blocks to do background fitting on
-    :return bg:
-    """
-
-    ny, nx = img.shape
-    xx, yy = np.meshgrid(range(nx), range(ny))
-    bg = np.zeros((ny, nx))
-
-    for ii in range(int(np.ceil(ny/npix))):
-        for jj in range(int(np.ceil(nx/npix))):
-            xstart = jj * npix
-            xend = np.min([(jj+1) * npix, nx])
-            ystart = ii * npix
-            yend = np.min([(ii+1) * npix, ny])
-
-            # linear lest squares
-            # dependent variable matrix
-            x = xx[ystart:yend, xstart:xend].ravel()[:, None]
-            y = yy[ystart:yend, xstart:xend].ravel()[:, None]
-            one_vec = np.ones(y.shape)
-            Xmat = np.concatenate((x, y, one_vec), axis=1)
-            # data vector
-            d = img[ystart:yend, xstart:xend].ravel()[:, None]
-            # solve
-            coeffs, _, _, _ = np.linalg.lstsq(Xmat, d)
-            bg[ystart:yend, xstart:xend] = coeffs[0, 0] * xx[ystart:yend, xstart:xend] + \
-                                           coeffs[1, 0] * yy[ystart:yend, xstart:xend] + \
-                                           coeffs[2, 0]
-
-    return bg
 
 # model OTF function
 def symm1d_to_2d(arr, fs, fmax, npts):
@@ -1342,12 +1305,6 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
     # remove background
     # ##############################
     if remove_background:
-        # print("Removing background prior to peakfinding")
-        # get_bg_partial = partial(get_background, npix=200)
-        # bgs = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-        #     joblib.delayed(get_bg_partial)(imgs[ii]) for ii in range(imgs.shape[0])
-        # )
-        # imgs = imgs - np.array(bgs)
         filter_pix_bg = nx_roi
         bg = skimage.filters.gaussian(imgs, [0, filter_pix_bg, filter_pix_bg],
                                             output=None, mode='nearest', cval=0,
