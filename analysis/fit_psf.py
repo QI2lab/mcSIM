@@ -405,11 +405,6 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
 
     return val
 
-# pixelation function
-def pixelate_model(nx, dxy, z, p, wavelength, fn, ni=1.5, sf=1):
-    # todo:
-    pass
-
 # fitting functions
 def fit_cont_psfmodel(img, wavelength, ni, model='gaussian',
                       init_params=None, fixed_params=None, sd=None, xx=None, yy=None, zz=None, bounds=None):
@@ -580,51 +575,198 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
 
     return result, fit_fn
 
-def localize_radial_symm(img):
+def localize2d(img, mode="radial-symmetry"):
     """
     Perform 2D localization using the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
 
-    :param img:
+    :param img: 2D image of size ny x nx
+    :param mode: 'radial-symmetry' or 'centroid'
 
     :return xc:
     :return yc:
     """
+    if img.ndim != 2:
+        raise ValueError("img must be a 2D array, but was %dD" % img.ndim)
+
     ny, nx = img.shape
     x = np.arange(nx)
     y = np.arange(ny)
 
-    # gradients taken at point between four pixels, i.e. (xk, yk) = (j + 0.5, i + 0.5)
-    # using the Roberts cross operator
-    yk = 0.5 * (y[:-1] + y[1:])
-    xk = 0.5 * (x[:-1] + x[1:])
-    # gradients along 45 degree rotated directions
-    grad_uk = img[1:, 1:] - img[:-1, :-1]
-    grad_vk = img[:-1, :-1] - img[:-1, 1:]
-    grad_xk = 1 / np.sqrt(2) * (grad_uk - grad_vk)
-    grad_yk = 1 / np.sqrt(2) * (grad_uk + grad_vk)
-    with np.errstate(invalid="ignore"):
-        # slope of the gradient at this point
-        mk = grad_yk / grad_xk
+    if mode == "centroid":
+        xc = np.sum(img * x[None, :]) / np.sum(img)
+        yc = np.sum(img * y[:, None]) / np.sum(img)
+    elif mode == "radial-symmetry":
+        # gradients taken at point between four pixels, i.e. (xk, yk) = (j + 0.5, i + 0.5)
+        # using the Roberts cross operator
+        yk = 0.5 * (y[:-1] + y[1:])
+        xk = 0.5 * (x[:-1] + x[1:])
+        # gradients along 45 degree rotated directions
+        grad_uk = img[1:, 1:] - img[:-1, :-1]
+        grad_vk = img[1:, :-1] - img[:-1, 1:]
+        grad_xk = 1 / np.sqrt(2) * (grad_uk - grad_vk)
+        grad_yk = 1 / np.sqrt(2) * (grad_uk + grad_vk)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            # slope of the gradient at this point
+            mk = grad_yk / grad_xk
+            mk[np.isnan(mk)] = np.inf
 
-        # line passing through through (xk, yk) with slope mk is y = yk + mk*(x - xk)
-        # minimimum distance of points (xc, yc) is dk**2 = [(yk - yc) - mk*(xk -xc)]**2 / (mk**2 + 1)
+            # compute weights by (1) increasing weight where gradient is large and (2) decreasing weight for points far away
+            # from the centroid (as small slope errors can become large as the line is extended to the centroi)
+            # approximate distance between (xk, yk) and (xc, yc) by assuming (xc, yc) is centroid of the gradient
+            grad_norm = np.sqrt(grad_xk**2 + grad_yk**2)
+            centroid_grad_norm_x = np.sum(xk[None, :] * grad_norm) / np.sum(grad_norm)
+            centroid_grad_norm_y = np.sum(yk[:, None] * grad_norm) / np.sum(grad_norm)
+            dk_centroid = np.sqrt((yk[:, None] - centroid_grad_norm_y)**2 + (xk[None, :] - centroid_grad_norm_x)**2)
+            # weights
+            wk = grad_norm**2 / dk_centroid
+
+
+            # def chi_sqr(xc, yc):
+            #     val = ((yk[:, None] - yc) - mk * (xk[None, :] - xc))**2 / (mk**2 + 1) * wk
+            #     val[np.isinf(mk)] = (np.tile(xk[None, :], [yk.size, 1])[np.isinf(mk)] - xc)**2
+            #     return np.sum(val)
+
+            # line passing through through (xk, yk) with slope mk is y = yk + mk*(x - xk)
+            # minimimum distance of points (xc, yc) is dk**2 = [(yk - yc) - mk*(xk -xc)]**2 / (mk**2 + 1)
+            # must handle the case mk -> infinity separately. In this case dk**2 -> (xk - xc)**2
+            # minimize chi^2 = \sum_k dk**2 * wk
+            # minimizing for xc, yc gives a matrix equation
+            # [[A, B], [C, D]] * [[xc], [yc]] = [[E], [F]]
+            # in case the slope is infinite, need to take the limit of the sum manually
+            summand_a = -mk ** 2 * wk / (mk ** 2 + 1)
+            summand_a[np.isinf(mk)] = wk[np.isinf(mk)]
+            A = np.sum(summand_a)
+
+            summand_b = mk * wk / (mk**2 + 1)
+            summand_b[np.isinf(mk)] = 0
+            B = np.sum(summand_b)
+            C = -B
+
+            D = np.sum(wk / (mk**2 + 1))
+
+            summand_e = (mk * wk * (yk[:, None] - mk * xk[None, :])) / (mk**2 + 1)
+            summand_e[np.isinf(mk)] = - (wk * xk[None, :])[np.isinf(mk)]
+            E = np.sum(summand_e)
+
+            summand_f = (yk[:, None] - mk * xk[None, :]) * wk / (mk**2 + 1)
+            summand_f[np.isinf(mk)] = 0
+            F = np.sum(summand_f)
+
+
+            xc = (D * E - B * F) / (A*D - B*C)
+            yc = (-C * E + A * F) / (A*D - B*C)
+    else:
+        raise ValueError("mode must be 'centroid' or 'radial-symmetry', but was '%s'" % mode)
+
+    return xc, yc
+
+def localize3d(img, mode="radial-symmetry"):
+    """
+    Perform 3D localization using an extension of the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
+
+    :param img: 3D image of size nz x ny x nx
+    :param mode: 'radial-symmetry' or 'centroid'
+
+    :return xc:
+    :return yc:
+    :return zc:
+    """
+    if img.ndim != 3:
+        raise ValueError("img must be a 3D array, but was %dD" % img.ndim)
+
+    nz, ny, nx = img.shape
+    x = np.arange(nx)[None, None, :]
+    y = np.arange(ny)[None, :, None]
+    z = np.arange(nz)[:, None, None]
+
+    if mode == "centroid":
+        xc = np.sum(img * x) / np.sum(img)
+        yc = np.sum(img * y) / np.sum(img)
+        zc = np.sum(img * z) / np.sum(img)
+    elif mode == "radial-symmetry":
+        yk = 0.5 * (y[:, :-1, :] + y[:, 1:, :])
+        xk = 0.5 * (x[:, :, :-1] + x[:, :, 1:])
+        zk = 0.5 * (z[:-1] + z[1:])
+        coords = (zk, yk, xk)
+
+        # take a cube of 8 voxels, and compute gradients at the center, using the four pixel diagonals that pass
+        # through the center
+        grad_n1 = img[1:, 1:, 1:] - img[:-1, :-1, :-1]
+        n1 = np.array([1, 1, 1]) / np.sqrt(3) # vectors go [nz, ny, nx]
+        grad_n2 = img[1:, :-1, 1:] - img[:-1, 1:, :-1]
+        n2 = np.array([1, -1, 1]) / np.sqrt(3)
+        grad_n3 = img[1:, :-1, :-1] - img[:-1, 1:, 1:]
+        n3 = np.array([1, -1, -1]) / np.sqrt(3)
+        grad_n4 = img[1:, 1:, :-1] - img[:-1, :-1, 1:]
+        n4 = np.array([1, 1, -1]) / np.sqrt(3)
+
+        # compute the gradient xyz components
+        # 3 unknowns and 4 eqns, so use pseudo-inverse to optimize overdetermined system
+        mat = np.concatenate((n1[None, :], n2[None, :], n3[None, :], n4[None, :]), axis=0)
+        gradk = np.linalg.pinv(mat).dot(
+            np.concatenate((grad_n1.ravel()[None, :], grad_n2.ravel()[None, :],
+                            grad_n3.ravel()[None, :], grad_n4.ravel()[None, :]), axis=0))
+        gradk = np.reshape(gradk, [3, zk.size, yk.size, xk.size])
 
         # compute weights by (1) increasing weight where gradient is large and (2) decreasing weight for points far away
         # from the centroid (as small slope errors can become large as the line is extended to the centroi)
         # approximate distance between (xk, yk) and (xc, yc) by assuming (xc, yc) is centroid of the gradient
-        grad_norm = np.sqrt(grad_xk**2 + grad_yk**2)
-        dkc = np.sqrt((np.sum(xk[None, :] * grad_norm))**2 + (np.sum(yk[:, None] * grad_norm))**2) / np.sum(grad_norm)
+        grad_norm = np.sqrt(np.sum(gradk**2, axis=0))
+        centroid_gns = np.array([np.sum(zk * grad_norm), np.sum(yk * grad_norm), np.sum(xk * grad_norm)]) / np.sum(grad_norm)
+        dk_centroid = np.sqrt((zk - centroid_gns[0]) ** 2 + (yk - centroid_gns[1]) ** 2 + (xk - centroid_gns[2]) ** 2)
         # weights
-        wk = (grad_xk**2 + grad_yk**2) / dkc
+        wk = grad_norm ** 2 / dk_centroid
 
-        # minimize chi^2 = \sum_k dk**2 * wk
-        delta = np.nansum(mk * wk / (mk**2 + 1))**2 - np.nansum(mk**2 * wk / (mk**2 + 1)) * np.nansum(wk / (mk**2 + 1))
-        xc = (np.nansum(mk * wk * (yk[:, None] - mk * xk[None, :]) / (mk**2 + 1)) * np.nansum(wk / (mk**2 + 1)) -
-              np.nansum(mk * wk / (mk**2 + 1)) * np.nansum((yk - mk * xk ) * wk / (mk**2 + 1))) / delta
-        yc = (np.nansum(mk * wk * (yk[:, None] - mk * xk[None, :]) / (mk**2 + 1)) * np.nansum(mk * wk / (mk**2 + 1)) -
-              np.nansum(mk**2 * wk / (mk**2 + 1)) * np.nansum((yk - mk * xk ) * wk / (mk**2 + 1))) / delta
+        # in 3D, parameterize a line passing through point Po along normal n by
+        # V(t) = Pk + n * t
+        # distance between line and point Pc minimized at
+        # tmin = -\sum_{i=1}^3 (Pk_i - Pc_i) / \sum_i n_i^2
+        # dk^2 = \sum_k \sum_i (Pk + n * tmin - Pc)^2
+        # again, we want to minimize the quantity
+        # chi^2 = \sum_k dk^2 * wk
+        # so we take the derivatives of chi^2 with respect to Pc_x, Pc_y, and Pc_z, which gives a system of linear
+        # equations, which we can recast into a matrix equation
+        # np.array([[A, B, C], [D, E, F], [G, H, I]]) * np.array([[Pc_z], [Pc_y], [Pc_x]]) = np.array([[J], [K], [L]])
+        nk = gradk / np.linalg.norm(gradk, axis=0)
 
-    return xc, yc
+        # def chi_sqr(xc, yc, zc):
+        #     cs = (zc, yc, xc)
+        #     chi = 0
+        #     for ii in range(3):
+        #         chi += np.sum((coords[ii] + nk[ii] * (cs[jj] - coords[jj]) - cs[ii]) ** 2 * wk)
+        #     return chi
+
+        # build 3x3 matrix from above
+        mat = np.zeros((3, 3))
+        for ll in range(3): # rows of matrix
+            for ii in range(3): # columns of matrix
+                if ii == ll:
+                    mat[ll, ii] += np.sum(-wk * (nk[ii] * nk[ll] - 1))
+                else:
+                    mat[ll, ii] += np.sum(-wk * nk[ii] * nk[ll])
+
+                for jj in range(3): # internal sum
+                    if jj == ll:
+                        mat[ll, ii] += np.sum(wk * nk[ii] * nk[jj] * (nk[jj] * nk[ll] - 1))
+                    else:
+                        mat[ll, ii] += np.sum(wk * nk[ii] * nk[jj] * nk[jj] * nk[ll])
+
+        # build vector from above
+        vec = np.zeros((3, 1))
+        coord_sum = zk * nk[0] + yk * nk[1] + xk * nk[2]
+        for ll in range(3): # sum over J, K, L
+            for ii in range(3): # internal sum
+                if ii == ll:
+                    vec[ll] += -np.sum((coords[ii] - nk[ii] * coord_sum) * (nk[ii] * nk[ll] - 1) * wk)
+                else:
+                    vec[ll] += -np.sum((coords[ii] - nk[ii] * coord_sum) * nk[ii] * nk[ll] * wk)
+
+        # invert matrix
+        zc, yc, xc = np.linalg.inv(mat).dot(vec)
+    else:
+        raise ValueError("mode must be 'centroid' or 'radial-symmetry', but was '%s'" % mode)
+
+    return xc, yc, zc
 
 # utility functions
 def get_coords(ns, drs):
