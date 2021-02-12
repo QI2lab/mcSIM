@@ -25,9 +25,23 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
     """
     to_use = np.logical_not(np.isnan(img))
 
+    # if all sd's are nan or zero, set to 1
+    if sd is None or np.all(np.isnan(sd)) or np.all(sd == 0):
+        sd = np.ones(img.shape)
+
+    # handle uncertainties that will cause fitting to fail
+    if np.any(sd == 0) or np.any(np.isnan(sd)):
+        sd[sd == 0] = np.nanmean(sd[sd != 0])
+        sd[np.isnan(sd)] = np.nanmean(sd[sd != 0])
+
+    # function to be optimized
     def err_fn(p): return np.divide(model_fn(p)[to_use].ravel() - img[to_use].ravel(), sd[to_use].ravel())
+
+    # if it was passed, use model jacobian
     if model_jacobian is not None:
         def jac_fn(p): return [v[to_use] / sd[to_use] for v in model_jacobian(p)]
+    else:
+        jac_fn = None
 
     results = fit_least_squares(err_fn, init_params, fixed_params=fixed_params, bounds=bounds,
                                 model_jacobian=jac_fn, **kwargs)
@@ -56,9 +70,8 @@ def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, mod
     if bounds is None:
         bounds = (tuple([-np.inf] * len(init_params)), tuple([np.inf] * len(init_params)))
 
-    # init_params = copy.deepcopy(init_params)
     init_params = np.array(init_params, copy=True)
-    # ensure initial parameters within bounds, but don't touch if parameter is fixed
+    # ensure initial parameters within bounds, if not fixed
     for ii in range(len(init_params)):
         if (init_params[ii] < bounds[0][ii] or init_params[ii] > bounds[1][ii]) and not fixed_params[ii]:
             raise ValueError("Initial parameter at index %d had value %0.2g, which was outside of bounds (%0.2g, %0.2g"
@@ -80,12 +93,10 @@ def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, mod
         return np.array([pfree[free_inds[ii]] if not fp else init_params[ii] for ii, fp in enumerate(fixed_params)])
 
     # map full parameters to reduced set
-    def pfull2pfree(pfull):
-        return np.array([p for p, fp in zip(pfull, fixed_params) if not fp])
+    def pfull2pfree(pfull): return np.array([p for p, fp in zip(pfull, fixed_params) if not fp])
 
     # function to minimize the sum of squares of, now as a function of only the free parameters
-    def err_fn_pfree(pfree):
-        return model_fn(pfree2pfull(pfree))
+    def err_fn_pfree(pfree): return model_fn(pfree2pfull(pfree))
 
     if model_jacobian is not None:
         def jac_fn_free(pfree): return pfull2pfree(model_jacobian(pfree2pfull(pfree))).transpose()
