@@ -51,7 +51,7 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
 
 def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, model_jacobian=None, **kwargs):
     """
-    Wrapper for non-linear least squares fit function scipy.optimize.least_squares which handles fixing parameters.
+    Wrapper for non-linear least squares fi t function scipy.optimize.least_squares which handles fixing parameters.
 
     :param model_fn: function f(p)
     :param list[float] init_params: p = [p1, p2, ..., pn]
