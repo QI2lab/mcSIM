@@ -54,7 +54,7 @@ print("####################################");
 User settings
 *****************************/
 // DMD settings
-String dmd_script_path = "C:\\Users\\ptbrown2\\Desktop\\multicolorSIM\\expt_ctrl\\set_dmd_sim.py";
+String dmd_script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\set_dmd_sim.py";
 boolean program_dmd = true; // if true, program DMD using parameters set here
 // set DMD mode "sim", "widefield", or "affine"
 //String dmd_mode = "sim";
@@ -78,6 +78,7 @@ boolean program_tscope = true; // false if already programmed and want to run sa
 boolean print_program = false;
 int dmd_trig1_ttl = 7; // remember that this would be ttl[dmd_trig1_ttl - 1]
 int dmd_trig2_ttl = 6; // should be HIGH to allow pattern to advance
+int shutter = 8;
 int tscope_trig_mode = 4;  // set to rising trigger, 0=Low, 1=High (causes error), 2=Rising, 3=Falling 4=Change
 int tscope_channel_fastest_axis = 1; // 0=z-stack fastest axis, then channel; 1=channel fastest axis, then z-stack. With channels alternating ON/OFF cannot do z-stack as fastest axis.
 
@@ -578,6 +579,9 @@ print("focus is initially at position " + focus_start_position + "um");
 /*****************************
 setup DMD. NOTE: the trigger #2 must be OFF/LOW before programming!
 *****************************/
+// ensure that shutter is closed before we start
+mmc.setProperty(String.format("TriggerScope-TTL%02d", new Object[] {shutter}), "State", 0);
+mmc.sleep(50);
 // ensure that DMD TTL trigger line is LOW before we start. Otherwise triggering will not succeed
 mmc.setProperty(String.format("TriggerScope-TTL%02d", new Object[] {dmd_trig1_ttl}), "State", 0);
 mmc.setProperty(String.format("TriggerScope-TTL%02d", new Object[] {dmd_trig2_ttl}), "State", 0);
