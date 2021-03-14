@@ -1,8 +1,9 @@
-// Initialize Optotune MRE2, using beanshell to run python script which uses their python SDK
-// Assumptions: 
-// (1) you have a conda python environment
-// (2) conda has been added to your windows PATH variable
-// (3) You have downloaded the Optotune python SDK, and it is on the PYTHONPATH for your conda environment
+// Initialize Optotune MRE2, using beanshell to run python script which uses their python SDK.
+// Assumptions:
+// (1) you have set this file as your startup script in MM under the menu tools->options
+// (2) you have a conda python environment
+// (3) conda has been added to your windows PATH variable
+// (4) You have downloaded the Optotune python SDK, and it is on the PYTHONPATH for your conda environment
 
 String script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\setup_optotune_mre2.py";
 String conda_env_name = "ptbrownenv";
