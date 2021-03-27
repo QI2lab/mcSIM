@@ -773,21 +773,26 @@ def get_affine_xform(fps, succesful_fits, dmd_centers):
     return affine_xform
 
 
-def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, affine_xform, options):
+def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
+                        affine_xform, options, figsize=(16, 12)):
     """
     Plot results of DMD affine transformation fitting using results of fit_pattern_peaks and get_affine_xform
 
     :param np.array img:
     :param np.array mask:
-    :param fps:
-    :param chisqs:
+    :param np.array fps: fit parameters for each peak ny x nx x 7 array
+    :param chisqs: chi squared statistic for each peak
     :param bool succesful_fits: boolean giving which fits we consider successful
-    :param dmd_centers:
-    :param affine_xform:
-    :param options:
+    :param dmd_centers: ny x nx x 2, center positiosn on DMD
+    :param affine_xform: affine transformation
+    :param options: {'cam_pix', 'dmd_pix', 'dmd2cam_mag_expected', 'cam_mag'}
 
     :return fig: figure handle to summary figure
     """
+    if "cam_mag" not in options.keys():
+        options.update({"cam_mag": np.nan})
+
+
     fps = np.array(fps, copy=True)
     # ensure longer sigma is first
     to_swap = fps[:, :, 4] > fps[:, :, 3]
@@ -829,6 +834,15 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     xdmd_xform = dmd_coords_xformed[0, :]
     ydmd_xform = dmd_coords_xformed[1, :]
 
+    ny, nx = mask.shape
+    xc_dmd = nx / 2
+    yc_dmd = ny / 2
+    xc_dmd_cam, yc_dmd_cam, _ = affine_xform.dot(np.array([[xc_dmd], [yc_dmd], [1]]))
+
+    nvec = 100
+    x_xvec, y_xvec, _ = affine_xform.dot(np.array([[xc_dmd + nvec], [yc_dmd], [1]]))
+    x_yvec, y_yvec, _ = affine_xform.dot(np.array([[xc_dmd], [yc_dmd + nvec], [1]]))
+
     # residual position error
     residual_dist_err = np.zeros((fps.shape[0], fps.shape[1])) * np.nan
     residual_dist_err[succesful_fits] = np.sqrt((xdmd_xform - xcam)**2 + (ydmd_xform - ycam)**2)
@@ -842,68 +856,72 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     vmax_img = vmin_img + np.max(amps[succesful_fits]) * 1.2
 
     # plot results
-    fig = plt.figure(figsize=(16, 12))
-    grid = plt.GridSpec(4, 4)
+    fig = plt.figure(figsize=figsize)
+    grid = plt.GridSpec(6, 4)
 
-    plt.subplot(grid[0, 0])
+    plt.subplot(grid[:2, 0])
     no_nans = chisqs.ravel()[np.logical_not(np.isnan(chisqs.ravel()))]
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
     plt.imshow(chisqs, vmin=vmin, vmax=vmax)
-    plt.title('chi squared values')
+    plt.title('$\chi^2$')
     plt.colorbar()
 
-    plt.subplot(grid[0, 1])
+    plt.subplot(grid[:2, 1])
     no_nans = residual_dist_err.ravel()[np.logical_not(np.isnan(residual_dist_err.ravel()))]
     vmax = np.percentile(no_nans, 90)
     plt.imshow(residual_dist_err, vmin=0, vmax=vmax)
-    plt.title('residual position error (pix)')
+    plt.title('position error (pix)')
     plt.colorbar()
 
-    plt.subplot(grid[1, 0])
+    plt.subplot(grid[2:4, 0])
     no_nans = sigma_mean_cam.ravel()[np.logical_not(np.isnan(sigma_mean_cam.ravel()))]
     sigma_mean_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
     plt.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax)
-    plt.title('mean sigma, median=%0.2f' % sigma_mean_median)
+    sigma_m = sigma_mean_median * options["cam_pix"] / options["cam_mag"]
+    plt.title('$\sqrt{\sigma_x \sigma_y}$, median=%0.2f\n$\sigma$=%0.1fnm, FWHM=%0.1fnm' %
+              (sigma_mean_median, sigma_m * 1e9, sigma_m * 2 *  np.sqrt(2 * np.log(2)) * 1e9))
     plt.colorbar()
 
-    plt.subplot(grid[1, 1])
+    plt.subplot(grid[2:4, 1])
     no_nans = amps.ravel()[np.logical_not(np.isnan(amps.ravel()))]
     amp_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
     plt.imshow(amps, vmin=vmin, vmax=vmax)
-    plt.title('amplitudes, median=%0.0f' % amp_median)
+    plt.title('amps median=%0.0f' % amp_median)
     plt.colorbar()
 
-    plt.subplot(grid[2, 0])
+    plt.subplot(grid[4:6, 0])
     no_nans = sigma_asymmetry_cam.ravel()[np.logical_not(np.isnan(sigma_asymmetry_cam.ravel()))]
     sigma_asym_median = np.median(no_nans)
     plt.imshow(sigma_asymmetry_cam, vmin=0, vmax=1)
-    plt.title('sigma asym med=%0.2f' % sigma_asym_median)
+    plt.title('$\sigma$ asym median=%0.2f' % sigma_asym_median)
     plt.colorbar()
 
-    plt.subplot(grid[2, 1])
+    plt.subplot(grid[4:6, 1])
     no_nans = angles.ravel()[np.logical_not(np.isnan(angles.ravel()))]
     median_angle = np.median(no_nans * 180 / np.pi)
     plt.imshow(angles * 180 /np.pi, vmin=0, vmax=180)
-    plt.title('angle (deg), med=%0.1f' % median_angle)
+    plt.title('angle, median=%0.1f$^\deg$' % median_angle)
     plt.colorbar()
 
-    plt.subplot(grid[:2, 2:])
+    plt.subplot(grid[:3, 2:])
     plt.imshow(img, vmin=vmin_img, vmax=vmax_img)
-    plt.scatter(xcam, ycam, c='r', marker='x')
-    plt.scatter(xdmd_xform, ydmd_xform, c='y', marker='1')
-    plt.title('red=fit points, yellow=dmd xformed points')
+    plt.plot(xcam, ycam, 'rx')
+    plt.plot(xdmd_xform, ydmd_xform, 'y1')
+    plt.plot(xc_dmd_cam, yc_dmd_cam, 'mx')
+    plt.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm')
+    plt.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
+    plt.legend(["fit points", "affine xform"])
 
-    plt.subplot(grid[3:, :2])
-    plt.imshow(mask)
-    plt.title('dmd mask')
-
-    plt.subplot(grid[2:, 2:])
+    plt.subplot(grid[3:, 2:])
     plt.imshow(mask_xformed)
+    plt.plot(xc_dmd_cam, yc_dmd_cam, c='m', marker='x')
+    plt.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm')
+    plt.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
     plt.title('dmd mask xformed to img space')
 
     plt.suptitle('theta_x=%.2fdeg, mx=%0.3f, cx=%0.1f, pixel corrected mx=%.3f\n'
