@@ -51,10 +51,11 @@ print("####################################");
 User settings
 *****************************/
 // DMD settings
-String conda_env_name = "ptbrownenv";
 String dmd_script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\set_dmd_sim.py";
 boolean program_dmd = true; // if true, program DMD using parameters set here
 // set DMD mode "sim", "widefield", or "affine"
+//String dmd_mode = "sim";
+//String dmd_mode = "widefield";
 String dmd_mode = "sim";
 boolean dark_patterns_between = true; // if running in normal SIM mode, add dark pattern in between SIM patterns to blank laser
 int n_dark_frames = 2; // number of dark frames added as extra SIM patterns to allow mirror enough time to move
@@ -78,8 +79,42 @@ int shutter = 8;
 int tscope_trig_mode = 4;  // set to rising trigger, 0=Low, 1=High (causes error), 2=Rising, 3=Falling 4=Change
 int tscope_channel_fastest_axis = 1; // 0=z-stack fastest axis, then channel; 1=channel fastest axis, then z-stack. With channels alternating ON/OFF cannot do z-stack as fastest axis.
 
+// triggerscope info
+int dac_bit_depth = 16;
+double dac_vmin = -10.;
+double dac_vmax = 10.;
+double dac_focus_vmin = 0.;
+double dac_focus_vmax = 10.;
+
 // MM settings
 int circ_buffer_mb = 1000;
+
+// scan settings
+int chan_vx = 15;
+double vx_start = 4.76;
+double vx_end = 4.76;
+double vx_step = 0.005;
+int nx_steps = (int) Math.round((vx_end - vx_start) / vx_step);
+if (nx_steps == 0){nx_steps = 1;}
+
+double[] vx_array = new double[nx_steps];
+for (int ii=0; ii<nx_steps; ii++) {
+	vx_array[ii] = vx_start + vx_step * (double) ii;
+}
+
+int chan_vy = 14;
+double vy_start = 5.13;
+double vy_end = 5.33;
+double vy_step = 0.01;
+int ny_steps = (int) Math.round((vy_end - vy_start) / vy_step);
+if (ny_steps == 0){ny_steps = 1;}
+
+double[] vy_array = new double[ny_steps];
+for (int ii=0; ii<ny_steps; ii++) {
+	vy_array[ii] = vy_start + vy_step * (double) ii;
+}
+
+print("nx=" + nx_steps + "; ny=" + ny_steps);
 
 /*****************************
 Define useful functions
@@ -170,7 +205,7 @@ String get_mda_channel_names(acqSettings){
  * @param  acqSettings
  * @param  debugger			boolean flag, if true print debugging information
  */
-boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [][] ttlArrayChannel, int nchannels, int dac_bit_depth, double dac_min_voltage, double dac_voltage_range, boolean debugger){
+boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [][] ttlArrayChannel, int nchannels, int dac_bit_depth, double dac_focus_vmin, double dac_voltage_range, boolean debugger){
 	
 	// get active group set in MDA
 	String activeGroup = acqSettings.channelGroup;
@@ -184,7 +219,7 @@ boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [
 	
 		int [] dacArray_preset = new int[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 		int [] ttlArray_preset = new int[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-		get_tscope_preset_setting(preset, dacArray_preset, ttlArray_preset, dac_bit_depth, dac_min_voltage, dac_voltage_range, debugger);
+		get_tscope_preset_setting(preset, dacArray_preset, ttlArray_preset, dac_bit_depth, dac_focus_vmin, dac_voltage_range, debugger);
 	
 		// assign preset info to program line
 		for(int ii=0; ii<16; ii++){
@@ -218,13 +253,13 @@ boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [
  * @param  acqSettings
  * @param  debugger			boolean flag, if true print debugging information
  */
-boolean get_tscope_named_settings(String preset_name, acqSettings, int [] dacArray, int [] ttlArray, int dac_bit_depth, double dac_min_voltage, double dac_voltage_range, boolean debugger){
+boolean get_tscope_named_settings(String preset_name, acqSettings, int [] dacArray, int [] ttlArray, int dac_bit_depth, double dac_focus_vmin, double dac_voltage_range, boolean debugger){
 	// get active group set in MDA
 	String activeGroup = acqSettings.channelGroup;
 	
 	// get OFF data
 	mmcorej.Configuration off_preset = mmc.getConfigData(activeGroup, preset_name);
-	get_tscope_preset_setting(off_preset, dacArray, ttlArray, dac_bit_depth, dac_min_voltage, dac_voltage_range, debugger);
+	get_tscope_preset_setting(off_preset, dacArray, ttlArray, dac_bit_depth, dac_focus_vmin, dac_voltage_range, debugger);
 	
 	return true;
 
@@ -236,11 +271,11 @@ boolean get_tscope_named_settings(String preset_name, acqSettings, int [] dacArr
  * @param  dacArray		a boolean array of size 16
  * @param  ttlArray		an integer array of size 16
  * @param  dac_bit_depth	
- * @param  dac_min_voltage		minimum dac voltage
- * @param  dac_voltage_range	dac_max_voltage - dac_min_voltage
+ * @param  dac_focus_vmin		minimum dac voltage
+ * @param  dac_voltage_range	dac_focus_vmax - dac_focus_vmin
  * @param  debugger				boolean flag, if true print debugging information
  */
-boolean get_tscope_preset_setting(mmcorej.Configuration preset, int [] dacArray, int [] ttlArray, int dac_bit_depth, double dac_min_voltage, double dac_voltage_range, boolean debugger) {
+boolean get_tscope_preset_setting(mmcorej.Configuration preset, int [] dacArray, int [] ttlArray, int dac_bit_depth, double dac_focus_vmin, double dac_voltage_range, boolean debugger) {
 	
 	// loop over device settings in preset
 	for (int k=0; k<preset.size(); k++){
@@ -264,9 +299,9 @@ boolean get_tscope_preset_setting(mmcorej.Configuration preset, int [] dacArray,
 				
 				//pull DAC Value in VOLTS
 				double dac_mm_setting = (double) Float.parseFloat(prop_val.replaceAll("\\.D","" ));
-				double volts = map_intervals(dac_mm_setting, 0., 10., dac_min_voltage, dac_voltage_range); 
-				dacArray[dn-1] = voltage2dac(dac_bit_depth, volts, dac_min_voltage, dac_voltage_range);
-				//dacArrayChannel[i_channel][dn-1] = voltage2dac(dac_bit_depth, volts, dac_min_voltage, dac_voltage_range);
+				double volts = map_intervals(dac_mm_setting, 0., 10., dac_focus_vmin, dac_voltage_range); 
+				dacArray[dn-1] = voltage2dac(dac_bit_depth, volts, dac_focus_vmin, dac_voltage_range);
+				//dacArrayChannel[i_channel][dn-1] = voltage2dac(dac_bit_depth, volts, dac_focus_vmin, dac_voltage_range);
 				
 				if(debugger) {print("DAC number " + dn + " = " + dacArray[dn-1]);}
 				//dacArrayChannel[i_channel][dn-1]);}
@@ -327,14 +362,14 @@ double get_real_stage_position(double fake_stage_pos_um, double zmin_fake_um, do
  * @param  zstart_um		start position for stage in microns
  * @param  zstep_um			step size for stage in microns
  * @param  dac_bit_depth	bit depth of the DAC. i.e. the DAC can represent 2^dac_bit_depth different values
- * @param  dac_min_voltage	minimum voltage the DAC can output, corresponding to 0 counts
- * @param  dac_max_voltage	maximum voltage the DAC can output, corresponding to 2^(dac_bit_depth-1) counts
+ * @param  dac_focus_vmin	minimum voltage the DAC can output, corresponding to 0 counts
+ * @param  dac_focus_vmax	maximum voltage the DAC can output, corresponding to 2^(dac_bit_depth-1) counts
  * @param  zmin_um				minimum position of the stage in microns
  * @param  zmax_um				maximum position of the stage in microns
  * @param  zmin_voltage		voltage corresponding to zmin_um
  * @param  zmax_voltage		voltage corresponding to zmax_um
  */
-boolean calculate_focus_settings(int [] focus_array, double zstart_um, double zstep_um, int dac_bit_depth, double dac_min_voltage, double dac_max_voltage, double zmin_um, double zmax_um, double zmin_voltage, double zmax_voltage){
+boolean calculate_focus_settings(int [] focus_array, double zstart_um, double zstep_um, int dac_bit_depth, double dac_focus_vmin, double dac_focus_vmax, double zmin_um, double zmax_um, double zmin_voltage, double zmax_voltage){
 	
 	// convert z-positions to stage voltage
 	// double vstart = (zstart_um - zmin_um) * (zmax_voltage - zmin_voltage) / (zmax_um - zmin_um) + zmin_voltage;
@@ -345,8 +380,8 @@ boolean calculate_focus_settings(int [] focus_array, double zstart_um, double zs
 	double vstep = map_intervals(zstep_um, 0., zrange_um, 0., zrange_v);
 	
 	// convert stage voltage to DAC value
-	double dac_voltage_range = dac_max_voltage - dac_min_voltage;
-	int dac_start = voltage2dac(dac_bit_depth, vstart, dac_min_voltage, dac_voltage_range);
+	double dac_voltage_range = dac_focus_vmax - dac_focus_vmin;
+	int dac_start = voltage2dac(dac_bit_depth, vstart, dac_focus_vmin, dac_voltage_range);
 	int dac_step = voltage2dac(dac_bit_depth, vstep, 0, dac_voltage_range);
 	
 	print("zstart position = " + zstart_um + "um = " + vstart + "volts = " + dac_start + "counts"); 
@@ -371,12 +406,12 @@ boolean calculate_focus_settings(int [] focus_array, double zstart_um, double zs
  *
  * @param  dac_bit_depth 	bit depth of the DAC. i.e. the DAC can represent 2^dac_bit_depth different values
  * @param  voltage			voltage to be converted to DAC value
- * @param  dac_min_voltage	minimum voltage the DAC can output, corresponding to 0 counts
- * @param  dac_max_voltage	maximum voltage the DAC can output, corresponding to 2^(dac_bit_depth-1) counts
+ * @param  dac_vmin			minimum voltage the DAC can output, corresponding to 0 counts
+ * @param  dac_voltage_range			maximum voltage the DAC can output, corresponding to 2^(dac_bit_depth-1) counts
  */
-int voltage2dac(int dac_bit_depth, double voltage, double dac_min_voltage, double dac_voltage_range){
+int voltage2dac(int dac_bit_depth, double voltage, double dac_vmin, double dac_voltage_range){
 	// round returns long
-	int dac_val = (int) Math.round(map_intervals(voltage, dac_min_voltage, dac_voltage_range, 0, (double)(Math.pow(2, dac_bit_depth) - 1)));
+	int dac_val = (int) Math.round(map_intervals(voltage, dac_vmin, dac_voltage_range, 0, (double)(Math.pow(2, dac_bit_depth) - 1)));
 	return dac_val;
 }
 
@@ -385,11 +420,11 @@ int voltage2dac(int dac_bit_depth, double voltage, double dac_min_voltage, doubl
  *
  * @param  dac_bit_depth 	bit depth of the DAC. i.e. the DAC can represent 2^dac_bit_depth different values
  * @param  dac_val			DAC value to be converted to voltage
- * @param  dac_min_voltage	minimum voltage the DAC can output, corresponding to 0 counts
- * @param  dac_max_voltage	maximum voltage the DAC can output, corresponding to 2^(dac_bit_depth-1) counts
+ * @param  dac_vmin			minimum voltage the DAC can output, corresponding to 0 counts
+ * @param  dac_vmax			maximum voltage the DAC can output, corresponding to 2^(dac_bit_depth-1) counts
  */
-double dac2voltage(int dac_bit_depth, int dac_val, double dac_min_voltage, double dac_max_voltage){
-	double voltage = map_intervals((double) dac_val, 0, (double) (Math.pow(2, dac_bit_depth) - 1), dac_min_voltage, dac_max_voltage - dac_min_voltage);
+double dac2voltage(int dac_bit_depth, int dac_val, double dac_vmin, double dac_vmax){
+	double voltage = map_intervals((double) dac_val, 0, (double) (Math.pow(2, dac_bit_depth) - 1), dac_vmin, dac_vmax - dac_vmin);
 	return voltage;
 }
 
@@ -476,10 +511,8 @@ if (nz_pos == 0){
 
 // number of time/positions/channels points etc. looped over during acquisition
 int nchannels = acqSettings.channels.size();
-int niterations = n_patterns * nchannels * nz_pos * nxy_pos * n_times;
 
 print(n_times + " times; " + nxy_pos + " xy-pos; " + nz_pos + " z-pos; " + nchannels + " channels; " + n_patterns + " sim patterns; ");
-print("total iterations = " + niterations);
 
 /*****************************
 Prepare datastore
@@ -515,7 +548,7 @@ SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-dd-MM;HH:mm:ss.SS
 String date = simpleDateFormat.format(new Date());
 
 // user data to store # sim images
-PropertyMapBuilder pmb = mm.data().getPropertyMapBuilder().putInt("NumSIMPatterns", n_patterns);
+PropertyMapBuilder pmb = mm.data().getPropertyMapBuilder().putInt("NumSIMPatterns", n_patterns).putInt("nx_steps", nx_steps).putInt("ny_steps", ny_steps);
 PropertyMap pm = pmb.build();
 
 // create new metadata
@@ -592,14 +625,20 @@ print("active channels: " + active_channels);
 // Otherwise, need to add calls to start virtual environment before calling python
 if(program_dmd){
 	print("setting DMD sequence from patterns stored in firmware");
+	/*
+	// todo: get relative path
+	String bsh_file_dir = dirname(pathToFile(getSourceFileInfo()).getAbsolutePath());
+	String dmd_script_path = String.format("%s\\sim_patterns\\2020_03_05_period=5.7_nangles=3\\run_sim.py", new Object [] {bsh_file_dir}); 
+	print(dmd_script_path);
+	*/
 	
 	Runtime r = Runtime.getRuntime();
 	Process p;
 	if(dark_patterns_between){
-			p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + dmd_script_path + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " --blank" + " -m " + dmd_mode + " -wr " + n_sim_patterns);
+			p = r.exec("python " + dmd_script_path + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " --blank" + " -m " + dmd_mode + " -wr " + n_sim_patterns);
 	}
 	else {
-			p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + dmd_script_path + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " -m " + dmd_mode + " -wr " + n_sim_patterns);
+			p = r.exec("python " + dmd_script_path + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " -m " + dmd_mode + " -wr " + n_sim_patterns);
 	}
 	
 	BufferedReader stdInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
@@ -660,32 +699,43 @@ int [][] ttlArrayChannel = new int[nchannels] [16]; //an array to hold values fo
 get_tscope_channel_settings(acqSettings, dacArrayChannel, ttlArrayChannel, nchannels, 16, -10., 20., debugger);
 
 // but when we write these to the triggerscope, we will write each channel line multiple times to account for the SIM patterns. Alternate channel values with OFF values
-n_tscope_steps = n_patterns * nchannels * 2; // all channel values paired with OFFs
+n_tscope_steps = n_patterns * nchannels * nx_steps * ny_steps * 2; // all channel values paired with OFFs
 int [][] dacArray = new int[n_tscope_steps] [16]; //an array to hold values for the DAC channel
 int [][] ttlArray = new int[n_tscope_steps] [16]; //an array to hold values for the TTL channel
 
 int counter = 0;
-for (int ic=0; ic < nchannels; ic++){
-	for (int isim=0; isim < n_patterns; isim++){
-		for (int ii=0; ii < 16; ii++){
-			// write channel data
-			ttlArray[counter][ii] = ttlArrayChannel[ic][ii];
-			dacArray[counter][ii] = dacArrayChannel[ic][ii];
-			
-			// write OFF data
-			ttlArray[counter+1][ii] = ttlArrayChannel[ic][ii];
+for (int ix=0; ix < nx_steps; ix++){
+	for (int iy=0; iy < ny_steps; iy++){
+		for (int ic=0; ic < nchannels; ic++){
+			for (int isim=0; isim < n_patterns; isim++){
+				for (int ii=0; ii < 16; ii++){
+					// write channel data
+					ttlArray[counter][ii] = ttlArrayChannel[ic][ii];
+					dacArray[counter][ii] = dacArrayChannel[ic][ii];
+					
+					
+					// write OFF data
+					ttlArray[counter+1][ii] = ttlArrayChannel[ic][ii];
 
-			if (!dark_patterns_between){
-				if (ii==(dmd_trig2_ttl-1) || ii==(dmd_trig1_ttl-1)){
-				ttlArray[counter+1][ii] = 0;
+					if (!dark_patterns_between){
+						if (ii==(dmd_trig2_ttl-1) || ii==(dmd_trig1_ttl-1)){
+						ttlArray[counter+1][ii] = 0;
+						}
+					}
+					
+					// don't change DAC, otherwise e.g. voice coil mirror is flipping back and forth rapidly.
+					dacArray[counter+1][ii] = dacArrayChannel[ic][ii];
 				}
+				// write scanning parameter data
+				dacArray[counter][chan_vx-1] = voltage2dac(dac_bit_depth, vx_array[ix], 0., 10.);
+				dacArray[counter+1][chan_vx-1] = voltage2dac(dac_bit_depth, vx_array[ix], 0., 10.);
+				
+				dacArray[counter][chan_vy-1] = voltage2dac(dac_bit_depth, vy_array[iy], 0., 10.);
+				dacArray[counter+1][chan_vy-1] = voltage2dac(dac_bit_depth, vy_array[iy], 0., 10.);
+				
+				counter = counter + 2;	
 			}
-			
-			// don't change DAC, otherwise e.g. voice coil mirror is flipping back and forth rapidly.
-			//dacArray[counter+1][ii] = dacArrayOff[ii];
-			dacArray[counter+1][ii] = dacArrayChannel[ic][ii];
 		}
-		counter = counter + 2;	
 	}
 }
 
@@ -713,9 +763,7 @@ Set focus loop
 *****************************/
 // focus channel calculations
 // DAC info
-int dac_bit_depth = 16;
-double dac_min_voltage = 0.;
-double dac_max_voltage = 10.;
+
 
 //  focus loop data
 //Float.parseFloat(mmc.getProperty(zStage, "Upper Limit"));
@@ -769,12 +817,12 @@ if (!ignore_z_loop){
 	zstep = get_real_stage_position(zstep, 0, zrange_tscope, 0, zrange_um);
 	
 	// calculate focus_array for stage	
-	calculate_focus_settings(focus_array, zstart, zstep, dac_bit_depth, dac_min_voltage, dac_max_voltage, zstart_um, zstop_um, zstart_voltage, zstop_voltage);
+	calculate_focus_settings(focus_array, zstart, zstep, dac_bit_depth, dac_focus_vmin, dac_focus_vmax, zstart_um, zstop_um, zstart_voltage, zstop_voltage);
 }
 else{
-	double focus_start_position_volts = map_intervals(focus_start_position/100, 0., 10., dac_min_voltage, dac_max_voltage - dac_min_voltage);
+	double focus_start_position_volts = map_intervals(focus_start_position/100, 0., 10., dac_focus_vmin, dac_focus_vmax - dac_focus_vmin);
 	print(focus_start_position_volts);
-	focus_array[0] = voltage2dac(dac_bit_depth, focus_start_position_volts, dac_min_voltage, dac_max_voltage - dac_min_voltage);
+	focus_array[0] = voltage2dac(dac_bit_depth, focus_start_position_volts, dac_focus_vmin, dac_focus_vmax - dac_focus_vmin);
 	
 	focus_array[1] = 0;
 	focus_array[3] = 1;
@@ -793,8 +841,8 @@ tgsWrite("ARM", true, true, 1);
 long time_start = System.currentTimeMillis();
 
 // set data for number of burst frames for camera
-int nburstFrames = nz_pos * nchannels * n_patterns;
-if (ignore_xy_loop){nburstFrames = n_times * nz_pos * nchannels * n_patterns;}
+int nburstFrames = nz_pos *  nx_steps * ny_steps * nchannels * n_patterns;
+if (ignore_xy_loop){nburstFrames = n_times * nz_pos * nx_steps * ny_steps * nchannels * n_patterns;}
 print("Number of camera burst frames: " + nburstFrames);
 
 // Execute multipoint SIM acquisition
@@ -831,10 +879,9 @@ for (int ti; ti < n_times; ti++){
 		}
 
 		/*****************************
-		burst acquisition of z-positions x channels x sim images
+		burst acquisition of z-positions x vxs x vys x channels x sim images
 		*****************************/
 		if (!ignore_xy_loop){mmc.startSequenceAcquisition(nburstFrames, 0, true);}
-		// mmc.startSequenceAcquisition(nburstFrames, 0, true);
 		// load coordinate data we already know
 		coord_builder = mm.data().getCoordsBuilder().stagePosition(ixy).z(0).channel(0).time(ti);
 
@@ -842,41 +889,45 @@ for (int ti; ti < n_times; ti++){
 		// NOTE: even though camera throws an extra edge during internal triggering, doesn't take an extra picture. Removed code intended to handle an extra picture.
 		// process images as they arrive and add metadata
 		for (int iz=0; iz < nz_pos; ++iz){
-			int iall = 0; // unique counter for channel/sim combination
-			for (int ichannel=0; ichannel < nchannels; ++ichannel){
-				for(int isim=0; isim < n_patterns; ++isim){
-										
-					// wait until an image is available
-					while(mmc.getRemainingImageCount() == 0){;}
-					
-					// handle image
-					TaggedImage img_tagged = mmc.popNextTaggedImage();
-					Image image = mm.data().convertTaggedImage(img_tagged);
-					
-					double zNow = 0.0;
-					//if (!ignore_z_loop) {zNow = acqSettings.slices.get(iz);}	
-					if (!ignore_z_loop) {zNow = zstart + iz * zstep;}	
-					if ((!ignore_z_loop) && (isim==0) && (ichannel==0) && (ti==0)){print((iz+1) + "/" + nz_pos + " zNow=" + zNow);}
-					
-					// create custom metadata object to store sim image #
-					PropertyMapBuilder pmb = mm.data().getPropertyMapBuilder().putInt("SimIndex", isim).putInt("ChannelIndex", ichannel);
-					PropertyMap pm = pmb.build();
-					
-					// get current image metadata and update with more
-					MetadataBuilder mdb = image.getMetadata().copy();
-					md = mdb.positionName("Pos-"+ixy).xPositionUm(xNow).yPositionUm(yNow).zPositionUm(zNow).exposureMs(exposureMs).userData(pm).build();
+			int iall = 0; // unique counter for vx/vy/channel/sim combination
+			for (int ix=0; ix < nx_steps; ++ix){
+				for (int iy=0; iy < ny_steps; ++iy){
+					for (int ichannel=0; ichannel < nchannels; ++ichannel){
+						for(int isim=0; isim < n_patterns; ++isim){
+												
+							// wait until an image is available
+							while(mmc.getRemainingImageCount() == 0){;}
 							
-					// coordinates for image
-					// coords must be unique for different images, so use iall instead of ichannel,
-					// i.e. channel entry has information about both channel and sim pattern.
-					// todo: where does the coord info get stored? md is what goes to the json metadata file. Also, what is stored depends on if using individual tiff files vs. multipage tiffs
-					coord_builder.z(iz).channel(iall);
-					Coords coords = coord_builder.build();
-					
-					// place image with update metadata into dataStore
-					store.putImage(image.copyWith(coords, md));	
-	
-					++iall; // increment counter
+							// handle image
+							TaggedImage img_tagged = mmc.popNextTaggedImage();
+							Image image = mm.data().convertTaggedImage(img_tagged);
+							
+							double zNow = 0.0;
+							//if (!ignore_z_loop) {zNow = acqSettings.slices.get(iz);}	
+							if (!ignore_z_loop) {zNow = zstart + iz * zstep;}	
+							if ((!ignore_z_loop) && (isim==0) && (ichannel==0) && (ti==0)){print((iz+1) + "/" + nz_pos + " zNow=" + zNow);}
+							
+							// create custom metadata object to store sim image #
+							PropertyMapBuilder pmb = mm.data().getPropertyMapBuilder().putInt("SimIndex", isim).putInt("ChannelIndex", ichannel).putInt("vx_index", ix).putInt("vy_index", iy).putDouble("vx_val", vx_array[ix]).putDouble("vy_val", vy_array[iy]);
+							PropertyMap pm = pmb.build();
+							
+							// get current image metadata and update with more
+							MetadataBuilder mdb = image.getMetadata().copy();
+							md = mdb.positionName("Pos-"+ixy).xPositionUm(xNow).yPositionUm(yNow).zPositionUm(zNow).exposureMs(exposureMs).userData(pm).build();
+									
+							// coordinates for image
+							// coords must be unique for different images, so use iall instead of ichannel,
+							// i.e. channel entry has information about both channel and sim pattern.
+							// todo: where does the coord info get stored? md is what goes to the json metadata file. Also, what is stored depends on if using individual tiff files vs. multipage tiffs
+							coord_builder.z(iz).channel(iall);
+							Coords coords = coord_builder.build();
+							
+							// place image with update metadata into dataStore
+							store.putImage(image.copyWith(coords, md));	
+			
+							++iall; // increment counter
+						}
+					}
 				}
 			}
 		}
