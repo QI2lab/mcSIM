@@ -788,7 +788,17 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
 
     :return fig: figure handle to summary figure
     """
+    fps = np.array(fps, copy=True)
+    # ensure longer sigma is first
+    to_swap = fps[:, :, 4] > fps[:, :, 3]
+    sigma_max = np.array(fps[to_swap, 4], copy=True)
+    sigma_min = np.array(fps[to_swap, 3], copy=True)
 
+    fps[to_swap, 3] = sigma_max
+    fps[to_swap, 4] = sigma_min
+    fps[to_swap, 6] += np.pi / 2
+
+    # extract useful info from fits
     xcam = fps[:, :, 1]
     ycam = fps[:, :, 2]
     xcam = xcam[succesful_fits]
@@ -796,9 +806,10 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     amps = fps[:, :, 0]
     bgs = fps[:, :, 5]
     sigma_mean_cam = np.sqrt(fps[:, :, 3] * fps[:, :, 4])
-    sigma_asymmetry_cam = (fps[:, :, 3] - fps[:, :, 4]) / (fps[:, :, 3] + fps[:, :, 4]) * 2
+    sigma_asymmetry_cam = np.abs(fps[:, :, 3] - fps[:, :, 4]) / (0.5 * (fps[:, :, 3] + fps[:, :, 4]))
     with np.errstate(invalid="ignore"):
-        angles = np.mod(fps[:, :, 6], 2*np.pi)
+        # angles differing by pi represent same ellipse
+        angles = np.mod(fps[:, :, 6], np.pi)
 
     xdmd = dmd_centers[:, :, 0]
     ydmd = dmd_centers[:, :, 1]
@@ -868,13 +879,17 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers, aff
     plt.colorbar()
 
     plt.subplot(grid[2, 0])
-    plt.imshow(sigma_asymmetry_cam, vmin=-0.25, vmax=0.25)
-    plt.title('sigma asymmetry')
+    no_nans = sigma_asymmetry_cam.ravel()[np.logical_not(np.isnan(sigma_asymmetry_cam.ravel()))]
+    sigma_asym_median = np.median(no_nans)
+    plt.imshow(sigma_asymmetry_cam, vmin=0, vmax=1)
+    plt.title('sigma asym med=%0.2f' % sigma_asym_median)
     plt.colorbar()
 
     plt.subplot(grid[2, 1])
-    plt.imshow(angles, vmin=0, vmax=(2*np.pi))
-    plt.title('rotation angle')
+    no_nans = angles.ravel()[np.logical_not(np.isnan(angles.ravel()))]
+    median_angle = np.median(no_nans * 180 / np.pi)
+    plt.imshow(angles * 180 /np.pi, vmin=0, vmax=180)
+    plt.title('angle (deg), med=%0.1f' % median_angle)
     plt.colorbar()
 
     plt.subplot(grid[:2, 2:])
