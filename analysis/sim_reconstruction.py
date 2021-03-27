@@ -105,6 +105,9 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
     if len(crop_sizes) == 1 and nfolders > 1:
         crop_sizes = crop_sizes * nfolders
 
+    if len(img_centers) == 1 and nfolders > 1:
+        img_centers = img_centers * nfolders
+
     # ############################################
     # load affine data
     # ############################################
