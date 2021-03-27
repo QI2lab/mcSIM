@@ -1123,6 +1123,27 @@ def segment_intersect(start1, end1, start2, end2):
     else:
         return None
 
+def nearest_point_on_line(line_point, line_unit_vec, pt):
+    """
+    Find the shortest distance between a line and a point of interest.
+
+    Parameterize line by v(t) = line_point + line_unit_vec * t
+
+    :param line_point: a point on the line
+    :param line_unit_vec: unit vector giving the direction of the line
+    :param pt: the point of interest
+
+    :return nearest_pt: the nearest point on the line to the point of interest
+    :return dist: the minimum distance between the line and the point of interest.
+    """
+    if np.linalg.norm(line_unit_vec) != 1:
+        raise ValueError("line_unit_vec norm != 1")
+    tmin = np.sum((pt - line_point) * line_unit_vec)
+    nearest_pt = line_point + tmin * line_unit_vec
+    dist = np.sqrt(np.sum((nearest_pt - pt)**2))
+
+    return nearest_pt, dist
+
 # working with regions of interest
 def get_extent(y, x):
     """
