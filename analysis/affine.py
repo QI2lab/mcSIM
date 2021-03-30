@@ -18,7 +18,6 @@ import pickle
 
 import analysis_tools as tools
 import fit
-# from . import analysis_tools as tools
 
 
 # affine matrix parameterizations
@@ -541,7 +540,8 @@ def fit_barrel_distortion(from_pts, to_pts):
     raise NotImplementedError("todo: not implemented")
 
 # helper functions for dealing with an array of dots projected on a flat background
-def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_squared_relative_max=1.5, max_position_err=0.1, img_sd=None, debug=False):
+def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_squared_relative_max=1.5,
+                      max_position_err=0.1, img_sd=None, debug=False):
     """
     Fit peak of fluorescence pattern
 
@@ -936,7 +936,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
 
 # main function for estimating affine transform
 def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, options, roi_size=25,
-                   export_fname="affine_xform", export_dir=None, **kwargs):
+                   export_fname="affine_xform", plot=True, export_dir=None, **kwargs):
     """
     Estimate affine transformation from DMD space to camera image space from an image.
 
@@ -962,18 +962,25 @@ def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, optio
     # get affine xforms
     affine_xform = get_affine_xform(fps, succesful_fits, pattern_centers)
 
-    # plot data
-    data = {'affine_xform': affine_xform}
-    fig = plot_affine_summary(img, mask, fps, chisqs, succesful_fits, pattern_centers, affine_xform, options)
-
+    # export data
+    data = {'affine_xform': affine_xform, 'pattern_centers': pattern_centers, 'fit_params': fps,
+            'fit_params_description': "[amp, cx, cy, sigma_x, sigma_y, theta, bg]", "chi_squareds": chisqs}
+    data.update(options)
     if export_dir is not None:
-        fig_fpath = os.path.join(export_dir, export_fname + ".png")
-        fig.savefig(fig_fpath)
-
         fpath = os.path.join(export_dir, export_fname + ".pkl")
         with open(fpath, 'wb') as f:
             pickle.dump(data, f)
 
-    plt.show()
+    # plot data
+    if not plot:
+        fig = None
+    else:
+        fig = plot_affine_summary(img, mask, fps, chisqs, succesful_fits, pattern_centers, affine_xform, options)
+
+        if export_dir is not None:
+            fig_fpath = os.path.join(export_dir, export_fname + ".png")
+            fig.savefig(fig_fpath)
+
+        plt.show()
 
     return data, fig
