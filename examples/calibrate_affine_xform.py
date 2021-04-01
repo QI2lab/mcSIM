@@ -3,7 +3,7 @@ Example showing how affine calibration between DMD and image space is done
 """
 import datetime
 import numpy as np
-import matplotlib.pyplot
+import matplotlib.pyplot as plt
 import analysis_tools as tools
 import affine
 import dmd_patterns as dmd
@@ -29,7 +29,7 @@ mask = masks[1]
 
 # read imges for each channel
 for nc in range(len(channel_labels)):
-        img, _, _ = tools.read_tiff(fname, slices=nc)
+        img, _ = tools.read_tiff(fname, slices=nc)
         img = img[0]
         affine_xform = affine.estimate_xform(img, mask, pattern_centers, centers_init,
                                              indices_init, options, roi_size=roi_size,

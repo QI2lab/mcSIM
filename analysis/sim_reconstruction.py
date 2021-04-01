@@ -228,7 +228,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
         # set up image size
         # load one file to check size
         fname = os.path.join(rpath, metadata['FileName'].values[0])
-        im, _, _ = tools.read_tiff(fname, [metadata['ImageIndexInFile'].values[0]])
+        im, _ = tools.read_tiff(fname, [metadata['ImageIndexInFile'].values[0]])
         _, ny_raw, nx_raw = im.shape
         if crop_image:
             # or pick ROI
@@ -1772,6 +1772,9 @@ def sim_optical_section(imgs, axis=0):
     imgs = np.swapaxes(imgs, 0, axis)
 
     img_os = np.sqrt(2) / 3 * np.sqrt((imgs[0] - imgs[1]) ** 2 + (imgs[0] - imgs[2]) ** 2 + (imgs[1] - imgs[2]) ** 2)
+
+    if img_os.ndim > 1:
+        img_os = np.transpose(img_os, [img_os.ndim - 1] + list(range(img_os.ndim - 1)))
 
     return img_os
 

@@ -3,25 +3,25 @@ Miscellaneous helper functions. As I collect many relating to a certain area, th
 specific modules.
 """
 
+import os
+import glob
+import datetime
+import json
+import re
+from pathlib import Path
 import numpy as np
 import scipy.optimize
 import scipy.sparse as sp
 from scipy import fft
-from PIL import Image
-import PIL.TiffTags
-import tiffile
-import os
-import glob
-#import libtiff
-import datetime
-import json
-from pathlib import Path
 import pandas as pd
-import re
+# from PIL import Image # todo: can I get rid of this in favor of tifffile?
+# import PIL.TiffTags
+# import tiffile # todo: can I get rid of this in favor of tifffile?
+import tifffile
 
 import fit
 
-# I/O for metadata files
+# I/O for metadata and image files
 def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
     """
     Parse all micromanager metadata files in subdirectories of metadata_dir. MM metadata is stored as JSON
@@ -204,12 +204,11 @@ def read_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy
 
     fnames = [os.path.join(d, p) for d, p in zip(md["directory"][to_use], md["FileName"][to_use])]
     slices = md["ImageIndexInFile"][to_use]
-    imgs = load_images(fnames, slices, dtype=dtype)
+    imgs = read_multi_tiff(fnames, slices)
 
     return imgs
 
-# I/O for image files
-def read_tiff(fname, slices=None, offset=None, skip=None, dtype=np.uint16):
+def read_tiff(fname, slices=None, offset=None, skip=None):
     """
     Read tiff file containing multiple images
 
@@ -234,31 +233,14 @@ def read_tiff(fname, slices=None, offset=None, skip=None, dtype=np.uint16):
     if isinstance(slices, int) or np.issubdtype(type(slices), np.integer):
         slices = [slices]
 
-    tif = Image.open(fname)
+    tif = tifffile.TiffFile(fname)
+    n_frames = len(tif.pages)
+    dtype = tif.pages[0].dtype
 
-    # read tiff and micro manager metadata
+    # read metadata
     tiff_metadata = {}
-    other_metadata = {}
-    for key in tif.tag_v2.keys():
-        try:
-            tiff_metadata[PIL.TiffTags.TAGS[key]] = tif.tag[key]
-        except KeyError:
-            # other_metadata = json.loads(tif.tag[key][0])
-            other_metadata.update({str(key): tif.tag[key]})
-
-    n_frames = tif.n_frames
-
-    # try:
-    #     ij_data = parse_imagej_tiff_tag(tiff_metadata['ImageDescription'][0])
-    #     n_ij = int(ij_data['images'])
-    #     if n_frames == 1 and n_ij != 1:
-    #         n_frames = n_ij
-    # except:
-    #     pass
-
-    # tif = libtiff.TIFF.open(path, 'r')
-    # surely there is roi_size property to find the number of images? But couldn't find it...
-    # n_frames = sum([1 for _ in tif.iter_images()])
+    for tag in tif.pages[0].tags:
+        tiff_metadata[tag.name] = tag.value
 
     # check arguments are consistent
     if slices is not None and offset is None and skip is None:
@@ -271,21 +253,16 @@ def read_tiff(fname, slices=None, offset=None, skip=None, dtype=np.uint16):
         raise ValueError('incompatible arguments provided for slices, offsets, and skip. '
                         'Either provide slices and no skip or offset, or provide roi_size skip and offset but no slices.')
 
-    # load images
-    imgs = []
-    for s in slices:
-        tif.seek(s)
-        imgs.append(np.asarray(tif, dtype=dtype))
+    imgs = tifffile.imread(fname, multifile=False, key=slices)
 
-    # for ii, tif_slice in enumerate(tif.iter_images()):
-    #     if ii in slices:
-    #         imgs.append(np.asarray(tif_slice, dtype=np.uint16))
+    if imgs.ndim == 2:
+        imgs = np.expand_dims(imgs, axis=0)
 
-    return np.asarray(imgs), tiff_metadata, other_metadata
+    return imgs, tiff_metadata
 
-def load_images(fnames, slice_indices, dtype=np.uint16):
+def read_multi_tiff(fnames, slice_indices):
     """
-    Load multiple images and slices, definted by lists fnames and slice_indices,
+    Load multiple images and slices, defined by lists fnames and slice_indices,
     and return in same order as inputs. Automatically load all images from each file without multiple reads.
 
     # todo: right now only supports tifs, but in general could support other image types
@@ -310,14 +287,14 @@ def load_images(fnames, slice_indices, dtype=np.uint16):
     imgs = [''] * len(fnames)
     for ii, fu in enumerate(fnames_unique):
         slices = slice_indices[inds_to_unique == ii]
-        imgs_curr, _, _ = read_tiff(fu, slices, dtype=dtype)
+        imgs_curr, _ = read_tiff(fu, slices)
 
         # this is necessary in case e.g. one file has images [1,3,7] and another has [2,6,10]
         for jj, ind in enumerate(inds[inds_to_unique == ii]):
             imgs[ind] = imgs_curr[jj, :, :]
 
-    if any([isinstance(im, str) for im in imgs]):
-        raise ValueError()
+    # if any([isinstance(im, str) for im in imgs]):
+    #     raise ValueError()
     imgs = np.asarray(imgs)
 
     return imgs
@@ -342,31 +319,10 @@ def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata
     if not isinstance(dtype, str):
         raise TypeError("dtype must be a string, e.g. 'uint16'")
 
-    # convert numpy array images to PIL.Image
-    # if img.ndim == 2:
-    #     im_list = [Image.fromarray(img.astype(dtype))]
-    # elif img.ndim == 3:
-    #     im_list = [Image.fromarray(img[ii].astype(dtype)) for ii in range(img.shape[0])]
-    # elif img.ndim > 3:
-    #     n = int(img.size / (img.shape[-2] * img.shape[-1]))
-    #     img_reshaped = img.reshape([n, img.shape[-2], img.shape[-1]])
-    #     im_list = [Image.fromarray(img_reshaped[ii].astype(dtype)) for ii in range(img_reshaped.shape[0])]
-    # else:
-    #     raise ValueError('number of dimensions was %d, but must be >1.' % img.ndim)
-
-    # coerce metadata # todo: this has not worked so far...
-    # ifd = ImageFileDirectory_v2()
-    # for k, v in tif_metadata.items():
-        # tag_info = PIL.TiffTags.TagInfo(name=k)
-        # ifd[k] = v
-
-    # im_list[0].save(save_fname, save_all=True, append_images=im_list[1:], tiffinfo=ifd)
-    # im_list[0].save(save_fname, save_all=True, append_images=im_list[1:])
-
     if hyperstack:
-        img = tiffile.transpose_axes(img, axes_order, asaxes='TZCYXS')
+        img = tifffile.transpose_axes(img, axes_order, asaxes='TZCYXS')
 
-    tiffile.imwrite(save_fname, img.astype(dtype), dtype=dtype, imagej=True, **kwargs)
+    tifffile.imwrite(save_fname, img.astype(dtype), dtype=dtype, imagej=True, **kwargs)
 
 def parse_imagej_tiff_tag(tag):
     """
@@ -391,7 +347,7 @@ def parse_imagej_tiff_tag(tag):
 
     return subtag_dict
 
-def tiffs2stack(fname_out, dir_path, fname_exp="*.tif", dtype=np.float,
+def tiffs2stack(fname_out, dir_path, fname_exp="*.tif",
                 exp=r"(?P<prefix>.*)nc=(?P<channel>\d+)_nt=(?P<time>\d+)_nxy=(?P<position>\d+)_nz=(?P<slice>\d+)"):
     """
     Combine single TIFF files into a stack based on name
@@ -452,13 +408,13 @@ def tiffs2stack(fname_out, dir_path, fname_exp="*.tif", dtype=np.float,
         raise NotImplementedError("Not implemented for nxy != 1")
 
     # read image to get image size
-    im_first, _, _ = read_tiff(files[0], dtype=dtype)
+    im_first, _ = read_tiff(files[0])
     _, ny, nx = im_first.shape
 
     # combine images to one array
     imgs = np.zeros((nc, nt, nz, ny, nx)) * np.nan
     for ii in range(len(files)):
-        img, _, _, = read_tiff(files[ii], dtype=dtype)
+        img, _ = read_tiff(files[ii])
         imgs[channels[ii], times[ii], slices[ii]] = img[0]
 
     if np.any(np.isnan(imgs)):
