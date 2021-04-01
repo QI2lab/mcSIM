@@ -282,15 +282,23 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
             if init_params[ii] is None:
                 init_params[ii] = ip_default[ii]
 
-    if bounds is None:
-        bounds = ((-np.inf, xx.min(), yy.min(), 0, 0, -np.inf, -np.inf),
-                  (np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf, np.inf))
+    # replace any bounds which are none with default guesses
+    lbs_default = (-np.inf, xx.min(), yy.min(), 0, 0, -np.inf, -np.inf)
+    ubs_default = (np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf, np.inf)
 
+    if bounds is None:
+        bounds = (lbs_default, ubs_default)
+    else:
+        lbs = tuple([b if b is not None else lbs_default[ii] for ii, b in enumerate(bounds[0])])
+        ubs = tuple([b if b is not None else ubs_default[ii] for ii, b in enumerate(bounds[1])])
+        bounds = (lbs, ubs)
+
+    # do fitting
     result = fit_model(img, lambda p: gauss_fn(xx, yy, p), init_params, fixed_params=fixed_params,
                        sd=sd, bounds=bounds, model_jacobian=lambda p: gauss_jacobian(xx, yy, p))
 
-    pfit = result['fit_params']
-    def fit_fn(x, y): return gauss_fn(x, y, pfit)
+    # model function
+    def fit_fn(x, y): return gauss_fn(x, y, result['fit_params'])
 
     return result, fit_fn
 
