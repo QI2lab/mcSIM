@@ -51,9 +51,13 @@ def fit_model(img, model_fn, init_params, fixed_params=None, sd=None, bounds=Non
 
 def fit_least_squares(model_fn, init_params, fixed_params=None, bounds=None, model_jacobian=None, **kwargs):
     """
-    Wrapper for non-linear least squares fi t function scipy.optimize.least_squares which handles fixing parameters.
+    Wrapper for non-linear least squares fit function scipy.optimize.least_squares which handles fixing parameters
+    and calculating fit uncertainty.
 
-    :param model_fn: function f(p)
+    :param model_fn: function of model parameters p which returns an array, where the sum of squares of this array is
+    minimized. e.g. if we have a set of data points x_i and we make measurements y_i with uncertainties sigma_i, and we have
+    a model m(p, x_i)
+     then f(p) = [(m(p, x_i) - y_i) / sigma_i]
     :param list[float] init_params: p = [p1, p2, ..., pn]
     :param list[boolean] fixed_params: list of boolean values, same size as init_params. If None, no parameters will be fixed.
     :param tuple[tuple[float]] bounds: (lbs, ubs). If None, -/+ infinity used for all parameters.
@@ -152,6 +156,9 @@ def get_moments(img, order=1, coords=None, dims=None):
     moments of each slice by setting dims = [1, 2]
     :return:
     """
+
+    # todo: does not compute any cross moments, e.g. X*Y
+
     if dims is None:
         dims = range(img.ndim)
 
@@ -499,34 +506,3 @@ def sum_gauss_jacobian(x, y, p):
     jac_list += jac_current[:-2] + [jac_current[-1]] + [jac_current[-2]]
 
     return jac_list
-
-
-# other functions
-def poly(xx, yy, params, max_orders=(1, 1)):
-    """
-
-    :param xx:
-    :param yy:
-    :param params: [cx, cy, b00, b01, ..., b0N, b10, ...bMN], where
-    P(x) = \sum_{n,m} cnm (X - cx)**n * (Y - cy)**m
-    :param max_orders:
-    :return:
-    """
-
-    max_x, max_y = max_orders
-    ny = max_y + 1
-    nx = max_x + 1
-    norders = nx * ny
-
-    if len(params) != (norders + 2):
-        raise ValueError('params is not equal to norders')
-
-    cx = params[0]
-    cy = params[1]
-
-    val = 0
-    for ii in range(nx):
-        for jj in range(ny):
-            val += params[2 + ii * ny + jj] * (xx - cx) ** ii * (yy - cy) ** jj
-
-    return val
