@@ -1,9 +1,9 @@
 """
-Functions for fitting PSF's from fluorescence images of beads (z-stacks or single planes) and tools for working with
-point-spread functions and optical transfer functions more generally.
+Functions for estimating PSF's from images of fluorescent beads (z-stacks or single planes). Useful for generating
+experimental PSF's from the average of many beads and fitting 2D and 3D PSF models to beads. Also includes tools for
+working withpoint-spread functions and optical transfer functions more generally.
 
-For fitting z-stack images of spots, the primary functions that will be called by an external script are autofit_psfs()
-and display_autofit().
+The primary functions that will be called by an external script are, find_beads(), autofit_psfs(), and display_autofit().
 """
 import os
 import timeit
@@ -18,16 +18,14 @@ import scipy.interpolate
 from scipy import fft
 import skimage.feature
 import skimage.filters
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
+from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
+
 import joblib
 from functools import partial
 
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
-from matplotlib.colors import PowerNorm
-import matplotlib.gridspec
-import matplotlib.cm
-
-import psfmodels as psfm #https://pypi.org/project/psfmodels/, https://github.com/tlambert03/PSFmodels-py
+import psfmodels as psfm
 import fit
 import analysis_tools as tools
 
@@ -978,7 +976,7 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
     plt.suptitle("PSF XZ/YZ planes")
     nrows = nfits + 1
     ncols = 9
-    spec = matplotlib.gridspec.GridSpec(ncols=ncols, nrows=nrows, figure=figh)
+    spec = plt.GridSpec(ncols=ncols, nrows=nrows, figure=figh)
 
     gamma = 0.6
     extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, z[-1] + 0.5 * dz, z[0] - 0.5 * dz]
@@ -994,37 +992,37 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
 
     # ax = plt.subplot(nrows, ncols, 2)
     ax = figh.add_subplot(spec[0, 2:4])
-    plt.imshow(imgs[:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
+    plt.imshow(imgs[:, cy_pix3d, :], cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax))
     plt.title("XZ power norm")
 
     ax = figh.add_subplot(spec[0, 4:6])
     plt.imshow(imgs[:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
-    plt.ylabel('Z (um)')
+    plt.ylabel('Experiment\nZ ($\mu$m)')
     plt.xlabel('Y (um)')
     plt.title('YZ plane')
 
     ax = figh.add_subplot(spec[0, 6:8])
-    plt.imshow(imgs[:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
+    plt.imshow(imgs[:, :, cx_pix3d], cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax))
     plt.title('YZ power norm')
 
     for ii in range(nfits):
         # normal scale
         ax = figh.add_subplot(spec[ii + 1, 0:2])
         im = plt.imshow(fit_img3d[ii][:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent)
-        plt.title('%s, sf=%d, NA=%0.3f' % (model[ii], sfs[ii], fit_params[ii][4]))
+        plt.ylabel('%s, sf=%d, NA=%0.3f\nz ($\mu$m)' % (model[ii], sfs[ii], fit_params[ii][4]))
         if ii < (nfits - 1):
             plt.setp(ax.get_xticklabels(), visible=False)
 
         # power law scaled, to emphasize smaller features
         ax = figh.add_subplot(spec[ii + 1, 2:4])
-        plt.imshow(fit_img3d[ii][:, cy_pix3d, :], vmin=vmin, vmax=vmax, cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma))
+        plt.imshow(fit_img3d[ii][:, cy_pix3d, :], cmap='bone', extent=extent, norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax))
         if ii < (nfits - 1):
             plt.setp(ax.get_xticklabels(), visible=False)
 
         # other cut
         ax = figh.add_subplot(spec[ii + 1, 6:8])
-        im = plt.imshow(fit_img3d[ii][:, :, cx_pix3d], vmin=vmin, vmax=vmax, cmap='bone', extent=extent,
-                        norm=PowerNorm(gamma=gamma))
+        im = plt.imshow(fit_img3d[ii][:, :, cx_pix3d], cmap='bone', extent=extent,
+                        norm=PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax))
         if ii < (nfits - 1):
             plt.setp(ax.get_xticklabels(), visible=False)
 
@@ -1055,22 +1053,22 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
     return figh_list, fig_names
 
 # get real PSF
-def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
+def get_exp_psf(imgs, dx, dz, fit_params, rois):
     """
     Get experimental psf from imgs and the results of autofit_psfs
 
     :param imgs:z-stack of images
     :param dx: pixel size (um)
     :param dz: spacing between image planes (um)
-    :param fit_params: n x 6 array, [A, cx, cy, cz, NA, bg]
+    :param fit_params: n x 6 array, where each element gives [A, cx, cy, cz, NA, bg]
+    Use the center positions, background, and amplitude. # todo: can I get rid of the amplitude?
     :param rois: regions of interest
 
     :return psf_mean:
-    :return psf_sd:
+    :return psf_sdm:
     """
 
-    fit_params = np.asarray([f['fit_params'] for f in fit3ds])
-    chi_sqrs = np.asarray([f['chi_squared'] for f in fit3ds]).transpose()
+    # fit_params = np.asarray([f['fit_params'] for f in fit_results])
 
     # get size
     nroi = rois[0][3] - rois[0][2]
@@ -1083,7 +1081,6 @@ def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
         raise ValueError("z coordinates do not include zero")
 
     psf_shifted = np.zeros((len(rois), nzroi, nroi, nroi)) * np.nan
-    weights = np.zeros((len(rois)))
     # loop over rois and shift psfs so they are centered
     for ii, (fp, roi) in enumerate(zip(fit_params, rois)):
         # get roi
@@ -1110,33 +1107,14 @@ def get_exp_psf(imgs, dx, dz, fit3ds, rois, model='vectorial'):
                 continue
             psf_shifted[ii, ind_z] = psf_temp[jj]
 
-        # subtract background
-        # old way, but do not like because will not average noise in background nicely to zero. Essentially relying on
-        # having most spots with similar amplitudes
-        # psf_shifted[ii] = (psf_shifted[ii] - fp[5]) / fp[0]
-        # not sure that chi squared is such a useful thing. But assuming all fits look very similar, probably ok.
-        # weights[ii] = fp[0] / chi_sqrs[ii]
-
         psf_shifted[ii] = (psf_shifted[ii] - fp[5])
-        # weights[ii] = 1
-
-    # weighted averaging
-    # with np.errstate(divide='ignore', invalid='ignore'):
-    #     psf_weighted = np.array([p * w for p, w in zip(psf_shifted, weights)])
-    #     weights_nan = np.transpose(np.tile(weights, [nzroi, nroi, nroi, 1]), [3, 0, 1, 2])
-    #     weights_nan[np.isnan(psf_weighted)] = np.nan
-    #     psf_mean = np.nansum(psf_weighted, axis=0) / np.nansum(weights_nan, axis=0)
-    #
-    #     # reliability weighted standard error
-    #     v1 = np.nansum(weights_nan, axis=0)
-    #     v2 = np.nansum(weights_nan ** 2, axis=0)
-    #     numerator = np.asarray([w * (pshift - psf_mean)**2 for w, pshift in zip(weights, psf_shifted)])
-    #     psf_sd = np.nansum(numerator, axis=0) / (v1 - v2/v1)
 
     with np.errstate(divide='ignore', invalid='ignore'):
         not_nan = np.logical_not(np.isnan(psf_shifted))
         norm = np.sum(fit_params[:, 0][:, None, None, None] * not_nan, axis=0)
+
         psf_mean = np.nansum(psf_shifted, axis=0) / norm
+
         psf_sd = np.sqrt(np.nansum((psf_shifted / fit_params[:, 0][:, None, None, None] - psf_mean)**2, axis=0) /
                          np.sum(not_nan, axis=0))
         psf_sdm = psf_sd / np.sqrt(np.sum(not_nan, axis=0))
@@ -1176,7 +1154,8 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
         na_min = np.percentile(fit_params_2d[:, 4], 100 - p)
         fit3ds_psf, fit2ds_psf, rois_psf = zip(*[[f3, f2, r] for f3, f2, r in zip(fit3ds, fit2ds, rois)
                                                  if f2['fit_params'][4] >= na_min])
-        psf, psf_sd = get_exp_psf(imgs, dx, dz, fit3ds_psf, rois_psf)
+        fit_params = np.asarray([f["fit_params"] for f in fit3ds_psf])
+        psf, psf_sd = get_exp_psf(imgs, dx, dz, fit_params, rois_psf)
         exp_psfs.append(psf)
         exp_psfs_sd.append(psf_sd)
 
@@ -1193,7 +1172,7 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
         bounds = ((0, -4*dx, -4*dx, -1e-12, 0.2, -np.inf),
                   (np.inf, 4*dx, 4*dx, 1e-12, ni, np.inf))
 
-        init_params = [None, None, None, 0, None, None]
+        init_params = [None, 0, 0, 0, None, None]
         fixed_params = [False, False, False, True, False, False]
 
         # gaussian 2D fit
@@ -1297,7 +1276,7 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
 
         if expected_na is not None:
             fmax = 1 / (wavelength / 2 / expected_na)
-            circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='r', fill=0)
+            circ = Circle((0, 0), radius=fmax, color='r', fill=0)
             ax.add_artist(circ)
 
         plt.title('otf')
@@ -1348,8 +1327,7 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
     return fighs, fignames, data
 
 # automatically process image
-def find_candidate_beads(img, filter_xy_pix=1, filter_z_pix=0.5, min_distance=1, abs_thresh_std=1,
-                         max_thresh=-np.inf, max_num_peaks=np.inf,
+def find_candidate_beads(img, min_distance=1, abs_thresh_std=1., max_thresh=-np.inf, max_num_peaks=np.inf,
                          mode="max_filter"):
     """
     Find candidate beads in image. Based on function from mesoSPIM-PSFanalysis
@@ -1367,24 +1345,24 @@ def find_candidate_beads(img, filter_xy_pix=1, filter_z_pix=0.5, min_distance=1,
     """
 
     # gaussian filter to smooth image before peak finding
-    if img.ndim == 3:
-        filter_sds = [filter_z_pix, filter_xy_pix, filter_xy_pix]
-    elif img.ndim == 2:
-        filter_sds = filter_xy_pix
-    else:
-        raise ValueError("img should be a 2 or 3 dimensional array, but was %d dimensional" % img.ndim)
-
-    smoothed = skimage.filters.gaussian(img, filter_sds, output=None, mode='nearest', cval=0,
-                                        multichannel=None, preserve_range=True)
+    # if img.ndim == 3:
+    #     filter_sds = [filter_z_pix, filter_xy_pix, filter_xy_pix]
+    # elif img.ndim == 2:
+    #     filter_sds = filter_xy_pix
+    # else:
+    #     raise ValueError("img should be a 2 or 3 dimensional array, but was %d dimensional" % img.ndim)
+    #
+    # smoothed = skimage.filters.gaussian(img, filter_sds, output=None, mode='nearest', cval=0,
+    #                                     multichannel=None, preserve_range=True)
 
     # set threshold value
-    abs_threshold = np.max([smoothed.mean() + abs_thresh_std * img.std(), max_thresh])
+    abs_threshold = np.max([img.mean() + abs_thresh_std * img.std(), max_thresh])
 
     if mode == "max_filter":
-        centers = skimage.feature.peak_local_max(smoothed, min_distance=min_distance, threshold_abs=abs_threshold,
+        centers = skimage.feature.peak_local_max(img, min_distance=min_distance, threshold_abs=abs_threshold,
                                                  exclude_border=False, num_peaks=max_num_peaks)
     elif mode == "threshold":
-        ispeak = smoothed > abs_threshold
+        ispeak = img > abs_threshold
         # get indices of points above threshold
         coords = np.meshgrid(*[range(img.shape[ii]) for ii in range(img.ndim)], indexing="ij")
         centers = np.concatenate([c[ispeak][:, None] for c in coords], axis=1)
@@ -1393,10 +1371,61 @@ def find_candidate_beads(img, filter_xy_pix=1, filter_z_pix=0.5, min_distance=1,
 
     return centers
 
-def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.7,
-               filter_xy_pix=1, filter_z_pix=0, min_distance=1, abs_thresh_std=1, max_sep_assume_one_peak=2,
-               max_percent_asymmetry=0.5,
-               max_num_peaks=np.inf, remove_background=False, require_isolated=True):
+# todo: good candidate for numba or computing in chunks...
+def combine_nearby_beads(centers, min_xy_dist, min_z_dist, mode="average", weights=None):
+    """
+    Combine multiple peaks above threshold into reduced set, where assume all peaks separated by no more than
+    min_xy_dist and min_z_dist come from the same feature.
+
+    :param centers:
+    :param min_xy_dist:
+    :param min_z_dist:
+    :param mode:
+    :param weights:
+    :return:
+    """
+    centers_unique = np.array(centers, copy=True)
+    inds = np.arange(len(centers), dtype=np.int)
+
+    if weights is None:
+        weights = np.ones(len(centers_unique))
+
+    counter = 0
+    while 1:
+        # compute distances to all other beads
+        z_dists = np.abs(centers_unique[counter][0] - centers_unique[:, 0])
+        xy_dists = np.sqrt((centers_unique[counter][1] - centers_unique[:, 1]) ** 2 +
+                           (centers_unique[counter][2] - centers_unique[:, 2]) ** 2)
+
+        # beads which are close enough we will combine
+        combine = np.logical_and(z_dists < min_z_dist, xy_dists < min_xy_dist)
+        if mode == "average":
+            # centers_unique[counter] = np.nanmean(centers_unique[combine], axis=0, dtype=np.float)
+            denom = np.nansum(np.logical_not(np.isnan(np.sum(centers_unique[combine], axis=1))) * weights[combine])
+            centers_unique[counter] = np.nansum(centers_unique[combine] * weights[combine][:, None], axis=0, dtype=np.float) / denom
+            weights[counter] = denom
+        elif mode == "keep-one":
+            pass
+        else:
+            raise ValueError("mode must be 'average' or 'keep-one', but was '%s'" % mode)
+
+        # remove all points from list except for one representative
+        combine[counter] = False
+
+        inds = inds[np.logical_not(combine)]
+        centers_unique = centers_unique[np.logical_not(combine)]
+        weights = weights[np.logical_not(combine)]
+
+        counter += 1
+        if counter >= len(centers_unique):
+            break
+
+    return centers_unique, inds
+
+def find_beads(imgs, imgs_sd=None, roi_size_pix=(1, 1, 1), min_distance_to_keep=1., thresh_std=1., thresh_abs=-np.inf,
+               max_sep_assume_one_peak=2., min_sigma_pix=0.7, max_sigma_pix=5., max_percent_asymmetry=0.5,
+               min_fit_amp=100., max_off_center_fraction=0.25, max_num_peaks=np.inf, filter_image=False,
+               filter_small_sigmas=(0, 1, 1), filter_large_sigmas=None):
     """
     Identify beads in a 3D image. This is done in three steps.
 
@@ -1407,18 +1436,18 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
     3. Remaining beads are excluded if more than falls within the same region of interest.
 
     :param imgs: nz x nx x ny image
-    :param imgs_sd: standard deviations, assuming img is an average of other images, otherwise can be none
+    :param imgs_sd: standard deviations, assuming img is an average of other images or can estimate uncertainty from
+    camera read noise, or etc. If not used, set to None
     :param dx: pixel size in um
     :param dz: z-plane spacing in um
-    :param window_size_um: ROI size in real units (nz_um, ny_um, nx_um)
+    :param roi_size_pix: ROI size in real units (nz_um, ny_um, nx_um)
     :param min_sigma_pix: only points with gaussian standard deviation larger than this value will be considered
     so we can avoid e.g. hot pixels
-    :param filter_xy_pix: standard deviation of gaussian filter applied in x- and y-directions
-    :param filter_z_pix: standard deviation of gaussian filter applied in z-direction
-    :param min_distance: minimum distance between peaks, in pixels
-    :param float abs_thresh_std:
+    :param float min_distance_to_keep: minimum distance between peaks, in pixels
+    :param float thresh_std:
     :param int max_num_peaks: maximum number of peaks to find
-    :param bool remove_background: boolean. whether or not to remove background from image before peak finding.
+    :param bool filter_image: boolean. whether or not to remove background from image before peak finding.
+
     :return rois: list of regions of interest [[zstart, zend, ystart, yend, xstart, xend], ...] as coordinates in imgs
     :return centers: list of centers [[cz, cy, cx], ....] as coordinates in imgs
     :return fit_params: nroi x 7, where each row is of the form [A, cx, cy, sx, sy, bg]. The coordinates sx are given
@@ -1426,46 +1455,59 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
     """
 
     if imgs.ndim == 2:
-        imgs = imgs[None, :, :]
-
-    _, ny, nx = imgs.shape
+        imgs = np.expand_dims(imgs, axis=0)
 
     # ##############################
     # get ROI sizes
     # ##############################
-    nx_roi = np.round(window_size_um[2] / dx)
-    if np.mod(nx_roi, 2) == 0:
-        nx_roi = nx_roi + 1
+    # todo: make in pixels instead of um
+    # nx_roi = np.round(roi_size_um[2] / dx)
+    # if np.mod(nx_roi, 2) == 0:
+    #     nx_roi = nx_roi + 1
+    #
+    # # using square ROI
+    # ny_roi = nx_roi
+    #
+    # # don't care if z-roi size is odd
+    # nz_roi = np.round(roi_size_um[0] / dz)
+    nz_roi, ny_roi, nx_roi = roi_size_pix
 
-    # using square ROI
-    ny_roi = nx_roi
+    if not nx_roi % 2 == 1:
+        # raise ValueError("nx_roi must be odd, but was %d." % nx_roi)
+        nx_roi += 1
 
-    # don't care if z-roi size is odd
-    nz_roi = np.round(window_size_um[0] / dz)
+    if not ny_roi % 2 == 1:
+        # raise ValueError("ny_roi must be odd, but was %d." % ny_roi)
+        ny_roi += 1
+
+    if not nz_roi % 2 == 1:
+        # raise ValueError("ny_roi must be odd, but was %d." % nz_roi)
+        nz_roi += 1
+
+
 
     # ##############################
-    # remove background
+    # filter image
     # ##############################
-    if remove_background:
-        filter_pix_bg = nx_roi
-        bg = skimage.filters.gaussian(imgs, [0, filter_pix_bg, filter_pix_bg],
-                                            output=None, mode='nearest', cval=0,
-                                            multichannel=None, preserve_range=True)
-        imgs = imgs - bg
+    if filter_image:
+        if filter_large_sigmas is not None:
+            imgs_filtered = skimage.filters.difference_of_gaussians(imgs, filter_small_sigmas, filter_large_sigmas,
+                                                                    mode='nearest', cval=0, multichannel=None)
+        else:
+            imgs_filtered = skimage.filters.gaussian(imgs, filter_small_sigmas, mode="nearest", cval=0,
+                                                     multichannel=None, preserve_range=True)
     else:
-        bg = 0
+        imgs_filtered = imgs
 
-
-    # todo: maybe useful to set filter_size_pix based on expected NA?
     # ##############################
     # find plausible peaks
     # ##############################
-    centers = find_candidate_beads(imgs, filter_xy_pix=filter_xy_pix, filter_z_pix=filter_z_pix,
-                                   min_distance=min_distance, abs_thresh_std=abs_thresh_std, max_num_peaks=max_num_peaks)
-    print("Found %d candidates" % len(centers))
+    centers_all = find_candidate_beads(imgs_filtered, min_distance=min_distance_to_keep, abs_thresh_std=thresh_std,
+                                       max_thresh=thresh_abs, max_num_peaks=max_num_peaks)
+    print("Found %d candidates" % len(centers_all))
+    centers = copy.deepcopy(centers_all)
 
     # get ROI's for each peak
-    # rois = np.array([tools.crop_roi(tools.get_centered_roi(c, [nz_roi, ny_roi, nx_roi]), imgs.shape) for c in centers])
     rois = np.array([tools.get_centered_roi(c, [nz_roi, ny_roi, nx_roi], min_vals=[0, 0, 0], max_vals=np.array(imgs.shape)) for c in centers])
 
     # discard rois that get cropped by the edge of the image
@@ -1498,78 +1540,64 @@ def find_beads(imgs, imgs_sd, dx, dz, window_size_um=(1, 1, 1), min_sigma_pix=0.
         )
 
     results = list(zip(*results))[0]
-    gauss_fitp = np.asarray([r['fit_params'] for r in results])
-    chi_sqrs = np.asarray([r['chi_squared'] for r in results])
+    fitp = np.asarray([r['fit_params'] for r in results])
 
     # exclude peaks if too little weight
-    min_peak_amp = np.std(imgs) * abs_thresh_std
-    big_enough = gauss_fitp[:, 0] >= min_peak_amp
+    big_enough = fitp[:, 0] >= min_fit_amp
 
     # exclude points that are not very symmetric
-    asymmetry = np.abs(gauss_fitp[:, 3] - gauss_fitp[:, 4]) / (0.5 * (gauss_fitp[:, 3] + gauss_fitp[:, 4]))
+    asymmetry = np.abs(fitp[:, 3] - fitp[:, 4]) / (0.5 * (fitp[:, 3] + fitp[:, 4]))
     is_symmetric = asymmetry < max_percent_asymmetry
 
     # exclude points too far from center of ROI
-    max_off_center_fractional = 0.25
-    on_center = np.logical_and(np.abs(gauss_fitp[:, 1] - 0.5 * nx_roi) / nx_roi < max_off_center_fractional,
-                               np.abs(gauss_fitp[:, 2] - 0.5 * nx_roi) / nx_roi < max_off_center_fractional)
+    on_center = np.logical_and(np.abs(fitp[:, 1] - 0.5 * nx_roi) / nx_roi < max_off_center_fraction,
+                               np.abs(fitp[:, 2] - 0.5 * nx_roi) / nx_roi < max_off_center_fraction)
     # exclude points if sigma too large
-    max_sigma = nx_roi / 2
-    not_too_big = np.logical_and(gauss_fitp[:, 3] < max_sigma,
-                                 gauss_fitp[:, 4] < max_sigma)
+    not_too_big = np.logical_and(fitp[:, 3] < max_sigma_pix, fitp[:, 4] < max_sigma_pix)
     # exclude points if sigma too small
-    not_too_small = np.logical_and(gauss_fitp[:, 3] > min_sigma_pix, gauss_fitp[:, 4] > min_sigma_pix)
-
-    # filter on chi squares
-    # todo: removed this because seems to fail mostly for bright peaks.
-    # chi_sq_ok = chi_sqrs < np.mean(chi_sqrs) + 2 * np.std(chi_sqrs)
+    not_too_small = np.logical_and(fitp[:, 3] > min_sigma_pix, fitp[:, 4] > min_sigma_pix)
 
     # combine all conditions and reduce centers/rois
-    geometry_ok = np.logical_and(is_symmetric, on_center)
-    size_ok = np.logical_and(not_too_big, not_too_small)
-    to_use = np.logical_and(geometry_ok, size_ok)
-    to_use = np.logical_and(to_use, big_enough)
-    # to_use = np.logical_and(to_use, chi_sq_ok)
+    to_use = np.logical_and.reduce((is_symmetric, on_center, not_too_big, not_too_small, big_enough))
 
     centers = centers[to_use]
     rois = rois[to_use]
-    gauss_fitp = gauss_fitp[to_use]
+    fitp = fitp[to_use]
+    results = [r for r, keep in zip(results, to_use) if keep]
     print("%d candidates with plausible fit parameters" % len(centers))
+
+    # ##############################
+    # replace centers by fit values
+    # ##############################
+    centers = np.array(centers, dtype=np.float)
+    centers[:, 2] = fitp[:, 1] + rois[:, 4]
+    centers[:, 1] = fitp[:, 2] + rois[:, 2]
 
     # ##############################
     # find sets of peaks so close together probably fitting the same peak. Only keep one each
     # ##############################
-    to_use = np.ones(len(centers), dtype=np.bool)
-    inds = np.arange(len(centers))
-    for ii in range(len(centers)):
-        if not to_use[ii]:
-            continue
+    _, inds_to_keep = combine_nearby_beads(centers, max_sep_assume_one_peak, max_sep_assume_one_peak, mode="keep-one")
+    centers = centers[inds_to_keep]
+    rois = rois[inds_to_keep]
+    fitp = fitp[inds_to_keep]
+    results = [results[ii] for ii in inds_to_keep]
 
-        d2ds = np.linalg.norm(centers[ii, 1:] - centers[:, 1:], axis=1)
-        inds_very_close = inds[d2ds < max_sep_assume_one_peak]
-        # only keep index with maximum amplitudes for fit
-        ind_to_keep = inds_very_close[np.argmax(gauss_fitp[inds_very_close, 0])]
-        to_use[inds_very_close] = False
-        to_use[ind_to_keep] = True
-
-    centers = centers[to_use]
-    rois = rois[to_use]
-    fit_params = gauss_fitp[to_use]
     print("%d points remain after removing likely duplicates" % len(centers))
 
     # ##############################
     # discards points too close together (only look at 2D distance)
     # ##############################
-    if require_isolated:
-        min_sep = window_size_um[2] / dx
-        min_dists = np.array([min_dist(c[1:], centers[:, 1:]) for c in centers])
-        dists_ok = min_dists > min_sep
-        rois = rois[dists_ok]
-        centers = centers[dists_ok]
-        fit_params = fit_params[dists_ok]
-        print("%d isolated candidates" % len(centers))
+    min_dists = np.array([min_dist(c[1:], centers[:, 1:]) for c in centers])
+    dists_ok = min_dists > min_distance_to_keep
 
-    return rois, centers, fit_params, bg
+    rois = rois[dists_ok]
+    centers = centers[dists_ok]
+    fitp = fitp[dists_ok]
+    results = [r for r, keep in zip(results, dists_ok) if keep]
+
+    print("%d candidates separated by > %0.2f pix" % (len(centers), min_distance_to_keep))
+
+    return rois, centers, fitp, results, imgs_filtered, centers_all
 
 def fit_roi(center, roi, dx, dz, wavelength, ni, sf, imgs, imgs_sd, model):
     """
@@ -1599,20 +1627,22 @@ def fit_roi(center, roi, dx, dz, wavelength, ni, sf, imgs, imgs_sd, model):
 
     # find z-plane closest to fit center and fit gaussian to get initial parameters for model fit
     c_roi = tools.full2roi(center, roi)
-    result, _ = fit_pixelated_psfmodel(sub_img[c_roi[0]][None, :, :], dx, dz, wavelength, ni=ni, sf=sf, model='gaussian',
-                                       init_params=[None, None, None, 0, None, None],
-                                       fixed_params=[False, False, False, True, False, False])
-    result['fit_params'][3] = z[c_roi[0]]
+    cz_roi_int = int(np.round(c_roi[0]))
+    # result, _ = fit_pixelated_psfmodel(sub_img[cz_roi_int][None, :, :], dx, dz, wavelength, ni=ni, sf=sf, model='gaussian',
+    #                                    init_params=[None, None, None, 0, None, None],
+    #                                    fixed_params=[False, False, False, True, False, False])
+    # result['fit_params'][3] = z[cz_roi_int]
 
     # full 3D PSF fit
     # na cannot exceed index of refraction...
-    cz = z[c_roi[0]]
+    cz = z[cz_roi_int]
     bounds = ((0, x.min(), y.min(), np.max([cz - 2.5 * float(dz), z.min()]), 0.2, -np.inf),
               (np.inf, x.max(), y.max(), np.min([cz + 2.5 * float(dz), z.max()]), ni, np.inf))
 
     # fit 3D psf model
     # todo: add sf
-    init_params = result['fit_params']
+    # init_params = result['fit_params']
+    init_params = [None, None, None, cz, None, None]
     fit3d, _ = fit_pixelated_psfmodel(sub_img, dx, dz, wavelength, ni=ni, model=model, init_params=init_params,
                                       sd=sub_img_sd, bounds=bounds)
 
@@ -1626,7 +1656,7 @@ def fit_roi(center, roi, dx, dz, wavelength, ni, sf, imgs, imgs_sd, model):
     return fit2d, fit3d
 
 # main fitting function
-def autofit_psfs(imgs, imgs_sd, dx, dz, wavelength, ni=1.5, model='vectorial', sf=3, **kwargs):
+def autofit_psfs(imgs, imgs_sd, dx, dz, wavelength, ni=1.5, model='vectorial', sf=3, window_size_um=(1, 1, 1), **kwargs):
     """
     Find isolated points, fit PSFs, and report data. This is the main function of this module
 
@@ -1647,8 +1677,15 @@ def autofit_psfs(imgs, imgs_sd, dx, dz, wavelength, ni=1.5, model='vectorial', s
     dx = float(copy.deepcopy(dx))
     wavelength = float(copy.deepcopy(wavelength))
 
+    sz_um, sy_um, sx_um = window_size_um
+    sz_pix = int(np.round(sz_um / dz))
+    sy_pix = int(np.round(sy_um / dx))
+    sx_pix = int(np.round(sx_um / dx))
+    if sy_pix != sx_pix:
+        raise ValueError("window_size_um must give the same size window in x and y directions, but gave %0.2f and %0.2f" % (sy_um, sx_um))
+
     # todo: to account for images with fluctuating background, might want to segment the image and then apply some stages of this?
-    rois, centers, _, _ = find_beads(imgs, imgs_sd, dx, dz, **kwargs)
+    rois, centers, _, _, _, _ = find_beads(imgs, imgs_sd, roi_size_pix=(sz_pix, sy_pix, sx_pix), **kwargs)
 
     # ##############################
     # fit each peak to psf model in parallel using joblib
@@ -1663,6 +1700,10 @@ def autofit_psfs(imgs, imgs_sd, dx, dz, wavelength, ni=1.5, model='vectorial', s
         print("starting PSF fitting for %d ROI's" % len(rois))
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
                   joblib.delayed(fit_roi_partial)(centers[ii], rois[ii]) for ii in range(len(centers)))
+        # results = []
+        # for ii in range(len(centers)):
+        #     r = fit_roi(centers[ii], rois[ii], dx=dx, dz=dz, wavelength=wavelength, ni=ni, sf=sf, imgs=imgs, imgs_sd=imgs_sd, model=model)
+        #     results.append(r)
 
         # unpack results
         results = list(zip(*results))
@@ -1715,7 +1756,9 @@ def display_autofit(imgs, imgs_unc, dx, dz, wavelength, ni, rois, centers, fit2d
         figh1.savefig(os.path.join(save_dir, fname))
 
     # plot points
-    figh2 = plot_bead_locations(imgs, centers, fit3ds, fit2ds, figsize, **kwargs)
+    # figh2 = plot_bead_locations(imgs, centers, fit3ds, fit2ds, figsize, **kwargs)
+    figh2 = plot_bead_locations(imgs, centers, title="Max intensity projection and NA from 2D fit versus position",
+                                weights=[ft["fit_params"][4] for ft in fit2ds], cbar_labels=["NA"], figsize=figsize, **kwargs)
 
     fighs.append(figh2)
     fig_names.append(['NA_vs_position'])
@@ -1810,13 +1853,14 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
     # fit parameter summary
     figh = plt.figure(figsize=figsize, **kwargs)
     plt.suptitle("PSF fit parameter summary")
-    grid = plt.GridSpec(2, 4)
+    grid = plt.GridSpec(2, 4, hspace=1, wspace=0.5)
 
     # 3D PSF fits
     if fit3ds is not None:
         # histogram of NAs
         plt.subplot(grid[0, 0])
-        edges = np.linspace(0, 1.5, 20)
+        # edges = np.linspace(0, 1.5, 20)
+        edges = np.arange(0, 1.6, 0.05)
         hcenters = 0.5 * (edges[1:] + edges[:-1])
         na_h, _ = np.histogram(fp3d[:, 4], edges)
         plt.plot(hcenters, na_h, '.-')
@@ -1893,53 +1937,70 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
 
     return figh
 
-def plot_bead_locations(imgs, centers, fit3ds, fit2ds, figsize=(20, 10), **kwargs):
+def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_labels=None, weights=None,
+                        cbar_labels=None, **kwargs):
     """
-    Plot bead locations against maximum intensity projection
+    Plot center locations on 2D image or max projection of 3D image
 
-    :param imgs:
-    :param centers:
-    :param fit3ds: if None, will not plot
-    :param fit2ds: if None, will not plot
-    :param figsize:
-    :param kwargs:
+    # todo: replace some of the more complicated plotting functions with this one ... maybe add another argument
+    # weights which gives intensity of each color
+
+    :param imgs: np.array either 3D or 2D. Dimensions order Z, Y, X
+    :param center_lists: [center_array_1, center_array_2, ...] where each center_array is a numpy array of size N_i x 3
+    consisting of triples of center values giving cz, cy, cx
+    :param color_lists: list of colors for each series to be plotted in
+    :param legend_labels: labels for each series
+    :param weights: list of arrays [w_1, ..., w_n], with w_i the same size as center_array_i, giving the intensity of
+    the color to be plotted
     :return:
     """
 
-    figh = plt.figure(figsize=figsize, **kwargs)
+    if not isinstance(center_lists, list):
+        center_lists = [center_lists]
+    nlists = len(center_lists)
 
-    plt.title("Maximum intensity projection and NA map")
+    if color_lists is None:
+        cmap = plt.cm.get_cmap('hsv')
+        color_lists = []
+        for ii in range(nlists):
+            color_lists.append(cmap(ii / nlists))
 
-    max_int_proj = np.max(imgs, axis=0)
-    vmin = np.percentile(max_int_proj, 0.05)
-    vmax = np.percentile(max_int_proj, 99.99)
+    if legend_labels is None:
+        legend_labels = list(map(lambda x: "series #" + str(x) + " %d pts" % len(center_lists[x]), range(nlists)))
 
-    plt.imshow(max_int_proj, vmin=vmin, vmax=vmax, cmap='bone')
+    if weights is None:
+        weights = [np.ones(len(cs)) for cs in center_lists]
 
-    # plot circles with colormap representing NA. Reds for 3D NA, blues for 2D NA
-    if fit3ds:
-        fp3d = np.asarray([f['fit_params'] for f in fit3ds])
+    if cbar_labels is None:
+        cbar_labels = ["" for cs in center_lists]
 
-        cmap = matplotlib.cm.get_cmap('Reds')
-        plt.scatter(centers[:, 2], centers[:, 1], marker='o', facecolor='none',
-                    edgecolors=cmap(fp3d[:, 4] / np.max(fp3d[:, 4])))
-        cb1 = plt.colorbar(
-            matplotlib.cm.ScalarMappable(norm=matplotlib.colors.Normalize(vmin=0, vmax=np.max(fp3d[:, 4])), cmap=cmap))
-        cb1.set_label("3D fits NA")
+    if imgs.ndim == 3:
+        img_max_proj = np.nanmax(imgs, axis=0)
+    else:
+        img_max_proj = imgs
 
-    if fit2ds:
-        fp2d = np.asarray([f['fit_params'] for f in fit2ds])
+    figh = plt.figure(**kwargs)
+    plt.suptitle(title)
 
-        cmap = matplotlib.cm.get_cmap('Blues')
-        plt.scatter(centers[:, 2], centers[:, 1], marker='s', facecolor='none',
-                    edgecolors=cmap(fp2d[:, 4] / np.max(fp2d[:, 4])))
-        cb2 = plt.colorbar(
-            matplotlib.cm.ScalarMappable(norm=matplotlib.colors.Normalize(vmin=0, vmax=np.max(fp2d[:, 4])), cmap=cmap))
-        cb2.set_label('2D fits NA')
+    # plot image
+    vmin = np.percentile(img_max_proj, 0.1)
+    vmax = np.percentile(img_max_proj, 99.99)
 
-    if not fit3ds and not fit2ds:
-        plt.scatter(centers[:, 2], centers[:, 1], marker='o', facecolor='none',
-                    edgecolors='red')
+    plt.imshow(img_max_proj, vmin=vmin, vmax=vmax, cmap=plt.cm.get_cmap("bone"))
+
+    cbar = plt.colorbar()
+    cbar.ax.set_ylabel("Image intensity (counts)")
+
+    # plot centers
+    for ii in range(nlists):
+        cmap_color = LinearSegmentedColormap.from_list("test", [[0., 0., 0.], color_lists[ii]])
+        plt.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', marker='o',
+                    edgecolor=cmap_color(weights[ii] / np.nanmax(weights[ii])))
+
+        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=0, vmax=np.nanmax(weights[ii])), cmap=cmap_color))
+        cbar.ax.set_ylabel(cbar_labels[ii])
+
+    plt.legend(legend_labels)
 
     return figh
 

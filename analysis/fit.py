@@ -229,14 +229,14 @@ def fit_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bounds=
         bounds = ((-np.inf, x.min(), 0, -np.inf),
                   (np.inf, x.max(), x.max() - x.min(), np.inf))
 
-    fn = lambda p: gauss_fn(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
-    jacob_fn = lambda p: gauss_jacobian(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
+    fn = lambda p: gauss2d(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
+    jacob_fn = lambda p: gauss2d_jacobian(x, np.zeros(x.shape), [p[0], p[1], 0, p[2], 1, p[3], 0])
 
     result = fit_model(y, fn, init_params, fixed_params=fixed_params,
                        sd=sd, bounds=bounds, model_jacobian=jacob_fn)
 
     pfit = result['fit_params']
-    fit_fn = lambda x: gauss_fn(x, np.zeros(x.shape), [pfit[0], pfit[1], 0, pfit[2], 1, pfit[3], 0])
+    fit_fn = lambda x: gauss2d(x, np.zeros(x.shape), [pfit[0], pfit[1], 0, pfit[2], 1, pfit[3], 0])
 
     return result, fit_fn
 
@@ -301,11 +301,11 @@ def fit_gauss2d(img, init_params=None, fixed_params=None, sd=None, xx=None, yy=N
         bounds = (lbs, ubs)
 
     # do fitting
-    result = fit_model(img, lambda p: gauss_fn(xx, yy, p), init_params, fixed_params=fixed_params,
-                       sd=sd, bounds=bounds, model_jacobian=lambda p: gauss_jacobian(xx, yy, p))
+    result = fit_model(img, lambda p: gauss2d(xx, yy, p), init_params, fixed_params=fixed_params,
+                       sd=sd, bounds=bounds, model_jacobian=lambda p: gauss2d_jacobian(xx, yy, p))
 
     # model function
-    def fit_fn(x, y): return gauss_fn(x, y, result['fit_params'])
+    def fit_fn(x, y): return gauss2d(x, y, result['fit_params'])
 
     return result, fit_fn
 
@@ -342,13 +342,13 @@ def fit_sum_gauss2d(img, ngaussians, init_params, fixed_params=None, sd=None, xx
         bounds = [[-np.inf, xx.min(), yy.min(), 0, 0, -np.inf] * ngaussians + [-np.inf],
                   [ np.inf, xx.max(), yy.max(), xx.max() - xx.min(), yy.max() - yy.min(), np.inf] * ngaussians + [np.inf]]
 
-    result = fit_model(img, lambda p: sum_gauss_fn(xx, yy, p), init_params, fixed_params=fixed_params,
-                       sd=sd, bounds=bounds, model_jacobian=lambda p: sum_gauss_jacobian(xx, yy, p))
+    result = fit_model(img, lambda p: sum_gauss2d(xx, yy, p), init_params, fixed_params=fixed_params,
+                       sd=sd, bounds=bounds, model_jacobian=lambda p: sum_gauss2d_jacobian(xx, yy, p))
 
     pfit = result['fit_params']
 
     def fn(x, y):
-        return sum_gauss_fn(x, y, pfit)
+        return sum_gauss2d(x, y, pfit)
 
     return result, fn
 
@@ -411,7 +411,7 @@ def fit_half_gauss1d(y, init_params=None, fixed_params=None, sd=None, x=None, bo
 
 
 # gaussians and jacobians
-def gauss_fn(x, y, p):
+def gauss2d(x, y, p):
     """
     Rotated 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
     with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
@@ -429,7 +429,7 @@ def gauss_fn(x, y, p):
     return p[0] * np.exp(-xrot ** 2 / (2 * p[3] ** 2) - yrot ** 2 / (2 * p[4] ** 2)) + p[5]
 
 
-def gauss_jacobian(x, y, p):
+def gauss2d_jacobian(x, y, p):
     """
     Jacobian of gauss_fn
 
@@ -457,7 +457,7 @@ def gauss_jacobian(x, y, p):
             p[0] * exps * xrot * yrot * (1 / p[3]**2 - 1 / p[4]**2)]
 
 
-def sum_gauss_fn(x, y, p):
+def sum_gauss2d(x, y, p):
     """
     Sum of n 2D gaussians
     :param x:
@@ -473,15 +473,15 @@ def sum_gauss_fn(x, y, p):
     val = 0
     for ii in range(ngaussians - 1):
         ps = np.concatenate((np.array(p[6*ii: 6*ii + 5]), np.array([0]), np.atleast_1d([p[ii * 6 + 5]])))
-        val += gauss_fn(x, y, ps)
+        val += gauss2d(x, y, ps)
 
     # deal with last gaussian, which also gets background term
     ps = np.concatenate((np.array(p[-7:-2]), np.atleast_1d(p[-1]), np.atleast_1d(p[-2])))
-    val += gauss_fn(x, y, ps)
+    val += gauss2d(x, y, ps)
     return val
 
 
-def sum_gauss_jacobian(x, y, p):
+def sum_gauss2d_jacobian(x, y, p):
     """
     Jacobian of the sum of n 2D gaussians
     :param x:
@@ -497,12 +497,51 @@ def sum_gauss_jacobian(x, y, p):
     jac_list = []
     for ii in range(ngaussians - 1):
         ps = np.concatenate((np.array(p[6 * ii: 6 * ii + 5]), np.array([0]), np.atleast_1d([p[ii * 6 + 5]])))
-        jac_current = gauss_jacobian(x, y, ps)
+        jac_current = gauss2d_jacobian(x, y, ps)
         jac_list += jac_current[:-2] + [jac_current[-1]]
 
     # deal with last gaussian, which also gets background term
     ps = np.concatenate((np.array(p[-7:-2]), np.atleast_1d(p[-1]), np.atleast_1d(p[-2])))
-    jac_current = gauss_jacobian(x, y, ps)
+    jac_current = gauss2d_jacobian(x, y, ps)
     jac_list += jac_current[:-2] + [jac_current[-1]] + [jac_current[-2]]
 
     return jac_list
+
+
+def gauss3d(x, y, z, p):
+    """
+
+    R_body = U_z(psi)^-1 U_y(theta)^-1 U_z(phi)^-1 * R
+    U_z(phi)^-1 = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
+    f_rot(R) = f(R_body)
+
+    Take the z-axis in the frame of the object, and consider the z-axis in the lab frame. phi and theta describe
+    how the transformation to overlap these two. psi gives the gives the angle the object is rotated about its own axis
+
+    :param x: x-coordinates to evaluate function at.
+    :param y: y-coordinates to evaluate function at. Either same size as x, or broadcastable with x.
+    :param p: [A, cx, cy, cz, sxrot, syrot, szrot, bg, phi, theta, psi]
+    :return value:
+
+    """
+
+    phi = p[8]
+    theta = p[9]
+    psi = p[10]
+    xrot = (x - p[1]) * (np.cos(psi) * np.cos(theta) * np.cos(phi) - np.sin(psi) * np.sin(phi)) + \
+           (y - p[2]) * (-1) * (np.cos(psi) * np.cos(theta) * np.sin(phi) + np.sin(psi) * np.cos(phi)) + \
+           (z - p[3]) * (-1) * np.cos(psi) * np.sin(theta)
+
+    yrot = (x - p[1]) * (np.sin(psi) * np.cos(theta) * np.cos(phi) + np.cos(psi) * np.sin(phi)) + \
+           (y - p[2]) * (-np.sin(psi) * np.cos(theta) * np.sin(phi) + np.cos(psi) * np.cos(phi)) + \
+           (z - p[3]) * (-np.sin(psi) * np.sin(theta))
+    zrot = (x - p[1]) * np.sin(theta) * np.cos(phi) + \
+           (y - p[2]) * (- np.sin(theta) * np.sin(phi)) + \
+           (z - p[3]) * np.cos(theta)
+    val = p[0] * np.exp(-xrot**2 / (2 * p[4]**2) - yrot**2 / (2 * p[5] ** 2) - zrot**2 / (2 * p[6]**2)) + p[7]
+
+    return val
+
+
+def gauss3d_jacobian(x, y, z, p):
+    pass

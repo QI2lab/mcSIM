@@ -24,15 +24,8 @@ from scipy import fft
 import scipy.optimize
 import scipy.signal
 import scipy.ndimage
-import skimage
-import skimage.restoration
 from skimage.exposure import match_histograms
 from PIL import Image
-
-# MCMC
-import theano
-import theano.tensor as tt
-import pymc3 as pm
 
 # plotting
 import matplotlib.pyplot as plt
@@ -394,7 +387,7 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
 class SimImageSet:
     def __init__(self, options, imgs, frq_sim_guess, otf=None,
                  wiener_parameter=1, fbounds=(0.01, 1), fbounds_shift=(0.01, 1),
-                 use_bayesian=False, use_wicker=True, normalize_histograms=True, background_counts=100,
+                 use_wicker=True, normalize_histograms=True, background_counts=100,
                  do_global_phase_correction=True, determine_amplitudes=False, find_frq_first=True,
                  default_to_guess_on_bad_phase_fit=True, max_phase_err=20*np.pi/180,
                  default_to_guess_on_low_mcnr=True, min_mcnr=1,
@@ -412,8 +405,6 @@ class SimImageSet:
          If None, estimate from NA.
         :param wiener_parameter: Attenuation parameter for Wiener deconvolution. This will attenuate parts of the image
         where |otf(f)|^2 * SNR < wiener_parameter
-        :param use_bayesian: Boolean. If True, use bayesian approach to estimate SIM frequency, phase, and modulation
-        depth. Otherwise use classical optimization approach.
         :param plot_diagnostics: Boolean. If True, display figures to visually inspect output.
         :param use_fixed_parameters: Boolean. Whether to do parameter fitting, or to use provided parameters.
         :param phases_guess: If use_fixed_parameters is True, these phases are used. Otherwise they are ignored.
@@ -444,7 +435,6 @@ class SimImageSet:
         # analysis settings
         # #############################################
         self.wiener_parameter = wiener_parameter
-        self.use_bayesian = use_bayesian
         self.use_wicker = use_wicker
         self.global_phase_correction = do_global_phase_correction
         self.normalize_histograms = normalize_histograms
@@ -579,79 +569,57 @@ class SimImageSet:
         # #############################################
         # estimate SIM parameters
         # #############################################
-        if self.use_bayesian:
-            raise NotImplementedError("use_bayesian=True is not currently supported")
-            # todo: this method no longer working. Maybe will want to revisit it at some point
-            # todo: not very happy that these parameter estimation functions return figures.
-            # todo: need to update to work with new way of storing power_spectrum params
-            # todo: seem to have problems when I try and run many instances in a loop?
-            self.print_tee("starting bayesian parameter inference", self.log_file)
+        # estimate frequencies
+        tstart = time.time()  # since done using joblib, process_time() is not useful...
 
-            self.frqs, self.phases, self.mod_depths, bayes_figs, bayes_fig_names = \
-                self.estimate_parameters_bayesian(self.frqs_guess, figsize=self.figsize)
-
-            # in this case, still do power spectrum fitting to get model for SNR
-            self.separated_components_ft = separate_components(self.imgs_ft, self.phases)
-
-            tstart = time.process_time()
-
-            _, self.power_spectrum_params = self.estimate_mod_depths()
-
-            tend = time.process_time()
-            self.print_tee('fit power spectrum parameters in %0.2fs' % (self.nangles, tend - tstart), self.log_file)
-
+        if self.use_fixed_frq:
+            self.frqs = self.frqs_guess
+            self.print_tee("using fixed frequencies", self.log_file)
         else:
-            # estimate frequencies
-            tstart = time.time()  # since done using joblib, process_time() is not useful...
-
-            if self.use_fixed_frq:
-                self.frqs = self.frqs_guess
-                self.print_tee("using fixed frequencies", self.log_file)
+            if self.find_frq_first:
+                self.frqs = self.estimate_sim_frqs(self.imgs_ft, self.imgs_ft, self.frqs_guess)
             else:
-                if self.find_frq_first:
-                    self.frqs = self.estimate_sim_frqs(self.imgs_ft, self.imgs_ft, self.frqs_guess)
-                else:
-                    self.print_tee("doing phase demixing prior to frequency finding", self.log_file)
-                    self.separated_components_ft = separate_components(self.imgs_ft, self.phases_guess, np.ones((self.nangles, self.nphases)))
-                    imgs1 = np.expand_dims(self.separated_components_ft[:, 0], axis=1)
-                    imgs2 = np.expand_dims(self.separated_components_ft[:, 1], axis=1)
-                    self.frqs = self.estimate_sim_frqs(imgs1, imgs2, self.frqs_guess)
+                self.print_tee("doing phase demixing prior to frequency finding", self.log_file)
+                self.separated_components_ft = separate_components(self.imgs_ft, self.phases_guess, np.ones((self.nangles, self.nphases)))
+                imgs1 = np.expand_dims(self.separated_components_ft[:, 0], axis=1)
+                imgs2 = np.expand_dims(self.separated_components_ft[:, 1], axis=1)
+                self.frqs = self.estimate_sim_frqs(imgs1, imgs2, self.frqs_guess)
 
-            tend = time.time()
-            self.print_tee("fitting frequencies took %0.2fs" % (tend - tstart), self.log_file)
+        tend = time.time()
+        self.print_tee("fitting frequencies took %0.2fs" % (tend - tstart), self.log_file)
 
-            # estimate phases
-            tstart = time.process_time()
-            if self.use_fixed_phase:
-                self.phases = self.phases_guess
-                self.amps = np.ones((self.nangles, self.nphases))
-                self.print_tee("Using fixed phases", self.log_file)
-            else:
-                self.phases, self.amps = self.estimate_sim_phases(self.frqs, self.phases_guess)
+        # estimate phases
+        tstart = time.process_time()
+        if self.use_fixed_phase:
+            self.phases = self.phases_guess
+            self.amps = np.ones((self.nangles, self.nphases))
+            self.print_tee("Using fixed phases", self.log_file)
+        else:
+            self.phases, self.amps = self.estimate_sim_phases(self.frqs, self.phases_guess)
 
-            tend = time.process_time()
-            self.print_tee("estimated %d phases in %0.2fs" % (self.nangles * self.nphases, tend - tstart), self.log_file)
+        tend = time.process_time()
+        self.print_tee("estimated %d phases in %0.2fs" % (self.nangles * self.nphases, tend - tstart), self.log_file)
 
-            # separate components
-            self.separated_components_ft = separate_components(self.imgs_ft, self.phases, self.amps)
+        # separate components
+        self.separated_components_ft = separate_components(self.imgs_ft, self.phases, self.amps)
 
-            # estimate modulation depths and power spectrum fit parameters
-            tstart = time.process_time()
-            # for the moment, need to do this feet even if have fixed mod depth, because still need the
-            # power spectrum parameters
-            self.mod_depths, self.power_spectrum_params, self.pspec_masks = self.estimate_mod_depths()
+        # estimate modulation depths and power spectrum fit parameters
+        tstart = time.process_time()
+        # for the moment, need to do this feet even if have fixed mod depth, because still need the
+        # power spectrum parameters
+        self.mod_depths, self.power_spectrum_params, self.pspec_masks = self.estimate_mod_depths()
 
-            if self.use_fixed_mod_depths:
-                self.mod_depths = np.zeros((self.nangles, self.nphases))
-                self.mod_depths[:, 0] = 1
-                for jj in range(1, self.nphases):
-                    self.mod_depths[:, jj] = self.mod_depths_guess
+        if self.use_fixed_mod_depths:
+            self.mod_depths = np.zeros((self.nangles, self.nphases))
+            self.mod_depths[:, 0] = 1
+            for jj in range(1, self.nphases):
+                self.mod_depths[:, jj] = self.mod_depths_guess
 
-                    # also correct power spectrum params
-                    self.power_spectrum_params[:, jj, 2] = self.mod_depths[:, jj]
+                # also correct power spectrum params
+                self.power_spectrum_params[:, jj, 2] = self.mod_depths[:, jj]
 
-            tend = time.process_time()
-            self.print_tee('estimated %d modulation depths in %0.2fs' % (self.nangles, tend - tstart), self.log_file)
+        tend = time.process_time()
+        self.print_tee('estimated %d modulation depths in %0.2fs' % (self.nangles, tend - tstart), self.log_file)
 
         # #############################################
         # estimate modulation contrast to noise ratio for raw images
@@ -963,52 +931,6 @@ class SimImageSet:
             mod_depths[:, jj] = power_spectrum_params[:, 1, 2]
 
         return mod_depths, power_spectrum_params, masks
-
-    def estimate_parameters_bayesian(self, frq_sim_guess, figsize=(20, 10)):
-        """
-        Estimate frequencies, phases, and modulation depths from SIM images. This function utilizes the many
-        estimation function (get_sim_frq, get_sim_phase, etc.) to estimate all these parameters.
-
-        :param frq_sim_guess: 2 x nangles array of guess SIM frequency values
-        :return:
-        """
-
-        debug_figs = []
-        debug_fig_names = []
-
-        frqs_sim = np.zeros((self.nangles, 2))
-        phases = np.zeros((self.nangles, self.nphases))
-        ms = np.zeros((self.nangles, self.nphases))
-        for ii in range(self.nangles):
-            for jj in range(self.nphases):
-
-                # set up model fn
-                if jj == 0:
-                    frqs_sim[ii], phases[ii, jj], ms[ii, jj], I_inferred, trace = \
-                        get_sim_params_mcmc(self.imgs_ft[ii, jj], self.otf, frq_sim_guess[ii], self.fx, self.fy, self.fmax, fit_shifts=True)
-                else:
-                    _, phases[ii, jj], ms[ii, jj], I_inferred, trace = \
-                        get_sim_params_mcmc(self.imgs_ft[ii, jj], self.otf, frqs_sim[ii], self.fx, self.fy, self.fmax, fit_shifts=False)
-
-                if self.plot_diagnostics and ii == 0:
-                    figh = plot_correlation_fit(self.imgs_ft[ii, jj], self.imgs_ft[ii, jj], frqs_sim[ii],
-                                                self.dx, self.fmax,
-                                                frqs_guess=self.frqs_guess[ii], figsize=figsize,
-                                                ttl_str="Correlation fit, angle = %d, phase=0" % ii)
-
-                    debug_figs += [figh]
-                    debug_fig_names += ['frq_fit_angle=%d' % (ii + 1)]
-
-                if self.plot_diagnostics:
-                    pm.traceplot(trace)
-                    figh = plt.gcf()
-
-                    debug_figs += [figh]
-                    debug_fig_names += ['parameter_inference_angle=%d_phase=%d' % (ii + 1, jj + 1)]
-
-        mod_depths = np.mean(ms, axis=1)
-
-        return frqs_sim, phases, mod_depths, debug_figs, debug_fig_names
 
     # printing utility functions
     def print_parameters(self):
@@ -1425,7 +1347,9 @@ class SimImageSet:
                 # ####################
                 ax = plt.subplot(grid[jj, 0])
 
-                plt.imshow(np.abs(self.separated_components_ft[ii, jj]), norm=LogNorm(), extent=extent)
+                to_plot = np.abs(self.separated_components_ft[ii, jj])
+                to_plot[to_plot <= 0] = np.nan
+                plt.imshow(to_plot, norm=LogNorm(), extent=extent)
 
                 circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
                 ax.add_artist(circ)
@@ -1478,7 +1402,10 @@ class SimImageSet:
                 # ####################
                 ax = plt.subplot(grid[jj, 2])
 
-                plt.imshow(np.abs(self.components_shifted_ft[ii, jj]), norm=LogNorm(), extent=extent_upsampled)
+                # avoid any zeros for LogNorm()
+                cs_ft_toplot = np.abs(self.components_shifted_ft[ii, jj])
+                cs_ft_toplot[cs_ft_toplot <= 0] = np.nan
+                plt.imshow(cs_ft_toplot, norm=LogNorm(), extent=extent_upsampled)
                 plt.scatter(0, 0, edgecolor='r', facecolor='none')
 
                 circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
@@ -1504,7 +1431,9 @@ class SimImageSet:
                 # ####################
                 ax = plt.subplot(grid[jj, 3])
 
-                im2 = plt.imshow(self.weights[ii, jj] / self.weight_norm, norm=LogNorm(), extent=extent_upsampled)
+                to_plot = self.weights[ii, jj] / self.weight_norm
+                to_plot[to_plot <= 0] = np.nan
+                im2 = plt.imshow(to_plot, norm=LogNorm(), extent=extent_upsampled)
                 im2.set_clim([1e-5, 1])
                 fig.colorbar(im2)
 
@@ -2829,177 +2758,6 @@ def estimate_snr(img_ft, fxs, fys, fmax, filter_size=5):
     snr = sig_power / noise_power
 
     return snr
-
-# estimate modulation parameters using Bayesian inference. Alternative approach to the more direct techniques above.
-class fftshift2dOp(theano.Op):
-    # Properties attribute
-    __props__ = ()
-
-    # itypes and otypes attributes are
-    # compulsory if make_node method is not defined.
-    # They're the type of input and output respectively
-    itypes = None
-    otypes = None
-
-    #Compulsory if itypes and otypes are not defined
-    def make_node(self, sx, sy, phi):
-        # make apply node
-        sx = theano.tensor.as_tensor_variable(sx)
-        sy = theano.tensor.as_tensor_variable(sy)
-        phi = theano.tensor.as_tensor_variable(phi)
-        return theano.Apply(self, [sx, sy, phi], [tt.matrix()])
-
-    # Python implementation:
-    def perform(self, node, inputs_storage, output_storage):
-        sx, sy, phi = inputs_storage
-        ft = self.otf * np.exp(1j * phi) * fft.fft2(np.exp(1j * 2*np.pi * (sx * self.xx + sy * self.yy)) * fft.ifft2(self.imgft))
-        output_storage[0][0] = np.concatenate((ft.real, ft.imag))
-
-    # optional:
-    check_input = True
-
-    def __init__(self, imgft, otf):
-        """
-        Warning: imgft should be in 'normal' ordering. i.e. do NOT fftshift before sending here.
-
-        Will return imgft(x - sx, y - sy). i.e. will shift image towards positive direction for positive
-        sx, sy
-
-        :param imgft:
-        :param xx:
-        :param yy:
-        """
-        self.imgft = imgft
-        self.otf = otf
-
-        # choose units so that shifts are in pixels
-        # assuming square image
-        dt = 1 / imgft.shape[0]
-        x = tools.get_fft_pos(imgft.shape[1], dt=dt, centered=False, mode='symmetric')
-        y = tools.get_fft_pos(imgft.shape[0], dt=dt, centered=False, mode='symmetric')
-        xx, yy = np.meshgrid(x, y)
-
-        #self.dxy = dxy
-        self.yy = yy
-        self.xx = xx
-        super(fftshift2dOp, self).__init__()
-
-    def grad(self, inputs, output_grads):
-        # todo: not convinced this is working. Need to test it
-        sx, sy, phi = inputs
-
-        df_dsx = self.otf * np.exp(1j * phi) * fft.fft2(1j * 2 * np.pi * self.xx * np.exp(1j * 2 * np.pi * (sx * self.xx + sy * self.yy)) * fft.ifft2(self.imgft))
-        dc_dsx = output_grads[0] * df_dsx
-        #dc_dsx_roi = dc_dsx[self.roi[0]:self.roi[1], self.roi[2]:self.roi[3]]
-
-        df_dsy = self.otf * np.exp(1j * phi) * fft.fft2(1j * 2 * np.pi * self.yy * np.exp(1j * 2 * np.pi * (sx * self.xx + sy * self.yy)) * fft.ifft2(self.imgft))
-        dc_dsy = output_grads[1] * df_dsy
-        #dc_dsy_roi = dc_dsy[self.roi[0]:self.roi[1], self.roi[2]:self.roi[3]]
-
-        df_dphi = 1j * self.otf * np.exp(1j * phi) * fft.fft2(-1j * 2 * np.pi * self.xx * np.exp(-1j * 2 * np.pi * (sx * self.xx + sy * self.yy)) * fft.ifft2(self.imgft))
-        dc_dphi = output_grads[2] * df_dphi
-        #dc_dphi_roi = dc_dphi[self.roi[0]:self.roi[1], self.roi[2]:self.roi[3]]
-
-        # return [np.concatenate((dc_dsx_roi.real, dc_dsx_roi.imag)),
-        #         np.concatenate((dc_dsy_roi.real, dc_dsy_roi.imag)),
-        #         np.concatenate((dc_dphi_roi.real, dc_dphi_roi.imag))]
-        return [np.concatenate((dc_dsx.real, dc_dsx.imag)),
-                np.concatenate((dc_dsy.real, dc_dsy.imag)),
-                np.concatenate((dc_dphi.real, dc_dphi.imag))]
-
-    def R_op(self, inputs, eval_points):
-        pass
-
-def get_sim_params_mcmc(img_ft, otf, frqs_guess, fx, fy, fmax, roi_size=81, fit_shifts=True):
-    """
-    Compute SIM parameters using bayesian inference
-
-    # todo: if fit_shifts is false, automatically commute shift_vals
-
-    :param img_ft:
-    :param otf:
-    :param frqs_guess:
-    :param fx:
-    :param fy:
-    :param fmax:
-    :param roi_size:
-    :param fit_shifts:
-    :param shift_vals:
-    :return:
-    """
-
-    fx_guess, fy_guess = frqs_guess
-
-    # get frequency information
-    ny, nx = img_ft.shape
-    dfx = fx[1] - fx[0]
-    dfy = fy[1] - fy[0]
-
-    noise = np.sqrt(get_noise_power(img_ft, fx, fy, fmax))
-
-    # find pixel to center ROI at
-    fx_guess_pix = np.argmin(np.abs(fx_guess - fx))
-    fy_guess_pix = np.argmin(np.abs(fy_guess - fy))
-
-    # get ROI's from frequency guesses
-    model_roi = tools.get_centered_roi([fy_guess_pix, fx_guess_pix], [roi_size, roi_size])
-    center_roi = tools.get_centered_roi([fy.size//2, fx.size//2], [roi_size, roi_size])
-
-    # get image and reshape as desired
-    Iroi = img_ft[model_roi[0]:model_roi[1], model_roi[2]:model_roi[3]]
-    Iobs = np.concatenate((Iroi.real, Iroi.imag))
-
-    # function to convert from all real format back to complex image
-    recombine_fn = lambda mat: mat[:mat.shape[0] // 2] + 1j * mat[mat.shape[0] // 2:]
-
-    Iroi_center = img_ft[center_roi[0]:center_roi[1], center_roi[2]:center_roi[3]]
-
-    otf_roi = otf[model_roi[0]:model_roi[1], model_roi[2]:model_roi[3]]
-
-    # otherwise will throw errors bc no test values associated with some theano variables.
-    theano.config.compute_test_value = "warn"
-
-    # set up model fn
-    sx_var = tt.scalar('sx_var')
-    sy_var = tt.scalar('sy_var')
-    phi_var = tt.scalar('phi_var')
-    var = fftshift2dOp(Iroi_center, otf_roi)(sx_var, sy_var, phi_var)
-    model_fn = theano.function([sx_var, sy_var, phi_var], var)
-
-    with pm.Model() as model:
-        if fit_shifts:
-            sx = pm.Uniform('sx', -2, 2)
-            sy = pm.Uniform('sy', -2, 2)
-        else:
-            # in this case we take the guess value as fixed
-            sx = (fx[fx_guess_pix] - fx_guess) / dfx
-            sy = (fy[fy_guess_pix] - fy_guess) / dfy
-
-        phi = pm.Normal('phi', mu=np.pi, sd=2)
-        m = pm.Uniform('m', 0, 1)
-        mshift = 0.5 * m * fftshift2dOp(Iroi_center, otf_roi)(sx, sy, phi)
-
-        likelihood = pm.Normal('y', mu=mshift, sd=noise, observed=Iobs)
-
-        trace = pm.sample(1000, cores=2, tune=6000, chains=2, discard_tuned_samples=True)
-
-    # extract inferred values
-    if fit_shifts:
-        sx_inf = np.mean(trace.get_values('sx'))
-        sy_inf = np.mean(trace.get_values('sy'))
-    else:
-        sx_inf = sx
-        sy_inf = sy
-
-    frqs_sim = [fx[fx_guess_pix] - sx_inf * dfx,
-                fy[fy_guess_pix] - sy_inf * dfy]
-
-
-    phi_inferred = np.mean([np.mod(np.mean(ch), 2*np.pi) for ch in trace.get_values('phi', combine=False)])
-    mod_depth_inferred = np.mean(trace.get_values('m'))
-    img_inferred = recombine_fn(mod_depth_inferred * model_fn(sx_inf, sy_inf, phi_inferred))
-
-    return frqs_sim, phi_inferred, mod_depth_inferred, img_inferred, trace
 
 # create test data
 def get_test_pattern(img_size=(2048, 2048)):
