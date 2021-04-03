@@ -186,7 +186,7 @@ def sigma2na(wavelength, sigma):
     return fwhm2na(wavelength, fwhm)
 
 # different PSF model functions
-def gaussian_psf(x, y, p, wavelength):
+def gaussian2d_psf(x, y, p, wavelength):
     """
     2D Gaussian approximation to airy function. Matches well for equal peak intensity, but then area will not match.
     :param x:
@@ -225,6 +225,30 @@ def gaussian3d_psf(x, y, z, p, wavelength, ni):
 
     return val
 
+def gaussian3d_psf_jac(x, y, z, p, wavelength, ni):
+    """
+    Jacobean of gaussian3d_psf
+    """
+    sigma_xy = 0.22 * wavelength / p[4]
+    sigma_z = np.sqrt(6) / np.pi * ni * wavelength / p[4] ** 2
+
+    exp = np.exp(-(x - p[1])**2 / (2 * sigma_xy**2) -
+                (y - p[2])**2 / (2 * sigma_xy**2) -
+                (z - p[3])**2 / (2 * sigma_z**2))
+
+    bcast_shape = (x + y + z).shape
+
+    jac = [exp,
+           p[0] * exp * 2 * (x - p[1]) / (2 * sigma_xy**2),
+           p[0] * exp * 2 * (y - p[2]) / (2 * sigma_xy**2),
+           p[0] * exp * 2 * (z - p[3]) / (2 * sigma_z**2),
+           p[0] * exp * (-(x - p[1])**2 / sigma_xy**2 / p[4] +
+                         -(y - p[2])**2 / sigma_xy**2 / p[4] +
+                         -(z - p[3])**2 / sigma_z**2 * 2 / p[4]),
+           np.ones(bcast_shape)]
+
+    return jac
+
 def gaussian3d_pixelated_psf(nx, dx, z, p, wavelength, ni, sf=3):
     """
     Gaussian function, accounting for image pixelation in the xy plane. This function mimics the style of the
@@ -242,27 +266,75 @@ def gaussian3d_pixelated_psf(nx, dx, z, p, wavelength, ni, sf=3):
     """
 
     if np.mod(nx, 2) == 0:
-        raise ValueError("pixel size must be odd.")
+        raise ValueError("number of xy pixels must be odd, but was %d." % nx)
+
+    if isinstance(z, (int, float, list)):
+        z = np.array([z])
+
+    if not isinstance(sf, int):
+        raise ValueError("sf must be an integer")
 
     # we will add amplitude and background back in at the end
     pt = [1, p[1], p[2], p[3], p[4], 0]
 
-    y, x, = get_coords([nx * sf, nx * sf], [dx / sf, dx / sf])
-    yy, zz, xx = np.meshgrid(y, z, x)
-    psf_exp = gaussian3d_psf(xx, yy, zz, pt, wavelength, ni)
+    y, x, = get_psf_coords([nx, nx], [dx, dx])
+    y = np.expand_dims(y, axis=(0, 2))
+    x = np.expand_dims(x, axis=(0, 1))
+    z = np.expand_dims(np.array(z, copy=True), axis=(1, 2))
 
-    # sum points in pixel
-    psf = tools.bin(psf_exp, [sf, sf], mode='mean')
+    xx_s, yy_s, zz_s = oversample_pixel(x, y, z, dx, sf=sf)
+
+    psf = np.mean(gaussian3d_psf(xx_s, yy_s, zz_s, pt, wavelength, ni), axis=-1)
 
     # get psf norm
-    ycs, xcs = get_coords([sf, sf], [dx / sf, dx / sf])
-    yyc, zzc, xxc = np.meshgrid(ycs, 0, xcs)
-    psf_norm = np.mean(gaussian3d_psf(xxc, yyc, zzc, [1, 0, 0, 0, p[4], 0], wavelength, ni))
+    xx_sc, yy_sc, zz_sc = oversample_pixel(np.array([0]), np.array([0]), np.array([0]), dx, sf=sf)
+    psf_norm = np.mean(gaussian3d_psf(xx_sc, yy_sc, zz_sc, [1, 0, 0, 0, p[4], 0], wavelength, ni), axis=-1)
 
     # psf normalized to one
     psf = p[0] * psf / psf_norm + p[5]
 
     return psf
+
+def gaussian3d_pixelated_psf_jac(nx, dx, z, p, wavelength, ni, sf=3):
+    if np.mod(nx, 2) == 0:
+        raise ValueError("number of xy pixels must be odd, but was %d." % nx)
+
+    if isinstance(z, (int, float, list)):
+        z = np.array([z])
+
+    if not isinstance(sf, int):
+        raise ValueError("sf must be an integer")
+
+    # we will need this value later
+    psf = gaussian3d_pixelated_psf(nx, dx, z, p, wavelength, ni, sf)
+
+    # we will add amplitude and background back in at the end
+    pt = [1, p[1], p[2], p[3], p[4], 0]
+
+    y, x, = get_psf_coords([nx, nx], [dx, dx])
+    y = np.expand_dims(y, axis=(0, 2))
+    x = np.expand_dims(x, axis=(0, 1))
+    z = np.expand_dims(np.array(z, copy=True), axis=(1, 2))
+
+    xx_s, yy_s, zz_s = oversample_pixel(x, y, z, dx, sf=sf)
+
+    jac = gaussian3d_psf_jac(xx_s, yy_s, zz_s, pt, wavelength, ni)
+    jac = [np.mean(j, axis=-1) for j in jac]
+
+    # get psf norm
+    xx_sc, yy_sc, zz_sc = oversample_pixel(np.array([0]), np.array([0]), np.array([0]), dx, sf=sf)
+    psf_norm = np.squeeze(np.mean(gaussian3d_psf(xx_sc, yy_sc, zz_sc, [1, 0, 0, 0, p[4], 0], wavelength, ni), axis=-1))
+    psf_norm_jac = gaussian3d_psf_jac(xx_sc, yy_sc, zz_sc, [1, 0, 0, 0, p[4], 0], wavelength, ni)
+    psf_norm_jac = np.squeeze(np.mean(psf_norm_jac[4], axis=-1))
+
+    # modify jacobean for psf normalization, which is: psf = p[0] * psf / psf_norm + p[5]
+    jac[0] = jac[0] / psf_norm
+    jac[1] = jac[1] * p[0] / psf_norm
+    jac[2] = jac[2] * p[0] / psf_norm
+    jac[3] = jac[3] * p[0] / psf_norm
+    jac[4] = jac[4] * p[0] / psf_norm - (psf - p[5]) * psf_norm_jac / psf_norm
+
+    return jac
 
 def airy_fn(x, y, p, wavelength):
     """
@@ -365,10 +437,10 @@ def born_wolf_psf(x, y, z, p, wavelength, ni):
 
 def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
     """
-    General functiion for evaluating different psfmodels. For vectorial or gibson-lanni PSF's, this wraps the functions
+    Wrapper function for evaluating different psfmodels. For vectorial or gibson-lanni PSF's, this wraps the functions
     in PSFmodels. For gaussian, it wraps the gaussian3d_pixelated_psf() function.
 
-    todo: need to implement index of refraction? Not sure this matters...
+    todo: need to implement index of refraction?
 
     :param nx: number of points to be sampled in x- and y-directions
     :param dxy: pixel size in um
@@ -403,12 +475,72 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
 
     return val
 
+def oversample_pixel(x, y, z, ds, sf=3, euler_angles=(0., 0., 0.)):
+    """
+    Suppose we have a set of pixels centered at points given by x, y, z. Generate sf**2 points in this pixel equally
+    spaced about the center. Allow the pixel to be orientated in an arbitrary direction with respect to the coordinate
+    system. The pixel rotation is described by the Euler angles (psi, theta, phi), where the pixel "body" frame
+    is a square with xy axis orientated along the legs of the square with z-normal to the square
+
+    :param x:
+    :param y:
+    :param z:
+    :param ds: pixel size
+    :param sf: sample factor
+    :param euler_angles: [phi, theta, psi] where phi and theta are the polar angles describing the normal of the pixel,
+    and psi describes the rotation of the pixel about its normal
+    :return:
+
+    """
+
+    # generate new points in pixel, each of which is centered about an equal area of the pixel, so summing them is
+    # giving an approximation of the integral
+    pts = np.arange(1 / (2*sf), 1 - 1 / (2*sf), 1 / sf) - 0.5
+    xp, yp = np.meshgrid(ds * pts, ds * pts)
+    zp = np.zeros(xp.shape)
+
+    # rotate points to correct position using normal vector
+    # for now we will fix x, but lose generality
+    mat = euler_mat(*euler_angles)
+    result = mat.dot(np.concatenate((xp.ravel()[None, :], yp.ravel()[None, :], zp.ravel()[None, :]), axis=0))
+    xs, ys, zs = result
+
+    # now must add these to each point x, y, z
+    xx_s = x[..., None] + xs[None, ...]
+    yy_s = y[..., None] + ys[None, ...]
+    zz_s = z[..., None] + zs[None, ...]
+
+    return xx_s, yy_s, zz_s
+
+def euler_mat(phi, theta, psi):
+    """
+    Define our euler angles connecting the body frame to the space/lab frame by
+
+    r_lab = U_z(phi) * U_y(theta) * U_z(psi) * r_body
+
+    Consider the z-axis in the body frame. This axis is then orientated at [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
+    in the space frame. i.e. phi, theta are the usual polar angles. psi represents a rotation of the object about its own axis.
+
+    U_z(phi) = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
+    U_y(theta) = [[cos(theta), 0, sin(theta)], [0, 1, 0], [-sin(theta), 0, cos(theta)]]
+    """
+    euler_mat = np.array([[np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
+                          -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
+                           np.cos(phi) * np.sin(theta)],
+                          [np.sin(phi) * np.cos(theta) * np.cos(psi) + np.cos(phi) * np.sin(psi),
+                          -np.sin(phi) * np.cos(theta) * np.sin(psi) + np.cos(phi) * np.cos(psi),
+                           np.sin(phi) * np.sin(theta)],
+                          [-np.sin(theta) * np.cos(psi), np.sin(theta) * np.sin(psi), np.cos(theta)]])
+
+    return euler_mat
+
 # fitting functions
 def fit_cont_psfmodel(img, wavelength, ni, model='gaussian',
                       init_params=None, fixed_params=None, sd=None, xx=None, yy=None, zz=None, bounds=None):
     """
     Fit PSF functions not accounting for pixelation. i.e. the value of these functions is their value at the center
     of a given pixel.
+
     :param img: img to be fit
     :param wavelength: wavelength in um
     :param init_params: [A, cx, cy, cz, NA, bg]. If not set, will guess reasonable values. Can also use a mixture of
@@ -421,16 +553,10 @@ def fit_cont_psfmodel(img, wavelength, ni, model='gaussian',
     :param bounds: tuple of tuples. First tuple is lower bounds, second is upper bounds
     :param ni: index of refraction
     :param model: 'gaussian' for 'born-wolf'
-    :return:
-    """
 
-    # select fitting model
-    if model == 'gaussian':
-        model_fn = lambda x, y, z, p: gaussian3d_psf(x, y, z, p, wavelength, ni)
-    elif model == 'born-wolf':
-        model_fn = lambda x, y, z, p: born_wolf_psf(x, y, z, p, wavelength, ni)
-    else:
-        raise ValueError("model must be 'gaussian' or 'born-wolf' but was '%s'" % model)
+    :return results: dictionary of fit results
+    :return fit_fn: function returning PSF for arguments x, y, z
+    """
 
     # get default coordinates
     if xx is None or yy is None or zz is None:
@@ -469,17 +595,26 @@ def fit_cont_psfmodel(img, wavelength, ni, model='gaussian',
         bounds = ((0, xx.min(), yy.min(), zz.min(), 0, -np.inf),
                   (np.inf, xx.max(), yy.max(), zz.max(), ni, np.inf))
 
-    # fitting
-    result = fit.fit_model(img, lambda p: model_fn(xx, yy, zz, p), init_params,
-                             fixed_params=fixed_params, sd=sd, bounds=bounds)
+    # select fitting model and do fitting
+    if model == 'gaussian':
+        model_fn = lambda x, y, z, p: gaussian3d_psf(x, y, z, p, wavelength, ni)
+        jac_fn = lambda x, y, z, p: gaussian3d_psf_jac(x, y, z, p, wavelength, ni)
+
+        result = fit.fit_model(img, lambda p: model_fn(xx, yy, zz, p), init_params,
+                               fixed_params=fixed_params, sd=sd, bounds=bounds, model_jacobian=jac_fn)
+
+    elif model == 'born-wolf':
+        model_fn = lambda x, y, z, p: born_wolf_psf(x, y, z, p, wavelength, ni)
+
+        result = fit.fit_model(img, lambda p: model_fn(xx, yy, zz, p), init_params,
+                               fixed_params=fixed_params, sd=sd, bounds=bounds)
+    else:
+        raise ValueError("model must be 'gaussian' or 'born-wolf' but was '%s'" % model)
 
     # model function at fit parameters
     pfit = result['fit_params']
-    chi_sq = result['chi_squared']
-    cov = result['covariance']
     fit_fn = lambda x, y, z: model_fn(x, y, z, pfit)
 
-    #return pfit, fit_fn, chi_sq, cov
     return result, fit_fn
 
 def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
@@ -499,12 +634,13 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
     :param sd: standard deviations if img is derived from averaged pictures
     :param wavelength: wavelength in um
     :param model: 'gaussian', 'gibson-lanni', or 'vectorial'
+
     :return result:
     :return fit_fn:
     """
 
     # get coordinates
-    z, y, x = get_coords(img.shape, [dz, dxy, dxy])
+    z, y, x = get_psf_coords(img.shape, [dz, dxy, dxy])
 
     # check size
     nz, ny, nx = img.shape
@@ -558,21 +694,30 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
         bounds = ((0, x.min(), y.min(), zlow, 0, -np.inf),
                   (np.inf, x.max(), y.max(), zhigh, ni, np.inf))
 
-    # fit function
-    if model == 'vectorial' or model =='gibson-lanni' or model=='gaussian':
+    # do fitting
+    if model == "gaussian":
         model_fn = lambda z, nx, dxy, p: model_psf(nx, dxy, z, p, wavelength, ni, sf=sf, model=model)
+        result = fit.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
+                               fixed_params=fixed_params, sd=sd, bounds=bounds,
+                               model_jacobian= lambda p: gaussian3d_pixelated_psf_jac(nx, dxy, z, p, wavelength, ni, sf=sf))
+        # result = fit.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
+        #                        fixed_params=fixed_params, sd=sd, bounds=bounds, jac='3-point', x_scale='jac')
+
+    elif model == 'vectorial' or model =='gibson-lanni':
+        model_fn = lambda z, nx, dxy, p: model_psf(nx, dxy, z, p, wavelength, ni, sf=sf, model=model)
+
+        result = fit.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
+                               fixed_params=fixed_params, sd=sd, bounds=bounds, jac='3-point', x_scale='jac')
     else:
         raise ValueError("Model should be 'vectorial', 'gibson-lanni', or 'gaussian', but was '%s'" % model)
 
-    # fitting
-    result = fit.fit_model(img, lambda p: model_fn(z, nx, dxy, p), init_params,
-                             fixed_params=fixed_params, sd=sd, bounds=bounds, jac='3-point', x_scale='jac')
 
     # model function at fit parameters
     fit_fn = lambda z, nx, dxy: model_fn(z, nx, dxy, result['fit_params'])
 
     return result, fit_fn
 
+# localize using radial symmetry
 def localize2d(img, mode="radial-symmetry"):
     """
     Perform 2D localization using the radial symmetry approach of https://doi.org/10.1038/nmeth.2071
@@ -767,14 +912,14 @@ def localize3d(img, mode="radial-symmetry"):
     return xc, yc, zc
 
 # utility functions
-def get_coords(ns, drs):
+def get_psf_coords(ns, drs):
     """
-    Get centered coordinates from step size and number of coordinates
+    Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
     :param ns: list of number of points
     :param drs: list of step sizes
     :return coords: list of coordinates [[c1, c2, c3, ...], ...]
     """
-    return [d * (np.arange(n) - n //2) for n, d in zip(ns, drs)]
+    return [d * (np.arange(n) - n // 2) for n, d in zip(ns, drs)]
 
 def min_dist(pt, pts):
     """
@@ -808,7 +953,7 @@ def get_strehl_ratio(design_na, fit_na, wavelength, model='born-wolf'):
         psf_fit = psfm.vectorial_psf(0, nx, dx, wvl=wavelength, params={'NA': fit_na}, normalize=1)
     elif model == 'born-wolf':
         #x = dx * (np.arange(nx) - nx//2)
-        x = get_coords(nx, dx)
+        x = get_psf_coords(nx, dx)
         xx, yy = np.meshgrid(x, x)
         psf_design = airy_fn(xx, yy, [1, 0, 0, design_na, 0], wavelength=wavelength)[None, :, :]
         psf_fit = airy_fn(xx, yy, [1, 0, 0, fit_na, 0], wavelength=wavelength)[None, :, :]
@@ -862,7 +1007,7 @@ def plot_psf3d(imgs, dx, dz, wavelength, ni, fits,
 
     # get coordinates
     nz, ny, nx = imgs.shape
-    z, y, x, = get_coords([nz, ny, nx], [dz, dx, dx])
+    z, y, x, = get_psf_coords([nz, ny, nx], [dz, dx, dx])
 
     vmin = np.min([fp[5] - 0.1 * fp[0] for fp in fit_params])
     vmax = np.max([1.4 * fp[0] + vmin for fp in fit_params])
@@ -1075,7 +1220,7 @@ def get_exp_psf(imgs, dx, dz, fit_params, rois):
 
     # maximum z size
     nzroi = np.max([r[1] - r[0] for r in rois])
-    zpsf = get_coords([nzroi], [dz])[0]
+    zpsf = get_psf_coords([nzroi], [dz])[0]
     izero = np.argmin(np.abs(zpsf))
     if not np.abs(zpsf[izero]) < 1e-10:
         raise ValueError("z coordinates do not include zero")
@@ -1088,7 +1233,7 @@ def get_exp_psf(imgs, dx, dz, fit_params, rois):
 
         # get coordinates
         nz = img_roi.shape[0]
-        z, y, x = get_coords(img_roi.shape, [dz, dx, dx])
+        z, y, x = get_psf_coords(img_roi.shape, [dz, dx, dx])
         izero_shift = np.argmin(np.abs(z))
 
         # find closest z-plane
@@ -1163,7 +1308,7 @@ def export_psf_otf(imgs, dx, dz, wavelength, ni, rois, fit3ds, fit2ds, expected_
         nz, ny, nx = psf.shape
 
         # Fit to 2D PSFs
-        z, y, x = get_coords(psf.shape, [dz, dx, dx])
+        z, y, x = get_psf_coords(psf.shape, [dz, dx, dx])
         iz = np.argmin(np.abs(z))
         ixz = np.argmin(np.abs(x))
         psf2d = psf[iz]
@@ -1623,7 +1768,7 @@ def fit_roi(center, roi, dx, dz, wavelength, ni, sf, imgs, imgs_sd, model):
         sub_img_sd = None
 
     # get coordinates
-    z, y, x = get_coords(sub_img.shape, [dz, dx, dx])
+    z, y, x = get_psf_coords(sub_img.shape, [dz, dx, dx])
 
     # find z-plane closest to fit center and fit gaussian to get initial parameters for model fit
     c_roi = tools.full2roi(center, roi)
@@ -2020,7 +2165,7 @@ def compare_psfs_models(wavelength=0.635, na=1.35, ni=1.5, dxy=0.065, nx=51, dz=
 
     # get coordinates
     ny = nx
-    z, y, x = get_coords([nz, ny, nx], [dz, dxy, dxy])
+    z, y, x = get_psf_coords([nz, ny, nx], [dz, dxy, dxy])
     yy, zz, xx = np.meshgrid(y, z, x)
 
     # set parameters
@@ -2080,7 +2225,7 @@ def test_fits(wavelength=0.635, na=1.35, ni=1.5, dx=0.065, nx=19, dz=0.1, nz=11,
     p_gtruth = [375, 1.7 * dx, -1.8 * dx, 0.8 * dz, na, 120]
 
     # get coordinates
-    z, y, x = get_coords([nz, nx, nx], [dz, dx, dx])
+    z, y, x = get_psf_coords([nz, nx, nx], [dz, dx, dx])
     yy, zz, xx = np.meshgrid(y, z, x)
 
     # noise
