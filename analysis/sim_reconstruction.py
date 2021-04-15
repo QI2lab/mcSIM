@@ -288,9 +288,10 @@ def reconstruct_folder(data_root_paths, pixel_size, na, emission_wavelengths, ex
                                 os.mkdir(sim_diagnostics_path)
 
                         # find images and load them
-                        raw_imgs = tools.read_dataset(metadata, z_indices=aa, xy_indices=bb, time_indices=ii,
-                                           user_indices={"UserChannelIndex": channel_inds[kk],
-                                           "UserSimIndex": list(range(npatterns_ignored, npatterns_ignored + nangles * nphases))})
+                        raw_imgs = tools.read_dataset(metadata, time_indices=ii, z_indices=aa, xy_indices=bb,
+                                                      user_indices={"UserChannelIndex": channel_inds[kk],
+                                                                    "UserSimIndex": list(range(npatterns_ignored,
+                                                                                               npatterns_ignored + nangles * nphases))})
 
                         # error if we have wrong number of images
                         if np.shape(raw_imgs)[0] != (nangles * nphases):
