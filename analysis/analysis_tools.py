@@ -152,7 +152,7 @@ def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
 
     return image_metadata, dims, summary
 
-def read_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy_indices=None, user_indices={}, dtype=np.uint16):
+def read_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy_indices=None, user_indices={}):
     """
     Load a set of images from MicroManager metadata, read using parse_mm_metadata()
 
