@@ -742,6 +742,10 @@ def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
 
     # vector orthogonal to p
     # todo: this inverts x, as pvec[2] is usually negative in my convention...maybe better to change?
+    # todo: actually think this is not really the problem. The coordinate system I have been using for
+    # todo: the DMD has x and y as looking at DMD, and z into the DMD. This is a left-handed coordinate system
+    # todo: the pupil coordinate system is right handed, so will always have a flip
+    # todo: need to either adopt different coordinate system for DMD or pupil
     xp = np.array([pvec[2], 0, -pvec[0]]) / np.sqrt(pvec[0] ** 2 + pvec[2] ** 2)
     yp = np.cross(pvec, xp)
 
