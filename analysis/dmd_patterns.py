@@ -5,9 +5,6 @@ See the supplemental material of doi: 10.1038/nmeth.1734 for more discussion of 
 Note: we interpret the pattern params(x, y) = M[i_y, i_x], where M is the matrix representing the pattern. matplotlib
 will display the matrix with i_y = 1 on top, so the pattern we really want is the matrix flipped along the first
 dimension.
-
-# todo: some vectors and etc. in this are passed around as lists. Prefer to pass them around as arrays instead.
-# todo: maybe better to make a class for a pattern. This could store lattice vectors, unit cell, etc.
 """
 
 import os
@@ -52,6 +49,7 @@ def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
     return pattern, cell
 
 
+# tool for manipulating unit cells
 def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell, do_cell_reduction=True):
     """
     Generate SIM patterns using lattice periodicity vectors vec_a = [dxa, dya] and vec_b = [dxb, 0],
@@ -532,7 +530,7 @@ def show_cell(vec_a, vec_b, cell, x, y):
     extent = [x[0] - 0.5, x[-1] + 0.5, y[0] - 0.5, y[-1] + 0.5]
 
     fig = plt.figure()
-    plt.imshow(cell, extent=extent, origin='bottom')
+    plt.imshow(cell, extent=extent, origin='lower')
     ph, = plt.plot([0, vec_a[0]], [0, vec_a[1]], 'r')
     ph1, = plt.plot([0, vec_b[0]], [0, vec_b[1]], 'g')
     plt.plot([vec_b[0], vec_b[0] + vec_a[0]], [vec_b[1], vec_b[1] + vec_a[1]], 'r')
@@ -679,7 +677,7 @@ def get_sim_phase(vec_a, vec_b, nphases, phase_index, pattern_size, origin='fft'
     return np.mod(phase, 2*np.pi)
 
 
-def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
+def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, na, nb,
                                   nphases=3, phase_index=0, origin='fft', dmd_size=None):
     """
     Get fourier component at f = n * recp_vec_a + m * recp_vec_b.
@@ -691,8 +689,8 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
     :param list[int] or np.array y: y-coordinates of unit cell
     :param list[int] or np.array vec_a:
     :param list[int] or np.array vec_b:
-    :param int n: integer multiples of recp_vec_a
-    :param int m: integer multiples of recp_vec_b
+    :param int na: integer multiples of recp_vec_a
+    :param int nb: integer multiples of recp_vec_b
     :param int nphases: only relevant for calculating phase
     :param int phase_index: only relevant for calculating phase
     :param list[int] or np.array origin: "corner" or "fft". Specifies where the origin of the
@@ -703,7 +701,7 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
     """
 
     recp_vect_a, recp_vect_b = get_reciprocal_vects(vec_a, vec_b, mode='frequency')
-    frq_vector = n * recp_vect_a + m * recp_vect_b
+    frq_vector = na * recp_vect_a + nb * recp_vect_b
 
     # fourier component is integral over unit cell
     xxs, yys = np.meshgrid(x, y)
@@ -1272,16 +1270,6 @@ def reduce_recp_basis(va, vb):
     :return np.array rsb: reduced reciprocal vector b
 
     """
-    # todo: this this just equivalent to getting reciprocal vectors of the reduced basis vectors?
-    # rva, rvb = get_reciprocal_vects(va, vb)
-
-    # force integer coefficients. Since we know that can get reciprocal vectors from
-    # inverse of matrix of lattice vectors, they must have integer values divided by this determinant
-    # det = va[0] * vb[1] - va[1] * vb[0]
-    # rsa, rsb = reduce_basis(rva * det, rvb * det)
-    #
-    # rsa = rsa / det
-    # rsb = rsb / det
 
     va, vb = reduce_basis(va, vb)
     rsa, rsb = get_reciprocal_vects(va, vb)
@@ -1293,7 +1281,6 @@ def get_closest_lattice_vec(point, va, vb):
     """
     Find the closest lattice vector to point
 
-    todo: didn't absolutely verify this always gives closest vector
     :param list or np.array point:
     :param list or np.array va:
     :param list or np.array vb:
@@ -1550,9 +1537,6 @@ def find_closest_multicolor_set(period, nangles, nphases, wavelengths=None,
      NOTE: for achieving multicolor SIM with a DMD there is more to the story --- you must first find
      an input and output angle which match the diffraction output angles and satisfy the Blaze condition
      for both colors, which is no easy feat!
-
-     todo: maybe want to add argument to specify a certain tolerance for the angles/periods. Could at least throw an
-     error of these aren't met.
 
     :param float period: pattern period in mirrors. If using multiple colors, specify this for the shortest wavelength
     :param int nangles: number of angles
@@ -2302,6 +2286,77 @@ def export_all_pattern_sets(dmd_size, periods, nangles=3, nphases=3, wavelengths
 
 
 # export calibration patterns
+def aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, cref, csample, radius=20, phase_index=0):
+    """
+    Generate patterns to calibrate DMD aberrations using the approach of https://doi.org/10.1364/OE.24.013881
+
+    Each pattern contains two small patches of lattice. If we measure the interference of the beams diffracted from
+    the two patches, we can extract the surface profile of the DMD.
+
+    :param dmd_size: (nx, ny)
+    :param vec_a:
+    :param vec_b:
+    :param nphases: number of phase shifts allowed
+    :param cref: (cx, cy)
+    :param csample: (cx, cy)
+    :param radius: radius, must be an integer
+    :param phase_index:
+    :return:
+    """
+    if not isinstance(radius, int):
+        raise ValueError("radius must be an integer")
+
+    cref = np.array(cref, dtype=np.int)
+    csample = np.array(csample, dtype=np.int)
+    if csample.ndim == 1:
+        csample = np.expand_dims(csample, axis=0)
+
+    nx, ny = dmd_size
+    npatterns = csample.shape[0]
+    pattern = np.zeros((npatterns, ny, nx), dtype=np.bool)
+
+    # get patch
+    pattern_patch, _ = get_sim_pattern([2 * radius + 1, 2 * radius + 1], vec_a, vec_b, nphases, phase_index)
+    xx, yy = np.meshgrid(range(pattern_patch.shape[1]), range(pattern_patch.shape[0]))
+    xx = xx - xx.mean()
+    yy = yy - yy.mean()
+    pattern_patch[np.sqrt(xx**2 + yy**2) > radius] = 0
+
+    # two patches
+    for ii in range(npatterns):
+        pattern[ii, cref[1] - radius: cref[1] + radius + 1, cref[0] - radius: cref[0] + radius + 1] = pattern_patch
+        pattern[ii, csample[ii, 1] - radius: csample[ii, 1] + radius + 1, csample[ii, 0] - radius : csample[ii, 0] + radius + 1] = pattern_patch
+
+    return pattern
+
+def aberration_pattern_set(dmd_size, vec_a, vec_b, nphases, radius=20):
+    nx, ny = dmd_size
+    cref = (nx//2, ny//2)
+
+    np_half_vert = (ny // 2) // (2 * radius + 1)
+    np_half_horz = (nx // 2) // (2 * radius + 1)
+
+    cxs = np.arange(cref[0] - (2 * radius + 1) * np_half_horz, cref[0] + (2 * radius + 1) * np_half_horz, 2 * radius + 1)
+    if cxs[0] - (radius + 1) < 0:
+        cxs = cxs[1:]
+    if cxs[-1] + radius + 1 > nx:
+        cxs = cxs[:-1]
+
+    cys = np.arange(cref[1] - (2 * radius + 1) * np_half_vert, cref[1] + (2 * radius + 1) * np_half_vert, 2 * radius + 1)
+    if cys[0] - (radius + 1) < 0:
+        cys = cys[1:]
+    if cys[-1] + (radius + 1) > ny:
+        cys = cys[:-1]
+
+    cxcx, cycy = np.meshgrid(cxs, cys)
+    # exclude sample point at same position as reference point
+    to_use = np.logical_not(np.logical_and(cxcx == cref[0], cycy == cref[1]))
+
+    csample = np.concatenate((cxcx[to_use][:, None], cycy[to_use][:, None]), axis=1)
+    patterns = aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, cref, csample, radius, phase_index=0)
+
+    return patterns, csample, cref
+
 def checkerboard(dmd_size, n_on, n_off=None):
     """
     Create checkerboard pattern

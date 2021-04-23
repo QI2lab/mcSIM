@@ -1,16 +1,11 @@
 """
-Tools for simulating diffraction of digital mirror device (DMD)
+Tools for simulating diffraction from a digital micromirror device (DMD)
 """
-# from . import analysis_tools as tools
-import analysis_tools as tools
-
 import os
 import numpy as np
 import scipy.optimize
 import pickle
 import joblib
-from functools import partial
-
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.widgets
@@ -19,9 +14,14 @@ from matplotlib.patches import Circle
 
 # main simulation function and important auxiliary functions
 def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
-                 tx_in, ty_in, txs_out, tys_out, is_coherent=True):
+                 tx_in, ty_in, txs_out, tys_out, zshifts=None):
     """
-    Simulate plane wave diffracted from a digital mirror device (DMD). We assume that the body of the device is in the xy
+    Simulate plane wave diffracted from a digital mirror device (DMD) naively. In most cases this function is not
+    the most efficient to use! When working with SIM patterns it is much more efficient to rely on the tools found in
+    dmd_patterns
+
+
+    We assume that the body of the device is in the xy
     plane with the negative z- unit vector defining the plane's normal. We suppose the device has rectangular pixels with sides
     parallel to the x- and y-axes. We further suppose a given pixel (centered at (0,0))
     swivels about the vector n = [1, 1, 0]/sqrt(2) by angle gamma, i.e. the direction x-y is the most interesting one.
@@ -50,24 +50,10 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
     :param ty_in: input angle projected in the yz-plane (radians)
     :param txs_out: array of arbitrary size specifying output angles in the xz-plane
            to compute diffraction pattern at. Note the difference in how incoming and outgoing angles are defined.
-    :param tys_out: 
-    :param is_coherent: boolean. If True, treat light as coherent.
-    :return: 
-    """
+    :param tys_out:
 
-    # axis to rotate mirror about
-    # n = [1, 1, 0]/sqrt(2);
-    # rotation by angle gamma about unit vector (nx, ny, nz)
-    # Rn = @(gamma, nx, ny, nz)...
-    #     [nx^2 * (1-cos(gamma)) + cos(gamma),...
-    #     nx*ny * (1-cos(gamma)) - nz * sin(gamma),...
-    #     nx*nz * (1-cos(gamma)) + ny * sin(gamma);...
-    #     nx*ny * (1-cos(gamma)) + nz * sin(gamma),...
-    #     ny^2  * (1-cos(gamma)) + cos(gamma),...
-    #     ny*nz * (1-cos(gamma)) - nx * sin(gamma);...
-    #     nx*nz * (1-cos(gamma)) - ny * sin(gamma),...
-    #     ny*nz * (1-cos(gamma)) + nx * sin(gamma),...
-    #     nz^2 *  (1-cos(gamma)) + cos(gamma)];
+    :return efields, sinc_efield_on, sinc_efield_off, diffraction_efield:
+    """
 
     # check input arguments are sensible
     if not np.all(np.logical_or(pattern == 0, pattern == 1)):
@@ -79,6 +65,9 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
     if txs_out.size != tys_out.size:
         raise ValueError('txs_out and tys_out should be the same size')
 
+    if zshifts is None:
+        zshifts = np.zeros(pattern.shape)
+
     # k-vector for wavelength
     k = 2*np.pi/wavelength
 
@@ -86,7 +75,7 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
     mxmx, mymy = np.meshgrid(range(nx), range(ny))
 
     # difference between incoming and outgoing unit vectors in terms of angles (a-b)
-    amb_fn = lambda tx_a, ty_a, tx_b, ty_b: get_unit_vector(tx_a, ty_a, 'in') - get_unit_vector(tx_b, ty_b, 'out')
+    def amb_fn(tx_a, ty_a, tx_b, ty_b): return get_unit_vector(tx_a, ty_a, 'in') - get_unit_vector(tx_b, ty_b, 'out')
 
     # want to do integral
     #   \int ds dt exp[ ik Rn*(s,t,0) \cdot (a-b)]
@@ -97,44 +86,40 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
                     * sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, amb, 'minus'))
 
     # phases for each mirror
-    phase_fn = lambda mx, my, amb_x, amb_y: np.exp(1j * k * (dx * mx * amb_x + dy * my * amb_y))
+    # amb = (amb_x, amb_y, amb_z)
+    def phase_fn(amb): return np.exp(1j * k * (dx * mxmx * amb[0] + dy * mymy * amb[1] + zshifts * amb[2]))
 
-    # full e-field info
-    efields = np.zeros(tys_out.shape, dtype=np.complex)
-    # info from diffraction pattern (i.e. sum without mirror integral)
-    diffraction_efield = np.zeros(efields.shape, dtype=np.complex)
-    # info from mirror integral
-    sinc_efield_on = np.zeros(efields.shape, dtype=np.complex)
-    sinc_efield_off = np.zeros(efields.shape, dtype=np.complex)
-
-    # loop over arbitrary sized array using single index.
-    for ii in range(tys_out.size):
-        ii_subs = np.unravel_index(ii, tys_out.shape)
-
+    def calc_output_angle(tx_out, ty_out):
         # incoming minus outgoing unit vectors
-        amb = amb_fn(tx_in, ty_in, txs_out[ii_subs], tys_out[ii_subs])
+        amb = amb_fn(tx_in, ty_in, tx_out, ty_out)
         amb = amb[0]
 
         # get envelope functions for ON and OFF states
-        sinc_efield_on[ii_subs] = mirror_int_fn(gamma_on, amb)
-        sinc_efield_off[ii_subs] = mirror_int_fn(gamma_off, amb)
+        sinc_efield_on = mirror_int_fn(gamma_on, amb)
+        sinc_efield_off = mirror_int_fn(gamma_off, amb)
 
         # phases for each pixel
-        phases = phase_fn(mxmx, mymy, amb[0], amb[1])
+        phases = phase_fn(amb)
+        diffraction_efield = np.sum(phases)
 
+        # multiply by blaze envlope to get full efield
         mask_phases = np.zeros((ny, nx), dtype=np.complex)
-        mask_phases[pattern == 0] = sinc_efield_off[ii_subs]
-        mask_phases[pattern == 1] = sinc_efield_on[ii_subs]
+        mask_phases[pattern == 0] = sinc_efield_off
+        mask_phases[pattern == 1] = sinc_efield_on
         mask_phases = mask_phases * phases
 
-        # coherent case: add electric fields
-        # incoherent case: add intensities
-        if is_coherent:
-            efields[ii_subs] = np.sum(mask_phases)
-            diffraction_efield[ii_subs] = np.sum(phases)
-        else:
-            efields[ii_subs] = np.sqrt(np.sum(abs(mask_phases)**2))
-            diffraction_efield[ii_subs] = np.sqrt(np.sum(abs(phases)**2))
+        efields = np.sum(mask_phases)
+
+        return efields, sinc_efield_on, sinc_efield_off, diffraction_efield
+
+    results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
+        joblib.delayed(calc_output_angle)(tx, ty) for tx, ty in zip(txs_out.ravel(), tys_out.ravel())
+    )
+    efields, sinc_efield_on, sinc_efield_off, diffraction_efield = zip(*results)
+    efields = np.asarray(efields).reshape(txs_out.shape)
+    sinc_efield_on = np.asarray(sinc_efield_on).reshape(txs_out.shape)
+    sinc_efield_off = np.asarray(sinc_efield_off).reshape(txs_out.shape)
+    diffraction_efield = np.asarray(diffraction_efield).reshape(txs_out.shape)
 
     return efields, sinc_efield_on, sinc_efield_off, diffraction_efield
 
@@ -208,6 +193,12 @@ def sinc_fn(x):
 
 #
 def get_rot_mat(n_vec, gamma):
+    """
+
+    :param n_vec:
+    :param gamma:
+    :return:
+    """
     nx, ny, nz = n_vec
     mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma))- nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
                     [nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma), ny**2 * (1 - np.cos(gamma)) + np.cos(gamma), ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma)],
@@ -216,12 +207,38 @@ def get_rot_mat(n_vec, gamma):
 
 # convert between xyz and 123 coords
 def xyz2mirror(vx, vy, vz, gamma):
+    """
+    Convert vector with components vx, vy, vz to v1, v2, v3.
+
+    The unit vectors ex, ey, ez are defined along the axes of the DMD body,
+    where as the unit vectors e1, e2, e3 are given by
+    e1 = (ex - ey) / sqrt(2) * cos(gamma) - ez * sin(gamma)
+    e2 = (ex + ey) / sqrt(2)
+    e3 = (ex - ey) / sqrt(2) sin(gamma) + ez * cos(gamma)
+    which are convenient because e1 points along the direction the micromirrors swivel and
+    e3 is normal to the DMD micrmirrors
+
+    :param vx:
+    :param vy:
+    :param vz:
+    :param gamma:
+    :return: v1, v2, v3
+    """
     v1 = np.cos(gamma) / np.sqrt(2) * (vx - vy) - np.sin(gamma) * vz
     v2 = 1 / np.sqrt(2) * (vx + vy)
     v3 = np.sin(gamma) / np.sqrt(2) * (vx - vy) + np.cos(gamma) * vz
     return v1, v2, v3
 
 def mirror2xyz(v1, v2, v3, gamma):
+    """
+    Inverse function for xyz2mirror()
+
+    :param v1:
+    :param v2:
+    :param v3:
+    :param gamma:
+    :return:
+    """
     vx = np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 + np.sin(gamma) / np.sqrt(2) * v3
     vy = -np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 - np.sin(gamma) / np.sqrt(2) * v3
     vz = -np.sin(gamma) * v1 + np.cos(gamma) * v3
@@ -421,25 +438,6 @@ def solve_max_diffraction_order(wavelength, d, gamma):
     """
 
     # # solution for maximum order
-    # theta_a_opt = np.arctan( (np.cos(2*gamma) - 1) / np.sin(2*gamma))
-    #
-    # # this should = sqrt(2) * lambda / d * n when diffraction condition is satisfied
-    # f = lambda t: np.sin(t) - np.sin(t - 2*gamma)
-    #
-    # # must also check end points for possible extrema
-    # # ts in range [-np.pi/2 np.pi/2]
-    # if gamma > 0:
-    #     fopts = [f(-np.pi/2 + 2*gamma), f(np.pi/2), f(theta_a_opt)]
-    # elif gamma <= 0:
-    #     fopts = [f(-np.pi / 2), f(np.pi / 2 + 2*gamma), f(theta_a_opt)]
-    #
-    # # find actually extrema
-    # fmin = np.min(fopts)
-    # fmax = np.max(fopts)
-    #
-    # nmax = np.floor(fmax * d / np.sqrt(2) / wavelength)
-    # nmin = np.ceil(fmin * d / np.sqrt(2) / wavelength)
-
     if gamma > 0:
         nmax = int(np.floor(d / wavelength * np.sqrt(2) * np.sin(gamma)))
         nmin = 1
@@ -703,13 +701,20 @@ def solve_combined_onoff(d, gamma_on, wavelength_on, n_on, wavelength_off, n_off
 
 # pupil mapping
 def get_pupil_basis(b):
+    """
+    Get basis vectors for pupil coordinates
+
+    :param b: unit vector defining pupil axis
+    :return xb, yb:
+    """
+
+    # todo: this inverts x, as pvec[2] is usually negative in my convention...maybe better to change?
+    # todo: actually think this is not really the problem. The coordinate system I have been using for
+    # todo: the DMD has x and y as looking at DMD, and z into the DMD. This is a left-handed coordinate system
+    # todo: the pupil coordinate system is right handed, so will always have a flip
+    # todo: need to either adopt different coordinate system for DMD or pupil
     xb = np.array([b[2], 0, -b[0]]) / np.sqrt(b[0]**2 + b[2]**2)
     yb = np.cross(b, xb)
-    # xb = -np.array([1 - 0.5 * b[0]**2, -0.5 * b[0] * b[1], -0.5 * b[0] * (1/b[2] + b[2])])
-    # xb = xb / np.linalg.norm(xb)
-    #
-    # yb = -np.array([-0.5 * b[0] * b[1], 1 - 0.5 * b[1]**2, -0.5 * b[1] * (1/b[2] + b[2])])
-    # yb = yb / np.linalg.norm(yb)
 
     return xb, yb
 
@@ -740,10 +745,10 @@ def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
 
     bf_xs, bf_ys, bf_zs = get_diffracted_output_uvect(bvec, fx, fy, wavelength, dx, dy)
 
-    # vector orthogonal to p
-    # todo: this inverts x, as pvec[2] is usually negative in my convention...maybe better to change?
-    xp = np.array([pvec[2], 0, -pvec[0]]) / np.sqrt(pvec[0] ** 2 + pvec[2] ** 2)
-    yp = np.cross(pvec, xp)
+    # pupil basis
+    xp, yp = get_pupil_basis(pvec)
+    # xp = np.array([pvec[2], 0, -pvec[0]]) / np.sqrt(pvec[0] ** 2 + pvec[2] ** 2)
+    # yp = np.cross(pvec, xp)
 
     # convert bfs to these coordinates
     bf_xp = bf_xs * xp[0] + bf_ys * xp[1] + bf_zs * xp[2]
@@ -753,8 +758,18 @@ def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
     return bf_xp, bf_yp, bf_p
 
 def get_diffracted_output_uvect(bvec, fx, fy, wavelength, dx, dy):
-    # bfx = bvec[0] - wavelength / dx * fx
-    # bfy = bvec[1] - wavelength / dy * fy
+    """
+    Get output unit vectors for diffracted orders with frequencies fx, fy where assume the fx=fy=0 order is diffracted
+    along bvec
+
+    :param bvec: DC component output direction
+    :param fx: 1/mirror
+    :param fy: 1/mirror
+    :param wavelength:
+    :param dx:
+    :param dy:
+    :return:
+    """
     bfx = bvec[0] + wavelength / dx * fx
     bfy = bvec[1] + wavelength / dy * fy
     bfz = -np.sqrt(1 - bfx**2 - bfy**2)
@@ -832,8 +847,6 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
     tx_ins, ty_ins = angle2xy(0, t45_ins)
 
     # blaze condition
-    # t45s_blaze_on = solve_blaze_condition_1d(t45_ins, gamma_on)
-    # t45s_blaze_off = solve_blaze_condition_1d(t45_ins, gamma_off)
     _, t45s_blaze_on = solve_blaze(np.zeros(t45_ins.shape), t45_ins, gamma_on)
     _, t45s_blaze_off = solve_blaze(np.zeros(t45_ins.shape), t45_ins, gamma_off)
 
@@ -865,7 +878,7 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
         for ii in range(n_wavelens):
             efields[kk, :, ii], sinc_efield_on[kk, :, ii], sinc_efield_off[kk, :, ii], diffraction_efield[kk, :, ii] \
              = simulate_dmd(pattern, wavelengths[ii], gamma_on, gamma_off, dx, dy, wx, wy,
-                            tx_ins[kk], ty_ins[kk], txs_out[kk], tys_out[kk], is_coherent=True)
+                            tx_ins[kk], ty_ins[kk], txs_out[kk], tys_out[kk])
 
             # get diffraction orders. Orders we want are along the antidiagonal
             # diff_tx_out, diff_ty_out, diff_nx, diff_ny = \
@@ -877,11 +890,6 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
                                                                             wavelengths[ii], (nxs[aa], nys[aa]))
             # convert back to 1D angle
             _, diff_t45_out[kk, ii] = angle2pm(diff_tx_out, diff_ty_out)
-
-        # intensity = np.abs(efields[kk])**2
-        # sinc_int_on = np.abs(sinc_efield_on[kk])**2
-        # sinc_int_off = np.abs(sinc_efield_off[kk])**2
-        # diffraction_int = np.abs(diffraction_efield[kk])**2
 
     data = {'pattern': pattern, 'wavelengths': wavelengths,
             'gamma_on': gamma_on, 'gamma_off': gamma_off,
@@ -911,8 +919,6 @@ def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_s
 
     # save data
     if saving:
-        # unique path
-        save_dir = tools.get_unique_name(save_dir, mode='dir')
         # unique file name
         fname = os.path.join(save_dir, 'simulation_data.pkl')
         with open(fname, 'wb') as f:
@@ -1069,7 +1075,6 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
     """
     Simulate light incident on a DMD to determine output diffraction pattern. See simulate_dmd() for more information.
 
-    The output angles are simulated in parallel using joblib, but there is no parallelization for input angles/wavelengths.
     Generally one wants to simulate many output angles but only a few input angles/wavelengths.
 
     :param pattern:
@@ -1127,8 +1132,6 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
     ndiff_orders = 7
     diff_tx_out = np.zeros((n_wavelens, len(ty_in), len(tx_in), 2*ndiff_orders + 1, 2*ndiff_orders + 1))
     diff_ty_out = np.zeros((n_wavelens, len(ty_in), len(tx_in), 2*ndiff_orders + 1, 2*ndiff_orders + 1))
-    # diff_nx = np.zeros((2*ndiff_orders + 1, 2*ndiff_orders + 1))
-    # diff_ny = np.zeros((2*ndiff_orders + 1, 2*ndiff_orders + 1))
     diff_nx, diff_ny = np.meshgrid(range(-ndiff_orders, ndiff_orders + 1), range(-ndiff_orders, ndiff_orders + 1))
 
     for ii in range(len(ty_in)):
@@ -1148,27 +1151,10 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
                 tx_out[ii, jj], ty_out[ii, jj] = np.meshgrid(tx_blaze_on[ii, jj] + tout_offsets,
                                                              ty_blaze_on[ii, jj] + tout_offsets)
 
-                # simulate output angles in parallel
-                simulate_partial = partial(simulate_dmd, pattern=pattern, wavelength=wavelengths[kk], gamma_on=gamma_on,
-                                           gamma_off=gamma_off, dx=dx, dy=dy, wx=wx, wy=wy,
-                                           tx_in=txtx_in[ii, jj], ty_in=tyty_in[ii, jj], is_coherent=1)
-
-                results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
-                    joblib.delayed(simulate_partial)(txs_out=tx, tys_out=ty) for tx, ty in
-                    zip(tx_out[ii, jj].ravel(), ty_out[ii, jj].ravel())
-                )
-
-                ef, sinc_ef_on, sinc_ef_off, diff_ef = zip(*results)
-                efields[kk, ii, jj] = np.reshape(ef, tx_out.shape)
-                sinc_efield_on[kk, ii, jj] = np.reshape(sinc_ef_on, tx_out.shape)
-                sinc_efield_off[kk, ii, jj] = np.reshape(sinc_ef_off, tx_out.shape)
-                diffraction_efield[kk, ii, jj] = np.reshape(diff_ef, tx_out.shape)
-
-                # efields[kk, ii, jj], sinc_efield_on[kk, ii, jj],\
-                # sinc_efield_off[kk, ii, jj], diffraction_efield[kk, ii, jj] = \
-                #     simulate_dmd(pattern, wavelengths[kk], gamma_on, gamma_off, dx, dy, wx, wy,
-                #                  txtx_in[ii, jj], tyty_in[ii, jj],
-                #                  tx_out[ii, jj], ty_out[ii, jj], is_coherent=1)
+                efields[kk, ii, jj], sinc_efield_on[kk, ii, jj],\
+                sinc_efield_off[kk, ii, jj], diffraction_efield[kk, ii, jj] = \
+                    simulate_dmd(pattern, wavelengths[kk], gamma_on, gamma_off, dx, dy, wx, wy, txtx_in[ii, jj], tyty_in[ii, jj],
+                                 tx_out[ii, jj], ty_out[ii, jj])
 
     data = {'tx_ins': tx_in, 'ty_ins': ty_in,
             'tx_blaze_on': tx_blaze_on, 'ty_blaze_on': ty_blaze_on,
@@ -1256,8 +1242,8 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
                 dtout = tx_out[ii, jj, 0, 1] - tx_out[ii, jj, 0, 0]
                 extent = [(tx_out[ii, jj].min() - 0.5 * dtout) * 180/np.pi,
                           (tx_out[ii, jj].max() + 0.5 * dtout) * 180/np.pi,
-                          (ty_out[ii, jj].max() + 0.5 * dtout) * 180/np.pi,
-                          (ty_out[ii, jj].min() - 0.5 * dtout) * 180/np.pi]
+                          (ty_out[ii, jj].min() - 0.5 * dtout) * 180/np.pi,
+                          (ty_out[ii, jj].max() + 0.5 * dtout) * 180/np.pi]
 
                 fig = plt.figure(figsize=figsize)
                 fname = 'tx_in=%0.2f_ty_in=%0.2f_wl=%dnm.png' % (tx_in[jj], ty_in[ii], int(wavelengths[kk] * 1e9))
@@ -1273,7 +1259,7 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
                 ax = plt.subplot(nrows, ncols, 1)
                 # plt.imshow(intensity[kk, ii, jj] / intensity[kk, ii, jj].max(), extent=extent, norm=PowerNorm(gamma=gamma))
                 plt.imshow(intensity[kk, ii, jj] / (dx*dy*nx*ny)**2, extent=extent,
-                           norm=PowerNorm(gamma=gamma))
+                           norm=PowerNorm(gamma=gamma), origin="lower")
                 # get xlim and ylim, we will want to keep these...
                 xlim = ax.get_xlim()
                 ylim = ax.get_ylim()
@@ -1304,7 +1290,7 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
                 # sinc envelopes from pixels
                 ax = plt.subplot(nrows, ncols, 2)
                 int_sinc = np.abs(sinc_on[kk, ii, jj]) ** 2
-                plt.imshow(int_sinc / (wx*wy)**2, extent=extent, norm=PowerNorm(gamma=gamma))
+                plt.imshow(int_sinc / (wx*wy)**2, extent=extent, norm=PowerNorm(gamma=gamma), origin="lower")
                 xlim = ax.get_xlim()
                 ylim = ax.get_ylim()
 
@@ -1332,7 +1318,7 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
 
                 # diffraction patterns
                 ax = plt.subplot(nrows, ncols, 3)
-                plt.imshow(np.abs(diff[kk, ii, jj]) ** 2, extent=extent, norm=PowerNorm(gamma=gamma))
+                plt.imshow(np.abs(diff[kk, ii, jj]) ** 2, extent=extent, norm=PowerNorm(gamma=gamma), origin="lower")
                 xlim = ax.get_xlim()
                 ylim = ax.get_ylim()
 
@@ -1360,7 +1346,7 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
                 plt.title('diffraction pattern')
 
                 plt.subplot(nrows, ncols, 4)
-                plt.imshow(pattern)
+                plt.imshow(pattern, origin="lower")
                 plt.title('DMD pattern')
 
                 # xy cuts
@@ -1587,4 +1573,3 @@ def display_2d(wavelengths, gamma, dx, max_diff_order=7, colors=None, angle_incr
     plt.show()
 
     return figh
-
