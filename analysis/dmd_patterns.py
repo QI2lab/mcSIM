@@ -532,7 +532,7 @@ def show_cell(vec_a, vec_b, cell, x, y):
     extent = [x[0] - 0.5, x[-1] + 0.5, y[0] - 0.5, y[-1] + 0.5]
 
     fig = plt.figure()
-    plt.imshow(cell, extent=extent, origin='bottom')
+    plt.imshow(cell, extent=extent, origin='lower')
     ph, = plt.plot([0, vec_a[0]], [0, vec_a[1]], 'r')
     ph1, = plt.plot([0, vec_b[0]], [0, vec_b[1]], 'g')
     plt.plot([vec_b[0], vec_b[0] + vec_a[0]], [vec_b[1], vec_b[1] + vec_a[1]], 'r')
