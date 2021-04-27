@@ -1721,24 +1721,26 @@ def find_beads(imgs, imgs_sd=None, roi_size_pix=(1, 1, 1), min_distance_to_keep=
     # ##############################
     # find sets of peaks so close together probably fitting the same peak. Only keep one each
     # ##############################
-    _, inds_to_keep = combine_nearby_beads(centers, max_sep_assume_one_peak, max_sep_assume_one_peak, mode="keep-one")
-    centers = centers[inds_to_keep]
-    rois = rois[inds_to_keep]
-    fitp = fitp[inds_to_keep]
-    results = [results[ii] for ii in inds_to_keep]
+    if len(centers) > 1:
+        _, inds_to_keep = combine_nearby_beads(centers, max_sep_assume_one_peak, max_sep_assume_one_peak, mode="keep-one")
+        centers = centers[inds_to_keep]
+        rois = rois[inds_to_keep]
+        fitp = fitp[inds_to_keep]
+        results = [results[ii] for ii in inds_to_keep]
 
     print("%d points remain after removing likely duplicates" % len(centers))
 
     # ##############################
     # discards points too close together (only look at 2D distance)
     # ##############################
-    min_dists = np.array([min_dist(c[1:], centers[:, 1:]) for c in centers])
-    dists_ok = min_dists > min_distance_to_keep
+    if len(centers) > 1:
+        min_dists = np.array([min_dist(c[1:], centers[:, 1:]) for c in centers])
+        dists_ok = min_dists > min_distance_to_keep
 
-    rois = rois[dists_ok]
-    centers = centers[dists_ok]
-    fitp = fitp[dists_ok]
-    results = [r for r, keep in zip(results, dists_ok) if keep]
+        rois = rois[dists_ok]
+        centers = centers[dists_ok]
+        fitp = fitp[dists_ok]
+        results = [r for r, keep in zip(results, dists_ok) if keep]
 
     print("%d candidates separated by > %0.2f pix" % (len(centers), min_distance_to_keep))
 
@@ -2083,7 +2085,7 @@ def plot_fit_stats(fit3ds, fit2ds, figsize, **kwargs):
     return figh
 
 def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_labels=None, weights=None,
-                        cbar_labels=None, **kwargs):
+                        cbar_labels=None, vlims_percentile=(0.01, 99.99), **kwargs):
     """
     Plot center locations on 2D image or max projection of 3D image
 
@@ -2128,8 +2130,8 @@ def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_l
     plt.suptitle(title)
 
     # plot image
-    vmin = np.percentile(img_max_proj, 0.1)
-    vmax = np.percentile(img_max_proj, 99.99)
+    vmin = np.percentile(img_max_proj, vlims_percentile[0])
+    vmax = np.percentile(img_max_proj, vlims_percentile[1])
 
     plt.imshow(img_max_proj, vmin=vmin, vmax=vmax, cmap=plt.cm.get_cmap("bone"))
 

@@ -1724,15 +1724,19 @@ def correct_modulation_for_bead_size(bead_radii, frqs):
     # consider cosine in x-direction and spherical fluorescent object. Can divide in circles in the YZ plane, with radius
     # sqrt(R^2 - x^2), so we need to do the integral
     # \int_{-R}^R pi * (R^2 - x^2) * 0.5 * (1 + cos(2*pi*f*x + phi))
-    def integrated(r, u, f, phi): return -np.pi / (2 * np.pi * f) ** 3 * \
-                (np.cos(phi) * ((u ** 2 - 2) * np.sin(u) + 2 * u * np.cos(u)) -
-                 np.sin(phi) * ((2 - u ** 2) * np.cos(u) + 2 * u * np.sin(u))) + \
-                 np.pi * r ** 2 / (2 * np.pi * f) * (np.cos(phi) * np.sin(u) + np.sin(phi) * np.cos(u))
-
-    def full_int(r, f, phi): return 1 + \
-                                    (integrated(r, 2 * np.pi * f * r, f, phi) - \
-                                    integrated(r, -2 * np.pi * f * r, f, phi)) / \
-                                    (4 / 3 * np.pi * r ** 3)
+    # def integrated(r, u, f, phi): return -np.pi / (2 * np.pi * f) ** 3 * \
+    #             (np.cos(phi) * ((u ** 2 - 2) * np.sin(u) + 2 * u * np.cos(u)) -
+    #              np.sin(phi) * ((2 - u ** 2) * np.cos(u) + 2 * u * np.sin(u))) + \
+    #              np.pi * r ** 2 / (2 * np.pi * f) * (np.cos(phi) * np.sin(u) + np.sin(phi) * np.cos(u))
+    #
+    # def full_int(r, f, phi): return 1 + \
+    #                                 (integrated(r, 2 * np.pi * f * r, f, phi) - \
+    #                                 integrated(r, -2 * np.pi * f * r, f, phi)) / \
+    #                                 (4 / 3 * np.pi * r ** 3)
+    
+    def full_int(r, f, phi):
+        u = 2 * np.pi * r * f
+        return 1 + 3 / u**3 * (np.sin(u) - u * np.cos(u)) * np.cos(phi)
 
     phis = np.array([0, 2 * np.pi / 3, 4 * np.pi / 3])
     vals = np.zeros(3)
