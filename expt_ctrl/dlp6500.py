@@ -1,19 +1,19 @@
 """
-Control of Light Crafter 6500DLP evaluation module.
+Control Light Crafter 6500DLP evaluation module over USB.
 
 Based on refactoring Anton Mazurenko's code, which is available at https://github.com/mazurenko/Lightcrafter6500DMDControl
 This code is written in python3, and is compatible with windows. The github code is written in python2 and did not run
 on windows (based on my limiting testing, although it is clearly intended to run on either windows or linux. I'm guessing
 it was actually run on linux and not tested on windows?)
 
-combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycrafter6500.
+The combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycrafter6500.
 
-TODO: would love to use the SDK, http://www.ti.com/tool/DLP-ALC-LIGHTCRAFTER-SDK, not very well document, and produces
-static library, not dll so can't easily use with ctypes.
+TODO: would love to use the SDK (http://www.ti.com/tool/DLP-ALC-LIGHTCRAFTER-SDK) but it is not very well document,
+ and it produces a static library, not dll so can't use with ctypes.
 """
 import pywinusb.hid as pyhid
-import struct
 import time
+import struct
 import numpy as np
 import copy
 
@@ -34,10 +34,10 @@ def combine_patterns(patterns, bit_depth=1):
 
     # todo: don't know if there is a pattern combination for other bit depths?
     if bit_depth != 1:
-        raise Exception('not implemented')
+        raise NotImplementedError('not implemented')
 
     if not np.all(np.logical_or(patterns == 0, patterns == 1)):
-        raise Exception('patterns must be binary')
+        raise ValueError('patterns must be binary')
 
     combined_patterns = []
 
@@ -101,7 +101,7 @@ def encode_erle(pattern):
 
     # pattern must be uint8
     if pattern.dtype != np.uint8:
-        raise Exception('pattern must be of type uint8')
+        raise ValueError('pattern must be of type uint8')
 
     # if 2D pattern, expand this to RGB with pattern in B layer and RG=0
     if pattern.ndim == 2:
@@ -110,7 +110,7 @@ def encode_erle(pattern):
                                   np.array(pattern[None, :, :], copy=True)), axis=0)
 
     if pattern.ndim != 3 and pattern.shape[0] != 3:
-        raise Exception("Image data is wrong shape. Must be 3 x ny x nx, with RGB values in each layer.")
+        raise ValueError("Image data is wrong shape. Must be 3 x ny x nx, with RGB values in each layer.")
 
     pattern_compressed = []
     _, ny, nx = pattern.shape
@@ -187,7 +187,7 @@ def encode_rle(pattern):
     """
     # pattern must be uint8
     if pattern.dtype != np.uint8:
-        raise Exception('pattern must be of type uint8')
+        raise ValueError('pattern must be of type uint8')
 
     # if 2D pattern, expand this to RGB with pattern in B layer and RG=0
     if pattern.ndim == 2:
@@ -196,7 +196,7 @@ def encode_rle(pattern):
                                   np.array(pattern[None, :, :], copy=True)), axis=0)
 
     if pattern.ndim != 3 and pattern.shape[0] != 3:
-        raise Exception("Image data is wrong shape. Must be 3 x ny x nx, with RGB values in each layer.")
+        raise ValueError("Image data is wrong shape. Must be 3 x ny x nx, with RGB values in each layer.")
 
     pattern_compressed = []
     _, ny, nx = pattern.shape
@@ -270,14 +270,14 @@ def decode_erle(dmd_size, pattern_bytes):
             line_pos = 0
             line_no += 1
         elif line_pos >= dmd_size[1]:
-            raise Exception("While reading line %d, length of line exceeded expected value" % line_no)
+            raise ValueError("While reading line %d, length of line exceeded expected value" % line_no)
 
         # end of image denoted by single 0x00 byte
         if ii == len(pattern_bytes) - 1:
             if pattern_bytes[ii] == 0:
                 break
             else:
-                raise Exception('Image not terminated with 0x00')
+                raise ValueError('Image not terminated with 0x00')
 
         # control byte of zero indicates special response
         if pattern_bytes[ii] == 0:
@@ -360,13 +360,13 @@ def erle_len2bytes(length):
         if length.is_integer():
             length = int(length)
         else:
-            raise Exception('length must be convertible to integer.')
+            raise TypeError('length must be convertible to integer.')
 
     # if not isinstance(length, int):
     #     raise Exception('length must be an integer')
 
     if length < 0 or length > 2 ** 15 - 1:
-        raise Exception('length is negative or too large to be encoded.')
+        raise ValueError('length is negative or too large to be encoded.')
 
     # main function
     if length < 128:
@@ -407,6 +407,7 @@ class dlp6500():
     Base class for communicating with DLP6500
     """
 
+    # tried to match with the DLP6500 GUI names where possible
     command_dict = {'PAT_START_STOP': 0x1A24,
                     'DISP_MODE': 0x1A1B,
                     'MBOX_DATA': 0x1A34,
@@ -549,7 +550,7 @@ class dlp6500():
         elif rw_mode == 'w':
             flagstring += '0'
         else:
-            raise Exception("flagstring should be 'r' or 'w' but was '%s'" % flagstring)
+            raise ValueError("flagstring should be 'r' or 'w' but was '%s'" % flagstring)
 
         # second bit is reply
         if reply:
@@ -626,7 +627,7 @@ class dlp6500():
             cmd = None
             data = buffer[1:]
         else:
-            raise Exception("mode must be 'first-packet' or 'nth-packet', but was '%s'" % mode)
+            raise ValueError("mode must be 'first-packet' or 'nth-packet', but was '%s'" % mode)
 
         return flag_byte, sequence_byte, data_len, cmd, data
 
@@ -813,7 +814,7 @@ class dlp6500():
         elif dmd_type_flag == 2:
             dmd_type = 'DLP9000'
         else:
-            raise Exception("Unknown DMD type index %d. Expected 1 or 2", dmd_type_flag)
+            raise ValueError("Unknown DMD type index %d. Expected 1 or 2", dmd_type_flag)
 
         # in principle could receive two packets. TODO: handle that case
         firmware_tag = ''
@@ -839,10 +840,10 @@ class dlp6500():
         """
 
         if rising_edge_delay_us < -20 or rising_edge_delay_us > 20e3:
-            raise Exception('rising edge delay must be in range -20 -- 20000us')
+            raise ValueError('rising edge delay must be in range -20 -- 20000us')
 
         if falling_edge_delay_us < -20 or falling_edge_delay_us > 20e3:
-            raise Exception('falling edge delay must be in range -20 -- 20000us')
+            raise ValueError('falling edge delay must be in range -20 -- 20000us')
 
         if invert:
             assert rising_edge_delay_us >= falling_edge_delay_us
@@ -858,7 +859,7 @@ class dlp6500():
         elif trigger_number == 2:
             resp = self.send_command('w', True, 0x1A1E, data)[0]
         else:
-            raise Exception('trigger_number must be 1 or 2')
+            raise ValueError('trigger_number must be 1 or 2')
 
         return resp
 
@@ -888,7 +889,7 @@ class dlp6500():
         """
 
         if delay_us < 104:
-            raise Exception('delay time must be 105us or longer.')
+            raise ValueError('delay time must be 105us or longer.')
 
         # todo: is this supposed to be a signed or unsigned integer.
         delay_byte = list(struct.unpack('BB', struct.pack('<H', delay_us)))
@@ -898,7 +899,7 @@ class dlp6500():
         elif edge_to_advance == 'falling':
             advance_byte = [0x01]
         else:
-            raise Exception("edge_to_advance must be 'rising' or 'falling', but was '%s'" % edge_to_advance)
+            raise ValueError("edge_to_advance must be 'rising' or 'falling', but was '%s'" % edge_to_advance)
 
         return self.send_command('w', True, 0x1A35, delay_byte + advance_byte)
 
@@ -925,7 +926,7 @@ class dlp6500():
         elif edge_to_start == 'falling':
             start_byte = [0x01]
         else:
-            raise Exception("edge_to_start must be 'rising' or 'falling', but was '%s'" % edge_to_start)
+            raise ValueError("edge_to_start must be 'rising' or 'falling', but was '%s'" % edge_to_start)
 
         return self.send_command('w', False, 0x1A36, start_byte)
 
@@ -947,7 +948,7 @@ class dlp6500():
         elif mode == 'on-the-fly':
             data = [0x03]
         else:
-            raise Exception("mode '%s' is not allowed" % mode)
+            raise ValueError("mode '%s' is not allowed" % mode)
 
         return self.send_command('w', True, 0x1A1B, data)
 
@@ -969,7 +970,7 @@ class dlp6500():
             data = [0x01]
             seq_byte = 0x00 # todo: check this from packet sniffer
         else:
-            raise Exception("cmd must be 'start', 'stop', or 'pause', but was '%s'" % cmd)
+            raise ValueError("cmd must be 'start', 'stop', or 'pause', but was '%s'" % cmd)
 
         return self.send_command('w', False, 0x1A24, data, sequence_byte=seq_byte)
 
@@ -1038,7 +1039,7 @@ class dlp6500():
 
         # next three bits give bit depth, integer 1 = 000, ..., 8 = 111
         if bit_depth != 1:
-            raise Exception('bit_depths other than 1 not implemented.')
+            raise NotImplementedError('bit_depths other than 1 not implemented.')
         misc_byte_str += '000'
 
         # next 3 give LED's enabled or disabled. Always disabled
@@ -1124,7 +1125,7 @@ class dlp6500():
         elif compression_mode == 'erle':
             encoding_byte = [0x02]
         else:
-            raise Exception()
+            raise ValueError("compression_mode must be 'none', 'rle', or 'erle' but was '%s'" % compression_mode)
 
         general_data = signature_bytes + width_byte + height_byte + num_encoded_bytes + \
                  reserved_bytes + bg_color_bytes + [0x01] + encoding_byte + \
@@ -1173,7 +1174,11 @@ class dlp6500():
         # check arguments
         # #########################
         if patterns.dtype != np.uint8:
-            raise Exception('patterns must be of dtype uint8')
+            raise ValueError('patterns must be of dtype uint8')
+
+        if patterns.ndim == 2:
+            patterns = np.expand_dims(patterns, axis=0)
+
         npatterns = len(patterns)
 
         # if only one exp_times, apply to all patterns
@@ -1181,7 +1186,7 @@ class dlp6500():
             exp_times = [exp_times]
 
         if not all(list(map(lambda t: isinstance(t, int), exp_times))):
-            raise Exception("exp_times must be a list of integers")
+            raise ValueError("exp_times must be a list of integers")
 
         if patterns.shape[0] > 1 and len(exp_times) == 1:
             exp_times = exp_times * patterns.shape[0]
@@ -1191,7 +1196,7 @@ class dlp6500():
             dark_times = [dark_times]
 
         if not all(list(map(lambda t: isinstance(t, int), dark_times))):
-            raise Exception("dark_times must be a list of integers")
+            raise ValueError("dark_times must be a list of integers")
 
         if patterns.shape[0] > 1 and len(dark_times) == 1:
             dark_times = dark_times * patterns.shape[0]
@@ -1249,7 +1254,7 @@ class dlp6500():
             if bit_depth == 1:
                 patterns = combine_patterns(patterns)
             else:
-                raise Exception("Combining multiple images into a 24-bit RGB image is only implemented for bit depth 1.")
+                raise NotImplementedError("Combining multiple images into a 24-bit RGB image is only implemented for bit depth 1.")
 
         # compress and load images
         # images must be loaded in backwards order according to programming manual
@@ -1257,10 +1262,10 @@ class dlp6500():
             print("sending pattern %d/%d" % (ii + 1, len(patterns)))
 
             if compression_mode == 'none':
-                raise Exception("compression mode 'none' has not been tested.")
+                raise NotImplementedError("compression mode 'none' has not been tested.")
                 compressed_pattern = np.packbits(dmd_pattern.ravel())
             elif compression_mode == 'rle':
-                raise Exception("compression mode 'rle' as not been tested.")
+                raise NotImplementedError("compression mode 'rle' as not been tested.")
                 compressed_pattern = encode_rle(dmd_pattern)
             elif compression_mode == 'erle':
                 compressed_pattern = encode_erle(dmd_pattern)
@@ -1292,6 +1297,8 @@ class dlp6500():
 
         # some weird behavior where wants to be STOPPED before starting triggered sequence. This seems to happen
         # intermittently. Probably due to some other DMD setting that I'm not aware of?
+        # todo: is this still true? One problem is the way the patterns respond depends on what the DMD's
+        # trigger state is when loading
         if triggered:
             self.start_stop_sequence('stop')
 
@@ -1328,12 +1335,12 @@ class dlp6500():
             bit_indices = list(bit_indices)
 
         if len(image_indices) != len(bit_indices):
-            raise Exception("image_indices and bit_indices must be the same length.")
+            raise ValueError("image_indices and bit_indices must be the same length.")
 
         nimgs = len(image_indices)
 
         if mode == 'on-the-fly' and 0 not in bit_indices:
-            raise Exception("Known issue (not with this code, but with DMD) that if 0 is not included in the bit"
+            raise ValueError("Known issue (not with this code, but with DMD) that if 0 is not included in the bit"
                             "indices, then the patterns displayed will not correspond with the indices supplied.")
 
         # if only one exp_times, apply to all patterns
@@ -1341,7 +1348,7 @@ class dlp6500():
             exp_times = [exp_times]
 
         if not all(list(map(lambda t: isinstance(t, int), exp_times))):
-            raise Exception("exp_times must be a list of integers")
+            raise ValueError("exp_times must be a list of integers")
 
         if nimgs > 1 and len(exp_times) == 1:
             exp_times = exp_times * nimgs
@@ -1351,7 +1358,7 @@ class dlp6500():
             dark_times = [dark_times]
 
         if not all(list(map(lambda t: isinstance(t, int), dark_times))):
-            raise Exception("dark_times must be a list of integers")
+            raise ValueError("dark_times must be a list of integers")
 
         if nimgs > 1 and len(dark_times) == 1:
             dark_times = dark_times * nimgs
