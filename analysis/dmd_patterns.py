@@ -2286,7 +2286,7 @@ def export_all_pattern_sets(dmd_size, periods, nangles=3, nphases=3, wavelengths
 
 
 # export calibration patterns
-def aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, cref, csample, radius=20, phase_index=0):
+def aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, centers, radius=20, phase_indices=0):
     """
     Generate patterns to calibrate DMD aberrations using the approach of https://doi.org/10.1364/OE.24.013881
 
@@ -2306,56 +2306,34 @@ def aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, cref, csample, radiu
     if not isinstance(radius, int):
         raise ValueError("radius must be an integer")
 
-    cref = np.array(cref, dtype=np.int)
-    csample = np.array(csample, dtype=np.int)
-    if csample.ndim == 1:
-        csample = np.expand_dims(csample, axis=0)
+    centers = np.array(centers, dtype=np.int)
+    if centers.ndim == 1:
+        centers = np.expand_dims(centers, axis=0)
 
-    nx, ny = dmd_size
-    npatterns = csample.shape[0]
-    pattern = np.zeros((npatterns, ny, nx), dtype=np.bool)
+    phase_indices = np.atleast_1d(phase_indices)
+    if len(phase_indices) == 1 and centers.shape[0] > 1:
+        phase_indices = np.ones(centers.shape[0]) * phase_indices[0]
 
-    # get patch
-    pattern_patch, _ = get_sim_pattern([2 * radius + 1, 2 * radius + 1], vec_a, vec_b, nphases, phase_index)
-    xx, yy = np.meshgrid(range(pattern_patch.shape[1]), range(pattern_patch.shape[0]))
+    # get patches
+    pattern_patches = []
+    for ii in range(nphases):
+        pattern_patch, _ = get_sim_pattern([2 * radius + 1, 2 * radius + 1], vec_a, vec_b, nphases, ii)
+        pattern_patches.append(pattern_patch)
+    pattern_patches = np.asarray(pattern_patches)
+
+    xx, yy = np.meshgrid(range(pattern_patches.shape[2]), range(pattern_patches.shape[1]))
     xx = xx - xx.mean()
     yy = yy - yy.mean()
-    pattern_patch[np.sqrt(xx**2 + yy**2) > radius] = 0
+    pattern_patches[:, np.sqrt(xx**2 + yy**2) > radius] = 0
 
-    # two patches
-    for ii in range(npatterns):
-        pattern[ii, cref[1] - radius: cref[1] + radius + 1, cref[0] - radius: cref[0] + radius + 1] = pattern_patch
-        pattern[ii, csample[ii, 1] - radius: csample[ii, 1] + radius + 1, csample[ii, 0] - radius : csample[ii, 0] + radius + 1] = pattern_patch
+    # get pattern
+    nx, ny = dmd_size
+    pattern = np.zeros((ny, nx))
+    for ii in range(len(centers)):
+        pattern[centers[ii, 1] - radius: centers[ii, 1] + radius + 1,
+                centers[ii, 0] - radius: centers[ii, 0] + radius + 1] = pattern_patches[phase_indices[ii]]
 
     return pattern
-
-def aberration_pattern_set(dmd_size, vec_a, vec_b, nphases, radius=20):
-    nx, ny = dmd_size
-    cref = (nx//2, ny//2)
-
-    np_half_vert = (ny // 2) // (2 * radius + 1)
-    np_half_horz = (nx // 2) // (2 * radius + 1)
-
-    cxs = np.arange(cref[0] - (2 * radius + 1) * np_half_horz, cref[0] + (2 * radius + 1) * np_half_horz, 2 * radius + 1)
-    if cxs[0] - (radius + 1) < 0:
-        cxs = cxs[1:]
-    if cxs[-1] + radius + 1 > nx:
-        cxs = cxs[:-1]
-
-    cys = np.arange(cref[1] - (2 * radius + 1) * np_half_vert, cref[1] + (2 * radius + 1) * np_half_vert, 2 * radius + 1)
-    if cys[0] - (radius + 1) < 0:
-        cys = cys[1:]
-    if cys[-1] + (radius + 1) > ny:
-        cys = cys[:-1]
-
-    cxcx, cycy = np.meshgrid(cxs, cys)
-    # exclude sample point at same position as reference point
-    to_use = np.logical_not(np.logical_and(cxcx == cref[0], cycy == cref[1]))
-
-    csample = np.concatenate((cxcx[to_use][:, None], cycy[to_use][:, None]), axis=1)
-    patterns = aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, cref, csample, radius, phase_index=0)
-
-    return patterns, csample, cref
 
 def checkerboard(dmd_size, n_on, n_off=None):
     """
