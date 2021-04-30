@@ -1,5 +1,16 @@
 """
 Tools for simulating diffraction from a digital micromirror device (DMD)
+
+We typically adopt a coordinate system with x- and y- axes along the primary axes of the DMD, and z- direction is positive
+pointing in to the DMD face. We typically suppose the mirrors swivel about the axis n = [1, 1, 0]/sqrt(2), i.e. diagonal
+to the DMD axes.
+
+The simulate_dmd() function performs a brute force simulation function, but most useful information can be extracted
+using more specialized tools also found here, such as find_combined_condition() or get_diffracted_output_uvec()
+
+When simulating a periodic pattern (such as used in Structured Illumination Microscopy), the tools found in
+dmd_pattern.py may be more suitable.
+
 """
 import os
 import numpy as np
@@ -11,6 +22,7 @@ import matplotlib.pyplot as plt
 import matplotlib.widgets
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
+
 
 # main simulation function and important auxiliary functions
 def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
@@ -38,6 +50,7 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
  
     :param pattern: an NxM array. Dimensions of the DMD are determined from this. As usual, the upper left hand corner
     if this array represents the smallest x- and y- values
+    :param wavelength:
     :param gamma_on: wavelength. Can choose any units as long as consistent with
           dx, dy, wx, and wy. 
     :param gamma_on: DMD mirror angle in radians 
@@ -51,6 +64,7 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
     :param txs_out: array of arbitrary size specifying output angles in the xz-plane
            to compute diffraction pattern at. Note the difference in how incoming and outgoing angles are defined.
     :param tys_out:
+    :param zshifts: if DMD is assumed to be non-flat, give height profile here. Array of the same size as pattern
 
     :return efields, sinc_efield_on, sinc_efield_off, diffraction_efield:
     """
@@ -81,7 +95,7 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
     #   \int ds dt exp[ ik Rn*(s,t,0) \cdot (a-b)]
     # = \int ds dt exp[ ik * (A_+*s + A_-*t)]
     # the result is a product of sinc functions (up to a phase)
-    mirror_int_fn = lambda gamma, amb: wx * wy \
+    def mirror_int_fn(gamma, amb): return wx * wy \
                     * sinc_fn(0.5 * k * wx * blaze_condition_fn(gamma, amb, 'plus')) \
                     * sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, amb, 'minus'))
 
@@ -123,6 +137,7 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
 
     return efields, sinc_efield_on, sinc_efield_off, diffraction_efield
 
+
 def blaze_envelope(wavelength, gamma, wx, wy, tx_in, ty_in, tx_out, ty_out, n_vec=(1/np.sqrt(2), 1/np.sqrt(2), 0)):
     """
     Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
@@ -143,9 +158,30 @@ def blaze_envelope(wavelength, gamma, wx, wy, tx_in, ty_in, tx_out, ty_out, n_ve
     k = 2*np.pi / wavelength
     amb = get_unit_vector(tx_in, ty_in, 'in') - get_unit_vector(tx_out, ty_out, 'out')
 
-    envelope = sinc_fn(0.5 * k * wx * blaze_condition_fn(gamma, amb, 'plus', n_vec=n_vec)) \
-             * sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, amb, 'minus', n_vec=n_vec))
+    envelope = sinc_fn(0.5 * k * wx * blaze_condition_fn(gamma, amb, 'plus', n_vec=n_vec)) * \
+               sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, amb, 'minus', n_vec=n_vec))
     return envelope
+
+
+def blaze_envelope2(wavelength, gamma, wx, wy, a_minus_b, n_vec=(1/np.sqrt(2), 1/np.sqrt(2), 0)):
+    """
+    Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
+
+    :param wavelength: wavelength of light. Units are arbitrary, but must be the same for wavelength, wx, and wy
+    :param gamma: mirror swivel angle, in radians
+    :param wx: mirror width in x-direction. Same units as wavelength.
+    :param wy: mirror width in y-direction. Same units as wavelength.
+    :param a_minus_b: difference between input (a) and output (b) unit vectors. NumPy array of size N x 3
+    :param n_vec: unit vector about which the mirror swivels. Typically (1, 1, 0) / np.sqrt(2)
+
+    :return envelope: same length as a_minus_b
+    """
+
+    k = 2*np.pi / wavelength
+    envelope = sinc_fn(0.5 * k * wx * blaze_condition_fn(gamma, a_minus_b, 'plus',  n_vec=n_vec)) * \
+               sinc_fn(0.5 * k * wy * blaze_condition_fn(gamma, a_minus_b, 'minus', n_vec=n_vec))
+    return envelope
+
 
 def blaze_condition_fn(gamma, amb, mode='plus', n_vec=(1/np.sqrt(2), 1/np.sqrt(2), 0)):
     """
@@ -177,6 +213,7 @@ def blaze_condition_fn(gamma, amb, mode='plus', n_vec=(1/np.sqrt(2), 1/np.sqrt(2
         raise ValueError("mode must be 'plus' or 'minus', but was '%s'" % mode)
     return A
 
+
 def sinc_fn(x):
     """
     Unnormalized sinc function, sinc(x) = sin(x) / x
@@ -184,14 +221,13 @@ def sinc_fn(x):
     :param x:
     :return sinc(x):
     """
-    # x = np.asarray(x)
     x = np.atleast_1d(x)
     with np.errstate(divide='ignore'):
         y = np.asarray(np.sin(x) / x)
     y[x == 0] = 1
     return y
 
-#
+
 def get_rot_mat(n_vec, gamma):
     """
 
@@ -200,12 +236,13 @@ def get_rot_mat(n_vec, gamma):
     :return:
     """
     nx, ny, nz = n_vec
-    mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma))- nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
+    mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
                     [nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma), ny**2 * (1 - np.cos(gamma)) + np.cos(gamma), ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma)],
                     [nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma), ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma), nz**2 * (1 - np.cos(gamma)) + np.cos(gamma)]])
     return mat
 
-# convert between xyz and 123 coords
+
+# functions for converting between different angular or unit vector representations of input and output directions
 def xyz2mirror(vx, vy, vz, gamma):
     """
     Convert vector with components vx, vy, vz to v1, v2, v3.
@@ -229,6 +266,7 @@ def xyz2mirror(vx, vy, vz, gamma):
     v3 = np.sin(gamma) / np.sqrt(2) * (vx - vy) + np.cos(gamma) * vz
     return v1, v2, v3
 
+
 def mirror2xyz(v1, v2, v3, gamma):
     """
     Inverse function for xyz2mirror()
@@ -244,7 +282,7 @@ def mirror2xyz(v1, v2, v3, gamma):
     vz = -np.sin(gamma) * v1 + np.cos(gamma) * v3
     return vx, vy, vz
 
-# functions for converting between different angular representations
+
 def angle2xy(tp, tm):
     """
     Convert angle projections along the x and y axis to angle projections along the p=(x+y)/sqrt(2) and m=(x-y)/sqrt(2)
@@ -252,7 +290,6 @@ def angle2xy(tp, tm):
 
     :param tp:
     :param tm:
-    :param mode:
     :return:
     """
 
@@ -261,13 +298,13 @@ def angle2xy(tp, tm):
 
     return tx, ty
 
+
 def angle2pm(tx, ty):
     """
     Convert angle projections along the the p=(x+y)/sqrt(2) and m=(x-y)/sqrt(2) to x and y axes.
 
     :param tx:
     :param ty:
-    :param mode:
     :return:
     """
 
@@ -275,6 +312,7 @@ def angle2pm(tx, ty):
     tp = np.arctan((np.tan(tx) + np.tan(ty)) / np.sqrt(2))
 
     return tp, tm
+
 
 def txty2polar(tx, ty):
     """
@@ -333,6 +371,7 @@ def txty2polar(tx, ty):
 
     return theta, phi
 
+
 def polar2txty(theta, phi):
     """
     Convert between v = [tan(tx), tan(ty), 1] / sqrt(tan(tx)**2 + tan(ty)**2 + 1)
@@ -353,6 +392,7 @@ def polar2txty(theta, phi):
     ty = np.arctan(np.tan(theta) * np.sin(phi))
     return tx, ty
 
+
 def uvector2txty(vx, vy, vz):
     """
     Convert unit vector from components to theta_x, theta_y representation. Inverse function for get_unit_vector()
@@ -366,6 +406,7 @@ def uvector2txty(vx, vy, vz):
     ty = np.arctan(vy * norm_factor)
 
     return tx, ty
+
 
 def get_unit_vector(tx, ty, mode='in'):
     """
@@ -404,6 +445,7 @@ def get_unit_vector(tx, ty, mode='in'):
 
     return uvec
 
+
 def frq2uvector(a, wavelength, d, nx, ny, fx, fy):
     """
 
@@ -423,6 +465,7 @@ def frq2uvector(a, wavelength, d, nx, ny, fx, fy):
     by = a[..., 1] - wavelength / d * (ny + fy)
     bz = -np.sqrt(1 - bx**2 - by**2)
     return bx, by, bz
+
 
 # todo: clean up these functions. probably several can combine
 # # utility functions for solving blaze + diffraction conditions
@@ -447,6 +490,7 @@ def solve_max_diffraction_order(wavelength, d, gamma):
 
     return nmax, nmin
 
+
 def solve_1color_1d(wavelength, d, gamma, n):
     """
     # todo: superseded by solve_combined_condition()
@@ -464,8 +508,8 @@ def solve_1color_1d(wavelength, d, gamma, n):
     :param d: mirror pitch (in same units as wavelength)
     :param gamma: angle mirror normal makes with DMD body normal
     :param n: diffraction order index
-    :return tins: list of solutions for incoming angle
-    :return touts: list of solutions for outgoing angle
+    :return tins: list of solutions for incoming angle along the (x-y) direction
+    :return touts: list of solutions for outgoing angle along the (x-y) direction
     """
     # point where derivative of sin(tin) - sin(tin - 2*gamma) = 0
     tin_opt = np.arctan((1 - np.cos(2 * gamma)) / np.sin(2 * gamma))
@@ -475,9 +519,9 @@ def solve_1color_1d(wavelength, d, gamma, n):
     tin_max = np.min([np.pi/2, np.pi/2 + 2*gamma])
     # can have on root for smaller values and one root for larger values
 
-    tout = lambda tin: tin - 2 * gamma
+    def tout(tin): return tin - 2 * gamma
     #fn = lambda tin: np.abs(np.sin(tin) - np.sin(tout(tin)) - np.sqrt(2) * wavelength / d * n)
-    fn = lambda tin: np.sin(tin) - np.sin(tout(tin)) - np.sqrt(2) * wavelength / d * n
+    def fn(tin): return np.sin(tin) - np.sin(tout(tin)) - np.sqrt(2) * wavelength / d * n
 
     try:
         r1 = scipy.optimize.root_scalar(fn, bracket=(tin_opt, tin_max), xtol=1e-5)
@@ -496,6 +540,7 @@ def solve_1color_1d(wavelength, d, gamma, n):
     touts = [ti - 2 * gamma for ti in tins]
 
     return tins, touts
+
 
 def solve_diffraction_input_1d(theta_out, wavelength, d, order):
     """
@@ -516,6 +561,7 @@ def solve_diffraction_input_1d(theta_out, wavelength, d, order):
     _, theta_in = angle2pm(tx_in, ty_in)
 
     return theta_in
+
 
 def solve_blaze(tp_in, tm_in, gamma):
     """
@@ -540,6 +586,7 @@ def solve_blaze(tp_in, tm_in, gamma):
 
     return tp_out, tm_out
 
+
 def solve_diffraction_input(tx_out, ty_out, dx, dy, wavelength, order):
     """
     Solve for diffraction input angle, given output angle
@@ -562,12 +609,13 @@ def solve_diffraction_input(tx_out, ty_out, dx, dy, wavelength, order):
 
     return tx_in, ty_in
 
+
 def solve_diffraction_output(tx_in, ty_in, dx, dy, wavelength, order):
     """
     Solve for diffraction output angle, given input angle
 
-    :param tx_out:
-    :param ty_out:
+    :param tx_in:
+    :param ty_in:
     :param dx:
     :param dy:
     :param wavelength:
@@ -584,6 +632,7 @@ def solve_diffraction_output(tx_in, ty_in, dx, dy, wavelength, order):
     tx_out, ty_out = uvector2txty(bx, by, bz)
 
     return tx_out, ty_out
+
 
 def solve_combined_condition(d, gamma, wavelength, order):
     """
@@ -637,6 +686,7 @@ def solve_combined_condition(d, gamma, wavelength, order):
     def b_fn(a1, positive=True): return(bx_fn(a1, positive), by_fn(a1, positive), bz_fn(a1))
 
     return a_fn, b_fn, a1_bounds
+
 
 def solve_combined_onoff(d, gamma_on, wavelength_on, n_on, wavelength_off, n_off):
     """
@@ -699,6 +749,7 @@ def solve_combined_onoff(d, gamma_on, wavelength_on, n_on, wavelength_off, n_off
 
     return b_vecs, a_vecs_on, a_vecs_off
 
+
 # pupil mapping
 def get_pupil_basis(b):
     """
@@ -717,6 +768,7 @@ def get_pupil_basis(b):
     yb = np.cross(b, xb)
 
     return xb, yb
+
 
 def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
     """
@@ -756,6 +808,7 @@ def frqs2pupil_xy(fx, fy, bvec, pvec, dx, dy, wavelength):
     bf_p = bf_xs * pvec[0] + bf_ys * pvec[1] + bf_zs * pvec[2]
 
     return bf_xp, bf_yp, bf_p
+
 
 def get_diffracted_output_uvect(bvec, fx, fy, wavelength, dx, dy):
     """
@@ -813,6 +866,7 @@ def plot_graphical_soln1d(d, gamma, wavelengths):
     plt.legend(phs, ['blaze condition'] + wavelengths)
 
     return fig
+
 
 def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
                 t45_ins, t45_out_offsets=None):
@@ -903,12 +957,12 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
 
     return data
 
+
 def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_simulation', figsize=(18, 14)):
     """
     :param data: output from
     :param colors:
     :param plot_log: boolean
-    :param plot_each_angle: boolean
     :param saving: boolean
     :param save_dir: directory to save data and figure results in
     :param saving:
@@ -1070,6 +1124,7 @@ def plot_1d_sim(data, colors=None, plot_log=False, saving=False, save_dir='dmd_s
 
     return figs, fig_names
 
+
 # 2D simulation
 def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in, ty_in, tout_offsets=None):
     """
@@ -1079,7 +1134,6 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
 
     :param pattern:
     :param wavelengths:
-    :param colors:
     :param gamma_on:
     :param gamma_off:
     :param dx:
@@ -1169,6 +1223,7 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
             'diffraction nx': diff_nx, 'diffraction ny': diff_ny}
 
     return data
+
 
 def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14)):
     """
@@ -1279,7 +1334,6 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
                             diff_ty_out[kk, ii, jj, iz, iz] * 180 / np.pi,
                             edgecolor='m', facecolor='none')
 
-
                 ax.set_xlim(xlim)
                 ax.set_ylim(ylim)
 
@@ -1371,6 +1425,7 @@ def plot_2d_sim(data, saving=False, save_dir='dmd_simulation', figsize=(18, 14))
 
     return figs, fig_names
 
+
 def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins):
     """
     Determine Blaze and diffraction angles in 2D for provided input angles. For each input angle, identify the
@@ -1458,6 +1513,7 @@ def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins):
             'tp_outs': tp_outs, 'tm_outs': tm_outs, 'tx_out': tx_out, 'ty_out': ty_out,
             'tx_ins': tx_ins, 'ty_ins': ty_ins}
     return data
+
 
 def display_2d(wavelengths, gamma, dx, max_diff_order=7, colors=None, angle_increment=0.1, figsize=(16, 8)):
     """
