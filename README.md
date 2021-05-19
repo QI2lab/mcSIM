@@ -58,10 +58,11 @@ to utilize dlp6500.py.
 
 ### [expt_ctrl/run_sim_triggerscop.bsh](expt_ctrl/run_sim_triggerscop.bsh)
 This is a beanshell script which can be run from [MicroManager 2.0 Gamma](https://micro-manager.org/wiki/Micro-Manager)
-to acquire SIM data  using dlp6500.py to set the DMD patterns (assuming they have already been loaded into the 
+to acquire SIM data using dlp6500.py to set the DMD patterns (assuming they have already been loaded into the 
 DMD firmware). This script programs a [Triggerscope 3B](https://arc.austinblanco.com/), which then provides the analog and 
 digital voltages required to run the rest of the experiment. The camera free runs as the
-master clock, triggering the triggerscope. We use a customized version of the Triggerscope firmware V601.
+master clock, triggering the triggerscope. We use a customized version of the Triggerscope firmware V601. The version of MM
+used is Micro-Manager 2.0.0-gamma1 20200514, MMCore Version 10.1.0, Device API version 69, Module API version 10
 
 ### [expt_ctrl/SIM.cfg](expt_ctrl/SIM.cfg)
 Configuration file describing experimental equipment to MicroManager
