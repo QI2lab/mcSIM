@@ -501,7 +501,7 @@ def oversample_pixel(x, y, z, ds, sf=3, euler_angles=(0., 0., 0.)):
 
     # rotate points to correct position using normal vector
     # for now we will fix x, but lose generality
-    mat = euler_mat(*euler_angles)
+    mat = fit.euler_mat(*euler_angles)
     result = mat.dot(np.concatenate((xp.ravel()[None, :], yp.ravel()[None, :], zp.ravel()[None, :]), axis=0))
     xs, ys, zs = result
 
@@ -511,28 +511,6 @@ def oversample_pixel(x, y, z, ds, sf=3, euler_angles=(0., 0., 0.)):
     zz_s = z[..., None] + zs[None, ...]
 
     return xx_s, yy_s, zz_s
-
-def euler_mat(phi, theta, psi):
-    """
-    Define our euler angles connecting the body frame to the space/lab frame by
-
-    r_lab = U_z(phi) * U_y(theta) * U_z(psi) * r_body
-
-    Consider the z-axis in the body frame. This axis is then orientated at [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
-    in the space frame. i.e. phi, theta are the usual polar angles. psi represents a rotation of the object about its own axis.
-
-    U_z(phi) = [[cos(phi), -sin(phi), 0], [sin(phi), cos(phi), 0], [0, 0, 1]]
-    U_y(theta) = [[cos(theta), 0, sin(theta)], [0, 1, 0], [-sin(theta), 0, cos(theta)]]
-    """
-    euler_mat = np.array([[np.cos(phi) * np.cos(theta) * np.cos(psi) - np.sin(phi) * np.sin(psi),
-                          -np.cos(phi) * np.cos(theta) * np.sin(psi) - np.sin(phi) * np.cos(psi),
-                           np.cos(phi) * np.sin(theta)],
-                          [np.sin(phi) * np.cos(theta) * np.cos(psi) + np.cos(phi) * np.sin(psi),
-                          -np.sin(phi) * np.cos(theta) * np.sin(psi) + np.cos(phi) * np.cos(psi),
-                           np.sin(phi) * np.sin(theta)],
-                          [-np.sin(theta) * np.cos(psi), np.sin(theta) * np.sin(psi), np.cos(theta)]])
-
-    return euler_mat
 
 # fitting functions
 def fit_cont_psfmodel(img, wavelength, ni, model='gaussian',
