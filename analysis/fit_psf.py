@@ -30,7 +30,7 @@ import fit
 import analysis_tools as tools
 
 # model OTF function
-def symm1d_to_2d(arr, fs, fmax, npts):
+def symm_fn_1d_to_2d(arr, fs, fmax, npts):
     """
     Convert a 1D function which is symmetric wrt to the radial variable to a 2D matrix. Useful helper function when
     computing PSFs from 2D OTFs
@@ -59,30 +59,54 @@ def symm1d_to_2d(arr, fs, fmax, npts):
 
     return arr_out, fxs, fys
 
-def otf2psf(otf, dfx=1, dfy=1):
+# should rewrite these to handle 1D/3D functions
+def otf2psf(otf, dfs=1):
+    """
+    Compute the point-spread function from the optical transfer function
+    :param otf: otf, as a 1D, 2D or 3D array. Assumes that f=0 is near the center of the array, and frequency are
+    arranged by the FFT convention
+    :param dfs: (dfz, dfy, dfx), (dfy, dfx), or (dfx). If only a single number is provided, will assume these are the
+    same
+    :return psf, coords: where coords = (z, y, x)
     """
 
-    :param dfx:
-    :param dfy:
-    :param otf:
-    :return:
+    if isinstance(dfs, (int, float)) and otf.ndim > 1:
+        dfs = [dfs] * otf.ndim
+
+    if len(dfs) != otf.ndim:
+        raise ValueError("dfs length must be otf.ndim")
+
+    shape = otf.shape
+    drs = np.array([1 / (df * n) for df, n in zip(shape, dfs)])
+    coords = [tools.get_fft_pos(n, dt=dr) for n, dr in zip(shape, drs)]
+
+    psf = fft.fftshift(fft.ifftn(fft.ifftshift(otf))).real
+
+    return psf, coords
+
+def psf2otf(psf, drs=1):
     """
-    ny, nx = otf.shape
-    psf = fft.fftshift(fft.ifft2(fft.ifftshift(otf))).real
-    dx = 1 / (dfx * nx)
-    dy = 1 / (dfy * ny)
-    xs = tools.get_fft_pos(nx, dt=dx)
-    ys = tools.get_fft_pos(ny, dt=dy)
+    Compute the optical transfer function from the point-spread function
 
-    return psf, xs, ys
+    :param psf: psf, as a 1D, 2D or 3D array. Assumes that r=0 is near the center of the array, and positions
+    are arranged by the FFT convention
+    :param drs: (dz, dy, dx), (dy, dx), or (dx). If only a single number is provided, will assume these are the
+    same
+    :return otf, coords: where coords = (fz, fy, fx)
+    """
 
-def psf2otf(psf, dx=1, dy=1):
-    ny, nx = psf.shape
-    otf = fft.fftshift(fft.fft2(fft.ifftshift(psf)))
-    fxs = tools.get_fft_pos(nx, dt=dx)
-    fys = tools.get_fft_pos(ny, dt=dy)
+    if isinstance(drs, (int, float)) and psf.ndim > 1:
+        drs = [drs] * psf.ndim
 
-    return otf, fxs, fys
+    if len(drs) != psf.ndim:
+        raise ValueError("drs length must be psf.ndim")
+
+    shape = psf.shape
+    coords = [tools.get_fft_frqs(n, dt=dr) for n, dr in zip(shape, drs)]
+
+    otf = fft.fftshift(fft.fftn(fft.ifftshift(psf)))
+
+    return otf, coords
 
 def circ_aperture_pupil(fx, fy, na, wavelength):
     fmax = 0.5 / (0.5 * wavelength / na)
@@ -123,7 +147,7 @@ def circ_aperture_otf(fx, fy, na, wavelength):
 
 def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None):
     """
-    Get incoherent transfer function from autocorrelation of coherent transfer functino
+    Get incoherent transfer function from autocorrelation of coherent transfer function
     :param otf_c:
     :param dx:
     :param wavelength:

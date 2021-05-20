@@ -537,9 +537,9 @@ def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout
 
     :param use_otf:
     :param ground_truth: Relative intensity values of image
-    :param max_photons: Mean photons emitted by ber of photons will be different than expected. Furthermore, due to
-    the "blurring" of the point spread function and possible binning of the image, no point in the image
-     may realize "max_photons"
+    :param max_photons: Scale factor which sets the maximum photon number in the case where ground_truth is normalized
+    to be between 0 and 1. If you use the OTF blurring of this function, then this will not be the true exact photon number.
+    If no scaling is desired, set to 1.
     :param cam_gains: gains at each camera pixel
     :param cam_offsets: offsets of each camera pixel
     :param cam_readout_noise_sds: standard deviation characterizing readout noise at each camera pixel

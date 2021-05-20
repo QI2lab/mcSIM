@@ -29,7 +29,7 @@ class Test_psf(unittest.TestCase):
         dfy = fys[1] - fys[0]
 
         otf = fit_psf.circ_aperture_otf(fxs[None, :], fys[:, None], na, wavelength)
-        psf, xs, ys = fit_psf.otf2psf(otf, dfx, dfy)
+        psf, (ys, xs) = fit_psf.otf2psf(otf, (dfy, dfx))
         psf = psf / psf.max()
 
         psf_true = fit_psf.airy_fn(xs[None, :], ys[:, None], [1, 0, 0, na, 0], wavelength)
