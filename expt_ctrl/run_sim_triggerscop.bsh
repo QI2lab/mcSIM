@@ -25,6 +25,7 @@ import org.micromanager.PropertyMap.PropertyMapBuilder ;
 import org.micromanager.display.DisplayWindow;
 import org.micromanager.MultiStagePosition;
 import org.micromanager.SequenceSettings;
+import org.micromanager.acquisition;
 import org.micromanager.api.AcquisitionOptions;
 
 import mmcorej.TaggedImage;
@@ -143,25 +144,6 @@ boolean printBuffers(int [][] ttlArray, int [][] dacArray, int nlines) {
 }
 
 /**
- * Grab channel names for the active group in the MDA window
- */
-String get_mda_channel_names(acqSettings){
-	String activeGroup = acqSettings.channelGroup;
-
-	StringBuilder sb = new StringBuilder("");
-	// loop over channels in active group and accumulate names
-	for (channel : acqSettings.channels) { 
-		// get preset data preset
-		String cf = channel.config;
-		sb.append(cf);
-		String sp = " ";
-		sb.append(sp);
-	}
-
-	return sb.toString();	
-}
-
-/**
  * Grab channel data from the MDA window corresponding to the triggerscope lines, and store this information in dacArrayChannel and ttlArrayChannel. 
  *
  * @param  dacArrayChannel	a boolean array of size nchannels x 16
@@ -177,27 +159,29 @@ boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [
 
 	// loop over channels in active group and accumulate TTL/DAC values
 	int i_channel = 0;
-	for (channel : acqSettings.channels) { 
-		// get preset data preset
-		String preset_name = channel.config; 
-		mmcorej.Configuration preset = mmc.getConfigData(activeGroup, preset_name);
-	
-		int [] dacArray_preset = new int[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-		int [] ttlArray_preset = new int[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-		get_tscope_preset_setting(preset, dacArray_preset, ttlArray_preset, dac_bit_depth, dac_min_voltage, dac_voltage_range, debugger);
-	
-		// assign preset info to program line
-		for(int ii=0; ii<16; ii++){
-			dacArrayChannel[i_channel][ii] = dacArray_preset[ii];
-			ttlArrayChannel[i_channel][ii] = ttlArray_preset[ii];
-		}
+	for (channel : acqSettings.channels) {
+		if(channel.useChannel){
+			// get preset data preset
+			String preset_name = channel.config; 
+			mmcorej.Configuration preset = mmc.getConfigData(activeGroup, preset_name);
+		
+			int [] dacArray_preset = new int[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+			int [] ttlArray_preset = new int[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+			get_tscope_preset_setting(preset, dacArray_preset, ttlArray_preset, dac_bit_depth, dac_min_voltage, dac_voltage_range, debugger);
+		
+			// assign preset info to program line
+			for(int ii=0; ii<16; ii++){
+				dacArrayChannel[i_channel][ii] = dacArray_preset[ii];
+				ttlArrayChannel[i_channel][ii] = ttlArray_preset[ii];
+			}
 
-		if(debugger){
-			print("#####################################################");
-			print("active group: '" + activeGroup + "' with preset '" + preset_name + "'");
-		}
+			if(debugger){
+				print("#####################################################");
+				print("active group: '" + activeGroup + "' with preset '" + preset_name + "'");
+			}
 
-		i_channel++;
+			i_channel++;
+		}
 	}
 	
 	
@@ -209,26 +193,6 @@ boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [
 	return true;
 }
 
-/**
- * Grab OFF preset data from the active channel in the MDA window, giving triggerscope DAC/TTL settings, and store this information in dacArray and ttlArray. The active channel must have a preset "OFF"
- *
- * @param  dacArrayChannel	a boolean array of size nchannels x 16
- * @param  ttlArrayChannel	an integer array of size nchannels x 16
- * @param  nchannels	
- * @param  acqSettings
- * @param  debugger			boolean flag, if true print debugging information
- */
-boolean get_tscope_named_settings(String preset_name, acqSettings, int [] dacArray, int [] ttlArray, int dac_bit_depth, double dac_min_voltage, double dac_voltage_range, boolean debugger){
-	// get active group set in MDA
-	String activeGroup = acqSettings.channelGroup;
-	
-	// get OFF data
-	mmcorej.Configuration off_preset = mmc.getConfigData(activeGroup, preset_name);
-	get_tscope_preset_setting(off_preset, dacArray, ttlArray, dac_bit_depth, dac_min_voltage, dac_voltage_range, debugger);
-	
-	return true;
-
-}
 
 /**
  * Grab triggerscope settings from a single preset. Utility function to help get_tscope_channel_settings
@@ -423,7 +387,7 @@ print("Circular buffer = " + mmc.getCircularBufferMemoryFootprint() + "MB");
 /*****************************
 camera settings
 *****************************/
-// exposure from main window (not from MDA). Since we are using the camera burst mode, we can't use different exposures for different channels anyways
+// exposure from camera (not from MDA)
 exposureMs = mmc.getExposure();
 camera = mmc.getCameraDevice();
 
@@ -431,28 +395,19 @@ camera = mmc.getCameraDevice();
 //String cam_trig_src = mmc.getProperty(camera, "TRIGGER SOURCE");
 //print("Camera trigger source is " + cam_trig_src);
 //boolean cam_using_int_trigger = cam_trig_src.matches("INTERNAL");
-
-// int ignore_last_channel_focus_trigger_num = 0;
-// if (cam_trig_src.matches("INTERNAL")){
-	// ignore_last_channel_focus_trigger_num = 1;}
-// else{
-	// if ( !cam_trig_src.matches("SOFTWARE")) {
-		// mm.scripter().message("Unrecognized camera trigger source = " + cam_trig_src);
-		// exit;
-	// }
-// }
-
  
 /*****************************
 Pull acquisition settings from MDA window
 *****************************/
-acqSettings = mm.acquisitions().getAcquisitionSettings();
+// org.micromanager.acquisition.SequenceSettings?
+acqSettings = mm.getAcquisitionManager().getAcquisitionSettings();
 
 // Pull number of repeats from MDA window
 int n_times = acqSettings.numFrames;
 if (n_times == 0){n_times = 1;}
 
 //Pull (XY) position list from MDA window
+// todo: are these really from MDA window?
 positionList = mm.positions().getPositionList();
 int nxy_pos = positionList.getNumberOfPositions(); // todo: integrate this with above checks...
 
@@ -470,14 +425,34 @@ boolean ignore_z_loop = false;
 if (nz_pos == 0){
 	nz_pos = 1;
 	ignore_z_loop = true;
-	//mm.scripter().message("No z slices found, ignoring Z loop.");
+
 	print("No z slices found, ignoring Z loop.");
 }
 
-// number of time/positions/channels points etc. looped over during acquisition
-int nchannels = acqSettings.channels.size();
-int niterations = n_patterns * nchannels * nz_pos * nxy_pos * n_times;
+// pull active channel list from MDA window
+String activeGroup = acqSettings.channelGroup;
 
+int nchannels = 0;
+StringBuilder sb = new StringBuilder("");
+// loop over channels in active group and accumulate names
+for (channel : acqSettings.channels) {
+	//only include channel if "use" box is checked
+	if(channel.useChannel){
+		nchannels += 1;
+		
+		// get preset data preset
+		String cf = channel.config;
+		sb.append(cf);
+		String sp = " ";
+		sb.append(sp);
+	}
+}
+
+String active_channels = sb.toString();
+print(nchannels + " active channels are: " + active_channels);
+
+// number of time/positions/channels points etc. looped over during acquisition
+int niterations = n_patterns * nchannels * nz_pos * nxy_pos * n_times;
 print(n_times + " times; " + nxy_pos + " xy-pos; " + nz_pos + " z-pos; " + nchannels + " channels; " + n_patterns + " sim patterns; ");
 print("total iterations = " + niterations);
 
@@ -582,9 +557,6 @@ mmc.sleep(50);
 // ensure that DMD TTL trigger line is LOW before we start. Otherwise triggering will not succeed
 mmc.setProperty(String.format("TriggerScope-TTL%02d", new Object[] {dmd_trig1_ttl}), "State", 0);
 mmc.setProperty(String.format("TriggerScope-TTL%02d", new Object[] {dmd_trig2_ttl}), "State", 0);
-
-String active_channels = get_mda_channel_names(acqSettings);
-print("active channels: " + active_channels);
 
 // Program DMD by calling python script
 // This will not run with a conda environment unless you also activate the environment
