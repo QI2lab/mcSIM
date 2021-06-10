@@ -287,15 +287,11 @@ dask-worker-space/
 # bytecode compiled python files
 **/__pycache__/
 
-# pycharm project
+# pycharm or intellij projects
 .idea/
 
-# folders storing temporary files
-sim_patterns/
-spifi_patterns/
-calibration_patterns/
-affine_calibration/
-data/
+# binary files
+**/bin
+# java
+**/classes
 
-# should I add this to repo?
-dmd_notes.pdf
