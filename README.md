@@ -80,9 +80,10 @@ Micro-Manager 2.0.0-gamma1 20210516, MMCore Version 10.1.1, Device API version 7
 describing the equipment and settings used in the experiment.
   
 ### [expt_ctrl/dmd_sim_umanager_plugin](expt_ctrl/dmd_sim_umanager_plugin)
-A simple MicroManager GUI plugin for controlling the DMD patterns while "cruising around" a sample before imaging.
-This plugin takes input from the user and then automatically runs [set_dmd_sim.py](expt_ctrl/set_dmd_sim.py) with
-the appropriate arguments.
+A simple [MicroManager GUI plugin](https://micro-manager.org/wiki/Version_2.0_Plugins) for controlling the DMD patterns while "cruising around" a sample before imaging.
+This plugin takes input from the user and then runs [set_dmd_sim.py](expt_ctrl/set_dmd_sim.py) with
+the appropriate arguments in a user specified Conda environment. This plugin can be compiled using IntelliJ IDEA and the resulting .jar file should be copied
+to the mmplugins subdirectory of the MicroManager installation directory.
 
 # Instrument design
 Mechanical drawings of some parts used in the setup are included in the [parts](parts) directory. For a more complete description of the setup and
