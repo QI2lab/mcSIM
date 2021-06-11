@@ -1,5 +1,6 @@
 # multicolor DMD-SIM
-This repository contains code for designing, analyzing, and carrying out multicolor DMD-SIM experiments, including DMD simulation code, DMD pattern generation, SIM reconstruction and
+This repository contains code for designing, analyzing, and carrying out multicolor structured illumination microscopy
+experiments based on a digital micromirror device (DMD-SIM), including DMD simulation code, DMD pattern generation, SIM reconstruction and
 instrument control. It also includes a number of useful utilities for simulating the resulting diffraction 
 pattern given certain DMD patterns, determining system point-spread functions and optical transfer functions, and 
 determining the affine transformation between the DMD coordinates and the imaging space coordinates. The various 
