@@ -51,7 +51,7 @@ boolean program_dmd = true; // if true, program DMD using parameters set here
 String dmd_mode = "sim"; // set DMD mode "sim", "widefield", or "affine"
 boolean dark_patterns_between = true; // if running in normal SIM mode, add dark pattern in between SIM patterns to blank laser
 int n_dark_frames = 2; // number of dark frames added as extra SIM patterns to allow mirror enough time to move
-int n_sim_patterns = 1; // number of real SIM patterns
+int n_sim_patterns = 9; // number of real SIM patterns
 int n_patterns = n_sim_patterns + n_dark_frames; // typically 11 = 2 dark to allow mirror to move + 9 real patterns
 
 // display and saving settings
