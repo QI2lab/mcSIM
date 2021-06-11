@@ -1157,6 +1157,11 @@ class dlp6500():
         Upload on-the-fly pattern sequence to DMD.
         # todo: seems I need to call set_pattern_sequence() after this command to actually get sequence running. Why?
 
+        WARNING: When using triggered operations, the DLP6500 behaves differently depending on the state of the trigger
+        in signals when this command is issued. If the trigger in signals are HIGH, then the patterns will be displayed
+        when the trigger is high. If the trigger in signals are LOW, then the patterns will be displayed when
+        the trigger is low.
+
         This command is based on Table 5-3 in the DLP programming manual
 
         :param patterns: N x Ny x Nx NumPy array of uint8
@@ -1249,7 +1254,7 @@ class dlp6500():
             print(self.read_error_description())
 
         # can combine images if bit depth = 1
-        # todo: test if things work if I don't combine images
+        # todo: test if things work if I don't combine images in the 24bit format
         if combine_images:
             if bit_depth == 1:
                 patterns = combine_patterns(patterns)
@@ -1271,7 +1276,7 @@ class dlp6500():
                 compressed_pattern = encode_erle(dmd_pattern)
 
             # pattern has an additional 48 bytes which must be sent also.
-            # # todo: Maybe I should nest the call to init_pattern_bmp_load in pattern_bmp_load?
+            # todo: Maybe I should nest the call to init_pattern_bmp_load in pattern_bmp_load?
             buffer = self.init_pattern_bmp_load(len(compressed_pattern) + 48, pattern_index=ii)[0]
             resp = self.decode_response(buffer)
             if resp['error']:
@@ -1367,10 +1372,6 @@ class dlp6500():
         # #########################
         # need to issue stop before changing mode. Otherwise DMD will sometimes lock up and not be responsive.
         self.start_stop_sequence('stop')
-        # buffer = self.start_stop_sequence('stop')[0]
-        # resp = self.decode_response(buffer)
-        # if resp['error']:
-        #     print(self.read_error_description())
 
         # set to pattern mode
         buffer = self.set_pattern_mode(mode)[0]
@@ -1381,15 +1382,6 @@ class dlp6500():
         # stop any currently running sequences
         # note: want to stop after changing pattern mode, because otherwise may throw error
         self.start_stop_sequence('stop')
-        # buffer = self.start_stop_sequence('stop')[0]
-        # resp = self.decode_response(buffer)
-        # if resp['error']:
-        #     print(self.read_error_description())
-
-        # buffer = self.set_trigger_in1(105, 'rising')[0]
-        # resp = self.decode_response(buffer)
-        # if resp['error']:
-        #     print(self.read_error_description())
 
         # set image parameters for look up table_
         for ii, (et, dt) in enumerate(zip(exp_times, dark_times)):
@@ -1410,15 +1402,8 @@ class dlp6500():
 
         # start sequence
         self.start_stop_sequence('start')
-        # buffer = self.start_stop_sequence('start')[0]
-        # resp = self.decode_response(buffer)
-        # if resp['error']:
-        #     print(self.read_error_description())
 
-        # test
-
-        # some weird behavior where wants to be STOPPED before starting triggered sequence. This seems to happen
-        # intermittently. Probably due to some other DMD setting that I'm not aware of?
+        # some weird behavior where wants to be STOPPED before starting triggered sequence
         if triggered:
             self.start_stop_sequence('stop')
 
@@ -1459,7 +1444,7 @@ class dlp6500():
         :param delay_ms:
         :return:
         """
-        # to do: test this works!
+        # todo: test this works!
         data = struct.unpack('BBBB', struct.pack('<I', delay_ms))
         data = list(data[:3])
         return self.send_command('w', True, 0x1A16, data)
