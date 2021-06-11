@@ -1,11 +1,17 @@
 # multicolorSIM
-This repository contains code for performing DMD-SIM experiments, including DMD simulation code, DMD pattern generation, SIM reconstruction and
+This repository contains code for designing, analyzing, and carrying out multicolor DMD-SIM experiments, including DMD simulation code, DMD pattern generation, SIM reconstruction and
 instrument control. It also includes a number of useful utilities for simulating the resulting diffraction 
 pattern given certain DMD patterns, determining system point-spread functions and optical transfer functions, and 
 determining the affine transformation between the DMD coordinates and the imaging space coordinates. The various 
-relevant files are described in more detail below.
+files are described in more detail below.
  
-This repository is connected with the BioRxiv preprint: [Multicolor structured illumination microscopy and quantitative control of coherent light with a digital micromirror device](https://doi.org/10.1101/2020.07.27.223941 )
+This repository is associated with the Biomedical Optics Express paper 
+[Multicolor structured illumination microscopy and quantitative control of polychromatic light with a digital micromirror device](https://doi.org/10.1364/BOE.422703)
+, and the BioRxiv preprint 
+[Multicolor structured illumination microscopy and quantitative control of coherent light with a digital micromirror device](https://doi.org/10.1101/2020.07.27.223941).
+The repository state at the time of publication is archived [here](https://doi.org/10.5281/zenodo.4773865), or available as
+a [release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0) on GitHub.
+
 
 # Analysis and simulation code
 
@@ -47,29 +53,38 @@ data is located in [examples/data](examples/data)
 # Hardware control code
 
 ### [expt_ctrl/dlp6500.py](expt_ctrl/dlp6500.py)
-Code for controlling the DLP6500 DMD over USB. This code was initially based on the approaches 
-of https://github.com/mazurenko/Lightcrafter6500DMDControl and https://github.com/csi-dcsc/Pycrafter6500 
+Code for controlling the DLP6500 DMD over USB on Windows. This code was initially based on the approaches 
+of [Lightcrafter6500DMDControl](https://github.com/mazurenko/Lightcrafter6500DMDControl) and
+[Pycrafter6500](https://github.com/csi-dcsc/Pycrafter6500).
 
 ### [expt_ctrl/set_dmd_sim.py](expt_ctrl/set_dmd_sim.py)
-This is the script used to set certain pattern sequences on the DMD from patterns which
+This is the script used to define pattern sequences on the DMD using patterns which
 have been previously loaded onto the firmware using the [Texas Instruments DLP6500 and DLP9000
-GUI](https://www.ti.com/tool/DLPC900REF-SW). This script is intended to be called from the command line, which allows run_sim_triggerscope.bsh
-to utilize dlp6500.py.
+GUI](https://www.ti.com/tool/DLPC900REF-SW). It is a command line interface to [dlp6500.py](expt_ctrl/dlp6500.py),
+and it is used by [run_sim_triggerscop.bsh](expt_ctrl/run_sim_triggerscop.bsh).
 
 ### [expt_ctrl/run_sim_triggerscop.bsh](expt_ctrl/run_sim_triggerscop.bsh)
-This is a beanshell script which can be run from [MicroManager 2.0 Gamma](https://micro-manager.org/wiki/Micro-Manager)
+This is a [beanshell script](https://beanshell.github.io/) which can be run from [MicroManager 2.0 Gamma](https://micro-manager.org/wiki/Micro-Manager)
 to acquire SIM data using dlp6500.py to set the DMD patterns (assuming they have already been loaded into the 
 DMD firmware). This script programs a [Triggerscope 3B](https://arc.austinblanco.com/), which then provides the analog and 
 digital voltages required to run the rest of the experiment. The camera free runs as the
-master clock, triggering the triggerscope. We use a customized version of the Triggerscope firmware V601. The version of MM
-used is Micro-Manager 2.0.0-gamma1 20200514, MMCore Version 10.1.0, Device API version 69, Module API version 10
+master clock, triggering the triggerscope. We use a customized version of the Triggerscope firmware V601. 
+
+This code was initially developed with Micro-Manager 2.0.0-gamma1 20200514, MMCore Version 10.1.0,
+Device API version 69, Module API version 10. But for more recent development we are using
+Micro-Manager 2.0.0-gamma1 20210516, MMCore Version 10.1.1, Device API version 70, Module API version 10.
 
 ### [expt_ctrl/SIM.cfg](expt_ctrl/SIM.cfg)
-Configuration file describing experimental equipment to MicroManager
+[MicroManager configuration file](https://micro-manager.org/wiki/Micro-Manager_Configuration_Guide#Configuration_file_syntax)
+describing the equipment and settings used in the experiment.
   
+### [expt_ctrl/dmd_sim_umanager_plugin](expt_ctrl/dmd_sim_umanager_plugin)
+A simple MicroManager GUI plugin for controlling the DMD patterns while "cruising around" a sample before imaging.
+This plugin takes input from the user and then automatically runs [set_dmd_sim.py](expt_ctrl/set_dmd_sim.py) with
+the appropriate arguments.
+
 # Instrument design
-Mechanical drawings of some parts used in the setup are included in the 
-[parts](parts) directory. For a more complete description of the setup and
-a parts list, see the preprint linked at the top.
+Mechanical drawings of some parts used in the setup are included in the [parts](parts) directory. For a more complete description of the setup and
+a parts list, see the published paper linked above.
 
 
