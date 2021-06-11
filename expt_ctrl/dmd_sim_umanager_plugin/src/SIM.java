@@ -40,11 +40,6 @@ public class SIM implements SciJavaPlugin, MenuPlugin {
    private Runtime runtime_;
    private Process process_;
 
-   //Runtime r = Runtime.getRuntime();
-   //Process p;
-   //BufferedReader stdInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
-   //BufferedReader stdError = new BufferedReader(new InputStreamReader(p.getErrorStream()));
-
    @Override
    public void setContext(Studio studio) {
       studio_ = studio;
@@ -56,10 +51,8 @@ public class SIM implements SciJavaPlugin, MenuPlugin {
    @Override
    public void onPluginSelected() {
       if (frame_ == null) {
-         // We have never before shown our GUI, so now we need to create it.
          frame_ = new org.micromanager.plugins.SIM.SIMFrame(studio_);
-//         JOptionPane.showMessageDialog(null, "Hello, world!", "Hello world!",
-//                 JOptionPane.PLAIN_MESSAGE);
+         // JOptionPane.showMessageDialog(null, "Hello, world!", "Hello world!", JOptionPane.PLAIN_MESSAGE);
       }
 
       frame_.setVisible(true);
@@ -71,19 +64,17 @@ public class SIM implements SciJavaPlugin, MenuPlugin {
     */
    @Override
    public String getSubMenu() {
-      return "Developer Tools";
-      // Indicates that we should show up in the root Plugins menu.
-//      return "";
+      return "";
    }
 
    @Override
    public String getName() {
-      return "MM SIM";
+      return "DMD SIM control";
    }
 
    @Override
    public String getHelpText() {
-      return "Automate DMD control for displaying SIM patterns.";
+      return "Automate DMD control for displaying SIM patterns while exploring sample.";
    }
 
    @Override

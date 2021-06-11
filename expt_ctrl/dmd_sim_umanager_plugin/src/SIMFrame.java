@@ -43,7 +43,7 @@ public class SIMFrame extends JFrame {
     private JComboBox comboBoxSinglePattern;
 
     public SIMFrame(Studio app){
-        super("MM SIM GUI");
+        super("DMD-SIM explorer");
         studio_ = app;
         profile_ = app.getUserProfile();
         settings_ = profile_.getSettings(this.getClass());

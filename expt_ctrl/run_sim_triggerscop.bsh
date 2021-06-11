@@ -395,7 +395,7 @@ SummaryMetadata.SummaryMetadataBuilder summary_mdb = store.getSummaryMetadata().
 Coords.CoordsBuilder intended_dm_cb = mm.data().getCoordsBuilder().z(nz_pos).stagePosition(nxy_pos).time(n_times).channel(nchannels);
 
 // axis order
-String [] aorder = {"time", "position", "z", "channel"};
+String [] aorder = {"position", "time", "z", "channel"};
 
 // current date/time
 SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-dd-MM;HH:mm:ss.SSS");
