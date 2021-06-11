@@ -13,6 +13,9 @@
 //
 // ------------------------------------------------------------------------------
 
+// access micromanager core with mmc
+// access GUI with mm
+// access acquisition engine with acq
 import org.micromanager.data.Coords;
 import org.micromanager.data.Datastore;
 import org.micromanager.data.Image;
@@ -27,13 +30,7 @@ import org.micromanager.MultiStagePosition;
 import org.micromanager.SequenceSettings;
 import org.micromanager.acquisition;
 import org.micromanager.api.AcquisitionOptions;
-
 import mmcorej.TaggedImage;
-
-import ij.io.Opener; 
-import ij.ImagePlus;
-import ij.ImageStack;
-import ij.gui.GenericDialog;
 
 import java.text.SimpleDateFormat;
 import java.util.concurrent.TimeUnit;
@@ -52,18 +49,17 @@ print("####################################");
 User settings
 *****************************/
 // DMD settings
-String conda_env_name = "ptbrownenv";
-String dmd_script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\set_dmd_sim.py";
+String dmd_script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\set_dmd_sim.py"; // python file to control DMD
+String conda_env_name = "ptbrownenv"; // conda environment used to run dmd_script_path
 boolean program_dmd = true; // if true, program DMD using parameters set here
-// set DMD mode "sim", "widefield", or "affine"
-String dmd_mode = "sim";
+String dmd_mode = "sim"; // set DMD mode "sim", "widefield", or "affine"
 boolean dark_patterns_between = true; // if running in normal SIM mode, add dark pattern in between SIM patterns to blank laser
 int n_dark_frames = 2; // number of dark frames added as extra SIM patterns to allow mirror enough time to move
 int n_sim_patterns = 9; // number of real SIM patterns
 int n_patterns = n_sim_patterns + n_dark_frames; // typically 11 = 2 dark to allow mirror to move + 9 real patterns
 
 // display and saving settings
-boolean debugger = false;
+boolean debug = false;
 boolean display = false;
 boolean individual_tifs = false;
 
@@ -71,10 +67,10 @@ boolean individual_tifs = false;
 boolean cam_using_int_trigger = true;
 
 // triggerscope settings
-boolean program_tscope = true; // false if already programmed and want to run same program again
+boolean program_tscope = true; // false if already programmed and want to run same program again // todo: not implemented
 boolean print_program = false;
-int dmd_trig1_ttl = 7; // remember that this would be ttl[dmd_trig1_ttl - 1]
-int dmd_trig2_ttl = 6; // should be HIGH to allow pattern to advance
+int dmd_trig1_ttl = 7; // rising edge advances to next pattern
+int dmd_trig2_ttl = 6; // HIGH to allow patterns to advance, or LOW to disallow
 int shutter = 8;
 int tscope_trig_mode = 4;  // set to rising trigger, 0=Low, 1=High (causes error), 2=Rising, 3=Falling 4=Change
 int tscope_channel_fastest_axis = 1; // 0=z-stack fastest axis, then channel; 1=channel fastest axis, then z-stack. With channels alternating ON/OFF cannot do z-stack as fastest axis.
@@ -150,9 +146,9 @@ boolean printBuffers(int [][] ttlArray, int [][] dacArray, int nlines) {
  * @param  ttlArrayChannel	an integer array of size nchannels x 16
  * @param  nchannels	
  * @param  acqSettings
- * @param  debugger			boolean flag, if true print debugging information
+ * @param  debug			boolean flag, if true print debugging information
  */
-boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [][] ttlArrayChannel, int nchannels, int dac_bit_depth, double dac_min_voltage, double dac_voltage_range, boolean debugger){
+boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [][] ttlArrayChannel, int nchannels, int dac_bit_depth, double dac_min_voltage, double dac_voltage_range, boolean debug){
 	
 	// get active group set in MDA
 	String activeGroup = acqSettings.channelGroup;
@@ -167,7 +163,7 @@ boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [
 		
 			int [] dacArray_preset = new int[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 			int [] ttlArray_preset = new int[] {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-			get_tscope_preset_setting(preset, dacArray_preset, ttlArray_preset, dac_bit_depth, dac_min_voltage, dac_voltage_range, debugger);
+			get_tscope_preset_setting(preset, dacArray_preset, ttlArray_preset, dac_bit_depth, dac_min_voltage, dac_voltage_range, debug);
 		
 			// assign preset info to program line
 			for(int ii=0; ii<16; ii++){
@@ -175,7 +171,7 @@ boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [
 				ttlArrayChannel[i_channel][ii] = ttlArray_preset[ii];
 			}
 
-			if(debugger){
+			if(debug){
 				print("#####################################################");
 				print("active group: '" + activeGroup + "' with preset '" + preset_name + "'");
 			}
@@ -185,7 +181,7 @@ boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [
 	}
 	
 	
-	if(debugger){
+	if(debug){
 		print("tscope channel settings:");
 		printBuffers(ttlArrayChannel, dacArrayChannel, i_channel);
 	}
@@ -202,9 +198,9 @@ boolean get_tscope_channel_settings(acqSettings, int [][] dacArrayChannel, int [
  * @param  dac_bit_depth	
  * @param  dac_min_voltage		minimum dac voltage
  * @param  dac_voltage_range	dac_max_voltage - dac_min_voltage
- * @param  debugger				boolean flag, if true print debugging information
+ * @param  debug				boolean flag, if true print debugging information
  */
-boolean get_tscope_preset_setting(mmcorej.Configuration preset, int [] dacArray, int [] ttlArray, int dac_bit_depth, double dac_min_voltage, double dac_voltage_range, boolean debugger) {
+boolean get_tscope_preset_setting(mmcorej.Configuration preset, int [] dacArray, int [] ttlArray, int dac_bit_depth, double dac_min_voltage, double dac_voltage_range, boolean debug) {
 	
 	// loop over device settings in preset
 	for (int k=0; k<preset.size(); k++){
@@ -218,7 +214,7 @@ boolean get_tscope_preset_setting(mmcorej.Configuration preset, int [] dacArray,
 		//only list triggerscope settings
 		if((device.contains("TriggerScope"))) { 
 			
-			if(debugger) { print("device '" + device + "' with property  '" + prop_name + "' and value '" + prop_val + "'"); }
+			if(debug) { print("device '" + device + "' with property  '" + prop_name + "' and value '" + prop_val + "'"); }
 				
 			//Handle DAC lines
 			if (device.contains("DAC") && prop_name.contains("Volts")) { 
@@ -232,7 +228,7 @@ boolean get_tscope_preset_setting(mmcorej.Configuration preset, int [] dacArray,
 				dacArray[dn-1] = voltage2dac(dac_bit_depth, volts, dac_min_voltage, dac_voltage_range);
 				//dacArrayChannel[i_channel][dn-1] = voltage2dac(dac_bit_depth, volts, dac_min_voltage, dac_voltage_range);
 				
-				if(debugger) {print("DAC number " + dn + " = " + dacArray[dn-1]);}
+				if(debug) {print("DAC number " + dn + " = " + dacArray[dn-1]);}
 				//dacArrayChannel[i_channel][dn-1]);}
 				
 			}
@@ -261,71 +257,11 @@ boolean get_tscope_preset_setting(mmcorej.Configuration preset, int [] dacArray,
 				//ttlArrayChannel[i_channel][ttl_num-1] = ttl_val;	
 				ttlArray[ttl_num-1] = ttl_val;
 				
-				if(debugger) {print("TTL "+ ttl_num + " = " + ttlArray[ttl_num-1]);}
+				if(debug) {print("TTL "+ ttl_num + " = " + ttlArray[ttl_num-1]);}
 	
 			}
 		}
 	}
-	
-	return true;
-}
-
-/**
- * Convert the triggerscope focus position (always range 0-1000um) to a real position. i.e. we are mapping [0, 1000] -> [zmin_stage, zmax_stage]
- * @param  fake_stage_pos_um	stage position as reported by triggerscope focus
- * @param  zmin_stage_um
- * @param  zrange_stage_um	range of stage, = zmax_stage_um - zmin_stage_um
- */
-double get_real_stage_position(double fake_stage_pos_um, double zmin_fake_um, double zrange_fake_um, double zmin_stage_um, double zrange_stage_um){
-	
-	// double real_position_um = (fake_stage_pos_um - zmin_fake_um) * zrange_stage_um / zrange_fake_um + zmin_stage_um;
-	double real_position_um = map_intervals(fake_stage_pos_um, zmin_fake_um, zrange_fake_um, zmin_stage_um, zrange_stage_um);
-	return real_position_um;
-}
-
-/**
- * Calculate z-focus settings for the DAC (in bits) from the stage position range, 
- * the stage voltage input range, and the DAC voltage output range
- *
- * @param  focus_array 		[dac_start, dac_step, _, zDirDAC, _]
- * @param  zstart_um		start position for stage in microns
- * @param  zstep_um			step size for stage in microns
- * @param  dac_bit_depth	bit depth of the DAC. i.e. the DAC can represent 2^dac_bit_depth different values
- * @param  dac_min_voltage	minimum voltage the DAC can output, corresponding to 0 counts
- * @param  dac_max_voltage	maximum voltage the DAC can output, corresponding to 2^(dac_bit_depth-1) counts
- * @param  zmin_um				minimum position of the stage in microns
- * @param  zmax_um				maximum position of the stage in microns
- * @param  zmin_voltage		voltage corresponding to zmin_um
- * @param  zmax_voltage		voltage corresponding to zmax_um
- */
-boolean calculate_focus_settings(int [] focus_array, double zstart_um, double zstep_um, int dac_bit_depth, double dac_min_voltage, double dac_max_voltage, double zmin_um, double zmax_um, double zmin_voltage, double zmax_voltage){
-	
-	// convert z-positions to stage voltage
-	// double vstart = (zstart_um - zmin_um) * (zmax_voltage - zmin_voltage) / (zmax_um - zmin_um) + zmin_voltage;
-	//double vstep = zstep_um * (zmax_voltage - zmin_voltage) / (zmax_um - zmin_um);
-	double zrange_v = zmax_voltage - zmin_voltage;
-	double zrange_um = zmax_um - zmin_um;
-	double vstart = map_intervals(zstart_um, zmin_um, zrange_um, zmin_voltage, zrange_v);
-	double vstep = map_intervals(zstep_um, 0., zrange_um, 0., zrange_v);
-	
-	// convert stage voltage to DAC value
-	double dac_voltage_range = dac_max_voltage - dac_min_voltage;
-	int dac_start = voltage2dac(dac_bit_depth, vstart, dac_min_voltage, dac_voltage_range);
-	int dac_step = voltage2dac(dac_bit_depth, vstep, 0, dac_voltage_range);
-	
-	print("zstart position = " + zstart_um + "um = " + vstart + "volts = " + dac_start + "counts"); 
-	print("zstep = " + zstep_um + "um = " + vstep + "volts = " + dac_step + "counts"); 
-	
-	// set direction flag
-	int zDirDAC = 1;
-	if (dac_step < 0){
-		dac_step = -dac_step;
-		zDirDAC = 0;
-	}
-	
-	focus_array[0] = dac_start;
-	focus_array[1] = dac_step;
-	focus_array[3] = zDirDAC;
 	
 	return true;
 }
@@ -375,11 +311,10 @@ double map_intervals(double val, double start, double range, double new_start, d
 /*****************************
 stop any running acquisition
 *****************************/
-//boolean live_mode_on = mm.live().getIsLiveModeOn();
 mm.live().setLiveMode(false);
 
 /*****************************
-set circular buffer
+set circular buffer size
 *****************************/
 mmc.setCircularBufferMemoryFootprint(circ_buffer_mb);
 print("Circular buffer = " + mmc.getCircularBufferMemoryFootprint() + "MB");
@@ -407,27 +342,18 @@ int n_times = acqSettings.numFrames;
 if (n_times == 0){n_times = 1;}
 
 //Pull (XY) position list from MDA window
-// todo: are these really from MDA window?
 positionList = mm.positions().getPositionList();
-int nxy_pos = positionList.getNumberOfPositions(); // todo: integrate this with above checks...
+int nxy_pos = positionList.getNumberOfPositions();
 
-// handle case where no XY positions are set.
 boolean ignore_xy_loop = false;
 if ((!acqSettings.usePositionList) || (nxy_pos == 0) || (nxy_pos == 1) || (positionList == null)) {
 	nxy_pos = 1;
 	ignore_xy_loop = true;
-	print("Only one position, ignoring xy loop");
 }
 
 //Pull Z position list from MDA window
 int nz_pos = acqSettings.slices.size();
-boolean ignore_z_loop = false;
-if (nz_pos == 0){
-	nz_pos = 1;
-	ignore_z_loop = true;
-
-	print("No z slices found, ignoring Z loop.");
-}
+if (nz_pos == 0){nz_pos = 1;}
 
 // pull active channel list from MDA window
 String activeGroup = acqSettings.channelGroup;
@@ -449,19 +375,17 @@ for (channel : acqSettings.channels) {
 }
 
 String active_channels = sb.toString();
-print(nchannels + " active channels are: " + active_channels);
 
 // number of time/positions/channels points etc. looped over during acquisition
 int niterations = n_patterns * nchannels * nz_pos * nxy_pos * n_times;
-print(n_times + " times; " + nxy_pos + " xy-pos; " + nz_pos + " z-pos; " + nchannels + " channels; " + n_patterns + " sim patterns; ");
-print("total iterations = " + niterations);
+print(String.format("%d times; %d xy-pos; %d z-pos, %d channels = %s, %d patterns; %d total iterations", new Object [] {n_times, nxy_pos, nz_pos, nchannels, active_channels, n_patterns, niterations}));
 
 /*****************************
 Prepare datastore
 *****************************/
 rootDir = acqSettings.root;
 prefixDir = acqSettings.prefix;
-savePath = mm.data().getUniqueSaveDirectory(rootDir + "/" + prefixDir); //todo: combine paths in os independent way...
+savePath = mm.data().getUniqueSaveDirectory(rootDir + "/" + prefixDir); //todo: combine paths in os independent way?
 print("Saving data in: " + savePath);
 
 //Datastore store = mm.data().createRAMDatastore();
@@ -490,7 +414,7 @@ SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-dd-MM;HH:mm:ss.SS
 String date = simpleDateFormat.format(new Date());
 
 // user data to store # sim images
-PropertyMapBuilder pmb = mm.data().getPropertyMapBuilder().putInt("NumSIMPatterns", n_patterns);
+PropertyMapBuilder pmb = mm.data().getPropertyMapBuilder().putInt("NumSIMPatterns", n_patterns).putInt("NumDarkFrames", n_dark_frames).putBoolean("DMDBlanksBetweenFrames", dark_patterns_between).putString("DMDPatternMode", dmd_mode);
 PropertyMap pm = pmb.build();
 
 // create new metadata
@@ -516,18 +440,15 @@ Detect triggerscope properties
 //String tscope_focus = "TriggerScope-Focus";
 //int focus_dac_index = 15;
 
-String tscope_hub;
-String tscope_focus;
-for (d : mmc.getLoadedDevices()) { // todo: get trigger scope device
-	if (d.contains("TriggerScope") && d.contains("Hub")) {tscope_hub = d;}
-	if (d.contains("TriggerScope") && d.contains("Focus")) {tscope_focus = d;}
-}
+String tscope_hub = "TriggerScope-Hub";
+String tscope_focus = "TriggerScope-Focus";
+//for (d : mmc.getLoadedDevices()) { // todo: get trigger scope device
+//	if (d.contains("TriggerScope") && d.contains("Hub")) {tscope_hub = d;}
+//	if (d.contains("TriggerScope") && d.contains("Focus")) {tscope_focus = d;}
+//}
 
 String tscope_serial_port = mmc.getProperty(tscope_hub, "COM Port");
 int focus_dac_index = Integer.parseInt(mmc.getProperty(tscope_focus, "DAC Number")) - 1;
-
-print("triggerscope device label is '" + tscope_hub + "' attached to port " + tscope_serial_port);
-print("triggerscope focus label is '" + tscope_focus + "' using DAC channel #+" + (focus_dac_index + 1));
 
 /*****************************
 XY and Z stages
@@ -535,18 +456,11 @@ XY and Z stages
 //Initialize XYZ stages
 xyStage = mmc.getXYStageDevice();
 
-// z-stage not set as focus device because triggerscope is. So harder to find it.
-//zStage = mmc.getFocusDevice();
-String zStage = "MCL NanoDrive Z Stage";
-//String zStage = mmc.getZStageDevice(); // todo: ensure this works, then replace
+// focus device is one of the triggerscope lines
 String focus_dev = mmc.getFocusDevice();
 
-//Initialize autofocus manager
-//aFocus = mm.getAutofocusManager();
-
-// get initial position
-double focus_start_position = mmc.getPosition(focus_dev);
-print("focus is initially at position " + focus_start_position + "um");
+// z-stage not set as focus device because triggerscope is. So harder to find it.
+String zStage = "MCL NanoDrive Z Stage";
 
 /*****************************
 setup DMD. NOTE: the trigger #2 must be OFF/LOW before programming!
@@ -559,9 +473,6 @@ mmc.setProperty(String.format("TriggerScope-TTL%02d", new Object[] {dmd_trig1_tt
 mmc.setProperty(String.format("TriggerScope-TTL%02d", new Object[] {dmd_trig2_ttl}), "State", 0);
 
 // Program DMD by calling python script
-// This will not run with a conda environment unless you also activate the environment
-// Easiest to install python and run without a virtual environment
-// Otherwise, need to add calls to start virtual environment before calling python
 if(program_dmd){
 	print("setting DMD sequence from patterns stored in firmware");
 	
@@ -582,8 +493,11 @@ if(program_dmd){
 }
 
 /*****************************
-General triggerscope programming
+Get initial settings so we can put everything back at the end
 *****************************/
+double z_initial_tscope = mmc.getPosition(focus_dev);
+//double z_initial_tscope = (double) Float.parseFloat(mmc.getProperty(focus_dev, "Position"));
+
 // get initial triggerscope settings so we can reset them at the end
 double [] dac_start = new double[16];
 int [] ttl_start = new int[16];
@@ -595,6 +509,9 @@ for (int ii=0; ii<16; ii++){
 	ttl_start[ii] = Integer.parseInt(mmc.getProperty(String.format("TriggerScope-TTL%02d", new Object[] {ii+1}), "State"));
 }
 
+/*****************************
+General triggerscope programming
+*****************************/
 //if (program_tscope) {	// start of program tscope loop, but have problems because any variables defined in here go out of scope...
 // clear previous triggerscope settings
 String answer = ""; //a reply buffer
@@ -603,7 +520,6 @@ if(!tgsWrite("CLEAR_ALL", true, true, 2)){print("Transmit Error...)"); }
 
 // set ignore trigger mode
 int ignore_last_channel_focus_trigger_num = 0;
-if ((cam_using_int_trigger) && (!ignore_xy_loop)){ignore_last_channel_focus_trigger_num = 2;}
 
 if(!tgsWrite("NUM_IGNORE_FINAL_CHANNEL_FOCUS_LOOP_TRIGGERS," + ignore_last_channel_focus_trigger_num, true, true, 1)){print("Transmit Error...)");}
 
@@ -611,7 +527,7 @@ if(!tgsWrite("NUM_IGNORE_FINAL_CHANNEL_FOCUS_LOOP_TRIGGERS," + ignore_last_chann
 if(!tgsWrite("TRIGMODE," + tscope_trig_mode, true, true, 1)){print("Transmit Error...)");}
 
 // tell triggerscopes how many time loops
-int n_tscope_loops = n_times*nxy_pos;
+int n_tscope_loops = n_times;
 if(!tgsWrite("TIMECYCLES," + n_tscope_loops, true, true, 1)){print("Transmit Error...)");}
 
 // set length of SIM sequence (i.e. number of program steps per pattern)
@@ -625,11 +541,10 @@ if(!tgsWrite(tout, true, true, 1)){print("Transmit Error...)");}
 /*****************************
 Build DAC/TTL lines which will be programmed to triggerscope
 *****************************/
-
 //first get lines for looping over channels
 int [][] dacArrayChannel = new int[nchannels] [16]; //an array to hold values for the DAC channel
 int [][] ttlArrayChannel = new int[nchannels] [16]; //an array to hold values for the TTL channel
-get_tscope_channel_settings(acqSettings, dacArrayChannel, ttlArrayChannel, nchannels, 16, -10., 20., debugger);
+get_tscope_channel_settings(acqSettings, dacArrayChannel, ttlArrayChannel, nchannels, 16, -10., 20., debug);
 
 // but when we write these to the triggerscope, we will write each channel line multiple times to account for the SIM patterns. Alternate channel values with OFF values
 n_tscope_steps = n_patterns * nchannels * 2; // all channel values paired with OFFs
@@ -646,7 +561,10 @@ for (int ic=0; ic < nchannels; ic++){
 			
 			// write OFF data
 			ttlArray[counter+1][ii] = ttlArrayChannel[ic][ii];
+			// as a test
+			ttlArray[counter+1][8] = 0;
 
+			// if we aren't inserting dark patterns in between bright patterns, turn off DMD triggers
 			if (!dark_patterns_between){
 				if (ii==(dmd_trig2_ttl-1) || ii==(dmd_trig1_ttl-1)){
 				ttlArray[counter+1][ii] = 0;
@@ -654,7 +572,6 @@ for (int ic=0; ic < nchannels; ic++){
 			}
 			
 			// don't change DAC, otherwise e.g. voice coil mirror is flipping back and forth rapidly.
-			//dacArray[counter+1][ii] = dacArrayOff[ii];
 			dacArray[counter+1][ii] = dacArrayChannel[ic][ii];
 		}
 		counter = counter + 2;	
@@ -681,73 +598,77 @@ for(int d = 0; d < n_tscope_steps; d++) { //load all TTL lines
 }
 
 /*****************************
-Set focus loop
+Set focus loop -- complicated because we have to consider many units, um, volts, ADC, and triggerscope 0-1000 firmware units
 *****************************/
-// focus channel calculations
+
 // DAC info
 int dac_bit_depth = 16;
 double dac_min_voltage = 0.;
 double dac_max_voltage = 10.;
 
 //  focus loop data
-//Float.parseFloat(mmc.getProperty(zStage, "Upper Limit"));
-double zcurrent = (double) Float.parseFloat(mmc.getProperty(focus_dev, "Position"));
-double zstart = 0;
-double zstop = 0;
-double zstep = 0;
+double zstart_um = 0;
+double zstop_um = 0;
+double zstep_um = 0;
+double zrange_um = 0;
 // data to send to triggerscope
 int [] focus_array = new int[]{0, 0, nz_pos, 0, tscope_channel_fastest_axis};
-if (!ignore_z_loop){
-	
-	// grab z-positions from MDA window
-	if(!acqSettings.relativeZSlice){
-		zstart = acqSettings.slices.get(0);
-		zstop = acqSettings.slices.get(nz_pos - 1);
-		zstep = acqSettings.slices.get(1) - acqSettings.slices.get(0);
-		
-	}
-	else{
-		print("using relative z-position");
-		zstart = zcurrent + acqSettings.slices.get(0);
-		zstop = zcurrent + acqSettings.slices.get(nz_pos - 1);
-		zstep = acqSettings.slices.get(1) - acqSettings.slices.get(0);
-	}
-	print("zstart=" + zstart + "; zstep=" + zstep + " in triggerscope 0-1000um units");
+if (nz_pos > 1){
 
-	// get real Z positions by moving to them and querying the z-stage
-	double zstart_voltage = zstart / 100;
-	double zstop_voltage = zstop / 100;
-	double zstart_tscope = zstart;
-	double zstop_tscope = zstop;
+	// grab z-position from MDA window, in triggerscope firmware units (0-1000)
+	double zstart_tscope = acqSettings.slices.get(0);
+	double zstop_tscope = acqSettings.slices.get(nz_pos - 1);
+	double zstep_tscope = acqSettings.slices.get(1) - acqSettings.slices.get(0);
 	double zrange_tscope = zstop_tscope - zstart_tscope;
+
+	if(acqSettings.relativeZSlice){
+		print("using relative z-position");
+		zstart_tscope += z_initial_tscope;
+		zstop_tscope += z_initial_tscope;
+	}
+
+	// convert from triggerscope firmware units to voltage
+	double zstart_voltage = map_intervals(zstart_tscope, 0., 1000., dac_min_voltage, dac_max_voltage - dac_min_voltage);
+	double zstop_voltage = map_intervals(zstop_tscope, 0., 1000., dac_min_voltage, dac_max_voltage - dac_min_voltage);
+	double zstep_voltage = map_intervals(zstart_tscope + zstep_tscope, 0., 1000., dac_min_voltage, dac_max_voltage - dac_min_voltage) - zstart_voltage;
+	double zrange_voltage = zstop_voltage - zstart_voltage;
+
+	// convert from voltage to DAC counts
+	int dac_start = voltage2dac(dac_bit_depth, zstart_voltage, dac_min_voltage, dac_max_voltage - dac_min_voltage);
+	int dac_step = voltage2dac(dac_bit_depth, zstep_voltage, 0, dac_max_voltage - dac_min_voltage);
+
+	// set direction flag
+	int zDirDAC = 1;
+	if (dac_step < 0){
+		dac_step = -dac_step;
+		zDirDAC = 0;
+	}
 	
+	focus_array[0] = dac_start;
+	focus_array[1] = dac_step;
+	focus_array[3] = zDirDAC;
+
+	// get real z-positions by moving the z-stage and querying the positiom
 	print("Moving z-stage to calibrate position values");
 	mmc.setPosition(focus_dev, zstop_tscope);
-	mmc.sleep(10);
-	double zstop_um = mmc.getPosition(zStage);
+	mmc.sleep(100);
+	zstop_um = mmc.getPosition(zStage);
 	
 	mmc.setPosition(focus_dev, zstart_tscope);
-	mmc.sleep(10);
-	double zstart_um = mmc.getPosition(zStage);
-	double zrange_um = zstop_um - zstart_um;
+	mmc.sleep(100);
+	zstart_um = mmc.getPosition(zStage);
+	zrange_um = zstop_um - zstart_um;
+	zstep_um = zrange_um / (float) (nz_pos - 1);
 	
-	// get max and min z-values for stage.
-	// float zstop_um = Float.parseFloat(mmc.getProperty(zStage, "Upper Limit"));
-	// float zstart_um = Float.parseFloat(mmc.getProperty(zStage, "Lower Limit"));
-	print("Real stage positions = " + zstart_um + "-" + zstop_um + "um = " + zstart_voltage + "-" + zstop_voltage + " volts");
-	
-	// get real zstart and zstep from triggerscope values (which are 0-1000um)
-	zstart = get_real_stage_position(zstart, zstart_tscope, zrange_tscope, zstart_um, zrange_um);
-	zstep = get_real_stage_position(zstep, 0, zrange_tscope, 0, zrange_um);
-	
-	// calculate focus_array for stage	
-	calculate_focus_settings(focus_array, zstart, zstep, dac_bit_depth, dac_min_voltage, dac_max_voltage, zstart_um, zstop_um, zstart_voltage, zstop_voltage);
+	// print information about z-scan
+	print(String.format("zstart = %.0f tscope firmware = %.3fum = %.3fV = %d counts", new Object[] {zstart_tscope, zstart_um, zstart_voltage, focus_array[0]}));
+	print(String.format("zstop  = %.0f tscope firmware = %.3fum = %.3fV = %d counts", new Object[] {zstop_tscope, zstop_um, zstop_voltage, focus_array[0] + focus_array[1] * (nz_pos - 1)}));
+	print(String.format("zstep  = %.0f tscope firmware = %.3fum = %.3fV = %d counts", new Object[] {zstep_tscope, zstep_um, zstep_voltage, focus_array[1]})); 
 }
 else{
-	double focus_start_position_volts = map_intervals(focus_start_position/100, 0., 10., dac_min_voltage, dac_max_voltage - dac_min_voltage);
-	print(focus_start_position_volts);
+	// use initial value and no loop
+	double focus_start_position_volts = map_intervals(z_initial_tscope, 0., 1000., dac_min_voltage, dac_max_voltage - dac_min_voltage);
 	focus_array[0] = voltage2dac(dac_bit_depth, focus_start_position_volts, dac_min_voltage, dac_max_voltage - dac_min_voltage);
-	
 	focus_array[1] = 0;
 	focus_array[3] = 1;
 }
@@ -758,105 +679,89 @@ if(!tgsWrite(tout, true, true, 1)){print("Transmit Error...)"); }
 //} // end for program tscope loop
 
 /*****************************
-ARM triggerscope and prepare to acquire
+ARM triggerscope and do multi-dimensional acquisition
 *****************************/
-tgsWrite("ARM", true, true, 1);
-
 long time_start = System.currentTimeMillis();
+long time_previous = time_start;
 
-// set data for number of burst frames for camera
-int nburstFrames = nz_pos * nchannels * n_patterns;
-if (ignore_xy_loop){nburstFrames = n_times * nz_pos * nchannels * n_patterns;}
-print("Number of camera burst frames: " + nburstFrames);
-
-// Execute multipoint SIM acquisition
-// if no xy loop, full burst mode
-if (ignore_xy_loop){mmc.startSequenceAcquisition(nburstFrames, 0, true);}
-for (int ti; ti < n_times; ti++){
-	// todo: calculate elapsed time
-	long time_now = System.currentTimeMillis();
-	long time_elapsed_ms = time_now - time_start;
-	int seconds = (int) ((time_elapsed_ms / 1000) % 60);
-	int minutes = (int) ((time_elapsed_ms / (1000*60)) % 60);
-	int hours   = (int) ((time_elapsed_ms / (1000*60*60)) % 24);
+for (int ixy=0; ixy < nxy_pos; ++ixy) {
+	// arm triggerscope before each move
+	tgsWrite("ARM", true, true, 1);
 	
-	print(String.format("%d/%d times; elapsed time = %02d:%02d:%02d", new Object [] {ti+1, n_times, hours, minutes, seconds}));
-	
-	for (int ixy=0; ixy < nxy_pos; ++ixy) {
-		// Get new XY position
-		double xNow = 0.0;
-		double yNow = 0.0;
-		if (!ignore_xy_loop) {
+	// Get new XY position
+	double xNow = 0.0;
+	double yNow = 0.0;
+	if (!ignore_xy_loop) {
 
-			//Move to new XY position
-			position = positionList.getPosition(ixy);
-			MultiStagePosition.goToPosition(position, mm.core());
-			
-			//Wait for XY stage. Our XY stage is much slower than Z stage, so waiting for it 
-			//to finish the move is reasonable.
-			mm.core().waitForDevice(xyStage);
-			
-			// Pull current xy-position
-			xNow = position.getX();
-			yNow = position.getY();
-			print((ixy+1) + "/" + nxy_pos + " (x,y)=(" + xNow + "," + yNow + ")");
-		}
+		//Move to new XY position
+		position = positionList.getPosition(ixy);
+		MultiStagePosition.goToPosition(position, mm.core());
+		
+		//Wait for XY stage. Our XY stage is much slower than Z stage, so waiting for it 
+		//to finish the move is reasonable.
+		mm.core().waitForDevice(xyStage);
+		
+		// Pull current xy-position
+		xNow = position.getX();
+		yNow = position.getY();
+	}
 
-		/*****************************
-		burst acquisition of z-positions x channels x sim images
-		*****************************/
-		if (!ignore_xy_loop){mmc.startSequenceAcquisition(nburstFrames, 0, true);}
-		// mmc.startSequenceAcquisition(nburstFrames, 0, true);
-		// load coordinate data we already know
-		coord_builder = mm.data().getCoordsBuilder().stagePosition(ixy).z(0).channel(0).time(ti);
+	/*****************************
+	burst acquisition of time/z-positions/channel/SIM images
+	*****************************/
+	mmc.startSequenceAcquisition(n_times * nz_pos * nchannels * n_patterns, 0, true);
+	for (int ti; ti < n_times; ti++){
 
-		// NOTE: during burst acqusition cannot change any settings NOT controlled by triggerscope between
-		// NOTE: even though camera throws an extra edge during internal triggering, doesn't take an extra picture. Removed code intended to handle an extra picture.
+		// NOTE: during burst acqusition cannot change any settings NOT controlled by triggerscope
 		// process images as they arrive and add metadata
 		for (int iz=0; iz < nz_pos; ++iz){
+			// calculate current z-position
+			double zNow = 0.0;
+			if (nz_pos > 1) {zNow = zstart_um + (float) iz * zstep_um;}	
+					
 			int iall = 0; // unique counter for channel/sim combination
 			for (int ichannel=0; ichannel < nchannels; ++ichannel){
 				for(int isim=0; isim < n_patterns; ++isim){
 										
-					// wait until an image is available
+					// wait until an image is available, then pop the image off the stack
 					while(mmc.getRemainingImageCount() == 0){;}
-					
-					// handle image
 					TaggedImage img_tagged = mmc.popNextTaggedImage();
 					Image image = mm.data().convertTaggedImage(img_tagged);
 					
-					double zNow = 0.0;
-					//if (!ignore_z_loop) {zNow = acqSettings.slices.get(iz);}	
-					if (!ignore_z_loop) {zNow = zstart + iz * zstep;}	
-					if ((!ignore_z_loop) && (isim==0) && (ichannel==0) && (ti==0)){print((iz+1) + "/" + nz_pos + " zNow=" + zNow);}
-					
-					// create custom metadata object to store sim image #
+					// create custom metadata object to store sim image # and channel
 					PropertyMapBuilder pmb = mm.data().getPropertyMapBuilder().putInt("SimIndex", isim).putInt("ChannelIndex", ichannel);
 					PropertyMap pm = pmb.build();
 					
-					// get current image metadata and update with more
+					// get current image metadata and update with custom data created above
 					MetadataBuilder mdb = image.getMetadata().copy();
 					md = mdb.positionName("Pos-"+ixy).xPositionUm(xNow).yPositionUm(yNow).zPositionUm(zNow).exposureMs(exposureMs).userData(pm).build();
 							
-					// coordinates for image
-					// coords must be unique for different images, so use iall instead of ichannel,
-					// i.e. channel entry has information about both channel and sim pattern.
-					// todo: where does the coord info get stored? md is what goes to the json metadata file. Also, what is stored depends on if using individual tiff files vs. multipage tiffs
-					coord_builder.z(iz).channel(iall);
+					// coordinates for image. They must be unique for different images, so we use iall instead of ichannel
+					// i.e. "channel" entry is unique for each combination of real channel and sim pattern
+					coord_builder = mm.data().getCoordsBuilder().stagePosition(ixy).z(iz).channel(iall).time(ti);
 					Coords coords = coord_builder.build();
 					
-					// place image with update metadata into dataStore
+					// place image with updated metadata into dataStore
 					store.putImage(image.copyWith(coords, md));	
 	
 					++iall; // increment counter
 				}
 			}
+
+			// print elapsed time at least every 2s
+			long time_now = System.currentTimeMillis();
+			if ( (time_now - time_previous) > 2000L){
+				long time_elapsed_ms = time_now - time_start;
+				int seconds = (int) ((time_elapsed_ms / 1000) % 60);
+				int minutes = (int) ((time_elapsed_ms / (1000*60)) % 60);
+				int hours   = (int) ((time_elapsed_ms / (1000*60*60)) % 24);
+				print(String.format("%d/%d xy-pos = (%.3fum, %.3fum), %d/%d times, %d/%d z-pos = %.3fum; elapsed time = %02d:%02d:%02d", new Object [] {ixy+1, nxy_pos, xNow, yNow, ti+1, n_times, iz+1, nz_pos, zNow, hours, minutes, seconds}));
+			}
+			time_previous = time_now;
 		}
-		// todo: check no images left!
-		if(!ignore_xy_loop){mmc.stopSequenceAcquisition();} // if only z/channel/sim in one burst
 	}
+	mmc.stopSequenceAcquisition();
 }
-if(ignore_xy_loop){mmc.stopSequenceAcquisition();} // if t/z/channel/sim in one burst
 
 // This saves one tif for each x-y position. Probably desired behavior here, but why is that enforced?
 // Only need one of these if using ram datastore
@@ -870,9 +775,9 @@ store.freeze();
 store.close();	
 
 // set triggerscope lines back to initial positions 
-mmc.sleep(1000); // todo: why is this here?
+mmc.sleep(1000); // todo: why is this here? is it necessary?
 print("Returning TriggerScope TTL/DAC lines to initial settings");
-mmc.setPosition(focus_dev, focus_start_position);
+mmc.setPosition(focus_dev, z_initial_tscope);
 for (int ii=0; ii<16; ii++){
 	if( ii != focus_dac_index){
 		mmc.setProperty(String.format("TriggerScope-DAC%02d", new Object[] {ii+1}), "Volts", dac_start[ii]);
