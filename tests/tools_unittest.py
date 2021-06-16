@@ -25,10 +25,10 @@ class TestTools(unittest.TestCase):
         img = np.random.rand(30, 30)
         img_ft = fft.fft2(img)
 
-        img_resampled_rs = tools.resample(img, nx=expand_x, ny=expand_y)
+        img_resampled_rs = tools.duplicate_pix(img, nx=expand_x, ny=expand_y)
         img_resampled_rs_ft = fft.fft2(img_resampled_rs)
 
-        img_resampled_fs = tools.resample_fourier_sp(img_ft, mx=expand_x, my=expand_y, centered=False)
+        img_resampled_fs = tools.duplicate_pix_ft(img_ft, mx=expand_x, my=expand_y, centered=False)
         img_resampled_fs_rs = fft.ifft2(img_resampled_fs)
 
         err_fs = np.abs(img_resampled_fs - img_resampled_rs_ft).max()
@@ -44,20 +44,67 @@ class TestTools(unittest.TestCase):
         """
 
         arr = np.array([[1, 2], [3, 4]])
-        arr_ft = fft.fft2(arr)
-        arr_ft_centered = fft.fftshift(arr_ft)
+        arr_ft = fft.fftshift(fft.fft2(fft.ifftshift(arr)))
 
-        arr_ft_ex1 = tools.expand_fourier_sp(arr_ft, mx=2, my=2, centered=False)
-        arr_ft_ex2 = tools.expand_fourier_sp(arr_ft_centered, mx=2, my=2, centered=True)
+        arr_ft_ex = tools.resample_bandlimited_ft(arr_ft, (2, 2))
+        arr_ex = fft.fftshift(fft.ifft2(fft.ifftshift(arr_ft_ex)))
 
-        arr_ex1 = fft.ifft2(arr_ft_ex1)
-        arr_ex2 = fft.ifft2(fft.ifftshift(arr_ft_ex2))
-
-        self.assertTrue(np.array_equal(arr_ex1, arr_ex2))
-        self.assertTrue(np.array_equal(arr_ex1.real, np.array([[1, 1.5, 2, 1.5],
+        self.assertTrue(np.array_equal(arr_ex.real, np.array([[1, 1.5, 2, 1.5],
                                                                [2, 2.5, 3, 2.5],
                                                                [3, 3.5, 4, 3.5],
                                                                [2, 2.5, 3, 2.5]])))
+
+    def test_expand_fourier_sp_odd1d(self):
+        """
+        Test function with odd input size
+        """
+        arr = np.random.rand(151)
+        arr_ft = fft.fftshift(fft.fft(fft.ifftshift(arr)))
+
+        arr_ex_ft = tools.resample_bandlimited_ft(arr_ft, (2,))
+        arr_exp = fft.fftshift(fft.ifft(fft.ifftshift(arr_ex_ft))).real
+
+        max_err = np.max(np.abs(arr_exp[1::2] - arr))
+        self.assertTrue(max_err < 1e-14)
+
+    def test_expand_fourier_sp_even1d(self):
+        """
+        test function with even input size
+        """
+        arr = np.random.rand(100)
+        arr_ft = fft.fftshift(fft.fft(fft.ifftshift(arr)))
+
+        arr_ex_ft = tools.resample_bandlimited_ft(arr_ft, (2,))
+        arr_exp = fft.fftshift(fft.ifft(fft.ifftshift(arr_ex_ft))).real
+
+        max_err = np.max(np.abs(arr_exp[::2] - arr))
+        self.assertTrue(max_err < 1e-14)
+
+    def test_expand_fourier_sp_odd2d(self):
+        """
+        Test function with odd input size
+        """
+        arr = np.random.rand(151, 151)
+        arr_ft = fft.fftshift(fft.fft2(fft.ifftshift(arr)))
+
+        arr_ex_ft = tools.resample_bandlimited_ft(arr_ft, (2, 2))
+        arr_exp = fft.fftshift(fft.ifft2(fft.ifftshift(arr_ex_ft))).real
+
+        max_err = np.max(np.abs(arr_exp[1::2, 1::2] - arr))
+        self.assertTrue(max_err < 1e-14)
+
+    def test_expand_fourier_sp_even2d(self):
+        """
+        test function with even input size
+        """
+        arr = np.random.rand(100, 100)
+        arr_ft = fft.fftshift(fft.fft2(fft.ifftshift(arr)))
+
+        arr_ex_ft = tools.resample_bandlimited_ft(arr_ft, (2, 2))
+        arr_exp = fft.fftshift(fft.ifft2(fft.ifftshift(arr_ex_ft))).real
+
+        max_err = np.max(np.abs(arr_exp[::2, ::2] - arr))
+        self.assertTrue(max_err < 1e-14)
 
     def test_translate_ft(self):
         """

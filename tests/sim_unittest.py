@@ -61,7 +61,7 @@ class TestSIM(unittest.TestCase):
         xx_edge, yy_edge = np.meshgrid(x_edge, y_edge)
         m_edge = 1 + 0.2 * np.cos(2 * np.pi * (frqs[0] * xx_edge + frqs[1] * yy_edge) + phi)
 
-        phase_guess_edge = sim.fit_phase_realspace(m_edge, frqs, dx, phase_guess=0, origin="edge")
+        phase_guess_edge = sim.get_phase_realspace(m_edge, frqs, dx, phase_guess=0, origin="edge")
 
         self.assertAlmostEqual(phi, float(phase_guess_edge), places=5)
 
@@ -71,7 +71,7 @@ class TestSIM(unittest.TestCase):
         xx_center, yy_center = np.meshgrid(x_center, y_center)
         m_center = 1 + 0.2 * np.cos(2 * np.pi * (frqs[0] * xx_center + frqs[1] * yy_center) + phi)
 
-        phase_guess_center = sim.fit_phase_realspace(m_center, frqs, dx, phase_guess=0, origin="center")
+        phase_guess_center = sim.get_phase_realspace(m_center, frqs, dx, phase_guess=0, origin="center")
 
         self.assertAlmostEqual(phi, float(phase_guess_center), places=5)
 
@@ -96,7 +96,7 @@ class TestSIM(unittest.TestCase):
 
         m_center_ft = fft.fftshift(fft.fft2(fft.ifftshift(m_center)))
 
-        phase_guess_center = sim.estimate_phase(m_center_ft, frqs, dx)
+        phase_guess_center = sim.get_phase_ft(m_center_ft, frqs, dx)
 
         self.assertAlmostEqual(phi, float(phase_guess_center), places=5)
 
@@ -151,8 +151,8 @@ class TestSIM(unittest.TestCase):
 
         sim_fs_ft = np.zeros(gt_ft_shifted.shape, dtype=np.complex)
         for ii in range(nangles):
-            kmat = sim.get_kmat(phases[ii], mods[ii], amps[ii])
-            sim_fs_ft[ii] = sim.mult_img_matrix(gt_ft_shifted[ii], kmat)
+            kmat = sim.get_band_mixing_matrix(phases[ii], mods[ii], amps[ii])
+            sim_fs_ft[ii] = sim.image_times_matrix(gt_ft_shifted[ii], kmat)
 
         sim_fs_rs = np.zeros(gt_ft_shifted.shape)
         for ii in range(nangles):
@@ -215,7 +215,7 @@ class TestSIM(unittest.TestCase):
             for jj in range(nphases):
                 imgs_ft[ii, jj] = fft.fftshift(fft.fft2(fft.ifftshift(sim_imgs[ii, jj])))
 
-        separated_components = sim.separate_components(imgs_ft, phases, mod_depths, amps)
+        separated_components = sim.do_sim_band_separation(imgs_ft, phases, mod_depths, amps)
 
         gt_per_angle = np.zeros((nangles, ny, nx))
         for ii in range(nangles):

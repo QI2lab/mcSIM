@@ -38,7 +38,7 @@ class Test_affine(unittest.TestCase):
         out_coords = np.meshgrid(range(2048), range(2048))
         img = affine.xform_fn(fn, xform, out_coords)
 
-        phase_fit = float(sim.fit_phase_realspace(img, fimg, 1, origin="edge"))
+        phase_fit = float(sim.get_phase_realspace(img, fimg, 1, origin="edge"))
 
         # todo: could also test frequencies if wanted...
 
@@ -68,7 +68,7 @@ class Test_affine(unittest.TestCase):
         x_new, y_new = np.meshgrid(range(500), range(500))
         img_new = fn_xlated(x_new, y_new)
 
-        phase_xlated_test = float(sim.fit_phase_realspace(img_new, fobj, 1, origin="edge"))
+        phase_xlated_test = float(sim.get_phase_realspace(img_new, fobj, 1, origin="edge"))
 
         self.assertAlmostEqual(phase_xlated, phase_xlated_test, 3)
 
@@ -93,7 +93,7 @@ class Test_affine(unittest.TestCase):
 
         # determine ROI phase from fitting
         img_roi = img[roi[0]:roi[1], roi[2]:roi[3]]
-        phase_roi_test = float(sim.fit_phase_realspace(img_roi, fobj, 1, origin="edge"))
+        phase_roi_test = float(sim.get_phase_realspace(img_roi, fobj, 1, origin="edge"))
 
         self.assertAlmostEqual(phase_roi, phase_roi_test, 8)
 
@@ -128,7 +128,7 @@ class Test_affine(unittest.TestCase):
         # compared with phase from fitting image directly
         out_coords = np.meshgrid(range(roi_img[2], roi_img[3]), range(roi_img[0], roi_img[1]))
         img = affine.xform_fn(fn, xform, out_coords)
-        phase_fit_roi = float(sim.fit_phase_realspace(img, fimg, 1, phase_guess=phase_roi, origin="edge"))
+        phase_fit_roi = float(sim.get_phase_realspace(img, fimg, 1, phase_guess=phase_roi, origin="edge"))
 
         # phase FFT
         ny, nx = img.shape

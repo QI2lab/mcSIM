@@ -14,9 +14,6 @@ import scipy.optimize
 import scipy.sparse as sp
 from scipy import fft
 import pandas as pd
-# from PIL import Image # todo: can I get rid of this in favor of tifffile?
-# import PIL.TiffTags
-# import tiffile # todo: can I get rid of this in favor of tifffile?
 import tifffile
 
 import fit
@@ -287,6 +284,7 @@ def read_multi_tiff(fnames, slice_indices):
     imgs = [''] * len(fnames)
     for ii, fu in enumerate(fnames_unique):
         slices = slice_indices[inds_to_unique == ii]
+        # todo: replace with tifffile
         imgs_curr, _ = read_tiff(fu, slices)
 
         # this is necessary in case e.g. one file has images [1,3,7] and another has [2,6,10]
@@ -299,8 +297,7 @@ def read_multi_tiff(fnames, slice_indices):
 
     return imgs
 
-def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata=None,
-              axes_order='ZYX', hyperstack=False, **kwargs):
+def save_tiff(img, save_fname, dtype, tif_metadata=None, axes_order='ZYX', hyperstack=False, **kwargs):
     """
     Save an nD NumPy array to a tiff file
 
@@ -308,16 +305,13 @@ def save_tiff(img, save_fname, dtype='uint16', tif_metadata=None, other_metadata
 
     :param img: nd-numpy array to save as TIF file
     :param save_fname: path to save file
-    :param dtype: data type to save tif as
+    :param np.dtype dtype: data type to save tif as
     :param tif_metadata: dictionary of tif metadata. All tags must be recognized.
     :param other_metadata: dictionary of tif metadata with tags that will not be recognized.
-    :param axes_order: a string consisting of XYZCTZ
+    :param axes_order: a string consisting of XYZCTZ where the fastest axes are more to the right
     :param hyperstack: whether or not to save in format compatible with imagej hyperstack
     :return:
     """
-
-    if not isinstance(dtype, str):
-        raise TypeError("dtype must be a string, e.g. 'uint16'")
 
     if hyperstack:
         img = tifffile.transpose_axes(img, axes_order, asaxes='TZCYXS')
@@ -543,7 +537,7 @@ def elliptical_grid(params, xx, yy, units='mean'):
     Ellipse equation is (x - cx) ^ 2 / A ^ 2 + (y - cy) ^ 2 / B ^ 2 = 1
     Define d_A  = sqrt((x - cx) ^ 2 + (y - cy) ^ 2 * (A / B) ^ 2)...which is the
     Define d_B  = sqrt((x - cx) ^ 2 * (B / A) ^ 2 + (y - cy) ^ 2) = (B / A) * d_A
-    Define d_AB = sqrt((x - cx) ^ 2 * (B / A) + (y - cy) ^ 2 * (A / B)) = sqrt(B / A) * d_A                                                      %
+    Define d_AB = sqrt((x - cx) ^ 2 * (B / A) + (y - cy) ^ 2 * (A / B)) = sqrt(B / A) * d_A
     for a given ellipse, d_A is the distance along the A axis, d_B along the B
     axis, and d_AB along 45 deg axis.i.e.d_A(x, y) gives the length of the A
     axis of an ellipse with the given axes A and B that contains (x, y).
@@ -824,7 +818,7 @@ def estimate_background(img):
 
 # resampling functions
 # todo: swap resample/expand names as they are not accurate!
-def resample(img, nx=2, ny=2):
+def duplicate_pix(img, nx=2, ny=2):
     """
     Resample image by expanding each pixel into a rectangle of ny x nx identical pixels
 
@@ -841,7 +835,7 @@ def resample(img, nx=2, ny=2):
 
     return img_resampled
 
-def resample_fourier_sp(img_ft, mx=2, my=2, centered=True):
+def duplicate_pix_ft(img_ft, mx=2, my=2, centered=True):
     """
     Resample the Fourier transform of image. In real space, this operation corresponds to replacing each pixel with a
     myxmx square of identical pixels. Note that this is often NOT the desired resampling behavior if you e.g. have
@@ -887,75 +881,102 @@ def resample_fourier_sp(img_ft, mx=2, my=2, centered=True):
 
     return img_ft_resampled
 
-def expand_im(img, mx=2, my=2):
+def resample_bandlimited(img, mag=(2, 2)):
     """
     Expand real-space imaging while keeping fourier content constant
 
-    :param img: original image
-    :param mx: factor to expandd along the x-direction
-    :param my: factor to expand along the y-direction
+    :param img: nD image
+    :param mag:
 
     :return img_resampled:
     """
-    img_resampled = fft.ifft2(expand_fourier_sp(fft.fft2(img), mx=mx, my=my, centered=False))
+    img_resampled = fft.fftshift(fft.ifft2(resample_bandlimited_ft(fft.fftshift(fft.fft2(fft.ifftshift(img))), mag)))
     return img_resampled
 
-def expand_fourier_sp(img_ft, mx=2, my=2, centered=True):
+def resample_bandlimited_ft(img_ft, mag=(2, 2)):
     """
     Expand image by factors of mx and my while keeping Fourier content constant.
 
-    :param img_ft: frequency space representation of image
-    :param mx: factor to resample image along the x-direction
-    :param my: factor to resample image along the y-direction
-    :param centered: if True assume img_ft has undergone an fftshift so that zero-frequency components are in the center
+    Let the initial (real space) array be a_{ij} and the final be b_{ij}.
+    If a has odd sizes, b_{2i-1,2j-1} = a_{i,j}
+    If a has even sizes, b_{2i, 2j} = a_{i,j}
+    This choice is dictated by the ``natural'' FFT position values, and it ensures that the zero positions of b and a
+    give the same value.
+
+    NOTE: the expanded FT function is normalized so that the realspace values will match after an inverse FFT,
+    thus the corresponding Fourier space components will have the relationship b_k = a_k * b.size / a.size
+
+    :param img_ft: frequency space representation of image, arranged according to the natural FFT representation.
+    e.g. img_ft = fftshift(fft2(ifftshift(img))).
+    :param mag: (my, mx)
 
     :return img_ft_expanded:
     """
+    # todo: add axes argument, so will only resample some axes
 
-    if mx == 1 and my == 1:
+    if isinstance(mag, int):
+        mag = [mag]
+
+    if not np.all([isinstance(m, int) for m in mag]):
+        raise ValueError("mx and my must both be integers")
+
+    if np.all([m == 1 for m in mag]):
         return img_ft
 
-    ny, nx = img_ft.shape
-    fx_old = get_fft_frqs(nx)
-    fy_old = get_fft_frqs(ny)
+    if not np.all([m == 2 for m in mag]):
+        raise NotImplementedError("not implemented for any expansion except factor of 2")
 
-    fx_new = get_fft_frqs(nx * mx, dt=0.5)
-    fy_new = get_fft_frqs(ny * my, dt=0.5)
+    # new method, works for arbitrary sized array
+    # don't need frequencies, but useful for checking using proper points in arrays
+    # frq_old = [get_fft_frqs(n) for n in img_ft.shape]
+    # frq_new = [get_fft_frqs(n * m, dt=1/m) for n, m in zip(img_ft.shape, mag)]
+    # center frequency for FFT of odd or even size is at position n//2
+    ind_start = [(m * n) // 2 - n // 2 for n, m in zip(img_ft.shape, mag)]
 
-    if not centered:
-        img_ft = fft.fftshift(img_ft)
+    slice_obj = tuple([slice(istart, istart + n, 1) for istart, n in zip(ind_start, img_ft.shape)])
+    img_ft_exp = np.zeros([n * m for n, m in zip(img_ft.shape, mag)], dtype=np.complex)
+    img_ft_exp[slice_obj] = img_ft
 
-    ix_start = np.where(fx_new == fx_old[0])[0][0]
-    iy_start = np.where(fy_new == fy_old[0])[0][0]
+    # if initial array was even it had an unpaired negative frequency, but its pair is present in the larger array
+    # this negative frequency was at -N/2, so this enters the IFT for a_n as a_(k=-N/2) * exp(2*np.pi*i * -n/2)
+    # not that exp(2*np.pi*i * -k/2) = exp(2*np.pi*i * k/2), so this missing frequency doesn't matter for a
+    # however, when we construct b, in the IFT for b_n we now have b_(k=-N/2) * exp(2*np.pi*i * -n/4)
+    # Since we are supposing N is even, we must satisfy
+    # b_(2n) = a_n -> b_(k=-L/2) + b_(k=L/2) = a_(k=-L/2)
+    # Further, we want to ensure that b is real if a is real, which implies
+    # b_(k=-N/2) = 0.5 * a(k=-N/2)
+    # b_(k= N/2) = 0.5 * a(k=-N/2)
+    # no complex conjugate is required for b_(k=N/2). If a_n is real, then a(k=-N/2) must also be real.
+    #
+    # consider the 2D case. We have an unfamiliar condition required to make a real
+    # a_(ky=-N/2, kx) = conj(a_(ky=-N/2, -kx))
+    # recall -N/2 <-> N/2 to make this more familiar
+    # for b_(n, m) we have b_(ky=-N/2, kx) * exp(2*np.pi*i * -n/4) * exp(2*np.pi*i * kx*m/(fx*N))
+    # to ensure all b_(n, m) are real we must enforce
+    # b_(ky=N/2, kx) = conj(b(ky=-N/2, -kx))
+    # b_(ky, kx=N/2) = conj(b(-ky, kx=-N/2))
+    # on the other hand, to enforce b_(2n, 2m) = a_(n, m)
+    # a(ky=-N/2,  kx) = b(ky=-N/2,  kx) + b(ky=N/2,  kx)
+    # a(ky=-N/2, -kx) = b(ky=-N/2, -kx) + b(ky=N/2, -kx) = b^*(ky=-N/2, kx) + b^*(ky=N/2, kx)
+    # but this second equation doesn't give us any more information than the real condition above
+    # the easiest way to do this is...
+    # b(ky=+/- N/2, kx) = 0.5 * a(ky=-N/2, kx)
+    # for the edges, the conditions are
+    # b(ky=+/- N/2, kx=+/- N/2) = 0.25 * a(ky=kx=-N/2)
+    # b(ky=+/- N/2, kx=-/+ N/2) = 0.25 * a(ky=kx=-N/2)
 
-    img_ft_exp = np.zeros((ny * my, nx * mx), dtype=np.complex)
-    img_ft_exp[iy_start : iy_start + ny, ix_start:ix_start + nx] = img_ft
+    for ii in range(img_ft.ndim):
+        slice_obj = [slice(None, None)] * img_ft.ndim
+        slice_obj[ii] = slice(ind_start[ii], ind_start[ii] + 1)
 
-    # todo: if even array has one extra negative frequency. Now I've added its positive freq
-    # partner, so shouldn't I have to put complex conjugate of that value in partner spot?
-    # yes, and divide by 2!
-    if np.mod(nx, 2) == 0:
-        ix_ops = np.where(fx_new == -fx_old[0])[0][0]
-        img_ft_exp[:, ix_start] = 0.5 * img_ft_exp[:, ix_start]
-        img_ft_exp[:, ix_ops] = img_ft_exp[:, ix_start]
+        val = img_ft_exp[tuple(slice_obj)]
+        img_ft_exp[tuple(slice_obj)] *= 0.5
 
-    if np.mod(ny, 2) == 0:
-        iy_ops = np.where(fy_new == - fy_old[0])[0][0]
-        img_ft_exp[iy_start, :] = 0.5 * img_ft_exp[iy_start, :]
-        img_ft_exp[iy_ops, :] = img_ft_exp[iy_start, :]
+        slice_obj[ii] = slice(ind_start[ii] + img_ft.shape[ii], ind_start[ii] + img_ft.shape[ii] + 1)
+        img_ft_exp[tuple(slice_obj)] = val
 
-    # but will have double corrected for [iy_start, ix_start], [iy_start, ix_ops], [iy_ops, ix_start], and [iy_ops, ix_ops]
-    if np.mod(ny, 2) == 0 and np.mod(nx, 2) == 0:
-        img_ft_exp[iy_start, ix_start] = 2 * img_ft_exp[iy_start, ix_start]
-        img_ft_exp[iy_start, ix_ops] = 2 * img_ft_exp[iy_start, ix_ops]
-        img_ft_exp[iy_ops, ix_start] = 2 * img_ft_exp[iy_ops, ix_start]
-        img_ft_exp[iy_ops, ix_ops] = 2 * img_ft_exp[iy_ops, ix_ops]
-
-    # correct normalization
-    img_ft_exp = mx * my * img_ft_exp
-
-    if not centered:
-        img_ft_exp = fft.ifftshift(img_ft_exp)
+    # correct normalization so real-space values of expanded array match real-space values of initial array
+    img_ft_exp = np.prod(mag) * img_ft_exp
 
     return img_ft_exp
 
@@ -1233,10 +1254,10 @@ def get_fft_frqs(length, dt=1, centered=True, mode='symmetric'):
 
     If fftshift=True, the natural frequency representation is the symmetric one
     If x = [0, ..., L-1], then
-    for even length sequences, (L-1) = 2*N+1:
-    f = [-(N+1), ..., 0, ..., N]/(dt*L)
-    and for odd length sequences, (L-1) = 2*N
-    f = [    -N, ..., 0, ..., N]/(dt*L)
+    for even length sequences, (L-1) = 2*N+1, and we have one more negative frequency than positive frequency:
+    f = [-(N+1), ..., 0, ..., N]/(dt*L) = [-L/2, ..., 0, ..., (L-2)/2]
+    and for odd length sequences, (L-1) = 2*N, and we have an equal number of negative and positive frequencies.
+    f = [    -N, ..., 0, ..., N]/(dt*L) = [-(L-1)/2, ..., 0, ..., (L-1)/2]
     i.e. for sequences of even length, we have one more negative frequency than we have positive frequencies.
 
 
@@ -1345,33 +1366,6 @@ def get_spline_fn(x1, x2, y1, y2, dy1, dy2):
     dfn = lambda x: 3 * coeffs[0, 0] * x**2 + 2 * coeffs[1, 0] * x + coeffs[2, 0]
     return fn, dfn, coeffs
 
-def mix_edges(img, wx=0.1, wy=0.1):
-    """
-
-    :param img:
-    :param wx:
-    :param wy:
-    :return:
-    """
-    ny, nx = img.shape
-    x, y = np.meshgrid(range(nx), range(ny))
-    x = x / x.max()
-    y = y / y.max()
-
-    # mix x edges together so that smoothly interpolate from equal mixture at edge to normal image at wx
-    fnx, _, _ = get_spline_fn(0, wx, 0.5, 1, 0, 0)
-    x_mix = fnx(x) * (x <= wx) + fnx(1 - x) * (x >= (1 - wx)) + 1 * (x > wx) * (x < (1 - wx))
-    img_symmetric_x = img * x_mix + np.flip(img, axis=1) * (1 - x_mix)
-
-    # mix y edges together so that smoothly interpolate from equal mixture at edge to normal image at wy
-    fny, _, _ = get_spline_fn(0, wy, 0.5, 1, 0, 0)
-    y_mix = fny(y) * (y <= wy) + fny(1 - y) * (y >= (1 - wy)) + 1 * (y > wy) * (y < (1 - wy))
-    img_symmetric_y = img * y_mix + np.flip(img, axis=0) * (1 - y_mix)
-
-    img_symmetric = 0.5 * (img_symmetric_x + img_symmetric_y)
-
-    return img_symmetric
-
 # translating images
 def translate_pix(img, shifts, dx=1, dy=1, mode='wrap', pad_val=0):
     """
@@ -1394,34 +1388,37 @@ def translate_pix(img, shifts, dx=1, dy=1, mode='wrap', pad_val=0):
     sx = int(np.round(-shifts[0] / dx))
     sy = int(np.round(-shifts[1] / dy))
 
-    img = np.roll(img, sy, axis=0)
-    img = np.roll(img, sx, axis=1)
+    # only need to operate on img if pixel shift is not zero
+    if sx != 0 or sy != 0:
+        img = np.roll(img, sy, axis=0)
+        img = np.roll(img, sx, axis=1)
 
-    if mode == 'wrap':
-        pass
-    elif mode == 'no-wrap':
-        mask = np.ones(img.shape)
-        ny, nx = img.shape
+        if mode == 'wrap':
+            pass
+        elif mode == 'no-wrap':
+            mask = np.ones(img.shape)
+            ny, nx = img.shape
 
-        if sx >= 0:
-            mask[:, :sx] = 0
+            if sx >= 0:
+                mask[:, :sx] = 0
+            else:
+                mask[:, nx+sx:] = 0
+
+            if sy >= 0:
+                mask[:sy, :] = 0
+            else:
+                mask[ny+sy:, :] = 0
+
+            img = img * mask + pad_val * (1 - mask)
         else:
-            mask[:, nx+sx:] = 0
-
-        if sy >= 0:
-            mask[:sy, :] = 0
-        else:
-            mask[ny+sy:, :] = 0
-
-        img = img * mask + pad_val * (1 - mask)
-    else:
-        raise ValueError("'mode' must be 'wrap' or 'no-wrap' but was '%s'" % mode)
+            raise ValueError("'mode' must be 'wrap' or 'no-wrap' but was '%s'" % mode)
 
     return img, -sx, -sy
 
+
 def translate_im(img, shift, dx=1, dy=None):
     """
-    Translate img(y,x) to img(y+yo, x+xo).
+    Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
 
     e.g. suppose the pixel spacing dx = 0.05 um and we want to shift the image by 0.0366 um,
     then dx = 0.05 and shift = [0, 0.0366]
@@ -1432,9 +1429,12 @@ def translate_im(img, shift, dx=1, dy=None):
     :param dy: pixel size of image along y-direction
     :return img_shifted:
     """
+    if img.ndim != 2:
+        raise ValueError("img must be 2D")
 
     if dy is None:
         dy = dx
+    # todo: take (dx, dy) as argument instead
 
     # must use symmetric frequency representation to do correctly!
     # we are using the FT shift theorem to approximate the Nyquist-Whittaker interpolation formula,
@@ -1451,45 +1451,90 @@ def translate_im(img, shift, dx=1, dy=None):
 
     return img_shifted
 
-def translate_ft(img_ft: np.ndarray, shift_frq, dx=1, dy=None, apodization=None) -> np.ndarray:
+
+def translate_ft(img_ft, shift_frq, dx=1):
     """
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
     using the FFT shift relationship, img_ft(f + shift_frq) = F[ exp(-2*pi*i * shift_frq * r) * img(r) ]
 
-    This is an approximation to the Whittaker-Shannon interpolation formula which can be performed using only FFT's
+    This is an approximation to the Whittaker-Shannon interpolation formula which can be performed using only FFT's.
+    In this sense, it is exact for band-limited functions
 
     :param img_ft: fourier transform, with frequencies centered using fftshift
     :param shift_frq: [fx, fy]. Frequency in hertz (i.e. angular frequency is k = 2*pi*f)
     :param dx: pixel size (sampling rate) of real space image in x-direction
     :param dy: pixel size (sampling rate) of real space image in y-direction
-    :param apodization: apodization function applied (in both k- and real- space)
 
     :return img_ft_shifted:
     """
-    if dy is None:
-        dy = dx
+    # todo: take (dx, dy) as argument instead
+    dy = dx
 
-    if apodization is None:
-        apodization = 1
+    if img_ft.ndim != 2:
+        raise ValueError("img_ft must be 2D")
 
-    # 1. shift frequencies in img_ft so zero frequency is in corner using ifftshift
-    # 2. inverse ft
-    # 3. multiply by exponential factor
-    # 4. take fourier transform, then shift frequencies back using fftshift
+    if shift_frq[0] == 0 and shift_frq[1] == 0:
+        return np.array(img_ft, copy=True)
+    else:
+        # 1. shift frequencies in img_ft so zero frequency is in corner using ifftshift
+        # 2. inverse ft
+        # 3. multiply by exponential factor
+        # 4. take fourier transform, then shift frequencies back using fftshift
 
-    ny, nx = img_ft.shape
-    # must use symmetric frequency representation to do correctly!
-    # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
-    # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
-    x = get_fft_pos(nx, dx, centered=False, mode='symmetric')
-    y = get_fft_pos(ny, dy, centered=False, mode='symmetric')
+        ny, nx = img_ft.shape
+        # must use symmetric frequency representation to do correctly!
+        # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
+        # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
+        x = get_fft_pos(nx, dx, centered=False, mode='symmetric')
+        y = get_fft_pos(ny, dy, centered=False, mode='symmetric')
 
-    exp_factor = np.exp(-1j * 2 * np.pi * (shift_frq[0] * x[None, :] + shift_frq[1] * y[:, None]))
-    #ifft2(ifftshift(img_ft)) = ifftshift(img)
-    img_ft_shifted = fft.fftshift(fft.fft2(apodization * exp_factor * fft.ifft2(fft.ifftshift(img_ft * apodization))))
+        exp_factor = np.exp(-1j * 2 * np.pi * (shift_frq[0] * x[None, :] + shift_frq[1] * y[:, None]))
+        #ifft2(ifftshift(img_ft)) = ifftshift(img)
+        img_ft_shifted = fft.fftshift(fft.fft2(exp_factor * fft.ifft2(fft.ifftshift(img_ft))))
 
-    return img_ft_shifted
+        return img_ft_shifted
+
+
+def conj_transpose_fft(img_ft, axes=(-1, -2)):
+    """
+    Given img_ft(f), return a new array
+    img_new_ft(f) := conj(img_ft(-f))
+
+    :param img_ft:
+    :param axes: axes on which to perform the transformation
+    """
+
+    # convert axes to positive number
+    axes = np.mod(axes, img_ft.ndim)
+
+    # flip and conjugate
+    img_ft_ct = np.flip(np.conj(img_ft), axis=axes)
+
+    # for odd FFT size, can simply flip the array to take f -> -f
+    # for even FFT size, have on more negative frequency than positive frequency component.
+    # by flipping array, have put the negative frequency components on the wrong side of the array
+    # (i.e. where the positive frequency components are)
+    # so must roll array to put them back on the right side
+    to_roll = [a for a in axes if np.mod(img_ft.shape[a], 2) == 0]
+    img_ft_ct = np.roll(img_ft_ct, shift=[1] * len(to_roll), axis=to_roll)
+
+    return img_ft_ct
+
+def rfft2fft(img_rft):
+    """
+    Convert rfft2 representation to fft2
+    """
+
+    nx = img_rft.shape[0]
+    
+    img_fft = np.zeros((nx, nx), dtype=np.complex)
+    img_fft[: img_rft.shape[0], : img_rft.shape[1]] = img_rft
+    img_fft = fft.fftshift(img_fft)
+    test = conj_transpose_fft(img_fft)
+    img_fft[:, :nx // 2] = test[:, :nx // 2]
+    
+    return img_fft
 
 def shannon_whittaker_interp(x, y, dt=1):
     """
@@ -1509,6 +1554,9 @@ def shannon_whittaker_interp(x, y, dt=1):
     return y_interp
 
 def sinc(x):
+    """
+    sinc(x) = sin(x) / x
+    """
     val = np.sin(x) / x
     val[x == 0] = 1
     return val
@@ -1553,4 +1601,3 @@ def get_cut_profile(img, start_coord, end_coord, width):
     cut = cut[inds]
 
     return xcut, cut
-

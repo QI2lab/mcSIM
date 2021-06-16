@@ -2655,7 +2655,7 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
         patterns_reshaped = np.reshape(patterns, [patterns.shape[0] * patterns.shape[1],
                                                   patterns.shape[2], patterns.shape[3]])
         patterns_reshaped = np.concatenate((patterns_reshaped, pattern_on[None, :, :], pattern_off[None, :, :]), axis=0)
-        tools.save_tiff(patterns_reshaped, fpath)
+        tools.save_tiff(patterns_reshaped, fpath, np.uint16)
 
     return patterns, vec_as, vec_bs, real_angles, real_periods
 
