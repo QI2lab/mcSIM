@@ -20,12 +20,11 @@ gamma_on = 12 * np.pi/180
 gamma_off = -12 * np.pi/180
 tout_offsets = np.linspace(-10, 10, 4800) * np.pi / 180
 # colors
-# we want to use the solution near theta_in=43deg, theta_out=19deg, n=4 for 473nm, n=3 for 635nm
-# wlens = [0.473e-6, 0.470e-6, 0.635e-6, 0.550e-6, 0.532e-6, 0.367e-6]
-wlens = [0.470e-6, 0.635e-6, 0.532e-6, 0.980e-6]
-diff_orders = [4, 3, -4, 2]
-inverted = [False, False, True, False]
-display_colors = ['b', 'r', 'g', 'k']
+# we want to use the solution near theta_in=43deg, theta_out=19deg, n=4 for 465nm, n=3 for 635nm
+wlens = [0.465e-6, 0.635e-6, 0.532e-6, 0.785e-6, 0.980e-6]
+diff_orders = [4, 3, -4, -3, 2]
+inverted = [False, False, True, True, False]
+display_colors = ['b', 'r', 'g', 'y', 'k']
 #base_period = np.sqrt(2) * 3
 base_period = 5
 periods = np.zeros(len(wlens))
