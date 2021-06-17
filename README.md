@@ -8,11 +8,9 @@ files are described in more detail below.
  
 This repository is associated with the Biomedical Optics Express paper 
 [Multicolor structured illumination microscopy and quantitative control of polychromatic light with a digital micromirror device](https://doi.org/10.1364/BOE.422703)
-, and the BioRxiv preprint 
-[Multicolor structured illumination microscopy and quantitative control of coherent light with a digital micromirror device](https://doi.org/10.1101/2020.07.27.223941).
+and the [BioRxiv preprint](https://doi.org/10.1101/2020.07.27.223941).
 The repository state at the time of publication is archived [here](https://doi.org/10.5281/zenodo.4773865), or available as
 a [release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0) on GitHub.
-
 
 # Analysis and simulation code
 
@@ -25,7 +23,9 @@ This file can be used to generate multicolor SIM patterns and other useful calib
 patterns for the DMD.
 
 ### [analysis/sim_reconstruction.py](analysis/sim_reconstruction.py)
-Code for reconstructing SIM images from raw data
+Code for reconstructing SIM images from raw data using a Gustaffson/Wiener filter style reconstruction. Several different
+reconstruction options are available, largely following either the approach of 
+[Lal *et al.*](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980). 
 
 ### [analysis/affine.py](analysis/affine.py)
 Code to fit the affine transformation between the DMD coordinates and camera coordinates using imaging data from a DMD
@@ -65,11 +65,14 @@ GUI](https://www.ti.com/tool/DLPC900REF-SW). It is a command line interface to [
 and it is used by [run_sim_triggerscop.bsh](expt_ctrl/run_sim_triggerscop.bsh).
 
 ### [expt_ctrl/run_sim_triggerscop.bsh](expt_ctrl/run_sim_triggerscop.bsh)
-This is a [beanshell script](https://beanshell.github.io/) which can be run from [MicroManager 2.0 Gamma](https://micro-manager.org/wiki/Micro-Manager)
+A [beanshell script](https://beanshell.github.io/) which can be run from [MicroManager 2.0 Gamma](https://micro-manager.org/wiki/Micro-Manager)
 to acquire SIM data using dlp6500.py to set the DMD patterns (assuming they have already been loaded into the 
-DMD firmware). This script programs a [Triggerscope 3B](https://arc.austinblanco.com/), which then provides the analog and 
+DMD firmware as described above). This script programs a [Triggerscope 3B](https://arc.austinblanco.com/), which then provides the analog and 
 digital voltages required to run the rest of the experiment. The camera free runs as the
-master clock, triggering the triggerscope. We use a customized version of the Triggerscope firmware V601. 
+master clock, triggering the Triggerscope. We use a customized version of the Triggerscope firmware V601. 
+
+This script supports collecting multidimensional data with the axis order xy-position/time/z-position/channel/SIM pattern.
+It also supports time-lapse imaging with arbitrary wait time.
 
 This code was initially developed with Micro-Manager 2.0.0-gamma1 20200514, MMCore Version 10.1.0,
 Device API version 69, Module API version 10. But for more recent development we are using

@@ -214,7 +214,7 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         # load metadata from one file to check size
         fname = os.path.join(rpath, metadata['FileName'].values[0])
         tif = tifffile.TiffFile(fname, multifile=False)
-        _, ny_raw, nx_raw = tif.series[0].shape
+        ny_raw, nx_raw = tif.series[0].shape[-2:]
 
         if crop_roi is not None:
             # check points don't exceed image size
@@ -271,7 +271,7 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
             for ixy in xyinds_to_use_temp:
                 for iz in zinds_to_use_temp:
                     for ind_t in tinds_to_use_temp:
-                        tstart = time.perf_counter()
+                        tstart_single_index = time.perf_counter()
 
                         identifier = "%.0fnm_nt=%d_nxy=%d_nz=%d" % (excitation_wavelengths[kk] * 1e3, ind_t, ixy, iz)
                         file_identifier = "nc=%d_nt=%d_nxy=%d_nz=%d" % (kk, ind_t, ixy, iz)
@@ -327,6 +327,8 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
                         img_set.save_result(os.path.join(sim_diagnostics_path, "sim_reconstruction_params.pkl"))
 
                         if saving and not tif_stack:
+                            tstart_save = time.perf_counter()
+
                             fname = os.path.join(sim_results_path, "sim_os_%s.tif" % file_identifier)
                             tools.save_tiff(img_set.sim_os, fname, dtype=np.float32, datetime=start_time)
 
@@ -339,6 +341,8 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
                             fname = os.path.join(sim_results_path, "deconvolved_%s.tif" % file_identifier)
                             tools.save_tiff(img_set.widefield_deconvolution, fname, dtype=np.float32,
                                             datetime=start_time)
+
+                            img_set.print_log("saving tiff files took %0.2fs" % (time.perf_counter() - tstart_save))
                         else:
                             # store images
                             imgs_os.append(img_set.sim_os)
@@ -348,7 +352,7 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
 
                         tend = time.perf_counter()
                         img_set.print_log("Reconstructed %d/%d from %s in %0.2fs" %
-                                          (counter, ncolors * nt_used * nxy_used * nz_used, folder, tend - tstart))
+                                          (counter, ncolors * nt_used * nxy_used * nz_used, folder, tend - tstart_single_index))
 
                         # delete so destructor is called and log file closes
                         del img_set
@@ -360,6 +364,8 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         # save data for all reconstructed files
         # #################################
         if saving and tif_stack:
+            tstart_save = time.perf_counter()
+
             # todo: want to include metadata in tif.
             # todo: this will fail if multiple positions
             fname = tools.get_unique_name(os.path.join(sim_results_path, 'widefield.tif'))
@@ -386,11 +392,13 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
             tools.save_tiff(deconvolved_to_save, fname, dtype=np.float32, axes_order='CZTYX', hyperstack=True,
                             datetime=start_time)
 
+            print("saving tiff stacks took %0.2fs" % (time.perf_counter() - tstart_save))
+
     return imgs_sr, imgs_wf, imgs_deconvolved, imgs_os
 
 class SimImageSet:
     def __init__(self, physical_params, imgs, frq_guess, phases_guess=None, mod_depths_guess=None,
-                 otf=None, wiener_parameter=1,
+                 otf=None, wiener_parameter=0.1,
                  phase_estimation_mode="wicker-iterative", frq_estimation_mode="band-correlation", combine_bands_mode="Lal",
                  use_fixed_mod_depths=False, normalize_histograms=True, determine_amplitudes=False,
                  background=0, max_phase_err=10 * np.pi / 180, min_mcnr=1, fbounds=(0.01, 1),
@@ -688,8 +696,10 @@ class SimImageSet:
         tstart = time.perf_counter()
 
         # correct for wrong global phases
+        self.otf_mask_threshold = 0.1
         self.phase_corrections, mags = get_band_overlap(self.bands_shifted_ft[:, 0], self.bands_shifted_ft[:, 1],
-                                                        self.otf_shifted[:, 0], self.otf_shifted[:, 1], otf_threshold=0.1)
+                                                        self.otf_shifted[:, 0], self.otf_shifted[:, 1],
+                                                        otf_threshold=self.otf_mask_threshold)
 
         phase_corr_mat = np.exp(1j * np.concatenate((np.zeros((len(self.phase_corrections), 1)),
                                                      np.expand_dims(self.phase_corrections, axis=1),
@@ -722,7 +732,7 @@ class SimImageSet:
         elif self.combine_mode == "fairSIM":
             # following the approach of FairSIM: https://doi.org/10.1038/ncomms10980
             self.weights = self.otf_shifted.conj()
-            self.weights_norm = self.wiener_parameter + np.nansum(np.abs(self.weights) ** 2, axis=(0, 1))
+            self.weights_norm = self.wiener_parameter**2 + np.nansum(np.abs(self.weights) ** 2, axis=(0, 1))
         else:
             raise ValueError("combine_mode must be 'fairSIM' or 'Lal' but was '%s'" % self.combine_mode)
 
@@ -773,7 +783,7 @@ class SimImageSet:
             # wf_decon_ft = self.widefield_ft * get_wiener_filter(self.otf, 1/np.sqrt(self.wiener_parameter / self.nangles))
 
             self.widefield_deconvolution_ft = np.nansum(self.weights[:, 0] * self.bands_shifted_ft[:, 0], axis=0) / \
-                          (self.wiener_parameter + np.nansum(np.abs(self.weights[:, 0])**2, axis=0))
+                          (self.wiener_parameter**2 + np.nansum(np.abs(self.weights[:, 0])**2, axis=0))
         else:
             raise ValueError()
 
@@ -898,7 +908,7 @@ class SimImageSet:
                     wiener_filters[ii, jj] = get_wiener_filter(self.otf_shifted[ii, jj], snr_shifted[ii, jj])
 
         # get weights for averaging
-        weights_norm = np.sum(snr_shifted * np.abs(self.otf_shifted) ** 2, axis=(0, 1)) + self.wiener_parameter
+        weights_norm = np.sum(snr_shifted * np.abs(self.otf_shifted) ** 2, axis=(0, 1)) + self.wiener_parameter**2
         # weighted averaging with |otf(f)|**2 * signal_power(f) / noise_power(f)
         weights = snr_shifted * np.abs(self.otf_shifted) ** 2 * wiener_filters
 
@@ -960,12 +970,22 @@ class SimImageSet:
             if phase_guess is None:
                 phase_guess = np.zeros((self.nangles, self.nphases))
 
-            # todo: joblib...
-            for ii in range(self.nangles):
-                for jj in range(self.nphases):
-                    phases[ii, jj] = get_phase_realspace(self.imgs[ii, jj], self.frqs[ii], self.dx,
-                                                         phase_guess=phase_guess[ii, jj], origin="center")
-                    amps[ii, jj] = 1
+            # joblib a little messy because have to map one index to two
+            results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
+                joblib.delayed(get_phase_realspace)(
+                    self.imgs[np.unravel_index(aa, [self.nangles, self.nphases])],
+                    self.frqs[np.unravel_index(aa, [self.nangles, self.nphases])[0]], self.dx,
+                    phase_guess=phase_guess[np.unravel_index(aa, [self.nangles, self.nphases])], origin="center"
+                ) for aa in range(self.nangles * self.nphases))
+
+            phases = np.reshape(np.array(results), [self.nangles, self.nphases])
+            amps = np.ones((self.nangles, self.nphases))
+
+            # for ii in range(self.nangles):
+            #     for jj in range(self.nphases):
+            #         phases[ii, jj] = get_phase_realspace(self.imgs[ii, jj], self.frqs[ii], self.dx,
+            #                                              phase_guess=phase_guess[ii, jj], origin="center")
+            # amps = np.ones((self.nangles, self.nphases))
 
         elif self.phase_estimation_mode == "fixed":
             phases = self.phases_guess
@@ -1146,23 +1166,24 @@ class SimImageSet:
             if not self.hold_figs_open:
                 plt.close(fh)
 
-        # plot power spectrum fits
-        fighs, fig_names = self.plot_power_spectrum_fits(figsize=self.figsize)
-        for fh, fn in zip(fighs, fig_names):
-            if saving:
-                fh.savefig(os.path.join(self.save_dir, "%s.png" % fn))
-            if not self.hold_figs_open:
-                plt.close(fh)
+        if self.combine_mode == "Lal":
+            # plot power spectrum fits
+            fighs, fig_names = self.plot_power_spectrum_fits(figsize=self.figsize)
+            for fh, fn in zip(fighs, fig_names):
+                if saving:
+                    fh.savefig(os.path.join(self.save_dir, "%s.png" % fn))
+                if not self.hold_figs_open:
+                    plt.close(fh)
 
-        # widefield power spectrum fit
-        figh = plot_power_spectrum_fit(self.widefield_ft, self.otf,
-                                       {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
-                                       self.pspec_params_wf, mask=self.mask_wf, figsize=self.figsize,
-                                       ttl_str="Widefield power spectrum")
-        if saving:
-            figh.savefig(os.path.join(self.save_dir, "power_spectrum_widefield.png"))
-        if not self.hold_figs_open:
-            plt.close(figh)
+            # widefield power spectrum fit
+            figh = plot_power_spectrum_fit(self.widefield_ft, self.otf,
+                                           {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
+                                           self.pspec_params_wf, mask=self.mask_wf, figsize=self.figsize,
+                                           ttl_str="Widefield power spectrum")
+            if saving:
+                figh.savefig(os.path.join(self.save_dir, "power_spectrum_widefield.png"))
+            if not self.hold_figs_open:
+                plt.close(figh)
 
         # plot filters used in reconstruction
         fighs, fig_names = self.plot_reconstruction_diagnostics(figsize=self.figsize)
@@ -1350,6 +1371,10 @@ class SimImageSet:
 
         circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ2)
+
+        # actual maximum frequency based on real SIM frequencies
+        for ii in range(self.nangles):
+            ax.add_artist(matplotlib.patches.Circle((0, 0), radius=self.fmax + 1/self.periods[ii], color='k', fill=0, ls='--'))
 
         plt.xlim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
