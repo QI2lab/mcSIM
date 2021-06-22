@@ -29,6 +29,32 @@ import psfmodels as psfm
 import fit
 import analysis_tools as tools
 
+def blur_img_otf(ground_truth, otf):
+    """
+    Blur image with OTF
+
+    :param ground_truth:
+    :param otf: optical transfer function evalated at the FFT frequencies (with f=0 near the center of the array)
+
+    :return img_blurred:
+    """
+    gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
+    img_blurred = fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf))).real
+
+    return img_blurred
+
+def blur_img_psf(ground_truth, psf):
+    """
+    Blur image with PSF
+
+    :param ground_truth:
+    :param psf: point-spread function
+    # todo: allow PSF of different size than image
+    """
+    otf, _ = psf2otf(psf)
+
+    return blur_img_otf(ground_truth, otf)
+
 # model OTF function
 def symm_fn_1d_to_2d(arr, fs, fmax, npts):
     """

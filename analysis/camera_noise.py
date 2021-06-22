@@ -11,9 +11,9 @@ from scipy import fft
 from PIL import Image
 import matplotlib.pyplot as plt
 
-import tiffile
+import tifffile
 import analysis_tools as tools
-import fit_psf as psf
+import fit_psf
 
 
 def adc2photons(img, gain_map, bg_map):
@@ -32,7 +32,7 @@ def adc2photons(img, gain_map, bg_map):
     photons[photons <= 0] = np.finfo(float).eps
     return photons
 
-def get_pixel_distrubtion(files, inds, dtype=np.uint16):
+def get_pixel_distribution(files, inds, dtype=np.uint16):
     """
     Get all pixel values for inds
     :param files: [fname1, fname2, ...]
@@ -47,7 +47,7 @@ def get_pixel_distrubtion(files, inds, dtype=np.uint16):
         print("started file %d/%d, elapsed time=%0.2fs" % (ii + 1, len(files), tnow - tstart))
 
         # don't reread first image
-        imgs = tiffile.imread(f, multifile=False)
+        imgs = tifffile.imread(f, multifile=False)
 
         nimgs_current = imgs.shape[0]
 
@@ -75,8 +75,11 @@ def get_pixel_statistics(files, description="", calculate_correlations=False, n_
 
     # read first image to get size
     # if OME TIFF this will try to read the entire stack if don't set multifile
-    imgs = tiffile.imread(files[0], multifile=False)
-    _, ny, nx = imgs.shape
+    tif = tifffile.TiffFile(files[0], multifile=False)
+    ny, nx = tif.series[0].shape[-2:]
+
+    # imgs = tifffile.imread(files[0], multifile=False)
+    # _, ny, nx = imgs.shape
 
     means = np.zeros((ny, nx))
     mean_sqrs = np.zeros(means.shape)
@@ -92,9 +95,7 @@ def get_pixel_statistics(files, description="", calculate_correlations=False, n_
         tnow = time.process_time()
         print("started file %d/%d, elapsed time=%0.2fs" % (ii + 1, len(files), tnow - tstart))
 
-        # don't reread first image
-        if ii > 0:
-            imgs = tiffile.imread(f, multifile=False)
+        imgs = tifffile.imread(f, multifile=False)
 
         nimgs_current = imgs.shape[0]
 
@@ -110,7 +111,9 @@ def get_pixel_statistics(files, description="", calculate_correlations=False, n_
             if ii == 0:
                 tnow = time.process_time()
                 print("chunk %d/%d, elapsed time=%0.2fs" % (jj / n_chunk_size + 1, niterations_current, tnow - tstart))
-            img_float = np.asarray(imgs[jj: jj + n_chunk_size], dtype=np.float)
+
+            # img_float = np.asarray(imgs[jj: jj + n_chunk_size], dtype=np.float)
+            img_float = imgs[jj: jj + n_chunk_size].astype(np.float)
             mean_sqrs_temp += np.sum(img_float ** 2, axis=0) / nimgs_current
             mean_cubes_temp += np.sum(img_float ** 3, axis=0) / nimgs_current
             mean_fourths_temp += np.sum(img_float ** 4, axis=0) / nimgs_current
@@ -131,13 +134,16 @@ def get_pixel_statistics(files, description="", calculate_correlations=False, n_
         corrsx = corrsx * w1 + corrsx_temp * w2
         corrsy = corrsy * w1 + corrsy_temp * w2
 
+        # time correlations have to be handled differently
         w1t = nimgs_t_corr / (nimgs_t_corr + nimgs_current - niterations_current)
         w2t = (nimgs_current - niterations_current) / (nimgs_t_corr + nimgs_current - niterations_current)
         corrst = corrst * w1t + corrst_temp * w2t
 
+        # update number of images
         nimgs_prior += nimgs_current
         nimgs_t_corr += nimgs_current - niterations_current
 
+    # calculate other useful statistics
     vars = mean_sqrs - means**2
     # variance of sample variance. See e.g. https://mathworld.wolfram.com/SampleVarianceDistribution.html
     mean_sqrs_central = mean_sqrs - means**2
@@ -529,57 +535,35 @@ def export_camera_params(offsets, variances, gains, id="", save_dir=''):
         pickle.dump(data, f)
 
 
-def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout_noise_sds, pix_size=None, otf=None, na=1.3,
-                  wavelength=0.5, photon_shot_noise=True, bin_size=1, use_otf=False):
+def simulated_img(ground_truth, gains, offsets, readout_noise_sds, psf=None, photon_shot_noise=True, bin_size=1):
     """
     Convert ground truth image (with values between 0-1) to simulated camera image, including the effects of
     photon shot noise and camera readout noise.
 
-    :param use_otf:
-    :param ground_truth: Relative intensity values of image
-    :param max_photons: Scale factor which sets the maximum photon number in the case where ground_truth is normalized
-    to be between 0 and 1. If you use the OTF blurring of this function, then this will not be the true exact photon number.
-    If no scaling is desired, set to 1.
-    :param cam_gains: gains at each camera pixel
-    :param cam_offsets: offsets of each camera pixel
-    :param cam_readout_noise_sds: standard deviation characterizing readout noise at each camera pixel
-    :param pix_size: pixel size of ground truth image in ums. Note that the pixel size of the output image will be
-    pix_size * bin_size
-    :param otf: optical transfer function. If None, use na and wavelength to set values
-    :param na: numerical aperture. Only used if otf=None
-    :param wavelength: wavelength in microns. Only used if otf=None
-    :param photon_shot_noise: turn on/off photon shot-noise
-    :param bin_size: bin pixels before applying Poisson/camera noise. This is to allow defining a pattern on a
+    :param ground_truth: Ground truth mean photon counts (before binning)
+    :param gains: gains at each camera pixel (ADU/e)
+    :param offsets: offsets of each camera pixel (ADU)
+    :param readout_noise_sds: standard deviation characterizing readout noise at each camera pixel (ADU)
+    :param psf: point-spread function
+    :param bool photon_shot_noise: turn on/off photon shot-noise
+    :param int bin_size: bin pixels before applying Poisson/camera noise. This is to allow defining a pattern on a
     finer pixel grid.
 
     :return img:
     :return snr:
-    :return max_photons_real:
     """
-    if np.any(ground_truth > 1) or np.any(ground_truth < 0):
-        warnings.warn('ground_truth image values should be in the range [0, 1] for max_photons to be correct')
 
-    img_size = ground_truth.shape
-
-    if use_otf:
-        # get OTF
-        if otf is None:
-            fx = tools.get_fft_frqs(img_size[1], pix_size)
-            fy = tools.get_fft_frqs(img_size[0], pix_size)
-            otf = psf.circ_aperture_otf(fx[None, :], fy[:, None], na, wavelength)
-
-        # blur image with otf/psf
-        # todo: maybe should add an "imaging forward model" function to fit_psf.py and call it here.
-        gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(ground_truth)))
-        img_blurred = max_photons * fft.fftshift(fft.ifft2(fft.ifftshift(gt_ft * otf))).real
-        img_blurred[img_blurred < 0] = 0
+    # optional blur image with PSF
+    if psf is not None:
+        img_blurred = fit_psf.blur_img_psf(ground_truth, psf)
     else:
-        img_blurred = max_photons * ground_truth
+        img_blurred = ground_truth
+
+    # ensure non-negative
+    img_blurred[img_blurred < 0] = 0
 
     # resample image by binning
     img_blurred = tools.bin(img_blurred, (bin_size, bin_size), mode='sum')
-
-    max_photons_real = img_blurred.max()
 
     # add shot noise
     if photon_shot_noise:
@@ -587,18 +571,17 @@ def simulated_img(ground_truth, max_photons, cam_gains, cam_offsets, cam_readout
     else:
         img_shot_noise = img_blurred
 
-    # add camera noise and convert from photons to ADU
-    readout_noise = np.random.standard_normal(img_shot_noise.shape) * cam_readout_noise_sds
+    # generate camera noise in ADU
+    readout_noise = np.random.standard_normal(img_shot_noise.shape) * readout_noise_sds
 
-    img = cam_gains * img_shot_noise + readout_noise + cam_offsets
+    # convert from photons to ADU
+    img = gains * img_shot_noise + readout_noise + offsets
 
-    # signal to noise ratio
-    sig = cam_gains * img_blurred
-    # assuming photon number large enough ~gaussian
-    noise = np.sqrt(cam_readout_noise_sds**2 + cam_gains**2 * img_blurred)
-    snr = sig / noise
+    # spatially resolved signal-to-noise ratio
+    # get noise from adding in quadrature, assuming photon number large enough ~gaussian
+    snr = (gains * img_blurred) / np.sqrt(readout_noise_sds ** 2 + gains ** 2 * img_blurred)
 
-    return img, snr, max_photons_real
+    return img, snr
 
 def denoise(img, gains, offsets, vars):
     pass

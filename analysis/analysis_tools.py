@@ -159,7 +159,6 @@ def read_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy
     :param z_indices:
     :param xy_indices:
     :param user_indices: {"name": indices}
-    :param file_pattern:
     :return:
     """
 
@@ -205,7 +204,7 @@ def read_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy
 
     return imgs
 
-def read_tiff(fname, slices=None, offset=None, skip=None):
+def read_tiff(fname, slices=None):
     """
     Read tiff file containing multiple images
 
@@ -217,39 +216,26 @@ def read_tiff(fname, slices=None, offset=None, skip=None):
 
     :param fname: path to file
     :param slices: list of slices to read
-    :param offset: offset image to start reading. Will be ignored unless slices is None. This is useful if
-    the number of slices is unknown.
-    :param skip: images to skip between reading. Will be ignored unless slices is None. This is useful if the number
-    of slices is unknown.
-    :param dtype: NumPy datatype of output array
 
     :return imgs: 3D numpy array, nz x ny x nx
     :return tiff_metadata: metadata tags with recognized numbers, corresponding to known descriptions
     :return other_metadata: other metadata tags with unrecognized numbers
     """
-    if isinstance(slices, int) or np.issubdtype(type(slices), np.integer):
-        slices = [slices]
 
     tif = tifffile.TiffFile(fname)
     n_frames = len(tif.pages)
-    dtype = tif.pages[0].dtype
+
+    if isinstance(slices, int) or np.issubdtype(type(slices), np.integer):
+        slices = [slices]
+    if slices is None:
+        slices = range(n_frames)
 
     # read metadata
     tiff_metadata = {}
     for tag in tif.pages[0].tags:
         tiff_metadata[tag.name] = tag.value
 
-    # check arguments are consistent
-    if slices is not None and offset is None and skip is None:
-        pass
-    elif slices is None and offset is None and skip is None:
-        slices = range(n_frames)
-    elif slices is None and offset is not None and skip is not None:
-        slices = range(offset, n_frames, skip)
-    else:
-        raise ValueError('incompatible arguments provided for slices, offsets, and skip. '
-                        'Either provide slices and no skip or offset, or provide roi_size skip and offset but no slices.')
-
+    # read
     imgs = tifffile.imread(fname, multifile=False, key=slices)
 
     if imgs.ndim == 2:
@@ -415,7 +401,7 @@ def tiffs2stack(fname_out, dir_path, fname_exp="*.tif",
         print("WARNING: not all channels/times/slices/positions were accounted for. Those that were not found are replaced by NaNs")
 
     # save results
-    save_tiff(imgs, fname_out, dtype='float32', axes_order="CTZYX", hyperstack=True)
+    save_tiff(imgs, fname_out, dtype=np.float32, axes_order="CTZYX", hyperstack=True)
 
 # file naming
 def get_unique_name(fname, mode='file'):
@@ -817,7 +803,6 @@ def estimate_background(img):
     return bg, fparams
 
 # resampling functions
-# todo: swap resample/expand names as they are not accurate!
 def duplicate_pix(img, nx=2, ny=2):
     """
     Resample image by expanding each pixel into a rectangle of ny x nx identical pixels
@@ -1367,53 +1352,53 @@ def get_spline_fn(x1, x2, y1, y2, dy1, dy2):
     return fn, dfn, coeffs
 
 # translating images
-def translate_pix(img, shifts, dx=1, dy=1, mode='wrap', pad_val=0):
+def translate_pix(img, shifts, dr=(1, 1), axes=(-2, -1), wrap=True, pad_val=0):
     """
     Translate image by given number of pixels with several different boundary conditions. If the shifts are sx, sy,
     then the image will be shifted by sx/dx and sy/dy. If these are not integers, they will be rounded to the closest
     integer.
 
-    i.e. given img(x, y) return img(x + sx, y + sy).
+    i.e. given img(y, x) return img(y + sy, x + sx). For example, a positive value for sx will shift the image
+    to the left.
 
     :param img: image to translate
-    :param shifts: distance to translate along each axis [sx, sy]. If these are not integers, then they will be
+    :param shifts: distance to translate along each axis (s1, s2, ...). If these are not integers, then they will be
     rounded to the closest integer value.
-    :param dx: size of pixels in x-direction
-    :param mode: 'wrap' or 'no-wrap'
-    :return:
-    """
-    # if not isinstance(shifts[0], int) or not isinstance(shifts[1], int):
-    #     raise TypeError('pix_shifts must be integers.')
+    :param dr: size of pixels along each axis (dr1, dr2, ...)
+    :param axes: identify the axes being wrapped, (a1, a2, ...)
+    :param bool wrap: if true, pixels on the boundary are shifted across to the opposite side. If false, these
+    parts of the array are padded with pad_val
+    :param pad_val: value to pad portions of the image that would wrap around. Only used if wrap is False
 
-    sx = int(np.round(-shifts[0] / dx))
-    sy = int(np.round(-shifts[1] / dy))
+    :return img_shifted, pix_shifts:
+    """
+
+    # make sure axes positive
+    axes = np.mod(axes, img.ndim)
+
+    # convert pixel shifts to integers
+    shifts_pix = np.array([int(np.round(-s / d)) for s, d in zip(shifts, dr)])
 
     # only need to operate on img if pixel shift is not zero
-    if sx != 0 or sy != 0:
-        img = np.roll(img, sy, axis=0)
-        img = np.roll(img, sx, axis=1)
+    if np.any(shifts_pix != 0):
+        # roll arrays. If wrap is True, this is all we need to do
+        for s, axis in zip(shifts_pix, axes):
+            img = np.roll(img, s, axis=axis)
 
-        if mode == 'wrap':
+        if wrap:
             pass
-        elif mode == 'no-wrap':
-            mask = np.ones(img.shape)
-            ny, nx = img.shape
-
-            if sx >= 0:
-                mask[:, :sx] = 0
-            else:
-                mask[:, nx+sx:] = 0
-
-            if sy >= 0:
-                mask[:sy, :] = 0
-            else:
-                mask[ny+sy:, :] = 0
-
-            img = img * mask + pad_val * (1 - mask)
         else:
-            raise ValueError("'mode' must be 'wrap' or 'no-wrap' but was '%s'" % mode)
+            # set parts of axes that have wrapped around to zero
+            for s, axis in zip(shifts_pix, axes):
 
-    return img, -sx, -sy
+                if s >= 0:
+                    slices = tuple([slice(0, img.shape[ii]) if ii != axis else slice(0, s) for ii in range(img.ndim)])
+                else:
+                    slices = tuple([slice(0, img.shape[ii]) if ii != axis else slice(s + img.shape[axis], img.shape[axis]) for ii in range(img.ndim)])
+
+                img[slices] = pad_val
+
+    return img, shifts_pix
 
 
 def translate_im(img, shift, dx=1, dy=None):
