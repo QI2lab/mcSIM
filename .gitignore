@@ -275,9 +275,6 @@ TSWLatexianTemp*
 # Makeindex log files
 *.lpz
 
-# python pickled files
-*.pkl
-
 # temporary directory for dask
 dask-worker-space/
 
