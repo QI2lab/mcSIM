@@ -187,6 +187,14 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         nxy = dims['position']
         nt = dims['time']
 
+        # z-plane spacing
+        unique_slices = np.unique(metadata["Slice"])
+        unique_slices.sort()
+        if len(unique_slices) > 1:
+            dz = unique_slices[1] - unique_slices[0]
+        else:
+            dz = 1
+
         # use this construction as zinds can be different for different folders
         if zinds_to_use is None:
             zinds_to_use_temp = range(nz)
@@ -355,25 +363,33 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
             imgs_wf = np.asarray(imgs_wf)
             wf_to_save = np.reshape(imgs_wf, [ncolors, nz_used, nt_used, imgs_wf[0].shape[-2], imgs_wf[0].shape[-1]])
             tools.save_tiff(wf_to_save, fname, dtype=np.float32, axes_order="CZTYX", hyperstack=True,
-                            datetime=start_time)
+                            datetime=start_time, resolution=(1/pixel_size, 1/pixel_size),
+                            metadata={"Info": "widefield image reconstructed from %s" % rpath, 'spacing': dz, 'unit': 'um'})
 
             fname = tools.get_unique_name(os.path.join(sim_results_path, 'sim_os.tif'))
             imgs_os = np.asarray(imgs_os)
             sim_os = np.reshape(imgs_os, [ncolors, nz_used, nt_used, imgs_os[0].shape[-2], imgs_os[0].shape[-1]])
-            tools.save_tiff(sim_os, fname, dtype=np.float32, axes_order="CZTYX", hyperstack=True, datetime=start_time)
+            tools.save_tiff(sim_os, fname, dtype=np.float32, axes_order="CZTYX", hyperstack=True,
+                            datetime=start_time, resolution=(1/pixel_size, 1/pixel_size),
+                            metadata={"Info": "SIM optical sectioned image reconstructed from %s" % rpath,
+                                      'spacing': dz, 'unit': 'um'})
 
             fname = tools.get_unique_name(os.path.join(sim_results_path, 'sim_sr.tif'))
             imgs_sr = np.asarray(imgs_sr)
             sim_to_save = np.reshape(imgs_sr, [ncolors, nz_used, nt_used, imgs_sr[0].shape[-2], imgs_sr[0].shape[-1]])
             tools.save_tiff(sim_to_save, fname, dtype=np.float32, axes_order="CZTYX", hyperstack=True,
-                            datetime=start_time)
+                            datetime=start_time, resolution=(1/(0.5*pixel_size), 1/(0.5*pixel_size)),
+                            metadata={"Info": "SIM superresolution image reconstructed from %s" % rpath,
+                                      'spacing': dz, 'unit': 'um'})
 
             fname = tools.get_unique_name(os.path.join(sim_results_path, 'deconvolved.tif'))
             imgs_deconvolved = np.asarray(imgs_deconvolved)
             deconvolved_to_save = np.reshape(imgs_deconvolved, [ncolors, nz_used, nt_used, imgs_deconvolved[0].shape[-2],
                                                                 imgs_deconvolved[0].shape[-1]])
             tools.save_tiff(deconvolved_to_save, fname, dtype=np.float32, axes_order='CZTYX', hyperstack=True,
-                            datetime=start_time)
+                            datetime=start_time, resolution=(1/(0.5*pixel_size), 1/(0.5*pixel_size)),
+                            metadata={"Info": "Deconvolved image reconstructed from %s" % rpath,
+                                      'spacing': dz, 'unit': 'um'})
 
             print("saving tiff stacks took %0.2fs" % (time.perf_counter() - tstart_save))
 
@@ -1869,19 +1885,23 @@ class SimImageSet:
             if start_time is None:
                 kwargs = {}
             else:
-                kwargs = {datetime:start_time}
+                kwargs = {datetime: start_time}
 
             fname = os.path.join(save_dir, "sim_os_%s.tif" % file_identifier)
-            tools.save_tiff(self.sim_os, fname, dtype=np.float32, **kwargs)
+            tools.save_tiff(self.sim_os, fname, dtype=np.float32, resolution=(1/self.dx, 1/self.dx),
+                            metadata={'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "widefield_%s.tif" % file_identifier)
-            tools.save_tiff(self.widefield, fname, dtype=np.float32, **kwargs)
+            tools.save_tiff(self.widefield, fname, dtype=np.float32, resolution=(1/self.dx, 1/self.dx),
+                            metadata={'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "sim_sr_%s.tif" % file_identifier)
-            tools.save_tiff(self.sim_sr, fname, dtype=np.float32, **kwargs)
+            tools.save_tiff(self.sim_sr, fname, dtype=np.float32, resolution=(1/(0.5 * self.dx), 1/(0.5 * self.dx)),
+                            metadata={'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "deconvolved_%s.tif" % file_identifier)
-            tools.save_tiff(self.widefield_deconvolution, fname, dtype=np.float32, **kwargs)
+            tools.save_tiff(self.widefield_deconvolution, fname, dtype=np.float32,
+                            resolution=(1/(0.5 * self.dx), 1/(0.5 * self.dx)), metadata={'unit': 'um'}, **kwargs)
 
             self.print_log("saving tiff files took %0.2fs" % (time.perf_counter() - tstart_save))
 

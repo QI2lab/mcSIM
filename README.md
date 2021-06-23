@@ -23,7 +23,7 @@ This file can be used to generate multicolor SIM patterns and other useful calib
 patterns for the DMD.
 
 ### [analysis/sim_reconstruction.py](analysis/sim_reconstruction.py)
-Code for reconstructing SIM images from raw data using a Gustaffson/Wiener filter style reconstruction. Several different
+Code for reconstructing SIM images from raw data using a Gustafsson/Wiener filter style reconstruction. Several different
 reconstruction options are available, largely following either the approach of 
 [Lal *et al.*](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980). 
 
