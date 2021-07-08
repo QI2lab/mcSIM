@@ -1,0 +1,3 @@
+[submodule "analysis/localize-psf"]
+	path = analysis/localize-psf
+	url = https://github.com/QI2lab/localize-psf.git

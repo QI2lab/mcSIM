@@ -16,6 +16,7 @@ from scipy import fft
 import pandas as pd
 import tifffile
 
+import rois
 import fit
 
 # I/O for metadata and image files
@@ -991,7 +992,7 @@ def get_peak_value(img, x, y, peak_coord, peak_pixel_size=1):
     iy = np.argmin(np.abs(py - y))
 
     # get ROI around pixel for weighted averaging
-    roi = get_centered_roi([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])
+    roi = rois.get_centered_roi([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])
     img_roi = img[roi[0]:roi[1], roi[2]:roi[3]]
     xx_roi = xx[roi[0]:roi[1], roi[2]:roi[3]]
     yy_roi = yy[roi[0]:roi[1], roi[2]:roi[3]]
@@ -1123,84 +1124,6 @@ def get_extent(y, x):
     extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
     return extent
 
-def roi2full(coords_roi, roi):
-    """
-    coords_roi = [c1, c2, ...]
-    roi = [c1start, c1end, c2start, c2end, ...]
-    :param coords_roi:
-    :param roi:
-    :return:
-    """
-    coords_full = []
-    for ii, c in enumerate(coords_roi):
-        coords_full.append(roi[2*ii] + c)
-
-    return coords_full
-
-def full2roi(coords_full, roi):
-    """
-    coords_full = [c1, c2, ...]
-    roi = [c1start, c1end, c2start, c2end, ...]
-
-    :param coords_full:
-    :param roi:
-    :return:
-    """
-
-    coords_roi = []
-    for ii, c in enumerate(coords_full):
-        coords_roi.append(c - roi[2*ii])
-
-    return coords_roi
-
-def get_centered_roi(centers, sizes, min_vals=None, max_vals=None):
-    """
-    Get end points of an roi centered about centers (as close as possible) with length sizes.
-    If the ROI size is odd, the ROI will be perfectly centered. Otherwise, the centering will
-    be approximation
-
-    roi = [start_0, end_0, start_1, end_1, ..., start_n, end_n]
-
-    Slicing an array as A[start_0:end_0, start_1:end_1, ...] gives the desired ROI.
-    Note that following python array indexing convention end_i are NOT contained in the ROI
-
-    :param centers: list of centers [c1, c2, ..., cn]
-    :param sizes: list of sizes [s1, s2, ..., sn]
-    :param min_values: list of minimimum allowed index values for each dimension
-    :param max_values: list of maximum allowed index values for each dimension
-    :return roi: [start_0, end_0, start_1, end_1, ..., start_n, end_n]
-    """
-    roi = []
-    # for c, n in zip(centers, sizes):
-    for ii in range(len(centers)):
-        c = centers[ii]
-        n = sizes[ii]
-
-        # get ROI closest to centered
-        end_test = np.round(c + (n - 1) / 2) + 1
-        end_err = np.mod(end_test, 1)
-        start_test = np.round(c - (n - 1) / 2)
-        start_err = np.mod(start_test, 1)
-
-        if end_err > start_err:
-            start = start_test
-            end = start + n
-        else:
-            end = end_test
-            start = end - n
-
-        if min_vals is not None:
-            if start < min_vals[ii]:
-                start = min_vals[ii]
-
-        if max_vals is not None:
-            if end > max_vals[ii]:
-                end = max_vals[ii]
-
-        roi.append(int(start))
-        roi.append(int(end))
-
-    return roi
 
 def map_intervals(vals, from_intervals, to_intervals):
     """
@@ -1225,6 +1148,7 @@ def map_intervals(vals, from_intervals, to_intervals):
         vals_out.append( (v - i1[0]) * (i2[1] - i2[0]) / (i1[1] - i1[0])  + i2[0])
 
     return vals_out
+
 
 # fft tools
 def get_fft_frqs(length, dt=1, centered=True, mode='symmetric'):
@@ -1282,6 +1206,7 @@ def get_fft_frqs(length, dt=1, centered=True, mode='symmetric'):
 
     return frqs
 
+
 def get_fft_pos(length, dt=1, centered=True, mode='symmetric'):
     """
     Get position coordinates for use with fast fourier transforms (fft's) using one of several different conventions.
@@ -1325,6 +1250,7 @@ def get_fft_pos(length, dt=1, centered=True, mode='symmetric'):
 
     return pos
 
+
 def get_spline_fn(x1, x2, y1, y2, dy1, dy2):
     """
 
@@ -1350,6 +1276,7 @@ def get_spline_fn(x1, x2, y1, y2, dy1, dy2):
     fn = lambda x: coeffs[0, 0] * x**3 + coeffs[1, 0] * x ** 2 + coeffs[2, 0] * x + coeffs[3, 0]
     dfn = lambda x: 3 * coeffs[0, 0] * x**2 + 2 * coeffs[1, 0] * x + coeffs[2, 0]
     return fn, dfn, coeffs
+
 
 # translating images
 def translate_pix(img, shifts, dr=(1, 1), axes=(-2, -1), wrap=True, pad_val=0):
