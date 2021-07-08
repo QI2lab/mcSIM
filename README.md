@@ -12,39 +12,43 @@ and the [BioRxiv preprint](https://doi.org/10.1101/2020.07.27.223941).
 The repository state at the time of publication is archived [here](https://doi.org/10.5281/zenodo.4773865), or available as
 a [release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0) on GitHub.
 
+When cloning this repo, use the following command to include submodules:
+
+`git clone --recurse-submodules https://github.com/QI2lab/mcSIM.git`
+
 # Analysis and simulation code
 
-### [analysis/simulate_dmd.py](analysis/simulate_dmd.py)
+### [simulate_dmd.py](analysis/simulate_dmd.py)
 Code for simulating the diffraction patterns produced by the DMD. Various 
 scripts illustrating the usage of this code can be found in the [examples](examples) directory
 
-### [analysis/dmd_patterns.py](analysis/dmd_patterns.py)
+### [dmd_patterns.py](analysis/dmd_patterns.py)
 This file can be used to generate multicolor SIM patterns and other useful calibrations
 patterns for the DMD.
 
-### [analysis/sim_reconstruction.py](analysis/sim_reconstruction.py)
+### [sim_reconstruction.py](analysis/sim_reconstruction.py)
 Code for reconstructing SIM images from raw data using a Gustafsson/Wiener filter style reconstruction. Several different
 reconstruction options are available, largely following either the approach of 
 [Lal *et al.*](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980). 
 
-### [analysis/affine.py](analysis/affine.py)
+### [affine.py](analysis/affine.py)
 Code to fit the affine transformation between the DMD coordinates and camera coordinates using imaging data from a DMD
 pattern consisting of many small points.
 
-### [analysis/fit_psf.py](analysis/fit_psf.py)
+### [fit_psf.py](analysis/localize-psf/fit_psf.py)
 Code for automatically finding PSF spots on an image of a sparse bead slide, performing both 2D and 3D PSF fitting using
 various PSF models, and providing useful statistics and figures summarizing the results.
 
-### [analysis/otf_tools.py](analysis/otf_tools.py)
+### [otf_tools.py](analysis/otf_tools.py)
 Code for extracting optical transfer function from measurement of the strength of various Fourier peaks for a given SIM DMD pattern.
  
-### [analysis/psd.py](analysis/psd.py)
+### [psd.py](analysis/psd.py)
 Code for doing the periodic/smooth image decomposition, an alternative to apodization for the Fourier transform. This code is taken from https://github.com/jacobkimmel/ps_decomp (with permission), and included here for convenience.
 
-### [analysis/fit.py](analysis/fit.py)
+### [fit.py](analysis/localize-psf/fit.py)
 Useful tools for fitting, used in fit_psf.py and elsewhere.
 
-### [analysis/analysis_tools.py](analysis/analysis_tools.py)
+### [analysis_tools.py](analysis/analysis_tools.py)
 Miscellaneous tools for IO, reading metadata, image processing, etc.
 
 # Examples
