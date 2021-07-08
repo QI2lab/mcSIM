@@ -6,29 +6,21 @@ working withpoint-spread functions and optical transfer functions more generally
 The primary functions that will be called by an external script are, find_beads(), autofit_psfs(), and display_autofit().
 """
 import os
-import timeit
-import pickle
 import copy
-
+import joblib
 import numpy as np
 import scipy.ndimage as ndi
 import scipy.special as sp
 import scipy.integrate
 import scipy.interpolate
 from scipy import fft
-import skimage.feature
-import skimage.filters
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
 from matplotlib.colors import PowerNorm, LinearSegmentedColormap, Normalize
-
-import joblib
-from functools import partial
-
-import psfmodels as psfm
+import psfmodels as psfm # https://pypi.org/project/psfmodels/
 import localize
 import fit
 import analysis_tools as tools
+
 
 def blur_img_otf(ground_truth, otf):
     """
@@ -44,6 +36,7 @@ def blur_img_otf(ground_truth, otf):
 
     return img_blurred
 
+
 def blur_img_psf(ground_truth, psf):
     """
     Blur image with PSF
@@ -56,37 +49,8 @@ def blur_img_psf(ground_truth, psf):
 
     return blur_img_otf(ground_truth, otf)
 
-# model OTF function
-def symm_fn_1d_to_2d(arr, fs, fmax, npts):
-    """
-    Convert a 1D function which is symmetric wrt to the radial variable to a 2D matrix. Useful helper function when
-    computing PSFs from 2D OTFs
-    :param arr:
-    :param fs:
-    :param df:
-    :return:
-    """
 
-    ny = 2 * npts + 1
-    nx = 2 * npts + 1
-    # fmax = fs.max()
-    dx = 1 / (2 * fmax)
-    dy = dx
-
-    not_nan = np.logical_not(np.isnan(arr))
-
-    fxs = tools.get_fft_frqs(nx, dx)
-    fys = tools.get_fft_frqs(ny, dy)
-    fmag = np.sqrt(fxs[None, :]**2 + fys[:, None]**2)
-    to_interp = np.logical_and(fmag >= fs[not_nan].min(), fmag <= fs[not_nan].max())
-
-
-    arr_out = np.zeros((ny, nx), dtype=arr.dtype)
-    arr_out[to_interp] = scipy.interpolate.interp1d(fs[not_nan], arr[not_nan])(fmag[to_interp])
-
-    return arr_out, fxs, fys
-
-# should rewrite these to handle 1D/3D functions
+# tools for converting between different otf/psf representations
 def otf2psf(otf, dfs=1):
     """
     Compute the point-spread function from the optical transfer function
@@ -110,6 +74,7 @@ def otf2psf(otf, dfs=1):
     psf = fft.fftshift(fft.ifftn(fft.ifftshift(otf))).real
 
     return psf, coords
+
 
 def psf2otf(psf, drs=1):
     """
@@ -135,6 +100,73 @@ def psf2otf(psf, drs=1):
 
     return otf, coords
 
+
+def symm_fn_1d_to_2d(arr, fs, fmax, npts):
+    """
+    Convert a 1D function which is symmetric wrt to the radial variable to a 2D matrix.
+    Useful helper function when computing PSFs from 2D OTFs
+    :param arr:
+    :param fs:
+    :param df:
+    :return:
+    """
+
+    ny = 2 * npts + 1
+    nx = 2 * npts + 1
+    # fmax = fs.max()
+    dx = 1 / (2 * fmax)
+    dy = dx
+
+    not_nan = np.logical_not(np.isnan(arr))
+
+    fxs = tools.get_fft_frqs(nx, dx)
+    fys = tools.get_fft_frqs(ny, dy)
+    fmag = np.sqrt(fxs[None, :]**2 + fys[:, None]**2)
+    to_interp = np.logical_and(fmag >= fs[not_nan].min(), fmag <= fs[not_nan].max())
+
+    arr_out = np.zeros((ny, nx), dtype=arr.dtype)
+    arr_out[to_interp] = scipy.interpolate.interp1d(fs[not_nan], arr[not_nan])(fmag[to_interp])
+
+    return arr_out, fxs, fys
+
+
+def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None):
+    """
+    Get incoherent transfer function from autocorrelation of coherent transfer function
+    :param otf_c:
+    :param dx:
+    :param wavelength:
+    :param ni:
+    :param defocus_um:
+    :param fx:
+    :param fy:
+    :return:
+    """
+    ny, nx = otf_c.shape
+
+    if fx is None:
+        fx = tools.get_fft_frqs(nx, dt=dx)
+    if fy is None:
+        fy = tools.get_fft_frqs(ny, dt=dx)
+
+    if defocus_um != 0:
+        if dx is None or wavelength is None or ni is None:
+            raise TypeError("if defocus != 0, dx, wavelength, ni must be provided")
+
+        k = 2*np.pi / wavelength * ni
+        defocus_fn = np.exp(1j * defocus_um * np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2), dtype=np.complex)))
+    else:
+        defocus_fn = 1
+
+    otf_c_defocus = otf_c * defocus_fn
+    # if even number of frequencies, we must translate otf_c by one so that f and -f match up
+    otf_c_minus_conj = np.roll(np.roll(np.flip(otf_c_defocus, axis=(0, 1)), np.mod(ny + 1, 2), axis=0), np.mod(nx + 1, 2), axis=1).conj()
+
+    otf_inc = scipy.signal.fftconvolve(otf_c_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(otf_c) ** 2)
+    return otf_inc, otf_c_defocus
+
+
+# circular aperture functions
 def circ_aperture_pupil(fx, fy, na, wavelength):
     fmax = 0.5 / (0.5 * wavelength / na)
 
@@ -146,6 +178,7 @@ def circ_aperture_pupil(fx, fy, na, wavelength):
     pupil[ff > fmax] = 0
 
     return pupil
+
 
 def circ_aperture_otf(fx, fy, na, wavelength):
     """
@@ -172,41 +205,6 @@ def circ_aperture_otf(fx, fy, na, wavelength):
 
     return otf
 
-def otf_coherent2incoherent(otf_c, dx=None, wavelength=0.5, ni=1.5, defocus_um=0, fx=None, fy=None):
-    """
-    Get incoherent transfer function from autocorrelation of coherent transfer function
-    :param otf_c:
-    :param dx:
-    :param wavelength:
-    :param ni:
-    :param defocus_um:
-    :param fx:
-    :param fy:
-    :return:
-    """
-    ny, nx = otf_c.shape
-
-    if fx is None:
-        fx = tools.get_fft_frqs(nx, dt=dx)
-    if fy is None:
-        fy = tools.get_fft_frqs(ny, dt=dx)
-
-    if defocus_um != 0:
-
-        if dx is None or wavelength is None or ni is None:
-            raise TypeError("if defocus != 0, dx, wavelength, ni must be provided")
-
-        k = 2*np.pi / wavelength * ni
-        defocus_fn = np.exp(1j * defocus_um * np.sqrt(np.array(k**2 - (2 * np.pi)**2 * (fx[None, :]**2 + fy[:, None]**2), dtype=np.complex)))
-    else:
-        defocus_fn = 1
-
-    otf_c_defocus = otf_c * defocus_fn
-    # if even number of frequencies, we must translate otf_c by one so that f and -f match up
-    otf_c_minus_conj = np.roll(np.roll(np.flip(otf_c_defocus, axis=(0, 1)), np.mod(ny + 1, 2), axis=0), np.mod(nx + 1, 2), axis=1).conj()
-
-    otf_inc = scipy.signal.fftconvolve(otf_c_defocus, otf_c_minus_conj, mode='same') / np.sum(np.abs(otf_c) ** 2)
-    return otf_inc, otf_c_defocus
 
 # helper functions for converting between NA and peak widths
 def na2fwhm(na, wavelength):
@@ -220,6 +218,7 @@ def na2fwhm(na, wavelength):
     fwhm = (1.6163399561827614) / np.pi * wavelength / na
     return fwhm
 
+
 def fwhm2na(wavelength, fwhm):
     """
 
@@ -229,6 +228,7 @@ def fwhm2na(wavelength, fwhm):
     """
     na = (1.6163399561827614) / np.pi * wavelength / fwhm
     return na
+
 
 def na2sxy(na, wavelength):
     """
@@ -265,14 +265,14 @@ def gaussian2d_psf(x, y, p, sf=1):
     :param x:
     :param y:
     :param p: [A, cx, cy, NA, bg]
-    :param wavelength:
+    :param sf:
     :return:
     """
 
-    return gaussian3d_pixelated_psf_v2(x, y, np.array([0]), [p[0], p[1], p[2], 0, p[3], 1, p[4]], sf=sf, angles=(0., 0., 0.))
+    return gaussian3d_psf(x, y, np.array([0]), [p[0], p[1], p[2], 0, p[3], 1, p[4]], sf=sf, angles=(0., 0., 0.))
 
 
-def gaussian3d_pixelated_psf_v2(x, y, z, dc, p, sf=3, angles=(0., 0., 0.)):
+def gaussian3d_psf(x, y, z, dc, p, sf=1, angles=(0., 0., 0.)):
     """
     Gaussian function, accounting for image pixelation in the xy plane.
 
@@ -306,7 +306,7 @@ def gaussian3d_pixelated_psf_v2(x, y, z, dc, p, sf=3, angles=(0., 0., 0.)):
     return psf
 
 
-def gaussian3d_pixelated_psf_jac(x, y, z, dc, p, sf, angles=(0., 0., 0.)):
+def gaussian3d_psf_jac(x, y, z, dc, p, sf, angles=(0., 0., 0.)):
     """
     Jacobian of gaussian3d_pixelated_psf()
 
@@ -345,50 +345,62 @@ def gaussian3d_pixelated_psf_jac(x, y, z, dc, p, sf, angles=(0., 0., 0.)):
     return jac
 
 
-def gaussian_lorentzian_psf(x, y, z, p, wavelength):
+def gaussian_lorentzian_psf(x, y, z, p, sf=1, dc=None, angles=(0., 0., 0.)):
     """
+    Gaussian-Lorentzian PSF model. One difficulty with the Gaussian PSF is the weight is not the same in every z-plane,
+    as we expect it should be. The Gaussian-Lorentzian form remedies this, but the functional form is no longer separable
 
     @param x:
     @param y:
     @param z:
-    @param p: [A, cx, cy, cz, NA, bg, FWHM z]
-    @param wavelength:
+    @param p: [A, cx, cy, cz, sxy, hwhm_z, bg]
     @return:
     """
-    sigma_xy = 0.22 * wavelength / p[4]
 
-    lor_factor = 1 + (z - p[3]) ** 2 / p[6] ** 2
-    norm = 2*np.pi * lor_factor * sigma_xy**2
-    val = p[0] * np.exp(- ((x - p[1])**2 + (y - p[2])**2) / (2 * sigma_xy**2 * lor_factor)) / norm + p[5]
+    if not isinstance(sf, int):
+        raise ValueError("sf must be an integer")
 
-    return val
+    if sf != 1 and dc is None:
+        raise Exception("If sf != 1, then a value for dc must be provided")
+
+    # oversample points in pixel
+    xx_s, yy_s, zz_s = oversample_pixel(x, y, z, dc, sf=sf, euler_angles=angles)
+
+    # calculate psf at oversampled points
+    lor_factor = 1 + (zz_s - p[3]) ** 2 / p[5] ** 2
+    psf_s = np.exp(- ((xx_s - p[1]) ** 2 + (yy_s - p[2]) ** 2) / (2 * p[4] ** 2 * lor_factor)) / lor_factor
+
+    # normalization is such that the predicted peak value of the PSF ignoring binning would be p[0]
+    psf = p[0] * np.mean(psf_s, axis=-1) + p[6]
+
+    return psf
 
 
-def gaussian_lorentzian_psf_jac(x, y, z, p, wavelength):
-    """
+def gaussian_lorentzian_psf_jac(x, y, z, p, sf=1, dc=None, angles=(0., 0., 0.)):
+    if not isinstance(sf, int):
+        raise ValueError("sf must be an integer")
 
-    @param x:
-    @param y:
-    @param z:
-    @param p:
-    @param wavelength:
-    @return:
-    """
-    sigma_xy = 0.22 * wavelength / p[4]
+    if sf != 1 and dc is None:
+        raise Exception("If sf != 1, then a value for dc must be provided")
 
-    lor_factor = 1 + (z - p[3]) ** 2 / p[6] ** 2
-    norm = 2 * np.pi * lor_factor * sigma_xy ** 2
+    # oversample points in pixel
+    xx_s, yy_s, zz_s = oversample_pixel(x, y, z, dc, sf=sf, euler_angles=angles)
 
-    factor = np.exp(- ((x - p[1]) ** 2 + (y - p[2]) ** 2) / (2 * sigma_xy ** 2 * lor_factor)) / norm
+    lor = 1 + (zz_s - p[3]) ** 2 / p[5] ** 2
+    r_sqr = (xx_s - p[1]) ** 2 + (yy_s - p[2]) ** 2
+    factor = np.exp(- r_sqr / (2 * p[4] ** 2 * lor)) / lor
 
-    # todo: finish
-    jac = [factor,
-           0,
-           0,
-           0,
-           0,
-           np.ones(),
-           0]
+    bcast_shape = (x + y + z).shape
+    jac = [np.mean(factor, axis=-1),
+           p[0] * np.mean((x - p[1]) / p[4]**2 / lor * factor, axis=-1),
+           p[0] * np.mean((y - p[2]) / p[4]**2 / lor * factor, axis=-1),
+           p[0] * np.mean(-(z - p[3]) / p[5]**2 / lor**2 * (r_sqr / 2 / p[4]**2) * factor, axis=-1) +
+           p[0] * np.mean(factor / lor * 2 * (z - p[3]) / p[5]**2, axis=-1),
+           p[0] * np.mean(factor * r_sqr / lor / p[4]**3, axis=-1),
+           p[0] * np.mean(factor * r_sqr / 2 / p[4]**2 / lor**2 * 2 * (z - p[3])**2 / p[5]**3, axis=-1) +
+           p[0] * np.mean(factor / lor * 2 * (z - p[3])**2 / p[5]**3, axis=-1),
+           np.ones(bcast_shape)
+           ]
 
     return jac
 
@@ -468,7 +480,7 @@ def born_wolf_psf(x, y, z, p, wavelength, ni, sf=1):
 
 
 # utility functions
-def oversample_pixel(x, y, z, ds, sf=3, euler_angles=(0., 0., 0.)):
+def oversample_pixel(x, y, z, ds, sf, euler_angles=(0., 0., 0.)):
     """
     Suppose we have a set of pixels centered at points given by x, y, z. Generate sf**2 points in this pixel equally
     spaced about the center. Allow the pixel to be orientated in an arbitrary direction with respect to the coordinate
@@ -510,15 +522,19 @@ def oversample_pixel(x, y, z, ds, sf=3, euler_angles=(0., 0., 0.)):
     return xx_s, yy_s, zz_s
 
 
-# main functions for dealing with PSF
+# main functions for fitting/plotting PSFs
 def get_psf_coords(ns, drs):
     """
     Get centered coordinates for PSFmodels style PSF's from step size and number of coordinates
     :param ns: list of number of points
     :param drs: list of step sizes
-    :return coords: list of coordinates [[c1, c2, c3, ...], ...]
+    :return coords: list of coordinates [zs, ys, xs, ...]
     """
-    return [d * (np.arange(n) - n // 2) for n, d in zip(ns, drs)]
+    ndims = len(drs)
+    coords = [np.expand_dims(d * (np.arange(n) - n // 2), axis=tuple(range(ii)) + tuple(range(ii+1, ndims)))
+              for ii, (n, d) in enumerate(zip(ns, drs))]
+
+    return coords
 
 
 def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
@@ -543,7 +559,7 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
     :param z: z positions in um
     :param p: [A, cx, cy, cz, NA, bg]
     :param wavelength: wavelength in um
-    :param model: 'gaussian', 'gibson-lanni', or 'vectorial'. 'gibson-lanni' relies on the psfmodels function
+    :param model: 'gaussian', 'gibson-lanni', 'born-wolf', or 'vectorial'. 'gibson-lanni' relies on the psfmodels function
     scalar_psf(), while 'vectorial' relies on the psfmodels function vectorial_psf()
     :param kwargs: keywords passed through to vectorial_psf() or scalar_psf()
     :return:
@@ -571,8 +587,8 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
             raise NotImplementedError('gibson-lanni model not implemented for sf=/=1')
 
         y, x, = get_psf_coords([nx, nx], [dxy, dxy])
-        y = np.expand_dims(y, axis=(0, 2))
-        x = np.expand_dims(x, axis=(0, 1))
+        y = np.expand_dims(y, axis=0)
+        x = np.expand_dims(x, axis=0)
         z = np.expand_dims(np.array(z, copy=True), axis=(1, 2))
 
         val = born_wolf_psf(x, y, z, p, wavelength, ni, sf=sf)
@@ -589,21 +605,21 @@ def model_psf(nx, dxy, z, p, wavelength, ni, sf=1, model='vectorial', **kwargs):
                    p[5]]
 
         y, x, = get_psf_coords([nx, nx], [dxy, dxy])
-        y = np.expand_dims(y, axis=(0, 2))
-        x = np.expand_dims(x, axis=(0, 1))
+        y = np.expand_dims(y, axis=0)
+        x = np.expand_dims(x, axis=0)
         z = np.expand_dims(np.array(z, copy=True), axis=(1, 2))
 
         # normalize so that peak amplitude is actually
-        psf_norm = gaussian3d_pixelated_psf_v2(p[1], p[2], p[3], dxy, p_gauss, sf, angles=(0., 0., 0.)) - p[5]
-        val = p[0] / psf_norm * (gaussian3d_pixelated_psf_v2(x, y, z, dxy, p_gauss, sf, angles=(0., 0., 0.)) - p[5]) + p[5]
+        psf_norm = gaussian3d_psf(p[1], p[2], p[3], dxy, p_gauss, sf, angles=(0., 0., 0.)) - p[5]
+        val = p[0] / psf_norm * (gaussian3d_psf(x, y, z, dxy, p_gauss, sf, angles=(0., 0., 0.)) - p[5]) + p[5]
     else:
-        raise ValueError("model must be 'gibson-lanni', 'vectorial', or 'gaussian' but was '%s'" % model)
+        raise ValueError("model must be 'gibson-lanni', 'vectorial', 'born-wolf', or 'gaussian' but was '%s'" % model)
 
     return val
 
 
-def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
-                           init_params=None, fixed_params=None, sd=None, bounds=None):
+def fit_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial',
+                 init_params=None, fixed_params=None, sd=None, bounds=None):
     """
     3D non-linear least squares fit using one of the point spread function models from psfmodels package.
 
@@ -626,6 +642,7 @@ def fit_pixelated_psfmodel(img, dxy, dz, wavelength, ni, sf=1, model='vectorial'
 
     # get coordinates
     z, y, x = get_psf_coords(img.shape, [dz, dxy, dxy])
+    z = z[:, 0, 0]
 
     # check size
     nz, ny, nx = img.shape
@@ -711,135 +728,47 @@ def plot_psfmodel_fit(imgs, dx, dz, wavelength, ni, sf, fit_params, model='vecto
     :return:
     """
 
-    # get coordinates
-    nz, ny, nx = imgs.shape
-    z, y, x, = get_psf_coords([nz, ny, nx], [dz, dx, dx])
+    info = "%s, %s, sf=%d" % (label, model, sf)
+    fp_names = ["A", "cx", "cy", "cz", "NA", "bg"]
+    coords = get_psf_coords(imgs.shape, (dz, dx, dx))
+    imgs_fit = model_psf(imgs.shape[-1], dx, coords[0][:, 0, 0], fit_params, wavelength, ni, sf, model=model)
 
-    # other useful coordinate info
-    extent_xy = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dx, y[0] - 0.5 * dx]
-    extent_xz = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, z[-1] + 0.5 * dz, z[0] - 0.5 * dz]
-    extent_zy = [z[0] - 0.5 * dz, z[-1] + 0.5 * dz, y[-1] + 0.5 * dx, y[0] - 0.5 * dx]
-
-    zc_pix = np.argmin(np.abs(z))
-    yc_pix = np.argmin(np.abs(y))
-    xc_pix = np.argmin(np.abs(x))
-
-    # fit function
-    imgs_fit = model_psf(nx, dx, z, fit_params, wavelength, ni, sf, model=model)
-
-    #
-    not_nan = np.logical_not(np.isnan(imgs))
-    vmin_img = np.percentile(imgs[not_nan], 0.1)
-    vmax_img = np.percentile(imgs[not_nan], 99.99)
-
-    #
-    # if use_same_scale:
-    #     vmin_fit = vmin_img
-    #     vmax_fit = vmax_img
-    # else:
-    #     vmin_fit = np.percentile(imgs_fit, 0.1)
-    #     vmax_fit = np.percentile(imgs_fit, 99.99)
-
-    figh = plt.figure(figsize=figsize, **kwargs)
-    grid = plt.GridSpec(2, 4, wspace=0.5, hspace=0.5)
-
-    strs = "%s, %s, sf=%d\nNA=%0.3f, zc=%0.3fum, yc=%0.3fum, xc=%0.3fum, amp=%0.2f, bg=%0.2f" % \
-            (label, model, sf, fit_params[4], fit_params[3], fit_params[2], fit_params[1],
-             fit_params[0], fit_params[5])
-    plt.suptitle(strs)
-
-    # XY-plane
-    ax = plt.subplot(grid[0, 1])
-    ax.imshow(imgs[zc_pix], extent=extent_xy, cmap="bone", norm=PowerNorm(gamma=gamma))
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_title("Data")
-
-    ax = plt.subplot(grid[0, 3])
-    ax.imshow(imgs_fit[zc_pix], extent=extent_xy, cmap="bone", norm=PowerNorm(gamma=gamma))
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_title("Fit")
-
-    # XZ-plane
-    ax = plt.subplot(grid[1, 1])
-    ax.imshow(imgs[:, yc_pix], extent=extent_xz, cmap="bone", norm=PowerNorm(gamma=gamma))
-    ax.set_xlabel("x ($\mu m$)")
-    ax.set_ylabel("z ($\mu m$)")
-
-    ax = plt.subplot(grid[1, 3])
-    ax.imshow(imgs_fit[:, yc_pix], extent=extent_xz, cmap="bone", norm=PowerNorm(gamma=gamma))
-    ax.set_xlabel("x ($\mu m$)")
-    ax.set_ylabel("z ($\mu m$)")
-
-    # YZ-plane
-    ax = plt.subplot(grid[0, 0])
-    ax.imshow(np.transpose(imgs[:, :, xc_pix]), extent=extent_zy, cmap="bone", norm=PowerNorm(gamma=gamma))
-    ax.set_xlabel("z ($\mu m$)")
-    ax.set_ylabel("y ($\mu m$)")
-
-    ax = plt.subplot(grid[0, 2])
-    ax.imshow(np.transpose(imgs_fit[:, :, xc_pix]), extent=extent_zy, cmap="bone", norm=PowerNorm(gamma=gamma))
-    ax.set_xlabel("z ($\mu m$)")
-    ax.set_ylabel("y ($\mu m$)")
-
-    # XY cuts
-    ax = plt.subplot(grid[1, 0])
-    ax.plot(np.sqrt(np.expand_dims(x, axis=0)**2 + np.expand_dims(y, axis=1)**2).ravel(), imgs[zc_pix].ravel(), 'g.')
-    ax.plot(y.ravel(), imgs[zc_pix, :, xc_pix], 'b.')
-    ax.plot(x.ravel(), imgs[zc_pix, yc_pix, :], 'k.')
-    ax.plot(y.ravel(), imgs_fit[zc_pix, :, xc_pix], 'b')
-    ax.plot(x.ravel(), imgs_fit[zc_pix, yc_pix, :], 'k')
-    ax.set_xlabel("xy-position ($\mu m$)")
-    ax.set_ylabel("amplitude")
-    ax.legend(["all", "y-cut", "x-cut"])
-
-    # z cuts
-    ax = plt.subplot(grid[1, 2])
-    ax.plot(z.ravel(), imgs[:, yc_pix, xc_pix], 'b.')
-    ax.plot(z.ravel(), imgs_fit[:, yc_pix, xc_pix], 'b')
-    ax.set_xlabel("z-position ($\mu m$)")
-    ax.set_ylabel("amplitude")
-
-    # optional saving
-    if save_dir is not None:
-        if not os.path.exists(save_dir):
-            os.mkdir(save_dir)
-
-        figh.savefig(os.path.join(save_dir, "%s.png" % label))
-        plt.close(figh)
+    figh = plot_psf_fit(imgs, imgs_fit, coords, fit_params, fit_param_names=fp_names, label=info,
+                        gamma=gamma, figsize=figsize, save_dir=save_dir, **kwargs)
 
     return figh
 
 
 # get real PSF
-def get_exp_psf(imgs, coords, centers, roi_size, backgrounds=None):
+def get_exp_psf(imgs, coords, centers, roi_sizes, backgrounds=None):
     """
-    Get experimental psf from imgs and the results of autofit_psfs
+    Get experimental psf from imgs by averaging many localizations (after pixel shifting).
 
     :param imgs:z-stack of images
     :param coords: (z, y, x) of full image. Must be broadcastable to full image size
-    :param fit_params: n x 6 array, where each element gives [A, cx, cy, cz, NA, bg]
-    Use the center positions, background, and amplitude. # todo: can I get rid of the amplitude?
-    :param roi_size: must be odd
+    :param centers: n x 3 array, (cz, cy, cx)
+    :param roi_sizes: [sz, sy, sx]
+    :param backgrounds: values to subtracted from each ROI
 
-    :return psf_mean:
-    :return psf_sdm:
+    :return psf_mean, psf_coords, otf_mean, otf_coords:
     """
+
+    if np.any(np.mod(np.array(roi_sizes), 2) == 0):
+        raise ValueError("roi_sizes must be odd")
+
     z, y, x, = coords
     dz = z[1, 0, 0] - z[0, 0, 0]
     dx = x[0, 0, 1] - x[0, 0, 0]
-
-    # centers = np.stack((fit_params[:, 3], fit_params[:, 2], fit_params[:, 1]), axis=1)
 
     # set up array to hold psfs
     nrois = len(centers)
     if backgrounds is None:
         backgrounds = np.zeros(nrois)
 
-    psf_shifted = np.zeros((nrois, roi_size[0], roi_size[1], roi_size[2])) * np.nan
+    psf_shifted = np.zeros((nrois, roi_sizes[0], roi_sizes[1], roi_sizes[2])) * np.nan
     # coordinates
-    z_psf, y_psf, x_psf = get_psf_coords(roi_size, [dz, dx, dx])
+    z_psf, y_psf, x_psf = get_psf_coords(roi_sizes, [dz, dx, dx])
+
     zc_pix_psf = np.argmin(np.abs(z_psf))
     yc_pix_psf = np.argmin(np.abs(y_psf))
     xc_pix_psf = np.argmin(np.abs(x_psf))
@@ -852,8 +781,8 @@ def get_exp_psf(imgs, coords, centers, roi_size, backgrounds=None):
         zc_pix = np.argmin(np.abs(z - centers[ii, 0]))
 
         # cut roi from image
-        roi_unc = tools.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_size)
-        roi = tools.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_size, min_vals=[0, 0, 0], max_vals=imgs.shape)
+        roi_unc = tools.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes)
+        roi = tools.get_centered_roi((zc_pix, yc_pix, xc_pix), roi_sizes, min_vals=[0, 0, 0], max_vals=imgs.shape)
         img_roi = imgs[roi[0]:roi[1], roi[2]:roi[3], roi[4]:roi[5]]
 
         zroi = z[roi[0]:roi[1], :, :]
@@ -894,6 +823,221 @@ def get_exp_psf(imgs, coords, centers, roi_size, backgrounds=None):
     kz, ky, kx = ks
 
     return psf_mean, (z_psf, y_psf, x_psf), otf_mean, (kz, ky, kx)
+
+
+# other display functions
+def plot_psf_fit(imgs, imgs_fit, coords, fit_params, fit_param_names=None, label="",
+                 figsize=(18, 10), gamma=1, save_dir=None, **kwargs):
+    """
+    Plot PSF model compared with real data. Intended to be agnostic of fit parameters
+
+    @param imgs:
+    @param imgs_fit:
+    @param coords:
+    @param fit_params:
+    @param fit_param_names:
+    @param label:
+    @param figsize:
+    @param gamma:
+    @param save_dir:
+    @param kwargs:
+    @return:
+    """
+
+    # get image size and central pixels
+    nz, ny, nx = imgs.shape
+
+    zc_pix = nz // 2
+    yc_pix = ny // 2
+    xc_pix = nx // 2
+
+    # get coordinates
+    z, y, x, = coords
+    dz = z[1, 0, 0] - z[0, 0, 0]
+    dy = y[0, 1, 0] - y[0, 0, 0]
+    dx = x[0, 0, 1] - x[0, 0, 0]
+
+    # other useful coordinate info
+    extent_xy = [x[0, 0, 0] - 0.5 * dx, x[0, 0, -1] + 0.5 * dx, y[0, -1, 0] + 0.5 * dy, y[0, 0, 0] - 0.5 * dy]
+    extent_xz = [x[0, 0, 0] - 0.5 * dx, x[0, 0, -1] + 0.5 * dx, z[-1, 0, 0] + 0.5 * dz, z[0, 0, 0] - 0.5 * dz]
+    extent_zy = [z[0, 0, 0] - 0.5 * dz, z[-1, 0, 0] + 0.5 * dz, y[0, -1, 0] + 0.5 * dy, y[0, 0, 0] - 0.5 * dy]
+
+    # plot results
+    ttl_str = "%s\n" % label
+    for ii in range(len(fit_params)):
+        if fit_param_names is None:
+            ttl_str += "%0.3f, " % fit_params[ii]
+        else:
+            ttl_str += "%s=%0.3f, " % (fit_param_names[ii], fit_params[ii])
+
+    figh = plt.figure(figsize=figsize, **kwargs)
+    grid = plt.GridSpec(2, 4, wspace=0.5, hspace=0.5)
+    plt.suptitle(ttl_str)
+
+    # XY-plane
+    ax = plt.subplot(grid[0, 1])
+    ax.imshow(imgs[zc_pix], extent=extent_xy, cmap="bone", norm=PowerNorm(gamma=gamma))
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Data")
+
+    ax = plt.subplot(grid[0, 3])
+    ax.imshow(imgs_fit[zc_pix], extent=extent_xy, cmap="bone", norm=PowerNorm(gamma=gamma))
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Fit")
+
+    # XZ-plane
+    ax = plt.subplot(grid[1, 1])
+    ax.imshow(imgs[:, yc_pix], extent=extent_xz, cmap="bone", norm=PowerNorm(gamma=gamma))
+    ax.set_xlabel("x ($\mu m$)")
+    ax.set_ylabel("z ($\mu m$)")
+
+    ax = plt.subplot(grid[1, 3])
+    ax.imshow(imgs_fit[:, yc_pix], extent=extent_xz, cmap="bone", norm=PowerNorm(gamma=gamma))
+    ax.set_xlabel("x ($\mu m$)")
+    ax.set_ylabel("z ($\mu m$)")
+
+    # YZ-plane
+    ax = plt.subplot(grid[0, 0])
+    ax.imshow(np.transpose(imgs[:, :, xc_pix]), extent=extent_zy, cmap="bone", norm=PowerNorm(gamma=gamma))
+    ax.set_xlabel("z ($\mu m$)")
+    ax.set_ylabel("y ($\mu m$)")
+
+    ax = plt.subplot(grid[0, 2])
+    ax.imshow(np.transpose(imgs_fit[:, :, xc_pix]), extent=extent_zy, cmap="bone", norm=PowerNorm(gamma=gamma))
+    ax.set_xlabel("z ($\mu m$)")
+    ax.set_ylabel("y ($\mu m$)")
+
+    # XY cuts
+    ax = plt.subplot(grid[1, 0])
+    ax.plot(np.sqrt(np.expand_dims(x, axis=0) ** 2 + np.expand_dims(y, axis=1) ** 2).ravel(), imgs[zc_pix].ravel(), 'g.')
+    ax.plot(y.ravel(), imgs[zc_pix, :, xc_pix], 'b.')
+    ax.plot(x.ravel(), imgs[zc_pix, yc_pix, :], 'k.')
+    ax.plot(y.ravel(), imgs_fit[zc_pix, :, xc_pix], 'b')
+    ax.plot(x.ravel(), imgs_fit[zc_pix, yc_pix, :], 'k')
+    ax.set_xlabel("xy-position ($\mu m$)")
+    ax.set_ylabel("amplitude")
+    ax.legend(["all", "y-cut", "x-cut"])
+
+    # z cuts
+    ax = plt.subplot(grid[1, 2])
+    ax.plot(z.ravel(), imgs[:, yc_pix, xc_pix], 'b.')
+    ax.plot(z.ravel(), imgs_fit[:, yc_pix, xc_pix], 'b')
+    ax.set_xlabel("z-position ($\mu m$)")
+    ax.set_ylabel("amplitude")
+
+    # optional saving
+    if save_dir is not None:
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+
+        figh.savefig(os.path.join(save_dir, "%s.png" % label))
+        plt.close(figh)
+
+    return figh
+
+def plot_fit_stats(fit_params, figsize=(18, 10), **kwargs):
+    """
+    Plot statistics for a list of fit result dictionaries
+
+    :param fit_params: N x 6 list of localization fit parameters
+    :param kwargs: passed to plt.figure()
+    :return figh: figure handle
+    """
+
+    # fit parameter summary
+    figh = plt.figure(figsize=figsize, **kwargs)
+    plt.suptitle("Localization fit parameter summary")
+    grid = plt.GridSpec(2, 2, hspace=1, wspace=0.5)
+
+    # amplitude vs sxy
+    ax = plt.subplot(grid[0, 0])
+    ax.plot(fit_params[:, 4], fit_params[:, 0], '.')
+    ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
+    ax.set_ylabel("amp")
+
+    # sxy vs sz
+    ax = plt.subplot(grid[0, 1])
+    ax.plot(fit_params[:, 4], fit_params[:, 5], '.')
+    ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
+    ax.set_ylabel(r"$\sigma_{z}$ ($\mu m$)")
+
+    # sxy vs bg
+    ax = plt.subplot(grid[1, 1])
+    ax.plot(fit_params[:, 4], fit_params[:, 6], '.')
+    ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
+    ax.set_ylabel(r"$\sigma_{z}$ ($\mu m$)")
+
+    return figh
+
+
+def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_labels=None, weights=None,
+                        cbar_labels=None, vlims_percentile=(0.01, 99.99), **kwargs):
+    """
+    Plot center locations on 2D image or max projection of 3D image
+
+    # todo: replace some of the more complicated plotting functions with this one ... maybe add another argument
+    # weights which gives intensity of each color
+
+    :param imgs: np.array either 3D or 2D. Dimensions order Z, Y, X
+    :param center_lists: [center_array_1, center_array_2, ...] where each center_array is a numpy array of size N_i x 3
+    consisting of triples of center values giving cz, cy, cx
+    :param color_lists: list of colors for each series to be plotted in
+    :param legend_labels: labels for each series
+    :param weights: list of arrays [w_1, ..., w_n], with w_i the same size as center_array_i, giving the intensity of
+    the color to be plotted
+    :return:
+    """
+
+    if not isinstance(center_lists, list):
+        center_lists = [center_lists]
+    nlists = len(center_lists)
+
+    if color_lists is None:
+        cmap = plt.cm.get_cmap('hsv')
+        color_lists = []
+        for ii in range(nlists):
+            color_lists.append(cmap(ii / nlists))
+
+    if legend_labels is None:
+        legend_labels = list(map(lambda x: "series #" + str(x) + " %d pts" % len(center_lists[x]), range(nlists)))
+
+    if weights is None:
+        weights = [np.ones(len(cs)) for cs in center_lists]
+
+    if cbar_labels is None:
+        cbar_labels = ["" for cs in center_lists]
+
+    if imgs.ndim == 3:
+        img_max_proj = np.nanmax(imgs, axis=0)
+    else:
+        img_max_proj = imgs
+
+    figh = plt.figure(**kwargs)
+    plt.suptitle(title)
+
+    # plot image
+    vmin = np.percentile(img_max_proj, vlims_percentile[0])
+    vmax = np.percentile(img_max_proj, vlims_percentile[1])
+
+    plt.imshow(img_max_proj, vmin=vmin, vmax=vmax, cmap=plt.cm.get_cmap("bone"))
+
+    cbar = plt.colorbar()
+    cbar.ax.set_ylabel("Image intensity (counts)")
+
+    # plot centers
+    for ii in range(nlists):
+        cmap_color = LinearSegmentedColormap.from_list("test", [[0., 0., 0.], color_lists[ii]])
+        plt.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', marker='o',
+                    edgecolor=cmap_color(weights[ii] / np.nanmax(weights[ii])))
+
+        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=0, vmax=np.nanmax(weights[ii])), cmap=cmap_color))
+        cbar.ax.set_ylabel(cbar_labels[ii])
+
+    plt.legend(legend_labels)
+
+    return figh
 
 
 # main fitting function
@@ -1001,6 +1145,7 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
     nps = len(psf_percentiles)
     psfs_real = np.zeros((nps,) + tuple(psf_roi_size))
     otfs_real = np.zeros(psfs_real.shape, dtype=np.complex)
+    fit_params_real = np.zeros((nps, 6))
     for ii in range(len(psf_percentiles)):
         # only keep smallest so many percent of spots
         sigma_max = np.percentile(fit_params[:, 4][to_keep],  psf_percentiles[ii])
@@ -1015,11 +1160,11 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
         psfs_real[ii], psf_coords, otfs_real[ii], otf_coords = get_exp_psf(imgs, (z, y, x), centers, psf_roi_size,
                                                                            backgrounds=fit_params[:, 5][to_use])
 
-        results, _ = fit_pixelated_psfmodel(psfs_real[ii], dx, dz, wavelength, ni, sf, model=model)
-        fit_params_real = results["fit_params"]
+        results, _ = fit_psfmodel(psfs_real[ii], dx, dz, wavelength, ni, sf, model=model)
+        fit_params_real[ii] = results["fit_params"]
 
         if plot:
-            figh = plot_psfmodel_fit(psfs_real[ii], dx, dz, wavelength, ni, sf, fit_params_real, model=model,
+            figh = plot_psfmodel_fit(psfs_real[ii], dx, dz, wavelength, ni, sf, fit_params_real[ii], model=model,
                                      gamma=gamma, figsize=figsize, label="smallest %d percent" % psf_percentiles[ii])
 
             if saving:
@@ -1043,109 +1188,6 @@ def autofit_psfs(imgs, psf_roi_size, dx, dz, wavelength, ni=1.5, model='vectoria
             figh.savefig(fname)
             plt.close(figh)
 
-    # todo: return all data
 
-    return None
-
-# other display functions
-def plot_fit_stats(fit_params, figsize=(18, 10), **kwargs):
-    """
-    Plot statistics for a list of fit result dictionaries
-
-    :param fit_params: N x 6 list of localization fit parameters
-    :param kwargs: passed to plt.figure()
-    :return figh: figure handle
-    """
-
-    # fit parameter summary
-    figh = plt.figure(figsize=figsize, **kwargs)
-    plt.suptitle("Localization fit parameter summary")
-    grid = plt.GridSpec(2, 2, hspace=1, wspace=0.5)
-
-    # amplitude vs sxy
-    ax = plt.subplot(grid[0, 0])
-    ax.plot(fit_params[:, 4], fit_params[:, 0], '.')
-    ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
-    ax.set_ylabel("amp")
-
-    # sxy vs sz
-    ax = plt.subplot(grid[0, 1])
-    ax.plot(fit_params[:, 4], fit_params[:, 5], '.')
-    ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
-    ax.set_ylabel(r"$\sigma_{z}$ ($\mu m$)")
-
-    # sxy vs bg
-    ax = plt.subplot(grid[1, 1])
-    ax.plot(fit_params[:, 4], fit_params[:, 6], '.')
-    ax.set_xlabel(r"$\sigma_{xy}$ ($\mu m$)")
-    ax.set_ylabel(r"$\sigma_{z}$ ($\mu m$)")
-
-    return figh
-
-
-def plot_bead_locations(imgs, center_lists, title="", color_lists=None, legend_labels=None, weights=None,
-                        cbar_labels=None, vlims_percentile=(0.01, 99.99), **kwargs):
-    """
-    Plot center locations on 2D image or max projection of 3D image
-
-    # todo: replace some of the more complicated plotting functions with this one ... maybe add another argument
-    # weights which gives intensity of each color
-
-    :param imgs: np.array either 3D or 2D. Dimensions order Z, Y, X
-    :param center_lists: [center_array_1, center_array_2, ...] where each center_array is a numpy array of size N_i x 3
-    consisting of triples of center values giving cz, cy, cx
-    :param color_lists: list of colors for each series to be plotted in
-    :param legend_labels: labels for each series
-    :param weights: list of arrays [w_1, ..., w_n], with w_i the same size as center_array_i, giving the intensity of
-    the color to be plotted
-    :return:
-    """
-
-    if not isinstance(center_lists, list):
-        center_lists = [center_lists]
-    nlists = len(center_lists)
-
-    if color_lists is None:
-        cmap = plt.cm.get_cmap('hsv')
-        color_lists = []
-        for ii in range(nlists):
-            color_lists.append(cmap(ii / nlists))
-
-    if legend_labels is None:
-        legend_labels = list(map(lambda x: "series #" + str(x) + " %d pts" % len(center_lists[x]), range(nlists)))
-
-    if weights is None:
-        weights = [np.ones(len(cs)) for cs in center_lists]
-
-    if cbar_labels is None:
-        cbar_labels = ["" for cs in center_lists]
-
-    if imgs.ndim == 3:
-        img_max_proj = np.nanmax(imgs, axis=0)
-    else:
-        img_max_proj = imgs
-
-    figh = plt.figure(**kwargs)
-    plt.suptitle(title)
-
-    # plot image
-    vmin = np.percentile(img_max_proj, vlims_percentile[0])
-    vmax = np.percentile(img_max_proj, vlims_percentile[1])
-
-    plt.imshow(img_max_proj, vmin=vmin, vmax=vmax, cmap=plt.cm.get_cmap("bone"))
-
-    cbar = plt.colorbar()
-    cbar.ax.set_ylabel("Image intensity (counts)")
-
-    # plot centers
-    for ii in range(nlists):
-        cmap_color = LinearSegmentedColormap.from_list("test", [[0., 0., 0.], color_lists[ii]])
-        plt.scatter(center_lists[ii][:, 2], center_lists[ii][:, 1], facecolor='none', marker='o',
-                    edgecolor=cmap_color(weights[ii] / np.nanmax(weights[ii])))
-
-        cbar = plt.colorbar(plt.cm.ScalarMappable(norm=Normalize(vmin=0, vmax=np.nanmax(weights[ii])), cmap=cmap_color))
-        cbar.ax.set_ylabel(cbar_labels[ii])
-
-    plt.legend(legend_labels)
-
-    return figh
+    return coords, fit_params, init_params, rois, to_keep, conditions, condition_names, filter_settings,\
+           psfs_real, psf_coords, otfs_real, otf_coords, psf_percentiles, fit_params_real

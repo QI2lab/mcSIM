@@ -9,9 +9,9 @@ import scipy.signal
 import joblib
 import matplotlib.pyplot as plt
 #
-import analysis_tools as tools
-import fit_psf as psf
+import rois
 import fit
+import fit_psf as psf
 
 # for filtering on GPU
 try:
@@ -80,7 +80,7 @@ def get_roi(center, img, x, y, z, sizes):
     i1 = np.argmin(np.abs(y.ravel() - center[1]))
     i2 = np.argmin(np.abs(x.ravel() - center[2]))
 
-    roi = np.array(tools.get_centered_roi([i0, i1, i2], sizes, min_vals=[0, 0, 0], max_vals=img.shape))
+    roi = np.array(rois.get_centered_roi([i0, i1, i2], sizes, min_vals=[0, 0, 0], max_vals=img.shape))
 
     z_roi = z[roi[0]:roi[1]]
     y_roi = y[:, roi[2]:roi[3], :]
@@ -514,10 +514,10 @@ def fit_gauss_roi(img_roi, coords, init_params=None, fixed_params=None, bounds=N
 
     # gaussian fitting localization
     def model_fn(p):
-        return psf.gaussian3d_pixelated_psf_v2(x_roi, y_roi, z_roi, dc, p, sf=sf, angles=angles)
+        return psf.gaussian3d_psf(x_roi, y_roi, z_roi, dc, p, sf=sf, angles=angles)
 
     def jac_fn(p):
-        return psf.gaussian3d_pixelated_psf_jac(x_roi, y_roi, z_roi, dc, p, sf=sf, angles=angles)
+        return psf.gaussian3d_psf_jac(x_roi, y_roi, z_roi, dc, p, sf=sf, angles=angles)
 
     # do fitting
     results = fit.fit_model(img_roi, model_fn, init_params, bounds=bounds, fixed_params=fixed_params, model_jacobian=jac_fn)
@@ -650,7 +650,7 @@ def plot_gauss_roi(fit_params, roi, imgs, coords, init_params=None, same_color_s
     vmax_roi = np.percentile(img_roi[np.logical_not(np.isnan(img_roi))], 99.9)
 
     # git fit
-    img_fit = psf.gaussian3d_pixelated_psf_v2(x_roi, y_roi, z_roi, dc, fit_params, sf=1)
+    img_fit = psf.gaussian3d_psf(x_roi, y_roi, z_roi, dc, fit_params, sf=1)
 
     # ################################
     # plot results interpolated on regular grid

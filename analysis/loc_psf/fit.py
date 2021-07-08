@@ -461,6 +461,56 @@ def gauss2d_jacobian(x, y, p):
             p[0] * exps * xrot * yrot * (1 / p[3]**2 - 1 / p[4]**2)]
 
 
+def gauss2d_v2(x, y, p):
+    """
+    Rotated 2D gaussian function. The angle theta is defined clockwise from the x- (or y-) axis. NOTE: be careful
+    with this when looking at results using e.g. matplotlib.imshow, as this will display the negative y-axis on top.
+
+    :param x: x-coordinates to evaluate function at.
+    :param y: y-coordinates to evaluate function at. Either same size as x, or broadcastable with x.
+    :param p: [A, cx, cy, sxrot, syrot/sxrot = anistropy, bg, theta]
+    :return value:
+    """
+    if len(p) != 7:
+        raise ValueError("parameter list p must have length 7")
+
+    xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])
+    yrot = np.cos(p[6]) * (y - p[2]) + np.sin(p[6]) * (x - p[1])
+    val = p[0] * np.exp(-xrot ** 2 / (2 * p[3] ** 2) - yrot ** 2 / (2 * p[3] ** 2 * p[4] ** 2)) + p[5]
+
+    return val
+
+
+def gauss2d_v2_jacobian(x, y, p):
+    """
+      Jacobian of gauss_fn
+
+      :param x:
+      :param y:
+      :param p: [A, cx, cy, sx, sy/sx, bg, theta]
+      :return value:
+      """
+    if len(p) != 7:
+        raise ValueError("parameter list p must have length 7")
+
+    # useful functions that show up in derivatives
+    xrot = np.cos(p[6]) * (x - p[1]) - np.sin(p[6]) * (y - p[2])
+    yrot = np.cos(p[6]) * (y - p[2]) + np.sin(p[6]) * (x - p[1])
+    exps = np.exp(-xrot ** 2 / (2 * p[3] ** 2) - yrot ** 2 / (2 * p[3] ** 2 * p[4] ** 2))
+
+    bcast_shape = (x + y).shape
+
+    jac = [exps,
+           p[0] * exps * (xrot / p[3] ** 2 * np.cos(p[6]) + yrot / p[3]**2 / p[4] ** 2 * np.sin(p[6])),
+           p[0] * exps * (yrot / p[3] ** 2 / p[4] ** 2 * np.cos(p[6]) - xrot / p[3] ** 2 * np.sin(p[6])),
+           p[0] * exps * (xrot ** 2 / p[3] ** 3 + yrot ** 2 / p[3] ** 3 / p[4]**2),
+           p[0] * exps * yrot ** 2 / p[3] ** 2 / p[4] ** 3,
+           np.ones(bcast_shape),
+           p[0] * exps * xrot * yrot * (1 / p[3] ** 2 - 1 / (p[3] ** 2 * p[4] ** 2))]
+
+    return jac
+
+
 def sum_gauss2d(x, y, p):
     """
     Sum of n 2D gaussians
