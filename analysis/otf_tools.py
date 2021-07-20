@@ -405,9 +405,11 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, wavele
             fy = np.atleast_1d(fy)
             tx_out = dmd_params["theta_outs"][0] + dmd_params["wavelength"] * fx / dmd_params["dx"]
             ty_out = dmd_params["theta_outs"][1] + dmd_params["wavelength"] * fy / dmd_params["dy"]
+
+            uvec_in = simulate_dmd.get_unit_vector(dmd_params["theta_ins"][0], dmd_params["theta_ins"][1], "in")
+            uvec_out = simulate_dmd.get_unit_vector(tx_out, ty_out, "out")
             envelope = simulate_dmd.blaze_envelope(dmd_params["wavelength"], dmd_params["gamma"], dmd_params["wx"],
-                                               dmd_params["wy"], dmd_params["theta_ins"][0], dmd_params["theta_ins"][1],
-                                               tx_out, ty_out)
+                                               dmd_params["wy"], uvec_in - uvec_out)
             return envelope * (np.sqrt(fx ** 2 + fy ** 2) <= fmax_efield_ex)
     else:
         def pupil_fn(fx, fy):

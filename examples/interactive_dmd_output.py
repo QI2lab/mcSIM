@@ -11,4 +11,4 @@ colors = ['b', 'g', 'r']
 gamma = 12 * np.pi / 180
 dx = 7.56 # um
 
-dmd.display_2d(wavelengths, gamma, dx, max_diff_order=15, colors=colors, angle_increment=0.1, figsize=(16, 8))
+dmd.interactive_display_2d(wavelengths, gamma, dx, max_diff_order=15, colors=colors, angle_increment=0.1, figsize=(16, 8))
