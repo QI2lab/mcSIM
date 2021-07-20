@@ -891,9 +891,11 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
 
             if include_blaze_correction:
                 # wavelength * frq = theta in Fraunhofer approximation
-                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, tin_x, tin_y,
-                                                                     tout_x + wavelength * vecs[ii, jj][0] / dx,
-                                                                     tout_y + wavelength * vecs[ii, jj][1] / dy)
+                uvec_in = simulate_dmd.get_unit_vector(tin_x, tin_y, "in")
+                uvec_out = simulate_dmd.get_unit_vector(tout_x + wavelength * vecs[ii, jj][0] / dx,
+                                                        tout_y + wavelength * vecs[ii, jj][1] / dy, "out")
+                amb = uvec_in - uvec_out
+                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, amb)
 
                 efield_fc[ii, jj] = efield_fc[ii, jj] * blaze_envelope[ii, jj]
     # for ii, n in enumerate(ns):
@@ -1030,9 +1032,11 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
 
             if include_blaze_correction:
                 # wavelength * frq = theta in Fraunhofer approximation
-                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, tin_x, tin_y,
-                                                                     tout_x + wavelength * vecs[ii, jj][0] / dx,
-                                                                     tout_y + wavelength * vecs[ii, jj][1] / dy)
+                uvec_in = simulate_dmd.get_unit_vector(tin_x, tin_y, "in")
+                uvec_out = simulate_dmd.get_unit_vector(tout_x + wavelength * vecs[ii, jj][0] / dx,
+                                                        tout_y + wavelength * vecs[ii, jj][1] / dy, "out")
+                amb = uvec_in - uvec_out
+                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, amb)
 
                 efield_fc_xformed[ii, jj] = efield_fc_xformed[ii, jj] * blaze_envelope[ii, jj]
 
