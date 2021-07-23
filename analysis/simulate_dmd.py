@@ -1174,8 +1174,9 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
 
             # sinc envelopes from pixels
             ax = plt.subplot(grid[0, 1])
-            int_sinc = np.abs(sinc_on[kk][input_ind]) ** 2
-            plt.imshow(int_sinc / (wx*wy)**2, extent=extent, norm=PowerNorm(gamma=gamma), cmap="bone", origin="lower")
+
+            plt.imshow(sinc_on[kk][input_ind] / (wx*wy)**2, extent=extent,
+                       norm=PowerNorm(gamma=1), cmap="bone", origin="lower")
             xlim = ax.get_xlim()
             ylim = ax.get_ylim()
 
@@ -1196,7 +1197,7 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
 
             plt.xlabel('theta x outgoing')
             plt.ylabel('theta y outgoing')
-            plt.title('Sinc ON, normalized to peak efficiency = (wx*wy)**2')
+            plt.title('Sinc blaze condition envelope')
 
             plt.subplot(grid[0, 2])
             plt.imshow(pattern, origin="lower", cmap="bone")
