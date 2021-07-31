@@ -1165,15 +1165,15 @@ class dlp6500():
         This command is based on Table 5-3 in the DLP programming manual
 
         :param patterns: N x Ny x Nx NumPy array of uint8
-        :param exp_times: exposure times in us. Either a single uint8 number, or a list the same length as the number of patterns. >=105us
-        :param dark_times: dark times in us. Either a single uint8 number or a list the same length as the number of patterns
-        :param triggered: Boolean. Whether or not DMD is to wait to be triggered.
-        :param clear_pattern_after_trigger: Boolean. Whether or not to keep displaying the pattern at the end of exposure time,
+        :param list[int] exp_times: exposure times in us. Either a single uint8 number, or a list the same length as the number of patterns. >=105us
+        :param list[int] dark_times: dark times in us. Either a single uint8 number or a list the same length as the number of patterns
+        :param bool triggered: Whether or not DMD should wait to be triggered to display the next pattern
+        :param bool clear_pattern_after_trigger: Whether or not to keep displaying the pattern at the end of exposure time,
         i.e. during time while DMD is waiting for the next trigger.
-        :param bit_depth: Bit depth of patterns
-        :param num_repeats: Number of repeats. 0 means infinite.
-        :param compression_mode: 'erle', 'rle', or 'none'
-        :return:
+        :param int bit_depth: Bit depth of patterns
+        :param int num_repeats: Number of repeats. 0 means infinite.
+        :param str compression_mode: 'erle', 'rle', or 'none'
+        :return stored_image_indices, stored_bit_indices: image and bit indices where each image was stored
         """
         # #########################
         # check arguments

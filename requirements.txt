@@ -9,9 +9,6 @@ psutil>=5.6.7
 cupy
 tifffile
 psfmodels>=0.2.0
-# for driver code #todo: which of these are actually being used?
-pywin32>=227
+# for dlp6500 driver code
 pywinusb>=0.4.2
-PyVISA>=1.10.1
-PyVISA-py>=0.3.1
 
