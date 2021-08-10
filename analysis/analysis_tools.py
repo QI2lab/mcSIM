@@ -1448,22 +1448,36 @@ def rfft2fft(img_rft):
     
     return img_fft
 
-def shannon_whittaker_interp(x, y, dt=1):
+def shannon_whittaker_interp(pts, fn_vals, dt=1):
     """
     Get function value between sampling points using Shannon-Whittaker interpolation formula.
 
-    :param x: point to find interpolated function
-    :param y: function at points n * dt
+    :param pts: point to find interpolated function
+    :param fn_vals: function at points n * dt
     :param dt: sampling rate
-    :return: y(x)
+    :return fn_interp: fn(pts)
     """
-    ns = np.arange(len(y))
-    y_interp = np.zeros(x.shape)
-    for ii in range(x.size):
-        ind = np.unravel_index(ii, x.shape)
-        y_interp[ind] = np.sum(y * sinc(np.pi * (x[ind] - ns * dt) / dt))
+    ns = np.arange(len(fn_vals))
+    fn_interp = np.zeros(pts.shape)
+    for ii in range(pts.size):
+        ind = np.unravel_index(ii, pts.shape)
+        fn_interp[ind] = np.sum(fn_vals * sinc(np.pi * (pts[ind] - ns * dt) / dt))
 
-    return y_interp
+    return fn_interp
+
+def shannon_whittaker_interp2d(pts, fn_vals, drs):
+    # todo: combine 1D and 2D functions to nD function
+    ns = np.expand_dims(np.arange(fn_vals.shape[0]), axis=1)
+    ms = np.expand_dims(np.arange(fn_vals.shape[1]), axis=0)
+
+    fn_interp = np.zeros(pts.shape)
+    for ii in range(pts.size):
+        ind = np.unravel_index(ii, pts.shape)
+        fn_interp[ind] = np.sum(fn_vals *
+                                sinc(np.pi * (pts[ind] - ns * drs[0]) / drs[0]) *
+                                sinc(np.pi * (pts[ind] - ms * drs[1]) / drs[1]))
+
+    return fn_interp
 
 def sinc(x):
     """

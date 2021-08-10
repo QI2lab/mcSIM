@@ -530,15 +530,6 @@ def fit_affine_xform_mask(img, mask, init_params=None):
     return pfit
 
 
-def fit_barrel_distortion(from_pts, to_pts):
-    """
-
-    :param from_pts:
-    :param to_pts:
-    :return:
-    """
-    raise NotImplementedError("todo: not implemented")
-
 # helper functions for dealing with an array of dots projected on a flat background
 def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_squared_relative_max=1.5,
                       max_position_err=0.1, img_sd=None, debug=False):

@@ -9,6 +9,7 @@ import affine
 import psd
 import camera_noise
 import fit
+import rois
 
 # general imports
 import pickle
@@ -1888,20 +1889,21 @@ class SimImageSet:
                 kwargs = {datetime: start_time}
 
             fname = os.path.join(save_dir, "sim_os_%s.tif" % file_identifier)
-            tools.save_tiff(self.sim_os, fname, dtype=np.float32, resolution=(1/self.dx, 1/self.dx),
-                            metadata={'unit': 'um'}, **kwargs)
+            tools.save_tiff(self.sim_os, fname, dtype=np.float32, resolution=(1/self.dx, 1/self.dx))\
+
+                            # metadata={'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "widefield_%s.tif" % file_identifier)
-            tools.save_tiff(self.widefield, fname, dtype=np.float32, resolution=(1/self.dx, 1/self.dx),
-                            metadata={'unit': 'um'}, **kwargs)
+            tools.save_tiff(self.widefield, fname, dtype=np.float32, resolution=(1/self.dx, 1/self.dx))
+                            # metadata={'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "sim_sr_%s.tif" % file_identifier)
-            tools.save_tiff(self.sim_sr, fname, dtype=np.float32, resolution=(1/(0.5 * self.dx), 1/(0.5 * self.dx)),
-                            metadata={'unit': 'um'}, **kwargs)
+            tools.save_tiff(self.sim_sr, fname, dtype=np.float32, resolution=(1/(0.5 * self.dx), 1/(0.5 * self.dx)))
+                            # metadata={'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "deconvolved_%s.tif" % file_identifier)
             tools.save_tiff(self.widefield_deconvolution, fname, dtype=np.float32,
-                            resolution=(1/(0.5 * self.dx), 1/(0.5 * self.dx)), metadata={'unit': 'um'}, **kwargs)
+                            resolution=(1/(0.5 * self.dx), 1/(0.5 * self.dx)))# metadata={'unit': 'um'}, **kwargs)
 
             self.print_log("saving tiff files took %0.2fs" % (time.perf_counter() - tstart_save))
 
@@ -2224,7 +2226,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     # #######################################
     roi_cx = np.argmin(np.abs(fx_sim - fxs))
     roi_cy = np.argmin(np.abs(fy_sim - fys))
-    roi = tools.get_centered_roi([roi_cy, roi_cx], [roi_size, roi_size])
+    roi = rois.get_centered_roi([roi_cy, roi_cx], [roi_size, roi_size])
 
     extent_roi = tools.get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
@@ -2280,7 +2282,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
-    roi_center = tools.get_centered_roi([cy_c, cx_c], [roi_size, roi_size])
+    roi_center = rois.get_centered_roi([cy_c, cx_c], [roi_size, roi_size])
 
     im3 = ax3.imshow(np.abs(img1_ft[roi_center[0]:roi_center[1], roi_center[2]:roi_center[3]])**2,
                      interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent)
