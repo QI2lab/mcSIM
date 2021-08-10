@@ -1,0 +1,49 @@
+import org.micromanager.internal.hcwizard.MicroscopeModel;
+
+String conda_env_name = "sim";
+String script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\run_odt.py";
+String temp_cfg_file = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\temp_config.cfg";
+
+cfg_file = mm.getSysConfigFile();
+//cfg = new ConfigWizard(mm, cfg_file);
+
+// get microscope model without NI device
+model = new MicroscopeModel();
+model.loadFromFile(cfg_file);
+model.createSetupConfigsFromHardware(mmc);
+model.createResolutionsFromHardware(mmc);
+
+devs = model.getDevices();
+for (d : devs){
+	name = d.getName();
+	if (name.contains("do")){
+		model.removeDevice(name);
+	}
+}
+
+// remove any NI devices from configuration settings
+model.removeInvalidConfigurations();
+// save to temporary file
+model.saveToFile(temp_cfg_file);
+mm.setSysConfigFile(temp_cfg_file);
+print("Loaded configuration without NI DAQ");
+
+if (true){
+	// run python
+	Runtime r = Runtime.getRuntime();
+	Process p;
+	p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + script_path);
+	
+	BufferedReader stdInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
+	BufferedReader stdError = new BufferedReader(new InputStreamReader(p.getErrorStream()));
+	
+	// print output from program
+	while ((s=stdInput.readLine()) != null){print(s);}
+	
+	// print errors from program
+	while ((s=stdError.readLine()) != null){print(s);}
+	
+	// restore initial configuration
+	mm.setSysConfigFile(cfg_file);
+	print("restored initial configuration");
+}
