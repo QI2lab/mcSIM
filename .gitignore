@@ -292,3 +292,5 @@ dask-worker-space/
 # java
 **/classes
 
+# scratch space
+examples/data/**
