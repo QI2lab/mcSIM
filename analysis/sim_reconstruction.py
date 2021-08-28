@@ -266,7 +266,7 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
                     # estimate frequencies based on affine_xform
                     frqs_guess[ii, 0], frqs_guess[ii, 1], phases_guess[ii, jj] = \
                         affine.xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0], frqs_dmd[kk, ii, 1],
-                                                         phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], crop_roi, xform)
+                                                                 phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], crop_roi, xform)
 
             # convert from 1/mirrors to 1/um
             frqs_guess = frqs_guess / pixel_size
@@ -504,9 +504,20 @@ class SimImageSet:
         self.fmax = 1 / (0.5 * self.wavelength / self.na)
         self.fbounds = fbounds
 
-        self.frqs_guess = frq_guess
-        self.phases_guess = phases_guess
-        self.mod_depths_guess = mod_depths_guess
+        if frq_guess is not None:
+            self.frqs_guess = np.array(frq_guess)
+        else:
+            self.frqs_guess = None
+
+        if phases_guess is not None:
+            self.phases_guess = np.array(phases_guess)
+        else:
+            self.phases_guess = None
+
+        if mod_depths_guess is not None:
+            self.mod_depths_guess = np.array(mod_depths_guess)
+        else:
+            self.mod_depths_guess = None
 
         # #############################################
         # get frequency data and OTF
@@ -568,8 +579,8 @@ class SimImageSet:
         #     for kk in range(self.nphases):
         #         periodic_portion[jj, kk], _ = psd.periodic_smooth_decomp(self.imgs[jj, kk])
 
-        apodization = scipy.signal.windows.tukey(self.imgs.shape[2], alpha=0.1)[None, :] * \
-                      scipy.signal.windows.tukey(self.imgs.shape[3], alpha=0.1)[:, None]
+        apodization = np.expand_dims(scipy.signal.windows.tukey(self.imgs.shape[2], alpha=0.1), axis=1) * \
+                      np.expand_dims(scipy.signal.windows.tukey(self.imgs.shape[3], alpha=0.1), axis=0)
         periodic_portion = self.imgs * np.expand_dims(apodization, axis=(0, 1))
 
         if self.use_gpu:
@@ -796,8 +807,8 @@ class SimImageSet:
                                    np.expand_dims(self.mod_depths, axis=(2, 3)), axis=(0, 1)) / self.weights_norm
 
         # inverse FFT to get real-space reconstructed image
-        apodization = scipy.signal.windows.tukey(self.sim_sr_ft.shape[1], alpha=0.1)[None, :] * \
-                      scipy.signal.windows.tukey(self.sim_sr_ft.shape[0], alpha=0.1)[:, None]
+        apodization = np.expand_dims(scipy.signal.windows.tukey(self.sim_sr_ft.shape[1], alpha=0.1), axis=0) * \
+                      np.expand_dims(scipy.signal.windows.tukey(self.sim_sr_ft.shape[0], alpha=0.1), axis=1)
 
         # irfft2 ~2X faster than ifft2. But have to slice out only half the frequencies
         self.sim_sr = fft.fftshift(fft.irfft2(fft.ifftshift(self.sim_sr_ft * apodization)[:, : self.sim_sr_ft.shape[1] // 2 + 1]))
@@ -1084,7 +1095,7 @@ class SimImageSet:
         exponent = fit_params_avg[1]
 
         # now fit each other component using this same exponent
-        power_spectrum_params = np.zeros((self.nangles, self.nangles, 4))
+        power_spectrum_params = np.zeros((self.nangles, self.nphases, 4))
         masks = np.zeros(self.bands_unmixed_ft.shape, dtype=np.bool)
         for ii in range(self.nangles):
             for jj in range(self.nphases):
@@ -1716,23 +1727,10 @@ class SimImageSet:
         circ2 = matplotlib.patches.Circle((0, 0), radius=2*self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ2)
 
-        circ3 = matplotlib.patches.Circle(self.frqs[0], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ3)
+        for ii in range(self.nangles):
+            ax.add_artist(matplotlib.patches.Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
-        circ4 = matplotlib.patches.Circle(-self.frqs[0], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ4)
-
-        circ5 = matplotlib.patches.Circle(self.frqs[1], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ5)
-
-        circ6 = matplotlib.patches.Circle(-self.frqs[1], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ6)
-
-        circ7 = matplotlib.patches.Circle(self.frqs[2], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ7)
-
-        circ8 = matplotlib.patches.Circle(-self.frqs[2], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ8)
+            ax.add_artist(matplotlib.patches.Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -1748,23 +1746,10 @@ class SimImageSet:
         circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
         ax.add_artist(circ2)
 
-        circ3 = matplotlib.patches.Circle(self.frqs[0], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ3)
+        for ii in range(self.nangles):
+            ax.add_artist(matplotlib.patches.Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
-        circ4 = matplotlib.patches.Circle(-self.frqs[0], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ4)
-
-        circ5 = matplotlib.patches.Circle(self.frqs[1], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ5)
-
-        circ6 = matplotlib.patches.Circle(-self.frqs[1], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ6)
-
-        circ7 = matplotlib.patches.Circle(self.frqs[2], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ7)
-
-        circ8 = matplotlib.patches.Circle(-self.frqs[2], radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ8)
+            ax.add_artist(matplotlib.patches.Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -2386,7 +2371,7 @@ def get_phase_realspace(img, sim_frq, dxy, phase_guess=0, origin="center"):
     return phi_fit
 
 
-def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=(0, 2 * np.pi / 3, 4 * np.pi / 3), fit_amps=True):
+def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=None, fit_amps=True):
     """
     # TODO: this can also return components separated the opposite way of desired
 
@@ -2410,6 +2395,9 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=(0
     :return phases: list of phases determined using this method
     :return amps: [A1, A2, A3]. If fit_amps is False, these will all be ones.
     """
+
+    if phases_guess is None:
+        phases_guess = np.array([0, 2 * np.pi / 3, 4 * np.pi / 3])
 
     _, ny, nx = imgs_ft.shape
     fx = tools.get_fft_frqs(nx, dxy)
