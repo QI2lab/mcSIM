@@ -512,7 +512,7 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     # transform pattern using affine transformation
     xform_roi = affine.xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
     img_coords = np.meshgrid(range(nx), range(ny))
-    pattern_xformed = affine.affine_xform_mat(pattern, xform_roi, img_coords, mode="interp")
+    pattern_xformed = affine.xform_mat(pattern, xform_roi, img_coords, mode="interp")
     # pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
 
     # get fourier transform of image

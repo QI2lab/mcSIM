@@ -326,7 +326,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
 
     # get mask transformed to image space
     img_coords = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
-    mask_xformed = affine.affine_xform_mat(mask, affine_xform, img_coords, mode='nearest')
+    mask_xformed = affine.xform_mat(mask, affine_xform, img_coords, mode='nearest')
 
     # summarize results
     vmin_img = np.min(bgs[succesful_fits])

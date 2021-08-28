@@ -1001,7 +1001,7 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
     nx_roi = roi[3] - roi[2]
     ny_roi = roi[1] - roi[0]
     img_coords_roi = np.meshgrid(range(nx_roi), range(ny_roi))
-    pattern_xformed = affine.affine_xform_mat(pattern, xform_roi, img_coords_roi, mode="interp")
+    pattern_xformed = affine.xform_mat(pattern, xform_roi, img_coords_roi, mode="interp")
     # pattern_xformed = affine.affine_xform_mat(pattern, affine_xform, img_coords, mode="interp")
     # pattern_xformed = pattern_xformed[roi[0]:roi[1], roi[2]:roi[3]]
     pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))

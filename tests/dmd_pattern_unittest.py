@@ -261,7 +261,7 @@ class TestPatterns(unittest.TestCase):
         # transform pattern to image space
         img_coords = np.meshgrid(range(nx), range(ny))
         # interpolation preserves phases but can distort Fourier components
-        pattern_xform = affine.affine_xform_mat(pattern, affine_xform_roi, img_coords, mode="interp")
+        pattern_xform = affine.xform_mat(pattern, affine_xform_roi, img_coords, mode="interp")
         # taking nearest pixel does a better job with amplitudes, but can introduce fourier components that did not exist before
         # pattern_xform_nearest = affine.affine_xform_mat(pattern, affine_xform_roi, img_coords, mode="nearest")
 
