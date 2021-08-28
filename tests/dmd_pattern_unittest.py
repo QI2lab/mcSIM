@@ -253,8 +253,8 @@ class TestPatterns(unittest.TestCase):
 
         vecs_xformed = np.zeros(vecs.shape)
         vecs_xformed[..., 0], vecs_xformed[..., 1], phases = affine.xform_sinusoid_params_roi(vecs[..., 0], vecs[..., 1],
-                                                                                              np.angle(efields), pattern.shape, roi,
-                                                      affine_mat, input_origin="fft", output_origin="fft")
+                                                                                                      np.angle(efields), pattern.shape, roi,
+                                                                                                      affine_mat, input_origin="fft", output_origin="fft")
         efields_xformed = np.abs(efields) * np.exp(1j * phases)
 
         # get pattern phase directly from fft

@@ -5,7 +5,7 @@ import scipy.signal
 from scipy import fft
 
 import sim_reconstruction as sim
-import affine as affine
+import affine
 import analysis_tools as tools
 
 class Test_affine(unittest.TestCase):

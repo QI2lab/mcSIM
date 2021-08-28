@@ -5,7 +5,7 @@ import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import analysis_tools as tools
-import affine
+import fit_dmd_affine
 import dmd_patterns as dmd
 
 now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H;%M;%S")
@@ -31,8 +31,8 @@ mask = masks[1]
 for nc in range(len(channel_labels)):
         img, _ = tools.read_tiff(fname, slices=nc)
         img = img[0]
-        affine_xform = affine.estimate_xform(img, mask, pattern_centers, centers_init,
-                                             indices_init, options, roi_size=roi_size,
-                                             export_fname="%s_affine_xform_%s" % (now_str, channel_labels[nc]),
-                                             export_dir=None, chi_squared_relative_max=3)
+        affine_xform = fit_dmd_affine.estimate_xform(img, mask, pattern_centers, centers_init,
+                                                     indices_init, options, roi_size=roi_size,
+                                                     export_fname="%s_affine_xform_%s" % (now_str, channel_labels[nc]),
+                                                     export_dir=None, chi_squared_relative_max=3)
 plt.show()

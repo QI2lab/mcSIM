@@ -440,8 +440,8 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, wavele
 
     # compute phase in new coordinates
     _, _, intensity_phases = affine.xform_sinusoid_params_roi(frq_vects_dmd[..., 0], frq_vects_dmd[..., 1],
-                                                              np.angle(intensity_theory),
-                                                              dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
+                                                                      np.angle(intensity_theory),
+                                                                      dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
     intensity_theory_xformed = np.abs(intensity_theory) * np.exp(1j * intensity_phases)
 
     return intensity_theory, intensity_theory_xformed, frq_vects_cam, frq_vects_um

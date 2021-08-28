@@ -65,22 +65,27 @@ def get_pixel_distribution(files, inds, dtype=np.uint16):
 def get_pixel_statistics(files, description="", calculate_correlations=False, n_chunk_size=50):
     """
     Estimate camera readout noise from a set of images taken in zero light conditions
+
+    # warning: if OEM TIFF data should only pass in the first file
+
     :param list[str] files: list of file names
-    :param calculate_correlations:
+    :param bool calculate_correlations:
     :param n_chunk_size: number of images from single file to analyze at once, if using TIFFs storing multiple images
+
     :return data: dictionary storing relevant data, including means, variances, and higher order moments
     """
+
+    if isinstance(files, str):
+        files = [files]
 
     tstart = time.process_time()
 
     # read first image to get size
     # if OME TIFF this will try to read the entire stack if don't set multifile
-    tif = tifffile.TiffFile(files[0], multifile=False)
+    tif = tifffile.TiffFile(files[0])
     ny, nx = tif.series[0].shape[-2:]
 
-    # imgs = tifffile.imread(files[0], multifile=False)
-    # _, ny, nx = imgs.shape
-
+    # storing information for entire dataset
     means = np.zeros((ny, nx))
     mean_sqrs = np.zeros(means.shape)
     mean_cubes = np.zeros(means.shape)
@@ -95,37 +100,55 @@ def get_pixel_statistics(files, description="", calculate_correlations=False, n_
         tnow = time.process_time()
         print("started file %d/%d, elapsed time=%0.2fs" % (ii + 1, len(files), tnow - tstart))
 
-        imgs = tifffile.imread(f, multifile=False)
+        imgs = tifffile.imread(f)
 
-        nimgs_current = imgs.shape[0]
-
-        # loop to avoid casting entire array to float
+        # these arrays will hold data for this file
+        means_temp = np.zeros(means.shape)
         mean_sqrs_temp = np.zeros(means.shape)
         mean_cubes_temp = np.zeros(means.shape)
         mean_fourths_temp = np.zeros(means.shape)
         corrsx_temp = np.zeros(means.shape)
         corrsy_temp = np.zeros(means.shape)
         corrst_temp = np.zeros(means.shape)
-        niterations_current = int(np.ceil(nimgs_current / n_chunk_size))
-        for jj in range(0, nimgs_current, n_chunk_size):
+
+        # loop over "chunks" of file to avoid casting entire array to float
+        nimgs_file = imgs.shape[0]
+        nchunks = int(np.ceil(nimgs_file / n_chunk_size))
+        for jj in range(0, nimgs_file, n_chunk_size):
             if ii == 0:
                 tnow = time.process_time()
-                print("chunk %d/%d, elapsed time=%0.2fs" % (jj / n_chunk_size + 1, niterations_current, tnow - tstart))
+                print("chunk %d/%d, elapsed time=%0.2fs" % (jj / n_chunk_size + 1, nchunks, tnow - tstart))
 
-            # img_float = np.asarray(imgs[jj: jj + n_chunk_size], dtype=np.float)
-            img_float = imgs[jj: jj + n_chunk_size].astype(np.float)
-            mean_sqrs_temp += np.sum(img_float ** 2, axis=0) / nimgs_current
-            mean_cubes_temp += np.sum(img_float ** 3, axis=0) / nimgs_current
-            mean_fourths_temp += np.sum(img_float ** 4, axis=0) / nimgs_current
+            # get last image from the previous chunk
+            if jj > 0:
+                have_last_img = True
+                img_last_prev = img_chunk[-1]
+            else:
+                have_last_img = False
+
+            img_chunk = imgs[jj: jj + n_chunk_size].astype(np.float)
+            # means_temp += np.sum(img_chunk, axis=0) / nimgs_file
+            mean_sqrs_temp += np.sum(img_chunk ** 2, axis=0) / nimgs_file
+            mean_cubes_temp += np.sum(img_chunk ** 3, axis=0) / nimgs_file
+            mean_fourths_temp += np.sum(img_chunk ** 4, axis=0) / nimgs_file
 
             if calculate_correlations:
-                corrsx_temp += np.sum(img_float * np.roll(img_float, 1, axis=2), axis=0) / nimgs_current
-                corrsy_temp += np.sum(img_float * np.roll(img_float, 1, axis=1), axis=0) / nimgs_current
-                corrst_temp += np.sum(img_float[1:] * np.roll(img_float, 1, axis=0)[1:], axis=0) / (nimgs_current - niterations_current)
+                corrsx_temp += np.sum(img_chunk * np.roll(img_chunk, 1, axis=2), axis=0) / nimgs_file
+                corrsy_temp += np.sum(img_chunk * np.roll(img_chunk, 1, axis=1), axis=0) / nimgs_file
 
+                if have_last_img:
+                    imgs_t_shifted = np.concatenate((np.expand_dims(img_last_prev, axis=0), img_chunk[:-1]), axis=0)
+                    corr_t_img = img_chunk * imgs_t_shifted
+                else:
+                    imgs_t_shifted = np.roll(img_chunk, 1, axis=0)
+                    corr_t_img = img_chunk[1:] * imgs_t_shifted[1:]
+
+                corrst_temp += np.sum(corr_t_img, axis=0) / (nimgs_file - 1)
+
+        # after looping over chunks, combine this image with previous images
         # combine current images with all previously averaged images
-        w1 = nimgs_prior / (nimgs_prior + nimgs_current)
-        w2 = nimgs_current / (nimgs_prior + nimgs_current)
+        w1 = nimgs_prior / (nimgs_prior + nimgs_file)
+        w2 = nimgs_file / (nimgs_prior + nimgs_file)
 
         means = means * w1 + np.mean(imgs, axis=0) * w2
         mean_sqrs = mean_sqrs * w1 + mean_sqrs_temp * w2
@@ -135,13 +158,13 @@ def get_pixel_statistics(files, description="", calculate_correlations=False, n_
         corrsy = corrsy * w1 + corrsy_temp * w2
 
         # time correlations have to be handled differently
-        w1t = nimgs_t_corr / (nimgs_t_corr + nimgs_current - niterations_current)
-        w2t = (nimgs_current - niterations_current) / (nimgs_t_corr + nimgs_current - niterations_current)
+        w1t = nimgs_t_corr / (nimgs_t_corr + (nimgs_file - 1))
+        w2t = (nimgs_file - 1) / (nimgs_t_corr + (nimgs_file - 1))
         corrst = corrst * w1t + corrst_temp * w2t
 
         # update number of images
-        nimgs_prior += nimgs_current
-        nimgs_t_corr += nimgs_current - niterations_current
+        nimgs_prior += nimgs_file
+        nimgs_t_corr += nimgs_file - 1
 
     # calculate other useful statistics
     vars = mean_sqrs - means**2
@@ -151,13 +174,21 @@ def get_pixel_statistics(files, description="", calculate_correlations=False, n_
     var_sample_var = (nimgs_prior - 1)**2 / nimgs_prior**3 * mean_fourth_central - \
                      (nimgs_prior - 1) * (nimgs_prior - 3) * mean_sqrs_central**2 / nimgs_prior**3
 
-    data = {"means": means, "means_unc": np.sqrt(vars) / np.sqrt(nimgs_prior),
-            "variances": vars, "variances_uncertainty": np.sqrt(var_sample_var),
-            "mean_sqrs": mean_sqrs, "mean_cubes": mean_cubes, "mean_fourths": mean_fourths,
+    data = {"means": means,
+            "means_unc": np.sqrt(vars) / np.sqrt(nimgs_prior),
+            "variances": vars,
+            "variances_uncertainty": np.sqrt(var_sample_var),
+            "mean_sqrs": mean_sqrs,
+            "mean_cubes": mean_cubes,
+            "mean_fourths": mean_fourths,
             "nimgs": nimgs_prior,
             "description": description}
 
     if calculate_correlations:
+        # set rows with useless info to zero...
+        corrsx[:, 0] = 0
+        corrsy[0, :] = 0
+
         data.update({"corr_x": corrsx, "corr_y": corrsy, "corr_t": corrst})
 
     return data
@@ -365,7 +396,9 @@ def plot_camera_noise_results(dark_data, light_data, gains, nbins=600, figsize=(
     # parameter histograms
     # ############################################
 
-    bin_edges = np.linspace(1, 3, nbins + 1)
+    gain_start = np.percentile(gains, 0.1) * 0.8
+    gain_end = np.percentile(gains, 99.1) * 1.2
+    bin_edges = np.linspace(gain_start, gain_end, nbins + 1)
     hgains, _ = np.histogram(gains.ravel(), bin_edges)
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
