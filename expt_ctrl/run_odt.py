@@ -62,7 +62,8 @@ pattern_base = 1 - pattern_base
 
 # center positions
 offs = np.arange(-180, 181, 20)
-# offs = np.arange(-400, 401, 50)
+# offs = np.arange(-45, 46, 5)
+# offs = np.arange(-18, 19, 2)
 xoffs, yoffs = np.meshgrid(offs, offs)
 npatterns = xoffs.size
 
@@ -86,11 +87,20 @@ dmd_delay = 105e-6
 dt = dmd_delay
 DAQ_sample_rate_hz = 1 / dt
 
+n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
+
 # npatterns = 2
-exposure_time_est = 3e-3
-nsteps_exposure = int(exposure_time_est // dt)
-exposure_time = nsteps_exposure * dt
-# add one extra time steps for readout time
+exposure_time_est = 0.33e-3
+min_frame_time = 3e-3
+
+if exposure_time_est >= min_frame_time:
+    nsteps_exposure = int(np.round(exposure_time_est / dt))
+    exposure_time = nsteps_exposure * dt
+else:
+    nsteps_exposure = int(np.ceil(min_frame_time / dt))
+    exposure_time = exposure_time_est
+
+# add one extra time step for readout time
 nsteps_pattern = nsteps_exposure + 3
 
 # add extra steps at start to turn on laser and DMD enable trigger and allow to stabilize
@@ -117,7 +127,7 @@ data_do[:, 4] = 1
 
 # DMD advance trigger
 # trigger on step before camera to account for 105us DMD delay
-data_do[nstabilize - 1:-1:nsteps_pattern, 3] = 1
+data_do[nstabilize - n_dmd_pre_trigger:-1:nsteps_pattern, 3] = 1
 
 # print(data_do)
 
@@ -129,6 +139,7 @@ taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
 taskDO.CfgSampClkTiming("OnBoardClock", DAQ_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_FiniteSamps, samples_per_ch)
 
 ## Write the output waveform
+print("programming DAQ with %d lines" % data_do.shape[0])
 samples_per_ch_ct_digital = ct.c_int32()
 taskDO.WriteDigitalLines(samples_per_ch, False, 10.0, daq.DAQmx_Val_GroupByChannel, data_do,
                          ct.byref(samples_per_ch_ct_digital), None)
