@@ -29,15 +29,11 @@ patterns for the DMD.
 ### [sim_reconstruction.py](analysis/sim_reconstruction.py)
 Code for reconstructing SIM images from raw data using a Gustafsson/Wiener filter style reconstruction. Several different
 reconstruction options are available, largely following either the approach of 
-[Lal *et al.*](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980). 
+[openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980). 
 
 ### [fit_dmd_affine.py](analysis/fit_dmd_affine.py)
 Code to fit the affine transformation between the DMD coordinates and camera coordinates using imaging data from a DMD
 pattern consisting of many small points.
-
-### [fit_psf.py](analysis/localize-psf/fit_psf.py)
-Code for automatically finding PSF spots on an image of a sparse bead slide, performing both 2D and 3D PSF fitting using
-various PSF models, and providing useful statistics and figures summarizing the results.
 
 ### [otf_tools.py](analysis/otf_tools.py)
 Code for extracting optical transfer function from measurement of the strength of various Fourier peaks for a given SIM DMD pattern.
@@ -45,11 +41,14 @@ Code for extracting optical transfer function from measurement of the strength o
 ### [psd.py](analysis/psd.py)
 Code for doing the periodic/smooth image decomposition, an alternative to apodization for the Fourier transform. This code is taken from https://github.com/jacobkimmel/ps_decomp (with permission), and included here for convenience.
 
-### [fit.py](analysis/localize-psf/fit.py)
-Useful tools for fitting, used in fit_psf.py and elsewhere.
-
 ### [analysis_tools.py](analysis/analysis_tools.py)
 Miscellaneous tools for IO, reading metadata, image processing, etc.
+
+### [localize-psf](analysis/localize-psf/fit.py)
+Useful tools for automatically localizing sparse fluorescent beads and performing both 2D and 3D
+PSF fitting using various PSF models. Also provides useful statistics and figures summarizing the results.
+This code has now been split out into a [separate repository](https://github.com/QI2lab/localize-psf) which is included in this repository as a
+submodule for convenience.
 
 # Examples
 Scripts illustrated examples of different DMD simulations and analysis are stored in [examples](examples). Associated 

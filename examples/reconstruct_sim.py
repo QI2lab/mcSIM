@@ -8,6 +8,7 @@ import affine
 import tifffile
 import pickle
 import numpy as np
+import rois
 
 # ############################################
 # load image data, channel/angle/phase
@@ -22,7 +23,7 @@ imgs = tifffile.imread("data/argosim_line_pairs.tif").reshape([ncolors, nangles,
 # ############################################
 # set ROI to reconstruction, [cy, cx]
 # ############################################
-roi = tools.get_centered_roi([791, 896], [850, 850])
+roi = rois.get_centered_roi([791, 896], [850, 850])
 nx_roi = roi[3] - roi[2]
 ny_roi = roi[1] - roi[0]
 
