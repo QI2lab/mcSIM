@@ -53,7 +53,7 @@ class SimImageSet:
                  otf=None, wiener_parameter=0.1,
                  phase_estimation_mode="wicker-iterative", frq_estimation_mode="band-correlation", combine_bands_mode="fairSIM",
                  use_fixed_mod_depths=False, normalize_histograms=True, determine_amplitudes=False,
-                 fmax_exclude_band0=0,
+                 fmax_exclude_band0=0, mod_depth_otf_mask_threshold=0.1,
                  background=0, gain=1, max_phase_err=10 * np.pi / 180, min_p2nr=1, fbounds=(0.01, 1),
                  interactive_plotting=False, save_dir=None, save_suffix="", use_gpu=CUPY_AVAILABLE, figsize=(20, 10)):
         """
@@ -147,6 +147,7 @@ class SimImageSet:
         self.use_fixed_mod_depths = use_fixed_mod_depths
         self.phase_estimation_mode = phase_estimation_mode
         self.fmax_exclude_band0 = fmax_exclude_band0
+        self.otf_mask_threshold = mod_depth_otf_mask_threshold
 
         if phases_guess is None:
             self.frq_estimation_mode = "fourier-transform"
@@ -429,7 +430,6 @@ class SimImageSet:
         tstart = time.perf_counter()
 
         # correct for wrong global phases
-        self.otf_mask_threshold = 0.1
         self.phase_corrections, mags = get_band_overlap(self.bands_shifted_ft[:, 0], self.bands_shifted_ft[:, 1],
                                                         self.otf_shifted[:, 0], self.otf_shifted[:, 1],
                                                         otf_threshold=self.otf_mask_threshold)
@@ -674,7 +674,7 @@ class SimImageSet:
             for ii in range(nangles)
         )
 
-        frqs, _ = zip(*results)
+        frqs, _, _ = zip(*results)
         frqs = np.reshape(np.asarray(frqs), [nangles, 2])
 
         return frqs
@@ -1021,7 +1021,10 @@ class SimImageSet:
                 ax.semilogy(bin_centers, histogram)
 
             ax.set_yticks([])
-            plt.title("median %0.1f" % (np.median(self.imgs[ii, jj].ravel())))
+            if ii == 0:
+                plt.title("image histogram\nmedian %0.1f" % (np.median(self.imgs[ii, jj].ravel())))
+            else:
+                plt.title("median %0.1f" % (np.median(self.imgs[ii, jj].ravel())))
             if ii != (self.nangles - 1):
                 ax.set_xticks([])
 
@@ -1054,7 +1057,10 @@ class SimImageSet:
             ylim = ax.get_ylim()
             ax.set_ylim([0, ylim[1]])
 
-            plt.title("mcnr median %0.3f" % median)
+            if ii == 0:
+                plt.title("mcnr histogram\nmedian %0.3f" % median)
+            else:
+                plt.title("median %0.3f" % median)
             ax.set_yticks([])
             if ii != (self.nangles - 1):
                 ax.set_xticks([])
@@ -2180,7 +2186,7 @@ def fit_modulation_frq(ft1, ft2, dx, fmax=None, exclude_res=0.7, frq_guess=None,
     if keep_guess_if_better and min_fn(init_params) < min_fn(fit_frqs):
         fit_frqs = init_params
 
-    return fit_frqs, mask
+    return fit_frqs, mask, result
 
 
 def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None, roi_size=31,
@@ -2250,7 +2256,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     # #######################################
     roi_cx = np.argmin(np.abs(fx_sim - fxs))
     roi_cy = np.argmin(np.abs(fy_sim - fys))
-    roi = rois.get_centered_roi([roi_cy, roi_cx], [roi_size, roi_size])
+    roi = rois.get_centered_roi([roi_cy, roi_cx], [roi_size, roi_size], min_vals=[0, 0], max_vals=cc.shape)
 
     extent_roi = tools.get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
@@ -2289,7 +2295,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     circ_max_frq = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0)
     ax2.add_artist(circ_max_frq)
 
-    roi_rec = matplotlib.patches.Rectangle((fxs[roi[2]], fys[roi[0]]), fxs[roi[3]] - fxs[roi[2]], fys[roi[1]] - fys[roi[0]],
+    roi_rec = matplotlib.patches.Rectangle((fxs[roi[2]], fys[roi[0]]), fxs[roi[3] - 1] - fxs[roi[2]], fys[roi[1] - 1] - fys[roi[0]],
                                            edgecolor='k', fill=0)
     ax2.add_artist(roi_rec)
 
@@ -2306,7 +2312,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
-    roi_center = rois.get_centered_roi([cy_c, cx_c], [roi_size, roi_size])
+    roi_center = rois.get_centered_roi([cy_c, cx_c], [roi_size, roi_size], [0, 0], img1_ft.shape)
 
     im3 = ax3.imshow(np.abs(img1_ft[roi_center[0]:roi_center[1], roi_center[2]:roi_center[3]])**2,
                      interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
@@ -2398,8 +2404,8 @@ def get_phase_realspace(img, sim_frq, dxy, phase_guess=0, origin="center"):
 
     def fn(phi): return -np.cos(2*np.pi * (sim_frq[0] * xx + sim_frq[1] * yy) + phi)
     def fn_deriv(phi): return np.sin(2*np.pi * (sim_frq[0] * xx + sim_frq[1] * yy) + phi)
-    def min_fn(phi): return np.sum(fn(phi) * img)
-    def jac_fn(phi): return np.asarray([np.sum(fn_deriv(phi) * img),])
+    def min_fn(phi): return np.sum(fn(phi) * img) / img.size
+    def jac_fn(phi): return np.asarray([np.sum(fn_deriv(phi) * img) / img.size,])
 
     # using jacobian makes faster and more robust
     result = scipy.optimize.minimize(min_fn, phase_guess, jac=jac_fn)
@@ -3174,16 +3180,28 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
     :param readout_noise_sds: noise standard deviation for each pixel (or single value for all pixels)
     :param pix_size: pixel size in um
     :param bool coherent_projection:
-    :param otf:
-    :param kwargs: keyword arguments "wavlength", "otf", "na", etc. will be passed through to simulated_img()
+    :param otf: the optical transfer function evaluated at the frequencies points of the FFT of ground_truth. The
+    proper frequency points can be obtained using fft.fftshift(fft.fftfreq(nx, dx)) and etc.
+    :param kwargs: keyword arguments which will be passed through to simulated_img()
 
     :return sim_imgs: nangles x nphases x ny x nx array
+    :return snrs: nangles x nphases x ny x nx array giving an estimate of the signal-to-noise ratio which will be
+    accurate as long as the photon number is large enough that the Poisson distribution is close to a normal distribution
     """
 
     if 'bin_size' in kwargs:
         nbin = kwargs['bin_size']
     else:
         nbin = 1
+
+    if isinstance(phases, (float, int)):
+        phases = np.atleast_2d(np.array(phases))
+
+    if isinstance(mod_depths, (float, int)):
+        mod_depths = np.atleast_1d(np.array(mod_depths))
+
+    frqs = np.atleast_2d(frqs)
+
 
     nangles = len(frqs)
     nphases = len(phases)
@@ -3198,24 +3216,72 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
     if amps is None:
         amps = np.ones((nangles, nphases))
 
+    if otf is not None:
+        psf_mat, _ = psf.otf2psf(otf)
+    else:
+        psf_mat = None
+
     # get coordinates
     x = tools.get_fft_pos(nx, pix_size, centered=True, mode="symmetric")
     y = tools.get_fft_pos(ny, pix_size, centered=True, mode="symmetric")
     xx, yy = np.meshgrid(x, y)
 
-    psf_mat, _ = psf.otf2psf(otf)
+    nxb = nx / nbin
+    nyb = ny / nbin
+    if not nxb.is_integer() or not nyb.is_integer():
+        raise Exception("The image size was not evenly divisble by the bin size")
+    nxb = int(nxb)
+    nyb = int(nyb)
 
-    sim_imgs = np.zeros((nangles, nphases, int(ny / nbin), int(nx / nbin)))
+    # phases will be the phase of the patterns in the binned coordinates
+    # need to compute the phases in the unbinned coordinates
+    # the effect of binning is to shift the center of the binned coordinates to the right/positive
+    # think of leftmost bin.
+    # For binned, this is at position -nbin x (n/nbin - 1) / 2 if n/nbin is odd, or -n/2 if n/nbin is even
+    # For unbinned, add up the leftmost nbins
+    # if nx and nx/nbin are even, shift = 0.5 * nbin - 0.5
+    # if nx is even and nx/nbin is odd, shift = 0.5 * nbin - 1
+    # if nx is odd and nx/nbin is odd, shift = 0
+    # if nx is odd, nx/nbin cannot be even
+    # relative to the unbinned coordinates
+    if np.mod(nx, 2) == 1:
+        xshift = 0
+    else:
+        if np.mod(nxb, 2) == 1:
+            xshift = -0.5
+        else:
+            xshift = 0.5 * nbin - 0.5
+    xshift = xshift * pix_size
+
+    if np.mod(ny, 2) == 1:
+        yshift = 0
+    else:
+        if np.mod(nyb, 2) == 1:
+            yshift = -0.5
+        else:
+            yshift = 0.5 * nbin - 0.5
+    yshift = yshift * pix_size
+
+    bin2non_xform = affine.params2xform([1, 0, xshift, 1, 0, yshift])
+    phases_unbinned = np.zeros(phases.shape)
+    for ii in range(nangles):
+        for jj in range(nphases):
+            _, _, phases_unbinned[ii, jj] = affine.xform_sinusoid_params(frqs[ii, 0], frqs[ii, 1], phases[ii, jj], bin2non_xform)
+
+    sim_imgs = np.zeros((nangles, nphases, nyb, nxb))
     snrs = np.zeros(sim_imgs.shape)
+    mcnrs = np.zeros(sim_imgs.shape)
     for ii in range(nangles):
         for jj in range(nphases):
             pattern = amps[ii, jj] * (1 + mod_depths[ii] *
-                                      np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))
+                                      np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
 
             if not coherent_projection:
                 pattern = psf.blur_img_otf(pattern, otf)
 
             sim_imgs[ii, jj], snrs[ii, jj] = camera_noise.simulated_img(ground_truth * pattern, gains, offsets,
                                                                         readout_noise_sds, psf=psf_mat, **kwargs)
+            # todo: compute mcnr
+            mcnrs[ii, jj] = 0
 
     return sim_imgs, snrs

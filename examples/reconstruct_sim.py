@@ -1,13 +1,13 @@
 """
 Reconstruct SIM image of argoSIM slide pattern of closely spaced line pairs.
 """
+import numpy as np
+from numpy import fft
+import pickle
+import tifffile
 import sim_reconstruction as sim
-import analysis_tools as tools
 import fit_psf as psf
 import affine
-import tifffile
-import pickle
-import numpy as np
 import rois
 
 # ############################################
@@ -81,8 +81,10 @@ for kk in range(ncolors):
 for kk in range(ncolors):
     # otf matrix
     fmax = 1 / (0.5 * emission_wavelengths[kk] / na)
-    fx = tools.get_fft_frqs(nx_roi, pixel_size)
-    fy = tools.get_fft_frqs(ny_roi, pixel_size)
+    # fx = tools.get_fft_frqs(nx_roi, pixel_size)
+    # fy = tools.get_fft_frqs(ny_roi, pixel_size)
+    fx = fft.fftshift(fft.fftfreq(nx_roi, pixel_size))
+    fy = fft.fftshift(fft.fftfreq(ny_roi, pixel_size))
     ff = np.sqrt(fx[None, :] ** 2 + fy[:, None] ** 2)
     otf = otf_fn(ff, fmax)
     otf[ff >= fmax] = 0

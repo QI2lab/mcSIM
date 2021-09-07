@@ -233,9 +233,11 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img,
     window = scipy.signal.windows.hann(nx_roi)[None, :] * scipy.signal.windows.hann(ny_roi)[:, None]
 
     # generate frequency data for image FT's
-    fxs = tools.get_fft_frqs(nx_roi, pixel_size_um)
+    # fxs = tools.get_fft_frqs(nx_roi, pixel_size_um)
+    fxs = fft.fftshift(fft.fftfreq(nx_roi, pixel_size_um))
     dfx = fxs[1] - fxs[0]
-    fys = tools.get_fft_frqs(ny_roi, pixel_size_um)
+    # fys = tools.get_fft_frqs(ny_roi, pixel_size_um)
+    fys = fft.fftshift(fft.fftfreq(ny_roi, pixel_size_um))
     dfy = fys[1] - fys[0]
 
     if imgs.shape[0] == nimgs:
@@ -294,7 +296,7 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img,
                 else:
                     # fit real fourier component in image space
                     # only need wavelength and na to get fmax
-                    frq_vects_expt[ii, aa, bb], mask = sim_reconstruction.fit_modulation_frq(
+                    frq_vects_expt[ii, aa, bb], mask, _ = sim_reconstruction.fit_modulation_frq(
                         img_ft, img_ft, pixel_size_um, fmax_img,
                         frq_guess=frq_vects_theory[ii, aa, bb], max_frq_shift=max_frq_shift,
                         force_start_from_guess=force_start_from_guess)
@@ -516,9 +518,11 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     # pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
 
     # get fourier transform of image
-    fxs = tools.get_fft_frqs(nx, pixel_size_um)
+    # fxs = tools.get_fft_frqs(nx, pixel_size_um)
+    fxs = fft.fftshift(fft.fftfreq(nx, pixel_size_um))
     dfx = fxs[1] - fxs[0]
-    fys = tools.get_fft_frqs(ny, pixel_size_um)
+    # fys = tools.get_fft_frqs(ny, pixel_size_um)
+    fys = fft.fftshift(fft.fftfreq(ny, pixel_size_um))
     dfy = fys[1] - fys[0]
 
     extent = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx, fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]

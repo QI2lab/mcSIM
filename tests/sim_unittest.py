@@ -34,14 +34,14 @@ class TestSIM(unittest.TestCase):
         m = 1 + 0.5 * np.cos(2 * np.pi * (frqs[0] * xx + frqs[1] * yy) + phi)
 
         mft = fft.fftshift(fft.fft2(fft.ifftshift(m)))
-        frq_extracted, mask, = sim.fit_modulation_frq(mft, mft, options["pixel_size"], fmax, exclude_res=0.6)
+        frq_extracted, mask, _ = sim.fit_modulation_frq(mft, mft, options["pixel_size"], fmax, exclude_res=0.6)
 
         self.assertAlmostEqual(np.abs(frq_extracted[0]), np.abs(frqs[0]), places=5)
         self.assertAlmostEqual(np.abs(frq_extracted[1]), np.abs(frqs[1]), places=5)
 
-    def test_fit_phase_realspace(self):
+    def test_getphase_realspace(self):
         """
-        Test fit_phase_realspace()
+        Test get_phase_realspace() function
         :return:
         """
 
@@ -63,7 +63,7 @@ class TestSIM(unittest.TestCase):
 
         self.assertAlmostEqual(phi, float(phase_guess_edge), places=5)
 
-        # create sample image with origin in center
+        # create sample image with origin in center/i.e. using fft style coordinates
         x_center = tools.get_fft_pos(nx, dx)
         y_center = x_center
         xx_center, yy_center = np.meshgrid(x_center, y_center)
@@ -73,9 +73,9 @@ class TestSIM(unittest.TestCase):
 
         self.assertAlmostEqual(phi, float(phase_guess_center), places=5)
 
-    def test_estimate_phase(self):
+    def test_get_phase_ft(self):
         """
-        Test estimate_phase() function, which guesses phase from value of image FT
+        Test get_phase_ft() function, which guesses phase from value of image FT
         :return:
         """
         # set parameters
@@ -98,7 +98,41 @@ class TestSIM(unittest.TestCase):
 
         self.assertAlmostEqual(phi, float(phase_guess_center), places=5)
 
-    def test_band_mixing_mat(self):
+    def test_get_phase_wicker(self):
+        pass
+
+
+    def test_get_simulated_sim_imgs(self):
+        """
+        Test that get_simulated_sim_imgs() returns images with the correct SIM parameters when used with different
+        levels of binning
+        @return:
+        """
+        nbins = [1, 2, 3, 4, 5, 6, 4, 5]
+        nxs = [600, 600, 600, 600, 600, 600, 500, 625]
+
+        dx = 0.59
+        for nbin, nx in zip(nbins, nxs):
+
+            freq = np.array([1 / 25.6346, 1 / 25.77772])
+            phi = 0.23626
+            gt, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)), freq, phi, 1, 1, 0, 0, dx, photon_shot_noise=False,
+                                               bin_size=nbin)
+            gt = gt[0, 0]
+            gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(gt)))
+
+            # test phase
+            phases_fit = sim.get_phase_realspace(gt, freq, nbin * dx, origin="center")
+            self.assertAlmostEqual(phi, float(phases_fit), places=3)
+
+            # test frequency
+            frq_guess = freq + np.random.uniform(-0.005, 0.005, 2)
+            frqs_fit, _, result = sim.fit_modulation_frq(gt_ft, gt_ft, nbin * dx, frq_guess=frq_guess)
+            np.testing.assert_allclose(frqs_fit, freq, atol=1e-5)
+
+
+
+    def test_get_band_mixing_matrix(self):
         """
         Test that the real-space and Fourier-space pattern generation models agree.
 

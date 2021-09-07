@@ -1006,8 +1006,10 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
     # pattern_xformed = pattern_xformed[roi[0]:roi[1], roi[2]:roi[3]]
     pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
 
-    fxs = tools.get_fft_frqs(pattern_xformed.shape[1], dt=1)
-    fys = tools.get_fft_frqs(pattern_xformed.shape[0], dt=1)
+    # fxs = tools.get_fft_frqs(pattern_xformed.shape[1], dt=1)
+    # fys = tools.get_fft_frqs(pattern_xformed.shape[0], dt=1)
+    fxs = fft.fftshift(fft.fftfreq(pattern_xformed.shape[1], 1))
+    fys = fft.fftshift(fft.fftfreq(pattern_xformed.shape[0], 1))
 
     # first, get electric field fourier components
     ns = np.arange(-nmax, nmax + 1)
@@ -2106,9 +2108,11 @@ def plot_sim_pattern_sets(patterns, vas, vbs, wavelength=None, pitch=7560):
 
     # display FT
     # get period info
-    fx = tools.get_fft_frqs(nx, 1)
+    # fx = tools.get_fft_frqs(nx, 1)
+    fx = fft.fftshift(fft.fftfreq(nx, 1))
     dfx = fx[1] - fx[0]
-    fy = tools.get_fft_frqs(ny, 1)
+    # fy = tools.get_fft_frqs(ny, 1)
+    fy = fft.fftshift(fft.fftfreq(ny, 1))
     dfy = fy[1] - fy[0]
     df_min = np.min([fx[1] - fx[0], fy[1] - fy[0]])
     extent = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx, fy[-1] + 0.5 * dfy, fy[0] - 0.5 * dfy]
