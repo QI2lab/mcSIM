@@ -212,6 +212,7 @@ with pm.Bridge() as bridge:
             # # img_pm = mm.data().get_property_map_builder().put_int("odt_index", ii)
             # img_md = img.get_metadata().copy().exposure_ms(exposure_time).user_data(img_pm).build()
             # img_md = img.get_metadata().copy().exposure_ms(exposure_time).build()
+            # todo: store info about DMD image
             img_md = img.get_metadata().copy().build()
             # get current coords
             img_coords = mm.data().get_coords_builder().stage_position(0).z(0).channel(0).time(ii).build()
@@ -241,11 +242,3 @@ taskDO.WriteDigitalLines(1, 1, 10.0, daq.DAQmx_Val_GroupByChannel,
 
 taskDO.StopTask()
 taskDO.ClearTask()
-
-# todo: should try creating a datastore and etc. Note sure if that code is in MM core or in the Java program
-# save_dir =
-# if not os.path.exists(save_dir):
-#     os.makedirs(save_dir)
-#
-# fname = os.path.join(save_dir, "images.tif")
-# tifffile.imwrite(fname, imgs)

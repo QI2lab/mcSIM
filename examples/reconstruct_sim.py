@@ -81,8 +81,6 @@ for kk in range(ncolors):
 for kk in range(ncolors):
     # otf matrix
     fmax = 1 / (0.5 * emission_wavelengths[kk] / na)
-    # fx = tools.get_fft_frqs(nx_roi, pixel_size)
-    # fy = tools.get_fft_frqs(ny_roi, pixel_size)
     fx = fft.fftshift(fft.fftfreq(nx_roi, pixel_size))
     fy = fft.fftshift(fft.fftfreq(ny_roi, pixel_size))
     ff = np.sqrt(fx[None, :] ** 2 + fy[:, None] ** 2)
@@ -111,7 +109,7 @@ for kk in range(ncolors):
                              normalize_histograms=True,
                              background=100, gain=2, min_p2nr=0.5,
                              save_dir="data/sim_reconstruction_%.0fnm" % (excitation_wavelengths[kk] * 1e3),
-                             interactive_plotting=True, figsize=(20, 13))
+                             interactive_plotting=False, figsize=(20, 13))
     imgset.reconstruct()
     imgset.plot_figs()
     imgset.save_imgs()

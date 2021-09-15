@@ -18,7 +18,7 @@ import copy
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 import matplotlib.patches
-
+import tifffile
 import analysis_tools as tools
 import affine
 import simulate_dmd
@@ -2663,7 +2663,7 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
         patterns_reshaped = np.reshape(patterns, [patterns.shape[0] * patterns.shape[1],
                                                   patterns.shape[2], patterns.shape[3]])
         patterns_reshaped = np.concatenate((patterns_reshaped, pattern_on[None, :, :], pattern_off[None, :, :]), axis=0)
-        tools.save_tiff(patterns_reshaped, fpath, np.uint16)
+        tifffile.imwrite(fpath, patterns_reshaped.astype(np.uint16))
 
     return patterns, vec_as, vec_bs, real_angles, real_periods
 

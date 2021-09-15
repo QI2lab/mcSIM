@@ -7,7 +7,6 @@ reconstruct_sim_dataset() provides an example of using SimImageSet to reconstruc
 implemented for a MicroManager dataset containing multiple z-positions, color channels, and time points.
 """
 
-
 import analysis_tools as tools
 import psd
 import camera_noise
@@ -16,7 +15,6 @@ import fit_psf as psf
 import affine
 import rois
 
-# general imports
 import pickle
 import os
 import time
@@ -25,8 +23,6 @@ import copy
 import warnings
 import shutil
 import joblib
-
-# numerical tools
 import numpy as np
 from scipy import fft
 import scipy.optimize
@@ -34,18 +30,15 @@ import scipy.signal
 import scipy.ndimage
 from skimage.exposure import match_histograms
 import tifffile
+import matplotlib.pyplot as plt
+from matplotlib.colors import PowerNorm, LogNorm
+from matplotlib.patches import Circle, Rectangle
 
 try:
     import cupy as cp
     CUPY_AVAILABLE = True
 except ImportError:
     CUPY_AVAILABLE = False
-
-# plotting
-import matplotlib.pyplot as plt
-from matplotlib.colors import PowerNorm
-from matplotlib.colors import LogNorm
-import matplotlib.patches
 
 
 class SimImageSet:
@@ -1114,11 +1107,8 @@ class SimImageSet:
         ax = plt.subplot(grid[1, 0])
         plt.imshow(np.abs(self.widefield_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_wf, cmap="bone")
 
-        circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ)
-
-        circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ2)
+        ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--'))
 
         plt.xlim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
@@ -1126,10 +1116,9 @@ class SimImageSet:
         # deconvolution Fourier space
         ax = plt.subplot(grid[1, 1])
         plt.imshow(np.abs(self.widefield_deconvolution_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
-        circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ)
-        circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ2)
+
+        ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--'))
 
         plt.xlim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
@@ -1137,15 +1126,13 @@ class SimImageSet:
         # SIM fourier space
         ax = plt.subplot(grid[1 ,2])
         plt.imshow(np.abs(self.sim_sr_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
-        circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ)
 
-        circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ2)
+        ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--'))
 
         # actual maximum frequency based on real SIM frequencies
         for ii in range(self.nangles):
-            ax.add_artist(matplotlib.patches.Circle((0, 0), radius=self.fmax + 1/self.periods[ii], color='k', fill=0, ls='--'))
+            ax.add_artist(Circle((0, 0), radius=self.fmax + 1/self.periods[ii], color='k', fill=0, ls='--'))
 
         plt.xlim([-2 * self.fmax, 2 * self.fmax])
         plt.ylim([2 * self.fmax, -2 * self.fmax])
@@ -1265,8 +1252,7 @@ class SimImageSet:
                 plt.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='r', facecolor='none')
                 plt.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
 
-                circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-                ax.add_artist(circ)
+                ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
 
                 ax.set_xlim([-2*self.fmax, 2*self.fmax])
                 ax.set_ylim([2*self.fmax, -2*self.fmax])
@@ -1288,8 +1274,7 @@ class SimImageSet:
                 im = plt.imshow(to_plot, norm=LogNorm(), extent=extent, cmap="bone")
                 clim = im.get_clim()
 
-                circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-                ax.add_artist(circ)
+                ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
 
                 if jj == 0:
                     plt.title('O(f)otf(f)')
@@ -1326,8 +1311,7 @@ class SimImageSet:
 
                 plt.scatter(0, 0, edgecolor='r', facecolor='none')
 
-                circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-                ax.add_artist(circ)
+                ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
 
                 if jj == 0:
                     plt.title('shifted component')
@@ -1335,12 +1319,10 @@ class SimImageSet:
                     plt.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
                 if jj == 1:
                     plt.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                    circ2 = matplotlib.patches.Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--')
-                    ax.add_artist(circ2)
+                    ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
                 elif jj == 2:
                     plt.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                    circ2 = matplotlib.patches.Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--')
-                    ax.add_artist(circ2)
+                    ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
                 plt.xlim([-2 * self.fmax, 2 * self.fmax])
                 plt.ylim([2 * self.fmax, -2 * self.fmax])
@@ -1359,15 +1341,12 @@ class SimImageSet:
                 im2.set_clim([1e-5, 1])
                 fig.colorbar(im2)
 
-                circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-                ax.add_artist(circ)
+                ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
 
                 if jj == 1:
-                    circ2 = matplotlib.patches.Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--')
-                    ax.add_artist(circ2)
+                    ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
                 elif jj == 2:
-                    circ2 = matplotlib.patches.Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--')
-                    ax.add_artist(circ2)
+                    ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
                 if jj == 0:
                     plt.title('normalized weight')
@@ -1397,16 +1376,12 @@ class SimImageSet:
         figh.colorbar(im, ticks=[1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 1e-2, 1e-3, 1e-4, 1e-5])
 
         ax.set_title("non-linear scale")
-        circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ)
-
-        circ2 = matplotlib.patches.Circle((0, 0), radius=2*self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ2)
+        ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=2*self.fmax, color='k', fill=0, ls='--'))
 
         for ii in range(self.nangles):
-            ax.add_artist(matplotlib.patches.Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
-
-            ax.add_artist(matplotlib.patches.Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
+            ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
+            ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -1416,16 +1391,13 @@ class SimImageSet:
         im = ax.imshow(net_weight, extent=extent_upsampled, cmap="bone")
 
         figh.colorbar(im)
-        circ = matplotlib.patches.Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ)
-
-        circ2 = matplotlib.patches.Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--')
-        ax.add_artist(circ2)
+        ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='k', fill=0, ls='--'))
 
         for ii in range(self.nangles):
-            ax.add_artist(matplotlib.patches.Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
+            ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
-            ax.add_artist(matplotlib.patches.Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
+            ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -1862,8 +1834,8 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
                             os.mkdir(sim_diagnostics_path)
 
                         # find images and load them
-                        raw_imgs = tools.read_dataset(metadata, time_indices=ind_t, z_indices=iz, xy_indices=ixy,
-                                                      user_indices={"UserChannelIndex": channel_inds[kk],
+                        raw_imgs = tools.read_mm_dataset(metadata, time_indices=ind_t, z_indices=iz, xy_indices=ixy,
+                                                         user_indices={"UserChannelIndex": channel_inds[kk],
                                                                     "UserSimIndex": list(range(npatterns_ignored,
                                                                                                npatterns_ignored + nangles * nphases))})
 
@@ -2204,6 +2176,9 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     :return figh: handle to figure produced
     """
+    # normalize ...
+    img1_ft = np.array(img1_ft, copy=True) / img1_ft.size
+    img2_ft = np.array(img2_ft, copy=True) / img2_ft.size
 
     # get physical parameters
     dy = dx
@@ -2215,7 +2190,6 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
         fmax = np.sqrt(np.max(fxs)**2 + np.max(fys)**2)
 
     # power spectrum / cross correlation
-    # cc = np.abs(img1_ft * img2_ft.conj())
     # cc = np.abs(scipy.signal.fftconvolve(img1_ft, img2_ft.conj(), mode='same'))
     cc = np.abs(scipy.signal.correlate(img2_ft, img1_ft, mode='same'))
 
@@ -2225,7 +2199,6 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     angle = np.angle(fx_sim + 1j * fy_sim)
 
     peak_cc = tools.get_peak_value(cc, fxs, fys, [fx_sim, fy_sim], peak_pixels)
-
     peak1_dc = tools.get_peak_value(img1_ft, fxs, fys, [0, 0], peak_pixels)
     peak2 = tools.get_peak_value(img2_ft, fxs, fys, [fx_sim, fy_sim], peak_pixels)
 
@@ -2233,13 +2206,13 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     # create figure
     figh = plt.figure(figsize=figsize)
-    gspec = matplotlib.gridspec.GridSpec(ncols=14, nrows=2, hspace=0.3, figure=figh)
+    gspec = plt.GridSpec(ncols=14, nrows=2, hspace=0.3, figure=figh)
 
     str = ""
     if ttl_str != "":
         str += "%s\n" % ttl_str
     # suptitle
-    str += '      fit: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
+    str += '      fit: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g and %0.2fdeg' % \
           (period * 1e3, 1/period, angle * 180 / np.pi, angle, fx_sim, fy_sim, np.abs(peak_cc), np.angle(peak_cc) * 180/np.pi)
     if frqs_guess is not None:
         fx_g, fy_g = frqs_guess
@@ -2247,12 +2220,12 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
         angle_g = np.angle(fx_g + 1j * fy_g)
         peak_cc_g = tools.get_peak_value(cc, fxs, fys, frqs_guess, peak_pixels)
 
-        str += '\nguess: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g at %0.2fdeg' % \
+        str += '\nguess: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g and %0.2fdeg' % \
                (period_g * 1e3, 1/period_g, angle_g * 180 / np.pi, angle_g, fx_g, fy_g, np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
     plt.suptitle(str)
 
     # #######################################
-    # plot region of interest
+    # plot cross-correlation region of interest
     # #######################################
     roi_cx = np.argmin(np.abs(fx_sim - fxs))
     roi_cy = np.argmin(np.abs(fy_sim - fys))
@@ -2262,7 +2235,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     ax = plt.subplot(gspec[0, 0:6])
     ax.set_title("cross correlation, ROI")
-    im1 = ax.imshow(cc[roi[0]:roi[1], roi[2]:roi[3]], interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi, cmap="bone")
+    im1 = ax.imshow(rois.cut_roi(roi, cc), interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi, cmap="bone")
     ph1 = ax.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
@@ -2275,47 +2248,48 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     else:
         ax.legend([ph1], ['frq fit'], loc="upper right")
 
-    circ_max_frq = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0, ls='--')
-    ax.add_artist(circ_max_frq)
-
-    ax.set_xlabel('fx (1/um)')
-    ax.set_ylabel('fy (1/um)')
+    ax.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
+    ax.set_xlabel('$f_x (1/\mu m)$')
+    ax.set_ylabel('$f_y (1/\mu m)$')
 
 
     cbar_ax = figh.add_subplot(gspec[0, 6])
     figh.colorbar(im1, cax=cbar_ax)
 
-    ### full image ###
+    # #######################################
+    # full cross-correlation
+    # #######################################
     ax2 = plt.subplot(gspec[0, 7:13])
     im2 = ax2.imshow(cc, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
     ax2.set_xlim([-fmax, fmax])
     ax2.set_ylim([fmax, -fmax])
 
     # plot maximum frequency
-    circ_max_frq = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0)
-    ax2.add_artist(circ_max_frq)
+    ax2.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0))
 
-    roi_rec = matplotlib.patches.Rectangle((fxs[roi[2]], fys[roi[0]]), fxs[roi[3] - 1] - fxs[roi[2]], fys[roi[1] - 1] - fys[roi[0]],
-                                           edgecolor='k', fill=0)
-    ax2.add_artist(roi_rec)
+    ax2.add_artist(Rectangle((fxs[roi[2]], fys[roi[0]]), fxs[roi[3] - 1] - fxs[roi[2]], fys[roi[1] - 1] - fys[roi[0]],
+                                           edgecolor='k', fill=0))
 
-    ax2.set_title("Cross correlation, C(fo) = \sum_f img_ft1(f) x img_ft2^*(f+fo)")
-    ax2.set_xlabel('fx (1/um)')
-    ax2.set_ylabel('fy (1/um)')
+    ax2.set_title(r"$C(f_o) = \sum_f g_1(f) \times g^*_2(f+f_o)$")
+    ax.set_xlabel('$f_x (1/\mu m)$')
+    ax.set_ylabel('$f_y (1/\mu m)$')
 
     cbar_ax = figh.add_subplot(gspec[0, 13])
     figh.colorbar(im2, cax=cbar_ax)
 
+    # #######################################
     # ft 1
+    # #######################################
     ax3 = plt.subplot(gspec[1, 0:6])
-    ax3.set_title("fft 1 PS near DC, peak = %0.3g at %0.2fdeg" % (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
+    ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0) = $"  " %0.3g and %0.2fdeg" % (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
-    roi_center = rois.get_centered_roi([cy_c, cx_c], [roi_size, roi_size], [0, 0], img1_ft.shape)
+    roi_center = rois.get_centered_roi([cy_c, cx_c], [roi[1] - roi[0], roi[3] - roi[2]], [0, 0], img1_ft.shape)
+    extent_roic = tools.get_extent(fys[roi_center[0]:roi_center[1]], fxs[roi_center[2]:roi_center[3]])
 
-    im3 = ax3.imshow(np.abs(img1_ft[roi_center[0]:roi_center[1], roi_center[2]:roi_center[3]])**2,
-                     interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
+    im3 = ax3.imshow(rois.cut_roi(roi_center, np.abs(img1_ft)**2),
+                     interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roic, cmap="bone")
     ax3.scatter(0, 0, color='r', marker='x')
 
     cbar_ax = figh.add_subplot(gspec[1, 6])
@@ -2323,13 +2297,13 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     # ft 2
     ax4 = plt.subplot(gspec[1, 7:13])
-    ttl_str = "fft 2 PS near fo, peak = %0.3g at %0.2fdeg" % (np.abs(peak2), np.angle(peak2) * 180 / np.pi)
+    ttl_str = r"$|g_2(f)|^2$" + r"near $f_o$, $g_2(f_p) =$" + " %0.3g and %0.2fdeg" % (np.abs(peak2), np.angle(peak2) * 180 / np.pi)
     if frqs_guess is not None:
         peak2_g = tools.get_peak_value(img2_ft, fxs, fys, frqs_guess, peak_pixels)
-        ttl_str += "\nguess peak = = %0.3g at %0.2fdeg" % (np.abs(peak2_g), np.angle(peak2_g) * 180 / np.pi)
+        ttl_str += "\nguess peak = %0.3g and %0.2fdeg" % (np.abs(peak2_g), np.angle(peak2_g) * 180 / np.pi)
     ax4.set_title(ttl_str)
 
-    im4 = ax4.imshow(np.abs(img2_ft[roi[0]:roi[1], roi[2]:roi[3]])**2,
+    im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2),
                      interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi, cmap="bone")
     ph1 = ax4.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
@@ -2845,11 +2819,9 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
 
     ax3.imshow(ps_exp, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0, ls='--')
-    ax3.add_artist(circ)
+    ax3.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
 
-    circ2 = matplotlib.patches.Circle((frq_sim[0], frq_sim[1]), radius=fmax, color='k', fill=0, ls='--')
-    ax3.add_artist(circ2)
+    ax3.add_artist(Circle((frq_sim[0], frq_sim[1]), radius=fmax, color='k', fill=0, ls='--'))
 
     ax3.set_xlabel('fx (1/um)')
     ax3.set_ylabel('fy (1/um)')
@@ -2861,11 +2833,8 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ax5 = plt.subplot(grid[1, 2:4])
     ax5.imshow(ps_fit, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0, ls='--')
-    ax5.add_artist(circ)
-
-    circ2 = matplotlib.patches.Circle((frq_sim[0], frq_sim[1]), radius=fmax, color='k', fill=0, ls='--')
-    ax5.add_artist(circ2)
+    ax5.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
+    ax5.add_artist(Circle((frq_sim[0], frq_sim[1]), radius=fmax, color='k', fill=0, ls='--'))
 
     ax5.set_xlabel('fx (1/um)')
     ax5.set_ylabel('fy (1/um)')
@@ -2879,11 +2848,8 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ps_exp_deconvolved[mask == 0] = np.nan
     ax4.imshow(ps_exp_deconvolved, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0, ls='--')
-    ax4.add_artist(circ)
-
-    circ2 = matplotlib.patches.Circle((frq_sim[0], frq_sim[1]), radius=fmax, color='k', fill=0, ls='--')
-    ax4.add_artist(circ2)
+    ax4.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
+    ax4.add_artist(Circle((frq_sim[0], frq_sim[1]), radius=fmax, color='k', fill=0, ls='--'))
 
     ax4.set_xlabel('fx (1/um)')
     ax4.set_ylabel('fy (1/um)')
@@ -2893,11 +2859,8 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ax4 = plt.subplot(grid[1, 8:])
     ax4.imshow(ps_fit_deconvolved, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='k', fill=0, ls='--')
-    ax4.add_artist(circ)
-
-    circ2 = matplotlib.patches.Circle((frq_sim[0], frq_sim[1]), radius=fmax, color='k', fill=0, ls='--')
-    ax4.add_artist(circ2)
+    ax4.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
+    ax4.add_artist(Circle((frq_sim[0], frq_sim[1]), radius=fmax, color='k', fill=0, ls='--'))
 
     ax4.set_xlabel('fx (1/um)')
     ax4.set_ylabel('fy (1/um)')

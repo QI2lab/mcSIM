@@ -150,7 +150,8 @@ def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
 
     return image_metadata, dims, summary
 
-def read_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy_indices=None, user_indices={}):
+
+def read_mm_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy_indices=None, user_indices={}):
     """
     Load a set of images from MicroManager metadata, read using parse_mm_metadata()
 
@@ -205,6 +206,7 @@ def read_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy
 
     return imgs
 
+
 def read_tiff(fname, slices=None):
     """
     Read tiff file containing multiple images
@@ -237,12 +239,13 @@ def read_tiff(fname, slices=None):
         tiff_metadata[tag.name] = tag.value
 
     # read
-    imgs = tifffile.imread(fname, multifile=False, key=slices)
+    imgs = tifffile.imread(fname, key=slices)
 
     if imgs.ndim == 2:
         imgs = np.expand_dims(imgs, axis=0)
 
     return imgs, tiff_metadata
+
 
 def read_multi_tiff(fnames, slice_indices):
     """
@@ -284,6 +287,7 @@ def read_multi_tiff(fnames, slice_indices):
 
     return imgs
 
+
 def save_tiff(img, save_fname, dtype, tif_metadata=None, axes_order='ZYX', hyperstack=False, **kwargs):
     """
     Save an nD NumPy array to a tiff file
@@ -304,6 +308,7 @@ def save_tiff(img, save_fname, dtype, tif_metadata=None, axes_order='ZYX', hyper
         img = tifffile.transpose_axes(img, axes_order, asaxes='TZCYXS')
 
     tifffile.imwrite(save_fname, img.astype(dtype), dtype=dtype, imagej=True, **kwargs)
+
 
 def parse_imagej_tiff_tag(tag):
     """
@@ -327,6 +332,7 @@ def parse_imagej_tiff_tag(tag):
             pass
 
     return subtag_dict
+
 
 def tiffs2stack(fname_out, dir_path, fname_exp="*.tif",
                 exp=r"(?P<prefix>.*)nc=(?P<channel>\d+)_nt=(?P<time>\d+)_nxy=(?P<position>\d+)_nz=(?P<slice>\d+)"):
@@ -402,7 +408,9 @@ def tiffs2stack(fname_out, dir_path, fname_exp="*.tif",
         print("WARNING: not all channels/times/slices/positions were accounted for. Those that were not found are replaced by NaNs")
 
     # save results
-    save_tiff(imgs, fname_out, dtype=np.float32, axes_order="CTZYX", hyperstack=True)
+    img = tifffile.transpose_axes(img, "CTZYX", asaxes='TZCYXS')
+    tifffile.imwrite(fname_out, img.astype(np.float32), imagej=True)
+
 
 # file naming
 def get_unique_name(fname, mode='file'):
@@ -431,9 +439,11 @@ def get_unique_name(fname, mode='file'):
 
     return fname
 
+
 def get_timestamp():
     now = datetime.datetime.now()
     return '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
+
 
 # image processing
 def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
@@ -516,6 +526,7 @@ def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
 
     return az_avg, sdm, dist_mean, dist_sd, npts_bin, masks
 
+
 def elliptical_grid(params, xx, yy, units='mean'):
     """
     Get elliptical `distance' grid for use with azimuthal averaging. These `distances' will be the same for points lying
@@ -567,6 +578,7 @@ def elliptical_grid(params, xx, yy, units='mean'):
             raise ValueError("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
 
     return distance_grid
+
 
 def bin(img, bin_size, mode='sum'):
     """
@@ -679,6 +691,7 @@ def bin(img, bin_size, mode='sum'):
 
     return m_binned
 
+
 def toeplitz_filter_mat(filter, img_size, mode='valid'):
     """
     Return the Toeplitz matrix which performs a given 1D or 2D filter on a 1D signal or 2D image. We assume the
@@ -768,6 +781,7 @@ def toeplitz_filter_mat(filter, img_size, mode='valid'):
 
     return mat
 
+
 # background estimation
 def estimate_background(img):
     """
@@ -803,6 +817,7 @@ def estimate_background(img):
 
     return bg, fparams
 
+
 # resampling functions
 def duplicate_pix(img, nx=2, ny=2):
     """
@@ -820,6 +835,7 @@ def duplicate_pix(img, nx=2, ny=2):
     img_resampled = np.kron(img, block)
 
     return img_resampled
+
 
 def duplicate_pix_ft(img_ft, mx=2, my=2, centered=True):
     """
@@ -867,6 +883,7 @@ def duplicate_pix_ft(img_ft, mx=2, my=2, centered=True):
 
     return img_ft_resampled
 
+
 def resample_bandlimited(img, mag=(2, 2)):
     """
     Expand real-space imaging while keeping fourier content constant
@@ -878,6 +895,7 @@ def resample_bandlimited(img, mag=(2, 2)):
     """
     img_resampled = fft.fftshift(fft.ifft2(resample_bandlimited_ft(fft.fftshift(fft.fft2(fft.ifftshift(img))), mag)))
     return img_resampled
+
 
 def resample_bandlimited_ft(img_ft, mag=(2, 2)):
     """
@@ -1008,6 +1026,7 @@ def get_peak_value(img, x, y, peak_coord, peak_pixel_size=1):
 
     return peak_value
 
+
 def pixel_overlap(centers1, centers2, lens1, lens2=None):
     """
     Calculate overlap of two nd-square pixels. The pixels go from coordinates
@@ -1052,6 +1071,7 @@ def pixel_overlap(centers1, centers2, lens1, lens2=None):
 
     return np.prod(overlaps)
 
+
 def segment_intersect(start1, end1, start2, end2):
     """
     Get intersection point of two 2D line segments
@@ -1086,6 +1106,7 @@ def segment_intersect(start1, end1, start2, end2):
     else:
         return None
 
+
 def nearest_point_on_line(line_point, line_unit_vec, pt):
     """
     Find the shortest distance between a line and a point of interest.
@@ -1108,20 +1129,27 @@ def nearest_point_on_line(line_point, line_unit_vec, pt):
     return nearest_pt, dist
 
 # working with regions of interest
-def get_extent(y, x):
+def get_extent(y, x, origin="lower"):
     """
     Get extent required for plotting arrays using imshow in real coordinates. The resulting list can be
     passed directly to imshow using the extent keyword.
 
-    Here we assume the values y and x are equally spaced and describe the center coordinate of each pixel
+    Here we assume the values y and x are equally spaced and describe the center coordinates of each pixel
 
     :param y: equally spaced y-coordinates
     :param x: equally spaced x-coordinates
-    :return extent: [xstart, xend, yend, ystart]
+    :param origin: "lower" or "upper" depending on if the y-origin is at the lower or upper edge of the image
+    :return extent: [xstart, xend, ystart, yend]
     """
     dy = y[1] - y[0]
     dx = x[1] - x[0]
-    extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
+    if origin == "lower":
+        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
+    elif origin == "upper":
+        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[0] - 0.5 * dy, y[-1] + 0.5 * dy]
+    else:
+        raise ValueError("origin must be 'lower' or 'upper' but was '%s'" % origin)
+
     return extent
 
 
@@ -1134,6 +1162,8 @@ def map_intervals(vals, from_intervals, to_intervals):
     :param to_intervals: list of intervals containing end valus [[c1, d1], [c2, d2], ..., [cn, dn]]
     :return:
     """
+
+    # todo: maybe move to affine.py?
     if not isinstance(vals, list):
         vals = [vals]
 
@@ -1180,6 +1210,7 @@ def get_fft_frqs(length, dt=1, centered=True, mode='symmetric'):
     than length//2 as negative
     :return:
     """
+    # todo: deprecated since almost identical functionality from fft.fftfreq() in combination with fft.fftshift()
 
     # generate symmetric, fftshifted frequencies
     if np.mod(length, 2) == 0:
@@ -1194,7 +1225,7 @@ def get_fft_frqs(length, dt=1, centered=True, mode='symmetric'):
         pass
     else:
         # convert from origin at center to origin at edge
-        frqs = scipy.fft.ifftshift(frqs)
+        frqs = fft.ifftshift(frqs)
 
     # shift back to positive if necessary
     if mode == 'symmetric':
@@ -1244,7 +1275,7 @@ def get_fft_pos(length, dt=1, centered=True, mode='symmetric'):
     if centered:
         pass
     else:
-        pos = scipy.fft.ifftshift(pos)
+        pos = fft.ifftshift(pos)
 
     pos = pos * dt
 
@@ -1433,6 +1464,7 @@ def conj_transpose_fft(img_ft, axes=(-1, -2)):
 
     return img_ft_ct
 
+
 def rfft2fft(img_rft):
     """
     Convert rfft2 representation to fft2
@@ -1447,6 +1479,7 @@ def rfft2fft(img_rft):
     img_fft[:, :nx // 2] = test[:, :nx // 2]
     
     return img_fft
+
 
 def shannon_whittaker_interp(pts, fn_vals, dt=1):
     """
@@ -1465,6 +1498,7 @@ def shannon_whittaker_interp(pts, fn_vals, dt=1):
 
     return fn_interp
 
+
 def shannon_whittaker_interp2d(pts, fn_vals, drs):
     # todo: combine 1D and 2D functions to nD function
     ns = np.expand_dims(np.arange(fn_vals.shape[0]), axis=1)
@@ -1479,6 +1513,7 @@ def shannon_whittaker_interp2d(pts, fn_vals, drs):
 
     return fn_interp
 
+
 def sinc(x):
     """
     sinc(x) = sin(x) / x
@@ -1486,6 +1521,7 @@ def sinc(x):
     val = np.sin(x) / x
     val[x == 0] = 1
     return val
+
 
 # plotting tools
 def get_cut_profile(img, start_coord, end_coord, width):
