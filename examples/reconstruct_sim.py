@@ -1,6 +1,7 @@
 """
 Reconstruct SIM image of argoSIM slide pattern of closely spaced line pairs.
 """
+import datetime
 import numpy as np
 from numpy import fft
 import pickle
@@ -9,6 +10,9 @@ import sim_reconstruction as sim
 import fit_psf as psf
 import affine
 import rois
+
+now = datetime.datetime.now()
+tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
 
 # ############################################
 # load image data, channel/angle/phase
@@ -108,7 +112,7 @@ for kk in range(ncolors):
                              frq_estimation_mode="band-correlation", combine_bands_mode="fairSIM",
                              normalize_histograms=True,
                              background=100, gain=2, min_p2nr=0.5,
-                             save_dir="data/sim_reconstruction_%.0fnm" % (excitation_wavelengths[kk] * 1e3),
+                             save_dir="data/%s_sim_reconstruction_%.0fnm" % (tstamp, excitation_wavelengths[kk] * 1e3),
                              interactive_plotting=False, figsize=(20, 13))
     imgset.reconstruct()
     imgset.plot_figs()

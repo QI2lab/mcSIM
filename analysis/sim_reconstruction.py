@@ -481,7 +481,7 @@ class SimImageSet:
 
         # put in modulation depth and global phase corrections
         self.sim_sr_ft = np.nansum(self.bands_shifted_ft * self.weights *
-                                   np.expand_dims(phase_corr_mat, axis=(2, 3)) /
+                                   np.expand_dims(phase_corr_mat, axis=(2, 3)) *
                                    np.expand_dims(mod_depth_corr_mat, axis=(2, 3)), axis=(0, 1)) / self.weights_norm
 
         # inverse FFT to get real-space reconstructed image
