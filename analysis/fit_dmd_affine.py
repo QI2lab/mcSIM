@@ -245,7 +245,7 @@ def get_affine_xform(fps, succesful_fits, dmd_centers):
     # estimate affine transformation
     out_pts = [(x, y) for x, y in zip(xcam, ycam)]
     in_pts = [(x, y) for x, y in zip(xdmd, ydmd)]
-    affine_xform = affine.fit_xform_points(in_pts, out_pts)
+    affine_xform, _ = affine.fit_xform_points(in_pts, out_pts)
 
     return affine_xform
 
