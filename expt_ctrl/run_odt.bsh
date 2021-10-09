@@ -47,3 +47,5 @@ if (true){
 	mm.setSysConfigFile(cfg_file);
 	print("restored initial configuration");
 }
+
+print("###################################################");

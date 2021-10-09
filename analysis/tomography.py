@@ -34,7 +34,7 @@ def get_angles(frqs, no, wavelength):
     return theta, phi
 
 
-def get_global_phase_shifts(imgs, ref_ind):
+def get_global_phase_shifts(imgs, ref_imgs):
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
     imgs * np.exp(1j * phase_shift) ~ img_ref
@@ -45,14 +45,23 @@ def get_global_phase_shifts(imgs, ref_ind):
     """
     nimgs = imgs.shape[0]
 
+    # if using only single ref image ...
+    if ref_imgs.ndim == (imgs.ndim - 1):
+        ref_imgs = np.expand_dims(ref_imgs, axis=0)
+
+    ref_imgs, imgs = np.broadcast_arrays(ref_imgs, imgs)
+
+    tstart = time.perf_counter()
     phase_shifts = np.zeros(nimgs)
-    # loop over non-reference images
-    inds_list = list(range(nimgs))
-    inds_list.remove(ref_ind)
-    for ii in inds_list:
-        def fn(p): return np.abs(imgs[ii] * np.exp(1j * p[0]) - imgs[ref_ind]).ravel()
+    for ii in range(nimgs):
+        print("computing phase shift %d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, time.perf_counter() - tstart), end="\r")
+        def fn(p): return np.abs(imgs[ii] * np.exp(1j * p[0]) - ref_imgs[ii]).ravel()
+        # s1 = np.mean(imgs[ii])
+        # s2 = np.mean(ref_imgs[ii])
+        # def fn(p): return np.abs(s1 * np.exp(1j * p[0]) - s2)
         results = fit.fit_least_squares(fn, [0])
         phase_shifts[ii] = results["fit_params"]
+    print("")
 
     return phase_shifts
 
@@ -84,7 +93,7 @@ def get_scattering_potential(n, no, wavelength):
     return sp
 
 
-def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1):
+def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=0.5):
     """
 
     @param efield_fts:
@@ -105,6 +114,9 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     fx = np.expand_dims(fft.fftshift(fft.fftfreq(nx, dxy)), axis=(0, 1))
     fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dxy)), axis=(0, 2))
     fz = get_fz(fx, fy, ni, wavelength)
+
+    not_detectable = (fx**2 + fy**2) > na_det / wavelength
+    fz[not_detectable] = np.nan
 
     # ##################################
     # construct frequencies where we have data about the 3D scattering potentials
@@ -133,10 +145,13 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     alpha = np.arcsin(na_det / ni)
     beta = np.max(theta)
 
+    # maximum frequencies present in ODT
     f_perp_max = (na_det + ni * np.sin(beta)) / wavelength
-    fz_max = ni / wavelength * (1 - np.cos(alpha))
+    fz_max = ni / wavelength * np.max([1 - np.cos(alpha), 1 - np.cos(beta)])
+
+    # generate realspace sampling from Nyquist sampling
     dxy_sp = 0.5 * 1 / f_perp_max
-    dz_sp = 0.5 * 1 / fz_max
+    dz_sp = dz_sampling_factor * 1 / fz_max
 
     x_fov = nx * dxy  # um
     nx_sp = int(np.ceil(x_fov / dxy_sp) + 1)
@@ -166,13 +181,24 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     fzfz_sp, fyfy_sp, fxfx_sp = np.meshgrid(fz_sp, fy_sp, fx_sp, indexing="ij")
 
     # ##################################
-    # define method for mapping pixels
+    # find indices in scattering potential per image
     # ##################################
 
-    def kernel(dx, dy, dz):
-        return np.logical_and.reduce((np.abs(dx) <= dfx_sp / 2, np.abs(dy) <= dfy_sp / 2, np.abs(dz) <= dfz_sp / 2))
+    # find indices from rounding
+    zind = (np.round(Fz / dfz_sp) + nz_sp // 2).astype(int)
+    yind = (np.round(Fy / dfy_sp) + ny_sp // 2).astype(int)
+    xind = (np.round(Fx / dfx_sp) + nx_sp // 2).astype(int)
 
-    # todo: could also think about looping over only pixel positions present in data
+    # only use those within bounds. will have some negative because not checking against NA
+    to_use_ind = np.logical_and.reduce((zind >= 0, zind < nz_sp,
+                                        yind >= 0, yind < ny_sp,
+                                        xind >= 0, xind < nx_sp))
+
+    # convert nD indices to 1D indices so can easily check if points are unique
+    cind = -np.ones(zind.shape, dtype=int)
+    cind[to_use_ind] = np.ravel_multi_index((zind[to_use_ind].astype(int).ravel(),
+                                             yind[to_use_ind].astype(int).ravel(),
+                                             xind[to_use_ind].astype(int).ravel()), (nz_sp, ny_sp, nx_sp))
 
     # one reconstruction per image
     tstart = time.perf_counter()
@@ -180,32 +206,73 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     sp_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
     num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=int)
     for ii in range(nimgs):
-        # F(kx - k*nx, ky - k * ny, kz - k * nz) = 2 * 1j * kz * E(kx, ky))
+        print("reconstructing angle %d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, time.perf_counter() - tstart), end="\r")
+        if ii == (nimgs - 1):
+            print("")
+
         f_unshift_ft = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
 
-        # expand to nz x nx x ndata points
-        f_unshift_ft_exp = np.expand_dims(f_unshift_ft[to_use_data[ii]], axis=(0, 1))
+        # check we don't have duplicate indices ... otherwise need to do something else ...
+        cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
+        if len(cind_unique_angle) != np.sum(to_use_ind[ii]):
+            # approach would be, get array mapping all elements to unique elements, using options for np.unique()
+            # and the cind's
+            # average these and keep track of number
+            # next, convert unique elements back to 3D indices and use the below code
+            raise NotImplementedError("reconstruction only implemented for one angle mapping")
 
-        # loop over y-direction, but do x/z in parallel. Much faster than looping over all pixels
-        for jj in range(ny_sp):
-            print("img %d/%d, y-coord %d/%d, elapsed time = %0.2fs" %
-                  (ii + 1, nimgs, jj + 1, ny_sp, time.perf_counter() - tstart), end="\r")
-            if jj == (ny_sp - 1):
-                print("")
+        # assuming at most one point for each ...
+        inds_angle = (zind[ii][to_use_ind[ii]], yind[ii][to_use_ind[ii]], xind[ii][to_use_ind[ii]])
+        sp_ft_imgs[ii][inds_angle] = f_unshift_ft[to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
+        num_pts[ii][inds_angle] = 1
 
-            # expand array so that is nz x nx x ndata points
-            dist_xs = np.expand_dims(fxfx_sp[:, jj], axis=-1) - np.expand_dims(Fx[ii, to_use_data[ii]], axis=(0, 1))
-            dist_ys = np.expand_dims(fyfy_sp[:, jj], axis=-1) - np.expand_dims(Fy[ii, to_use_data[ii]], axis=(0, 1))
-            dist_zs = np.expand_dims(fzfz_sp[:, jj], axis=-1) - np.expand_dims(Fz[ii, to_use_data[ii]], axis=(0, 1))
-            kern = kernel(dist_xs, dist_ys, dist_zs)
 
-            # sum over data points axis
-            # also must correct fact Fourier transform normalization is effectively different for different sized arrays
-            sp_ft_imgs[ii, :, jj] = np.sum(kern * f_unshift_ft_exp, axis=-1) * (nx_sp * ny_sp * nz_sp) / (ny * nx)
-            # track number of points for later averaging
-            num_pts[ii, :, jj] = np.sum(kern, axis=-1)
+    # ##################################
+    # define method for mapping pixels
+    # ##################################
 
-    sp_ft = np.sum(sp_ft_imgs, axis=0) / (np.sum(num_pts, axis=0) + reg)
+    # def kernel(dx, dy, dz):
+    #     return np.logical_and.reduce((np.abs(dx) <= dfx_sp / 2, np.abs(dy) <= dfy_sp / 2, np.abs(dz) <= dfz_sp / 2))
+    #
+    # # one reconstruction per image
+    # tstart = time.perf_counter()
+    #
+    # sp_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
+    # num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=int)
+    # for ii in range(nimgs):
+    #     # F(kx - k*no*nx, ky - k*no*ny, kz - k*no*nz) = 2 * 1j * kz * E(kx, ky))
+    #     f_unshift_ft = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
+    #
+    #     # expand to nz x nx x ndata points
+    #     f_unshift_ft_exp = np.expand_dims(f_unshift_ft[to_use_data[ii]], axis=(0, 1))
+    #
+    #     # loop over y-direction, but do x/z in parallel. Much faster than looping over all pixels
+    #     for jj in range(ny_sp):
+    #         print("reconstructing angle %d/%d, y-coord %d/%d, elapsed time = %0.2fs" %
+    #               (ii + 1, nimgs, jj + 1, ny_sp, time.perf_counter() - tstart), end="\r")
+    #         if jj == (ny_sp - 1):
+    #             print("")
+    #
+    #         # expand array so that is nz x nx x ndata points
+    #         dist_xs = np.expand_dims(fxfx_sp[:, jj], axis=-1) - np.expand_dims(Fx[ii, to_use_data[ii]], axis=(0, 1))
+    #         dist_ys = np.expand_dims(fyfy_sp[:, jj], axis=-1) - np.expand_dims(Fy[ii, to_use_data[ii]], axis=(0, 1))
+    #         dist_zs = np.expand_dims(fzfz_sp[:, jj], axis=-1) - np.expand_dims(Fz[ii, to_use_data[ii]], axis=(0, 1))
+    #         kern = kernel(dist_xs, dist_ys, dist_zs)
+    #
+    #         # sum over data points axis
+    #         # and correct for different normalization betwen DFT and FT
+    #         # DFT(f) * dx * dy * dz ~ FT(f)
+    #         sp_ft_imgs[ii, :, jj] = np.sum(kern * f_unshift_ft_exp, axis=-1) * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
+    #         # track number of points for later averaging
+    #         num_pts[ii, :, jj] = np.sum(kern, axis=-1)
+
+    # average over angles
+    num_pts_all = np.sum(num_pts, axis=0)
+    no_data = num_pts_all == 0
+
+    sp_ft = np.nansum(sp_ft_imgs, axis=0) / (num_pts_all + reg)
+    sp_ft[no_data] = np.nan
+
 
     fcoords = (fx_sp, fy_sp, fz_sp)
     coords = (x_sp, y_sp, z_sp)

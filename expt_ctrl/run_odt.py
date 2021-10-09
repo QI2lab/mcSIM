@@ -18,7 +18,12 @@ import tifffile
 sys.path.append(r"C:\Users\ptbrown2\Desktop\mcsim_private\mcSIM\expt_ctrl")
 import dlp6500
 
+
+tstart = time.perf_counter()
 # save_dir = r"F:\2021_08_04\pupil_map"
+
+# use this if device won't restart
+# daq.DAQmxResetDevice("Dev1")
 
 taskDO = daq.Task()
 taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
@@ -27,6 +32,8 @@ taskDO.WriteDigitalLines(1, 1, 10.0, daq.DAQmx_Val_GroupByChannel,
 
 taskDO.StopTask()
 taskDO.ClearTask()
+
+print("initialized DAQ lines, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
 
 # #########################
 # load dmd
@@ -59,26 +66,58 @@ pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1])), 12)
 pattern_base[pattern_base <= 0] = 0
 pattern_base[pattern_base > 0] = 1
 pattern_base = 1 - pattern_base
+print("pattern radius = %0.2f mirrors" % rad)
+print("pattern frequency (fx, fy) = (%0.3f, %0.3f) 1/ mirrors" % tuple(frq))
+
+# pupil info
+na_mitutoyo = 0.55
+dm = 7.56 # DMD mirror size
+fl_mitutoyo = 4e3 # focal length of mitutoya objective
+fl_olympus = 1.8e3
+# magnification between DMD and Mitutoyo BFP
+mag_dmd2bfp = 100 / 200 * 300 / 400 * fl_mitutoyo / fl_olympus
+
+pupil_rad_mirrors = fl_mitutoyo * na_mitutoyo / mag_dmd2bfp / dm
 
 # center positions
-offs = np.arange(-180, 181, 20)
+n_phis = 10
+phis = np.arange(n_phis) * 2*np.pi / n_phis
+fractions = [0.25, 0.5, 0.75, 0.9]
+n_thetas = len(fractions)
+
+xoffs = np.zeros((n_phis, n_thetas))
+yoffs = np.zeros((n_phis, n_thetas))
+for ii in range(n_phis):
+    for jj in range(n_thetas):
+        xoffs[ii, jj] = np.cos(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+        yoffs[ii, jj] = np.sin(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+
+xoffs = np.concatenate((np.array([0]), xoffs.ravel()))
+yoffs = np.concatenate((np.array([0]), yoffs.ravel()))
+
+# offs = np.arange(-360, 400, 40)
+# offs = np.arange(-180, 181, 20)
 # offs = np.arange(-45, 46, 5)
 # offs = np.arange(-18, 19, 2)
-xoffs, yoffs = np.meshgrid(offs, offs)
+# xoffs, yoffs = np.meshgrid(offs, offs)
 npatterns = xoffs.size
 
-patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
-for ii in range(npatterns):
-    patterns[ii] = np.copy(pattern_base)
-    patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
-                         (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
+print("generating patterns...")
+if True:
+    patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
+    for ii in range(npatterns):
+        patterns[ii] = np.copy(pattern_base)
+        patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
+                             (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
+else:
+    patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
 
-tstart = time.process_time()
+print("finished generating patterns, elapsed time %0.2fs" % (time.perf_counter() - tstart))
+
+
 img_inds, bit_inds = dmd.upload_pattern_sequence(patterns, 105, 0, triggered=True, clear_pattern_after_trigger=False)
 # dmd.set_pattern_sequence(img_inds, bit_inds, 105, 0, triggered=True, clear_pattern_after_trigger=True)
-tend = time.process_time()
-print("loading %d patterns took %0.2fs" % (npatterns, tend - tstart))
-
+print("loaded %d patterns, elapsed tune %0.2fs" % (npatterns, time.perf_counter() - tstart))
 
 # #########################
 # program digital output
@@ -89,8 +128,8 @@ DAQ_sample_rate_hz = 1 / dt
 
 n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
 
-# npatterns = 2
-exposure_time_est = 0.33e-3
+exposure_time_est = 3e-3
+# exposure_time_est = 3e-3
 min_frame_time = 3e-3
 
 if exposure_time_est >= min_frame_time:
@@ -144,6 +183,7 @@ samples_per_ch_ct_digital = ct.c_int32()
 taskDO.WriteDigitalLines(samples_per_ch, False, 10.0, daq.DAQmx_Val_GroupByChannel, data_do,
                          ct.byref(samples_per_ch_ct_digital), None)
 
+print("DAQ programming complete, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
 # #########################
 # pycromanager
 # #########################
@@ -199,11 +239,14 @@ with pm.Bridge() as bridge:
     # start hardware sequence on DAQ
     taskDO.StartTask()
 
+    start_acquisition = time.perf_counter()
+    timeout = 30
     try:
         # collect images
         for ii in range(npatterns):
             while mmc.get_remaining_image_count() == 0:
-                pass
+                if time.perf_counter() - start_acquisition > 3:
+                    break
 
             # pop image
             img_tg = mmc.pop_next_tagged_image()
@@ -232,6 +275,8 @@ with pm.Bridge() as bridge:
 taskDO.StopTask()
 taskDO.ClearTask()
 
+print("acquisition complete, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
+
 # #########################
 # turn off lines at end
 # #########################
@@ -242,3 +287,5 @@ taskDO.WriteDigitalLines(1, 1, 10.0, daq.DAQmx_Val_GroupByChannel,
 
 taskDO.StopTask()
 taskDO.ClearTask()
+
+print("reset DAQ lines, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
