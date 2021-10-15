@@ -25,6 +25,13 @@ def get_fz(fx, fy, ni, wavelength):
 
 
 def get_angles(frqs, no, wavelength):
+    """
+    Convert from frequency vectors to angle vectors
+    @param frqs:
+    @param no:
+    @param wavelength:
+    @return:
+    """
     with np.errstate(invalid="ignore"):
         theta = np.arccos(np.dot(frqs, np.array([0, 0, 1])) / (no / wavelength))
         theta[np.isnan(theta)] = 0
@@ -93,18 +100,21 @@ def get_scattering_potential(n, no, wavelength):
     return sp
 
 
-def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=0.5):
+def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
+                   mode="born"):
     """
 
-    @param efield_fts:
-    @param beam_frqs:
-    @param ni:
-    @param na_det:
+    @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used
+    @param beam_frqs: nimgs x 3, where each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2
+    @param ni: background index of refraction
+    @param na_det: detection numerical aperture
     @param wavelength:
-    @param dxy:
-    @param z_fov:
-    @param reg:
-    @return:
+    @param dxy: pixel size
+    @param z_fov: z-field of view
+    @param reg: regularization factor
+    @param dz_sampling_factor: fraction of Nyquist sampling factor to use
+    @param mode: "born" or "rytov"
+    @return sp_ft, sp_ft_imgs, coords, fcoords:
     """
     nimgs, ny, nx = efield_fts.shape
 
@@ -119,26 +129,6 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     fz[not_detectable] = np.nan
 
     # ##################################
-    # construct frequencies where we have data about the 3D scattering potentials
-    # frequencies of the sample F = f - no/lambda * beam_vec
-    # ##################################
-    Fx, Fy, Fz = np.broadcast_arrays(fx - np.expand_dims(beam_frqs[:, 0], axis=(1, 2)),
-                                     fy - np.expand_dims(beam_frqs[:, 1], axis=(1, 2)),
-                                     fz - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
-                                     )
-    # if don't copy, then elements of F's are reference to other elements.
-    # otherwise later when set some elements to nans, many that we don't expect would become nans also
-    Fx = np.array(Fx, copy=True)
-    Fy = np.array(Fy, copy=True)
-    Fz = np.array(Fz, copy=True)
-
-    freq_nan = np.isnan(Fz)
-    to_use_data = np.logical_not(freq_nan)
-
-    Fx[freq_nan] = np.nan
-    Fy[freq_nan] = np.nan
-
-    # ##################################
     # set sampling of 3D scattering potential
     # ##################################
     theta, _ = get_angles(beam_frqs, ni, wavelength)
@@ -151,7 +141,7 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
 
     # generate realspace sampling from Nyquist sampling
     dxy_sp = 0.5 * 1 / f_perp_max
-    dz_sp = dz_sampling_factor * 1 / fz_max
+    dz_sp = dz_sampling_factor * 0.5 / fz_max
 
     x_fov = nx * dxy  # um
     nx_sp = int(np.ceil(x_fov / dxy_sp) + 1)
@@ -178,16 +168,60 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     dfy_sp = fy_sp[1] - fy_sp[0]
     dfz_sp = fz_sp[1] - fz_sp[0]
 
-    fzfz_sp, fyfy_sp, fxfx_sp = np.meshgrid(fz_sp, fy_sp, fx_sp, indexing="ij")
-
     # ##################################
     # find indices in scattering potential per image
     # ##################################
 
-    # find indices from rounding
-    zind = (np.round(Fz / dfz_sp) + nz_sp // 2).astype(int)
-    yind = (np.round(Fy / dfy_sp) + ny_sp // 2).astype(int)
-    xind = (np.round(Fx / dfx_sp) + nx_sp // 2).astype(int)
+    # find indices into reconstruction from rounding
+    if mode == "born":
+        # ##################################
+        # construct frequencies where we have data about the 3D scattering potentials
+        # frequencies of the sample F = f - no/lambda * beam_vec
+        # ##################################
+        Fx, Fy, Fz = np.broadcast_arrays(fx - np.expand_dims(beam_frqs[:, 0], axis=(1, 2)),
+                                         fy - np.expand_dims(beam_frqs[:, 1], axis=(1, 2)),
+                                         fz - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
+                                         )
+        # if don't copy, then elements of F's are reference to other elements.
+        # otherwise later when set some elements to nans, many that we don't expect would become nans also
+        Fx = np.array(Fx, copy=True)
+        Fy = np.array(Fy, copy=True)
+        Fz = np.array(Fz, copy=True)
+
+        freq_nan = np.isnan(Fz)
+        Fx[freq_nan] = np.nan
+        Fy[freq_nan] = np.nan
+
+        # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
+        zind = (np.round(Fz / dfz_sp) + nz_sp // 2).astype(int)
+        yind = (np.round(Fy / dfy_sp) + ny_sp // 2).astype(int)
+        xind = (np.round(Fx / dfx_sp) + nx_sp // 2).astype(int)
+    elif mode == "rytov":
+        # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * psi_s(fx - n/lambda * nx, fy - n/lambda * ny)
+        # F(Fx, Fy, Fz) = 2*i * (2*pi*fz) * psi_s(Fx, Fy)
+        # so want to change variables and take (Fx, Fy) -> (fx, fy)
+        # But have one problem: (Fx, Fy, Fz) do not form a normalized vector like (fx, fy, fz)
+        # so although we can use fx, fy to stand in, we need to calculate the new z-component
+        # Fz_rytov = np.sqrt( (n/lambda)**2 - (Fx + n/lambda * nx)**2 - (Fy + n/lambda * ny)**2) - n/lambda * nz
+        # fz = Fz + n/lambda * nz
+        Fx_rytov = fx
+        Fy_rytov = fy
+        fx_rytov = Fx_rytov + np.expand_dims(beam_frqs[:, 0], axis=(1, 2))
+        fy_rytov = Fy_rytov + np.expand_dims(beam_frqs[:, 1], axis=(1, 2))
+        with np.errstate(invalid="ignore"):
+            fz_rytov = np.sqrt((ni / wavelength)**2 - fx_rytov**2 - fy_rytov**2)
+        Fz_rytov = fz_rytov - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
+
+        zind = (np.round(Fz_rytov / dfz_sp) + nz_sp // 2).astype(int)
+        yind = (np.round(Fy_rytov / dfy_sp) + ny_sp // 2).astype(int)
+        xind = (np.round(Fx_rytov / dfx_sp) + nx_sp // 2).astype(int)
+
+        zind, yind, xind = np.broadcast_arrays(zind, yind, xind)
+        zind = np.array(zind, copy=True)
+        yind = np.array(yind, copy=True)
+        xind = np.array(xind, copy=True)
+    else:
+        raise ValueError("'mode' must be 'born' or 'rytov' but was '%s'" % mode)
 
     # only use those within bounds. will have some negative because not checking against NA
     to_use_ind = np.logical_and.reduce((zind >= 0, zind < nz_sp,
@@ -210,7 +244,10 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         if ii == (nimgs - 1):
             print("")
 
-        f_unshift_ft = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
+        if mode == "born":
+            f_unshift_ft = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
+        elif mode == "rytov":
+            f_unshift_ft = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
 
         # check we don't have duplicate indices ... otherwise need to do something else ...
         cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
@@ -223,50 +260,11 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
 
         # assuming at most one point for each ...
         inds_angle = (zind[ii][to_use_ind[ii]], yind[ii][to_use_ind[ii]], xind[ii][to_use_ind[ii]])
+        # since using DFT's instead of FT's have to adjust the normalization. Recall that FT ~ DFT * dr1 * ... * drn
         sp_ft_imgs[ii][inds_angle] = f_unshift_ft[to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
         num_pts[ii][inds_angle] = 1
 
-
-    # ##################################
-    # define method for mapping pixels
-    # ##################################
-
-    # def kernel(dx, dy, dz):
-    #     return np.logical_and.reduce((np.abs(dx) <= dfx_sp / 2, np.abs(dy) <= dfy_sp / 2, np.abs(dz) <= dfz_sp / 2))
-    #
-    # # one reconstruction per image
-    # tstart = time.perf_counter()
-    #
-    # sp_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
-    # num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=int)
-    # for ii in range(nimgs):
-    #     # F(kx - k*no*nx, ky - k*no*ny, kz - k*no*nz) = 2 * 1j * kz * E(kx, ky))
-    #     f_unshift_ft = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
-    #
-    #     # expand to nz x nx x ndata points
-    #     f_unshift_ft_exp = np.expand_dims(f_unshift_ft[to_use_data[ii]], axis=(0, 1))
-    #
-    #     # loop over y-direction, but do x/z in parallel. Much faster than looping over all pixels
-    #     for jj in range(ny_sp):
-    #         print("reconstructing angle %d/%d, y-coord %d/%d, elapsed time = %0.2fs" %
-    #               (ii + 1, nimgs, jj + 1, ny_sp, time.perf_counter() - tstart), end="\r")
-    #         if jj == (ny_sp - 1):
-    #             print("")
-    #
-    #         # expand array so that is nz x nx x ndata points
-    #         dist_xs = np.expand_dims(fxfx_sp[:, jj], axis=-1) - np.expand_dims(Fx[ii, to_use_data[ii]], axis=(0, 1))
-    #         dist_ys = np.expand_dims(fyfy_sp[:, jj], axis=-1) - np.expand_dims(Fy[ii, to_use_data[ii]], axis=(0, 1))
-    #         dist_zs = np.expand_dims(fzfz_sp[:, jj], axis=-1) - np.expand_dims(Fz[ii, to_use_data[ii]], axis=(0, 1))
-    #         kern = kernel(dist_xs, dist_ys, dist_zs)
-    #
-    #         # sum over data points axis
-    #         # and correct for different normalization betwen DFT and FT
-    #         # DFT(f) * dx * dy * dz ~ FT(f)
-    #         sp_ft_imgs[ii, :, jj] = np.sum(kern * f_unshift_ft_exp, axis=-1) * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
-    #         # track number of points for later averaging
-    #         num_pts[ii, :, jj] = np.sum(kern, axis=-1)
-
-    # average over angles
+    # average over angles/images
     num_pts_all = np.sum(num_pts, axis=0)
     no_data = num_pts_all == 0
 
