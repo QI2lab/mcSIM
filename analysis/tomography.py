@@ -3,8 +3,11 @@ Tools for reconstructiong optical diffraction tomography (ODT) data
 """
 import numpy as np
 from numpy import fft
+from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
+from matplotlib.colors import PowerNorm, Normalize
 from matplotlib.patches import Circle, Arc
+from matplotlib.cm import ScalarMappable
 import time
 import fit
 
@@ -278,11 +281,14 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     return sp_ft, sp_ft_imgs, coords, fcoords
 
 
-def apply_n_constraints(scattering_pot_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True):
+def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True):
     """
-    Iterative apply constraints
+    Iterative apply constraints on the scattering potential and the index of refraction
 
-    @param scattering_pot_ft: 3D fourier transform of scattering potential
+    constraint 1: scattering potential FT must match data at points where we information
+    constraint 2: real(n) >= no and imag(n) >= 0
+
+    @param sp_ft: 3D fourier transform of scattering potential
     @param no: background index of refraction
     @param wavelength:
     @param n_iterations:
@@ -291,23 +297,29 @@ def apply_n_constraints(scattering_pot_ft, no, wavelength, n_iterations=100, bet
     @return scattering_pot_ft:
     """
     # scattering_potential masked with nans where no information
-    scattering_pot_ft = np.array(scattering_pot_ft, copy=True)
-    sp_data = np.array(scattering_pot_ft, copy=True)
+    sp_ft = np.array(sp_ft, copy=True)
+    sp_data = np.array(sp_ft, copy=True)
 
-    no_data = np.isnan(scattering_pot_ft)
+    if not np.any(np.isnan(sp_ft)):
+        raise ValueError("sp_ft contained no NaN's, so there is no information to infer")
+
+    no_data = np.isnan(sp_ft)
     is_data = np.logical_not(no_data)
-    scattering_pot_ft[no_data] = 0 #np.exp(1j * np.random.rand(*scattering_potential_ft[no_data].shape))
+    sp_ft[no_data] = 0 #np.exp(1j * np.random.rand(*scattering_potential_ft[no_data].shape))
+
+    # try smoothing image first ...
+    sp_ft = gaussian_filter(sp_ft, (2, 2, 2))
 
     for ii in range(n_iterations):
         # ############################
         # ensure n is physical
         # ############################
-        sp = fft.fftshift(fft.ifftn(fft.ifftshift(scattering_pot_ft)))
+        sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft)))
         n = get_n(sp, no, wavelength)
 
-        # real part must be >= 1
-        correct_real = np.real(n) < 1
-        n[correct_real] = 1 + np.imag(n[correct_real])
+        # real part must be >= no
+        correct_real = np.real(n) < no
+        n[correct_real] = no + np.imag(n[correct_real])
 
         # imaginary part must be >= 0
         correct_imag = np.imag(n) < 0
@@ -319,7 +331,7 @@ def apply_n_constraints(scattering_pot_ft, no, wavelength, n_iterations=100, bet
         # ############################
         # ensure img matches data
         # ############################
-        sp_ft_pm = np.array(scattering_pot_ft, copy=True)
+        sp_ft_pm = np.array(sp_ft, copy=True)
         sp_ft_pm[is_data] = sp_data[is_data]
 
         # ############################
@@ -335,9 +347,9 @@ def apply_n_constraints(scattering_pot_ft, no, wavelength, n_iterations=100, bet
         sp_ps_pm = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_ps_pm)))
         n_ps_pm = get_n(sp_ps_pm, no, wavelength)
 
-        # real part must be >= 1
-        correct_real = np.real(n_ps_pm) < 1
-        n_ps_pm[correct_real] = 1 + np.imag(n_ps_pm[correct_real])
+        # real part must be >= no
+        correct_real = np.real(n_ps_pm) < no
+        n_ps_pm[correct_real] = no + np.imag(n_ps_pm[correct_real])
 
         # imaginary part must be >= 0
         correct_imag = np.imag(n_ps_pm) < 0
@@ -350,11 +362,11 @@ def apply_n_constraints(scattering_pot_ft, no, wavelength, n_iterations=100, bet
         # update
         # ############################
         if use_raar:
-            scattering_pot_ft = beta * scattering_pot_ft - beta * sp_ps_ft + (1 - 2 * beta) * sp_ft_pm + 2 * beta * sp_ps_pm_ft
+            sp_ft = beta * sp_ft - beta * sp_ps_ft + (1 - 2 * beta) * sp_ft_pm + 2 * beta * sp_ps_pm_ft
         else:
-            scattering_pot_ft = sp_ft_pm_ps
+            sp_ft = sp_ft_pm_ps
 
-    return scattering_pot_ft
+    return sp_ft
 
 
 def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8)):
@@ -443,5 +455,90 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
     ax.set_ylim([-size, size])
     ax.set_xlabel("$f_x$ (1/$\mu m$)")
     ax.set_ylabel("$f_y$ (1/$\mu m$)")
+
+    return figh
+
+def plot_n3d(sp_ft, no, wavelength, coords, title=""):
+    """
+    Plot 3D index of refraction
+    @param sp_ft:
+    @param no:
+    @param wavelength:
+    @param coords:
+    @return:
+    """
+
+    # work with coordinates
+    x_sp, y_sp, z_sp  = coords
+    nz_sp = len(z_sp)
+    dxy_sp = x_sp[1] - x_sp[0]
+    dz_sp = z_sp[1] - z_sp[0]
+
+    extent_sp_xy = [x_sp[0] - 0.5 * dxy_sp, x_sp[-1] + 0.5 * dxy_sp, y_sp[0] - 0.5 * dxy_sp, y_sp[-1] + 0.5 * dxy_sp]
+    extent_sp_xz = [x_sp[0] - 0.5 * dxy_sp, x_sp[-1] + 0.5 * dxy_sp, z_sp[0] - 0.5 * dz_sp, z_sp[-1] + 0.5 * dz_sp]
+    extent_sp_yz = [y_sp[0] - 0.5 * dxy_sp, y_sp[-1] + 0.5 * dxy_sp, z_sp[0] - 0.5 * dz_sp, z_sp[-1] + 0.5 * dz_sp]
+
+    # get need quantities
+    sp_ft = np.array(sp_ft, copy=True)
+    sp_ft[np.isnan(sp_ft)] = 0
+    sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft)))
+
+    n_recon = get_n(sp, no, wavelength)
+    n_recon_ft = fft.fftshift(fft.fftn(fft.ifftshift(n_recon)))
+
+    vmax_real = 1.5 * np.max(np.real(n_recon) - no)
+    vmax_imag = 1.5 * np.max(np.imag(n_recon))
+    vmax_n_ft = 1.5 * np.max(np.abs(n_recon_ft))
+    vmax_sp_ft = 1.5 * np.max(np.abs(sp_ft))
+
+    # plots
+    fmt_fn = lambda x: "%0.6f" % x
+
+    figh = plt.figure(figsize=(16, 8))
+    plt.suptitle("Index of refraction, %s" % title)
+    grid = plt.GridSpec(4, nz_sp + 1)
+
+    for ii in range(nz_sp):
+        ax = plt.subplot(grid[0, ii])
+        ax.set_title("%0.1fum" % z_sp[ii])
+        im = ax.imshow(np.real(n_recon[ii]) - no, vmin=-vmax_real, vmax=vmax_real, cmap="RdBu", origin="lower", extent=extent_sp_xy)
+        im.format_cursor_data = fmt_fn
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        if ii == 0:
+            ax.set_ylabel("real(n) - no")
+
+        ax = plt.subplot(grid[1, ii])
+        im = ax.imshow(np.imag(n_recon[ii]), vmin=-vmax_imag, vmax=vmax_imag, cmap="RdBu", origin="lower", extent=extent_sp_xy)
+        im.format_cursor_data = fmt_fn
+        ax.set_xticks([])
+        ax.set_yticks([])
+        if ii == 0:
+            ax.set_ylabel("imag(n)")
+
+        ax = plt.subplot(grid[2, ii])
+        im = ax.imshow(np.abs(n_recon_ft[ii]), cmap="bone", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_n_ft), origin="lower")
+        im.format_cursor_data = fmt_fn
+        ax.set_xticks([])
+        ax.set_yticks([])
+        if ii == 0:
+            ax.set_ylabel("|n(f)|")
+
+        ax = plt.subplot(grid[3, ii])
+        im = ax.imshow(np.abs(sp_ft[ii]), cmap="bone", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft), origin="lower")
+        im.format_cursor_data = fmt_fn
+        if ii == 0:
+            ax.set_ylabel("|F(f)|")
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    ax = plt.subplot(grid[0, nz_sp])
+    ax.axis("off")
+    plt.colorbar(ScalarMappable(norm=Normalize(vmin=-vmax_real, vmax=vmax_real), cmap="RdBu"), ax=ax)
+
+    ax = plt.subplot(grid[1, nz_sp])
+    ax.axis("off")
+    plt.colorbar(ScalarMappable(norm=Normalize(vmin=-vmax_imag, vmax=vmax_imag), cmap="RdBu"), ax=ax)
 
     return figh
