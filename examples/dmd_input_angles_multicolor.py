@@ -123,7 +123,7 @@ hs = []
 for ii in range(len(wlens)):
     data = simulation_data[ii]
 
-    tout = data['tms_out'].transpose()
+    _, tout = sdmd.uvector2tmtp(*data["uvecs_out"][0].transpose())
     sinc = np.abs(data['sinc_efield_on'][0] / data['wx'] / data['wy']) ** 2
     sinc_off = np.abs(data['sinc_efield_off'][0] / data['wx'] / data['wy']) ** 2
     int = np.abs(data['efields'][0]) ** 2
