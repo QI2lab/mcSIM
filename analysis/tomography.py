@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, Normalize
 from matplotlib.patches import Circle, Arc
 from matplotlib.cm import ScalarMappable
+from scipy.interpolate import interpn
 import time
 import fit
 
@@ -128,7 +129,7 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dxy)), axis=(0, 2))
     fz = get_fz(fx, fy, ni, wavelength)
 
-    not_detectable = (fx**2 + fy**2) > na_det / wavelength
+    not_detectable = (fx**2 + fy**2) > (na_det / wavelength)**2
     fz[not_detectable] = np.nan
 
     # ##################################
@@ -139,11 +140,11 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     beta = np.max(theta)
 
     # maximum frequencies present in ODT
-    f_perp_max = (na_det + ni * np.sin(beta)) / wavelength
+    fxy_max = (na_det + ni * np.sin(beta)) / wavelength
     fz_max = ni / wavelength * np.max([1 - np.cos(alpha), 1 - np.cos(beta)])
 
     # generate realspace sampling from Nyquist sampling
-    dxy_sp = 0.5 * 1 / f_perp_max
+    dxy_sp = 0.5 * 1 / fxy_max
     dz_sp = dz_sampling_factor * 0.5 / fz_max
 
     x_fov = nx * dxy  # um
@@ -196,6 +197,7 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         Fy[freq_nan] = np.nan
 
         # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
+        # indices into the final scattering potential
         zind = (np.round(Fz / dfz_sp) + nz_sp // 2).astype(int)
         yind = (np.round(Fy / dfy_sp) + ny_sp // 2).astype(int)
         xind = (np.round(Fx / dfx_sp) + nx_sp // 2).astype(int)
@@ -211,14 +213,16 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         Fy_rytov = fy
         fx_rytov = Fx_rytov + np.expand_dims(beam_frqs[:, 0], axis=(1, 2))
         fy_rytov = Fy_rytov + np.expand_dims(beam_frqs[:, 1], axis=(1, 2))
-        with np.errstate(invalid="ignore"):
-            fz_rytov = np.sqrt((ni / wavelength)**2 - fx_rytov**2 - fy_rytov**2)
+        fz_rytov = get_fz(fx_rytov, fy_rytov, ni, wavelength)
+        # with np.errstate(invalid="ignore"):
+        #     fz_rytov = np.sqrt((ni / wavelength)**2 - fx_rytov**2 - fy_rytov**2)
         Fz_rytov = fz_rytov - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
 
         zind = (np.round(Fz_rytov / dfz_sp) + nz_sp // 2).astype(int)
         yind = (np.round(Fy_rytov / dfy_sp) + ny_sp // 2).astype(int)
         xind = (np.round(Fx_rytov / dfx_sp) + nx_sp // 2).astype(int)
 
+        # indices into the final scattering potential
         zind, yind, xind = np.broadcast_arrays(zind, yind, xind)
         zind = np.array(zind, copy=True)
         yind = np.array(yind, copy=True)
@@ -226,16 +230,56 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     else:
         raise ValueError("'mode' must be 'born' or 'rytov' but was '%s'" % mode)
 
-    # only use those within bounds. will have some negative because not checking against NA
+    # only use those within bounds
+    # when things work right, these should be the same for all images ... so maybe don't really need 3D array
+    # this is correct NA check for Born, but maybe not for Rytov approx?
     to_use_ind = np.logical_and.reduce((zind >= 0, zind < nz_sp,
                                         yind >= 0, yind < ny_sp,
-                                        xind >= 0, xind < nx_sp))
+                                        xind >= 0, xind < nx_sp,
+                                        np.logical_not(np.tile(not_detectable, [nimgs, 1, 1]))))
 
     # convert nD indices to 1D indices so can easily check if points are unique
     cind = -np.ones(zind.shape, dtype=int)
     cind[to_use_ind] = np.ravel_multi_index((zind[to_use_ind].astype(int).ravel(),
                                              yind[to_use_ind].astype(int).ravel(),
                                              xind[to_use_ind].astype(int).ravel()), (nz_sp, ny_sp, nx_sp))
+
+    # actually can do a little better than pixel rounding. Can interpolate to get appropriate fx, fy frequencies
+    # idea: Fx and Fy give the exact frequencies within the scattered field data, but once we find the corresponding
+    # pixel in the scaattering potential, there is a subpixel offset
+    # define Fx_on_pix and Fy_on_pix which give the exact frequencies in the scattering potential. Then we can
+    # interpolate the scattered field data to get this point.
+    # we still have some pixel error in Fz, and solving this would require interpolating among multiple angles
+    # which we don't want to do because then we are no longer working on a grid ...
+    Fx_on_pix = dfx_sp * (xind - nx_sp // 2)
+    Fy_on_pix = dfy_sp * (yind - ny_sp // 2)
+
+    use_interpolation = True
+    f_unshift_ft = np.zeros(efield_fts.shape, dtype=complex)
+    for ii in range(nimgs):
+        if use_interpolation:
+            # only interpolate at points we are going to use
+            interp_fcoords = np.stack((Fy_on_pix[ii, to_use_ind[ii]] + beam_frqs[ii, 1],
+                                       Fx_on_pix[ii, to_use_ind[ii]] + beam_frqs[ii, 0]), axis=1)
+
+            # also want corrected fz
+            fz_temp = get_fz(interp_fcoords[:, 1], interp_fcoords[:, 0], ni, wavelength)
+
+            # do interpolation
+            f_unshift_ft[ii, to_use_ind[ii]] = interpn((fy[0, :, 0], fx[0, 0, :]),
+                                                       efield_fts[ii],
+                                                       interp_fcoords,
+                                                       method="linear") * 2 * 1j * (2 * np.pi * fz_temp)
+        else:
+            # no interp mode
+            if mode == "born":
+                f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
+            elif mode == "rytov":
+                f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
+
+
+    if mode == "rytov":
+        raise NotImplementedError("need to fix this ...")
 
     # one reconstruction per image
     tstart = time.perf_counter()
@@ -247,10 +291,10 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         if ii == (nimgs - 1):
             print("")
 
-        if mode == "born":
-            f_unshift_ft = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
-        elif mode == "rytov":
-            f_unshift_ft = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
+        # if mode == "born":
+        #     f_unshift_ft = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
+        # elif mode == "rytov":
+        #     f_unshift_ft = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
 
         # check we don't have duplicate indices ... otherwise need to do something else ...
         cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
@@ -264,7 +308,8 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         # assuming at most one point for each ...
         inds_angle = (zind[ii][to_use_ind[ii]], yind[ii][to_use_ind[ii]], xind[ii][to_use_ind[ii]])
         # since using DFT's instead of FT's have to adjust the normalization. Recall that FT ~ DFT * dr1 * ... * drn
-        sp_ft_imgs[ii][inds_angle] = f_unshift_ft[to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
+        # sp_ft_imgs[ii][inds_angle] = f_unshift_ft[to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
+        sp_ft_imgs[ii][inds_angle] = f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
         num_pts[ii][inds_angle] = 1
 
     # average over angles/images
@@ -308,9 +353,13 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     sp_ft[no_data] = 0 #np.exp(1j * np.random.rand(*scattering_potential_ft[no_data].shape))
 
     # try smoothing image first ...
-    sp_ft = gaussian_filter(sp_ft, (2, 2, 2))
+    sp_ft = gaussian_filter(sp_ft, (4, 4, 4))
 
+    tstart = time.perf_counter()
     for ii in range(n_iterations):
+        print("constraint iteration %d/%d, elapsed time = %0.2fs" % (ii + 1, n_iterations, time.perf_counter() - tstart), end="\r")
+        if ii == (n_iterations - 1):
+            print("")
         # ############################
         # ensure n is physical
         # ############################
@@ -470,26 +519,38 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
 
     # work with coordinates
     x_sp, y_sp, z_sp  = coords
+    nx_sp = len(x_sp)
+    ny_sp = len(y_sp)
     nz_sp = len(z_sp)
     dxy_sp = x_sp[1] - x_sp[0]
     dz_sp = z_sp[1] - z_sp[0]
+
+    fx = fft.fftshift(fft.fftfreq(nx_sp, dxy_sp))
+    dfx_sp = fx[1] - fx[0]
+    fy = fft.fftshift(fft.fftfreq(ny_sp, dxy_sp))
+    dfy_sp = fy[1] - fy[0]
 
     extent_sp_xy = [x_sp[0] - 0.5 * dxy_sp, x_sp[-1] + 0.5 * dxy_sp, y_sp[0] - 0.5 * dxy_sp, y_sp[-1] + 0.5 * dxy_sp]
     extent_sp_xz = [x_sp[0] - 0.5 * dxy_sp, x_sp[-1] + 0.5 * dxy_sp, z_sp[0] - 0.5 * dz_sp, z_sp[-1] + 0.5 * dz_sp]
     extent_sp_yz = [y_sp[0] - 0.5 * dxy_sp, y_sp[-1] + 0.5 * dxy_sp, z_sp[0] - 0.5 * dz_sp, z_sp[-1] + 0.5 * dz_sp]
 
+
+    extent_fxy = [fx[0] - 0.5 * dfx_sp, fx[-1] + 0.5 * dfx_sp, fy[0] - 0.5 * dfy_sp, fy[-1] + 0.5 * dfy_sp]
+
     # get need quantities
-    sp_ft = np.array(sp_ft, copy=True)
-    sp_ft[np.isnan(sp_ft)] = 0
-    sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft)))
+    sp_ft_nonan = np.array(sp_ft, copy=True)
+    sp_ft_nonan[np.isnan(sp_ft_nonan)] = 0
+    sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_nonan)))
 
     n_recon = get_n(sp, no, wavelength)
     n_recon_ft = fft.fftshift(fft.fftn(fft.ifftshift(n_recon)))
 
-    vmax_real = 1.5 * np.max(np.real(n_recon) - no)
-    vmax_imag = 1.5 * np.max(np.imag(n_recon))
-    vmax_n_ft = 1.5 * np.max(np.abs(n_recon_ft))
-    vmax_sp_ft = 1.5 * np.max(np.abs(sp_ft))
+    vmax_real = 1.5 * np.percentile((np.real(n_recon) - no), 99)
+    vmax_imag = 1.5 * np.percentile(np.imag(n_recon), 99)
+    vmax_n_ft = 1.5 * np.percentile(np.abs(n_recon_ft), 99)
+
+    not_nan = np.logical_not(np.isnan(sp_ft))
+    vmax_sp_ft = 1.5 * np.percentile(np.abs(sp_ft[not_nan]), 99)
 
     # plots
     fmt_fn = lambda x: "%0.6f" % x
@@ -518,7 +579,8 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
             ax.set_ylabel("imag(n)")
 
         ax = plt.subplot(grid[2, ii])
-        im = ax.imshow(np.abs(n_recon_ft[ii]), cmap="bone", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_n_ft), origin="lower")
+        im = ax.imshow(np.abs(n_recon_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_n_ft),
+                       origin="lower", extent=extent_fxy)
         im.format_cursor_data = fmt_fn
         ax.set_xticks([])
         ax.set_yticks([])
@@ -526,7 +588,8 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
             ax.set_ylabel("|n(f)|")
 
         ax = plt.subplot(grid[3, ii])
-        im = ax.imshow(np.abs(sp_ft[ii]), cmap="bone", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft), origin="lower")
+        im = ax.imshow(np.abs(sp_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft),
+                       origin="lower", extent=extent_fxy)
         im.format_cursor_data = fmt_fn
         if ii == 0:
             ax.set_ylabel("|F(f)|")
