@@ -4,15 +4,19 @@
 // (2) you have a conda python environment
 // (3) conda has been added to your windows PATH variable
 // (4) You have downloaded the Optotune python SDK, and it is on the PYTHONPATH for your conda environment
+// For more instruction on (4) see the python script
 
-String script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\setup_optotune_mre2.py";
-String conda_env_name = "ptbrownenv";
+// ideally would get directory this file is stored in, but was not able to make this work yet
+// path=pathToFile( getSourceFileInfo() ).getAbsolutePath();
+String root_path = "C:\\Users\\shepherd lab\\Documents\\mcsim_private\\mcSIM\\expt_ctrl";
+String script_path = root_path + "\\setup_optotune_mre2.py";
+String conda_env_name = "mcsim";
 
 // activate conda environment and run python script
 // for this to work, your conda directory must be included on your Windows PATH variable
 Runtime r = Runtime.getRuntime();
 Process p;
-p = r.exec("cmd /c conda activate " + conda_env_name + " & python C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\setup_optotune_mre2.py");
+p = r.exec("cmd /c conda activate " + conda_env_name + " & python \"" + script_path + "\"");
 
 // read results
 BufferedReader stdInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
