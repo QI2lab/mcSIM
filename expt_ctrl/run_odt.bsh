@@ -1,8 +1,13 @@
 import org.micromanager.internal.hcwizard.MicroscopeModel;
 
-String conda_env_name = "sim";
-String script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\run_odt.py";
-String temp_cfg_file = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\temp_config.cfg";
+String conda_env_name = "mcsim";
+// ideally would get directory this file is stored in, but was not able to make this work yet
+// path=pathToFile( getSourceFileInfo() ).getAbsolutePath();
+String root_path = "C:\\Users\\shepherd lab\\Documents\\mcsim_private\\mcSIM\\expt_ctrl";
+String script_path = root_path + "\\run_odt.py";
+String temp_cfg_file = root_path + "\\temp_config.cfg";
+//String script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\run_odt.py";
+//String temp_cfg_file = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\temp_config.cfg";
 
 cfg_file = mm.getSysConfigFile();
 //cfg = new ConfigWizard(mm, cfg_file);
@@ -32,7 +37,7 @@ if (true){
 	// run python
 	Runtime r = Runtime.getRuntime();
 	Process p;
-	p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + script_path);
+	p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + "\"" + script_path + "\"");
 	
 	BufferedReader stdInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
 	BufferedReader stdError = new BufferedReader(new InputStreamReader(p.getErrorStream()));

@@ -45,8 +45,8 @@ print("####################################");
 User settings
 *****************************/
 // DMD settings
-String dmd_script_path = "C:\\Users\\ptbrown2\\Desktop\\mcsim_private\\mcSIM\\expt_ctrl\\set_dmd_sim.py"; // python file to control DMD
-String conda_env_name = "ptbrownenv"; // conda environment used to run dmd_script_path
+String dmd_script_path = "C:\\Users\\shepherd lab\\Documents\\mcsim_private\\mcSIM\\expt_ctrl\\set_dmd_sim.py"; // python file to control DMD
+String conda_env_name = "mcsim"; // conda environment used to run dmd_script_path
 boolean program_dmd = true; // if true, program DMD using parameters set here
 String dmd_mode = "sim"; // set DMD mode "sim", "widefield", or "affine"
 boolean dark_patterns_between = true; // if running in normal SIM mode, add dark pattern in between SIM patterns to blank laser
@@ -455,14 +455,20 @@ mmc.setProperty(String.format("TriggerScope-TTL%02d", new Object[] {dmd_trig2_tt
 if(program_dmd){
 	print("setting DMD sequence from patterns stored in firmware");
 	
-	Runtime r = Runtime.getRuntime();
-	Process p;
+	String dmd_cmd = "";
+
 	if(dark_patterns_between){
-			p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + dmd_script_path + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " --blank" + " -m " + dmd_mode + " -wr " + n_sim_patterns);
+			//p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + "\"" + dmd_script_path +  "\"" + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " --blank" + " -m " + dmd_mode + " -wr " + n_sim_patterns);
+			dmd_cmd = "cmd /c conda activate " + conda_env_name + " & python " + "\"" +  dmd_script_path +  "\"" + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " --blank" + " -m " + dmd_mode + " -wr " + n_sim_patterns;
 	}
 	else {
-			p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + dmd_script_path + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " -m " + dmd_mode + " -wr " + n_sim_patterns);
+			//p = r.exec("cmd /c conda activate " + conda_env_name + " & python " + "\"" + dmd_script_path +  "\""  + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " -m " + dmd_mode + " -wr " + n_sim_patterns);
+			dmd_cmd = "cmd /c conda activate " + conda_env_name + " & python " + "\"" + dmd_script_path +  "\""  + " " + active_channels + " --triggered" + " -d " + n_dark_frames + " -m " + dmd_mode + " -wr " + n_sim_patterns;
 	}
+	
+	print(dmd_cmd);
+	Runtime r = Runtime.getRuntime();
+	Process p = r.exec(dmd_cmd);
 	
 	BufferedReader stdInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
 	BufferedReader stdError = new BufferedReader(new InputStreamReader(p.getErrorStream()));
