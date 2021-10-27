@@ -11,6 +11,7 @@ from matplotlib.cm import ScalarMappable
 from scipy.interpolate import interpn
 import time
 import fit
+import analysis_tools as tools
 
 def get_fz(fx, fy, ni, wavelength):
     """
@@ -418,6 +419,105 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     return sp_ft
 
 
+def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_scattered,
+                         beam_frq, frq_ref, fmax_int, fcoords, dxy, title=""):
+    """
+
+    @param img_int:
+    @param img_efield_ft:
+    @param img_efield_bg_ft:
+    @param img_efield_scattered:
+    @param beam_frq:
+    @param frq_ref:
+    @param fmax_int:
+    @param fcoords:
+    @param dxy:
+    @param title:
+    @return:
+    """
+
+
+    fy, fx = fcoords
+    dfy = fy[1] - fy[0]
+    dfx = fx[1] - fx[0]
+    extent_fxfy = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx, fy[0]- 0.5 * dfy, fy[-1] + 0.5 * dfy]
+
+    # intensity
+    img_int_ft = fft.fftshift(fft.ifft2(fft.ifftshift(img_int)))
+
+    # electric field
+    img_efield = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_ft)))
+    img_efield_shift_ft = tools.translate_ft(img_efield_ft, beam_frq[:2], dx=dxy)
+    img_efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_ft)))
+
+    # background electric field
+    img_efield_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_bg_ft)))
+    img_efield_shift_bg_ft = tools.translate_ft(img_efield_bg_ft, beam_frq[:2], dx=dxy)
+    img_efield_shift_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_bg_ft)))
+
+    # scattered electric field
+    img_efield_scatt_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_efield_scattered)))
+    img_efield_shift_scatt_ft = tools.translate_ft(img_efield_scatt_ft, beam_frq[:2], dx=dxy)
+    img_efield_shift_scatt = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_scatt_ft)))
+
+
+    figh = plt.figure(figsize=(18, 10))
+    plt.suptitle(title)
+    grid = plt.GridSpec(3, 7, hspace=0.5)
+
+    # first column: intensity
+    ax = plt.subplot(grid[0, 0])
+    ax.imshow(np.abs(img_int), cmap="bone")
+    ax.set_title("$|I(r)|$")
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax = plt.subplot(grid[2, 0])
+    ax.imshow(np.abs(img_int_ft), norm=PowerNorm(gamma=0.2), cmap="bone", extent=extent_fxfy, origin="lower")
+    ax.plot(frq_ref[0], frq_ref[1], 'rx')
+    ax.add_artist(Circle((0, 0), fmax_int, facecolor="none", edgecolor='r'))
+    ax.add_artist(Circle(frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
+    ax.add_artist(Circle(-frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
+    ax.add_artist(Circle(beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
+    ax.add_artist(Circle(-beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
+    plt.xlabel("$f_x$ (1 / $\mu m$)")
+    plt.ylabel("$f_y$ (1 / $\mu m$)")
+    plt.title("$|I(f)|$")
+
+    labels = ["E", "E_{shifted}", "E_{bg}", "E_{bg,shifted}", "E_{scatt}", "E_{scatt,shifted}"]
+    fields_r = [img_efield, img_efield_shift, img_efield_bg, img_efield_shift_bg,
+                img_efield_scattered, img_efield_shift_scatt]
+    fields_ft = [img_efield_ft, img_efield_shift_ft, img_efield_bg_ft, img_efield_shift_bg_ft,
+                 img_efield_scatt_ft, img_efield_shift_scatt_ft]
+    for ii in range(6):
+        d = labels[ii]
+
+        ax = plt.subplot(grid[0, ii + 1])
+        ax.imshow(np.abs(fields_r[ii]), cmap="bone")
+        ax.set_title("$|%s(r)|$" % d)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        ax = plt.subplot(grid[1, ii + 1])
+        ax.imshow(np.angle(fields_r[ii]), cmap="RdBu", vmin=-np.pi, vmax=np.pi)
+        ax.set_title("$ang[%s(r)]$" % d)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        ax = plt.subplot(grid[2, ii + 1])
+        ax.imshow(np.abs(fields_ft[ii]), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
+        ax.plot(0, 0, 'rx')
+        plt.xlabel("$f_x$ (1 / $\mu m$)")
+        # plt.ylabel("$f_y$ (1 / $\mu m$)")
+        ax.set_yticks([])
+        plt.title("$|%s(f)|$" % d)
+        ax.set_xlim([-0.5 * fmax_int, 0.5 * fmax_int])
+        ax.set_ylim([-0.5 * fmax_int, 0.5 * fmax_int])
+
+    return figh
+
+
+
 def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8)):
     """
     Illustrate the region of frequency space which is obtained using the plane waves described by frqs
@@ -506,6 +606,7 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
     ax.set_ylabel("$f_y$ (1/$\mu m$)")
 
     return figh
+
 
 def plot_n3d(sp_ft, no, wavelength, coords, title=""):
     """
