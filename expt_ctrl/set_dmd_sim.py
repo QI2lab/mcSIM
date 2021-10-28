@@ -59,7 +59,8 @@ if __name__ == "__main__":
     # todo: rename this something more sensible
     parser.add_argument("-wr", "--widefieldrepeats", type=int, default=nangles * nphases,
                         help="number of times to repeat widefield or affine patterns. This simulates the SIM sequence,"
-                             " replacing the angle/phase loop with repeats of the same pattern")
+                             " replacing the angle/phase loop with repeats of the same pattern. Note that this argument"
+                             " only has an effect if the mode is `widefield` or `affine`")
 
     parser.add_argument("-s", "--singlepattern", action="store_true",
                         help="Display a single pattern on the DMD. Only a single colors argument should be supplied."
@@ -96,7 +97,7 @@ if __name__ == "__main__":
         raise ValueError("mode value '%s' was not one of the allowed values." % args.mode[0])
 
     # parse color argument
-    color_arg_inds = np.zeros(len(args.colors), dtype=np.int)
+    color_arg_inds = np.zeros(len(args.colors), dtype=int)
     for ii, c in enumerate(args.colors):
         color_arg_inds[ii] = int([jj for jj, cc in enumerate(color_alises) if c in cc][0])
 
@@ -110,21 +111,21 @@ if __name__ == "__main__":
             current_bit_inds = np.concatenate([bit_inds[pi] for pi in color_arg_inds])
         else:
             # OFF frames before start of each color
-            current_pic_inds = [np.concatenate((np.array([off_pic_inds] * args.darkframes, dtype=np.int), pic_inds[pi])) if not inverted[pi] else
-                                               np.concatenate((np.array([on_pic_inds] * args.darkframes, dtype=np.int), pic_inds[pi]))
+            current_pic_inds = [np.concatenate((np.array([off_pic_inds] * args.darkframes, dtype=int), pic_inds[pi])) if not inverted[pi] else
+                                               np.concatenate((np.array([on_pic_inds] * args.darkframes, dtype=int), pic_inds[pi]))
                                                for pi in color_arg_inds]
 
-            current_bit_inds = [np.concatenate((np.array([off_bit_inds] * args.darkframes, dtype=np.int), bit_inds[pi])) if not inverted[pi] else
-                                               np.concatenate((np.array([on_bit_inds] * args.darkframes, dtype=np.int), bit_inds[pi]))
+            current_bit_inds = [np.concatenate((np.array([off_bit_inds] * args.darkframes, dtype=int), bit_inds[pi])) if not inverted[pi] else
+                                               np.concatenate((np.array([on_bit_inds] * args.darkframes, dtype=int), bit_inds[pi]))
                                                for pi in color_arg_inds]
 
             if args.blank:
                 # intersperse pattern frames with off frames
-                current_pic_inds = [np.concatenate((ps[:, None], np.array([off_pic_inds] * len(ps), dtype=np.int)[:, None]), axis=1).ravel() if not inverted[pi] else
-                                np.concatenate((ps[:, None], np.array([on_pic_inds] * len(ps), dtype=np.int)[:, None]), axis=1).ravel()
+                current_pic_inds = [np.concatenate((ps[:, None], np.array([off_pic_inds] * len(ps), dtype=int)[:, None]), axis=1).ravel() if not inverted[pi] else
+                                np.concatenate((ps[:, None], np.array([on_pic_inds] * len(ps), dtype=int)[:, None]), axis=1).ravel()
                                 for pi, ps in zip(inverted, current_pic_inds)]
-                current_bit_inds = [np.concatenate((ps[:, None], np.array([off_bit_inds] * len(ps), dtype=np.int)[:, None]), axis=1).ravel() if not inverted[pi] else
-                                np.concatenate((ps[:, None], np.array([on_bit_inds] * len(ps), dtype=np.int)[:, None]), axis=1).ravel()
+                current_bit_inds = [np.concatenate((ps[:, None], np.array([off_bit_inds] * len(ps), dtype=int)[:, None]), axis=1).ravel() if not inverted[pi] else
+                                np.concatenate((ps[:, None], np.array([on_bit_inds] * len(ps), dtype=int)[:, None]), axis=1).ravel()
                                 for pi, ps in enumerate(current_bit_inds)]
 
             current_pic_inds = list(np.concatenate(current_pic_inds))

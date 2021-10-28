@@ -11,11 +11,12 @@ import datetime
 import PyDAQmx as daq
 import ctypes as ct
 import numpy as np
+import pickle
 import matplotlib.pyplot as plt
-# import pycromanager as pm
 import pycromanager as pm
 import tifffile
-sys.path.append(r"C:\Users\ptbrown2\Desktop\mcsim_private\mcSIM\expt_ctrl")
+# todo: do I need this? If so should add relative path
+# sys.path.append(r"C:\Users\ptbrown2\Desktop\mcsim_private\mcSIM\expt_ctrl")
 import dlp6500
 
 
@@ -62,7 +63,8 @@ xx, yy = np.meshgrid(range(nx), range(ny))
 
 frq = np.array([0, 1/3])
 rad = 5
-pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1])), 12)
+phase = 0
+pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
 pattern_base[pattern_base <= 0] = 0
 pattern_base[pattern_base > 0] = 1
 pattern_base = 1 - pattern_base
@@ -99,8 +101,13 @@ yoffs = np.concatenate((np.array([0]), yoffs.ravel()))
 # offs = np.arange(-180, 181, 20)
 # offs = np.arange(-45, 46, 5)
 # offs = np.arange(-18, 19, 2)
+# offs = np.zeros(19)
 # xoffs, yoffs = np.meshgrid(offs, offs)
+
 npatterns = xoffs.size
+
+pattern_info = {"frquency": frq, "radius": rad, "cref": cref, "phase": phase, "dmd_size": dmd_size,
+                "xoffsets": xoffs, "yoffsets": yoffs, "npatterns": npatterns}
 
 print("generating patterns...")
 if True:
@@ -117,7 +124,7 @@ print("finished generating patterns, elapsed time %0.2fs" % (time.perf_counter()
 
 img_inds, bit_inds = dmd.upload_pattern_sequence(patterns, 105, 0, triggered=True, clear_pattern_after_trigger=False)
 # dmd.set_pattern_sequence(img_inds, bit_inds, 105, 0, triggered=True, clear_pattern_after_trigger=True)
-print("loaded %d patterns, elapsed tune %0.2fs" % (npatterns, time.perf_counter() - tstart))
+print("loaded %d patterns, elapsed time %0.2fs" % (npatterns, time.perf_counter() - tstart))
 
 # #########################
 # program digital output
@@ -128,7 +135,8 @@ DAQ_sample_rate_hz = 1 / dt
 
 n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
 
-exposure_time_est = 3e-3
+# exposure_time_est = 3e-3
+exposure_time_est = 2.8e-3
 # exposure_time_est = 3e-3
 min_frame_time = 3e-3
 
@@ -139,7 +147,7 @@ else:
     nsteps_exposure = int(np.ceil(min_frame_time / dt))
     exposure_time = exposure_time_est
 
-# add one extra time step for readout time
+# add extra time steps for readout time
 nsteps_pattern = nsteps_exposure + 3
 
 # add extra steps at start to turn on laser and DMD enable trigger and allow to stabilize
@@ -207,6 +215,7 @@ with pm.Bridge() as bridge:
     mmc.set_property(bfly, "Trigger Overlap", "ReadOut")
     # setup trigger out
     mmc.set_property(bfly, "Line Selector", "Line2")
+    # mmc.set_property(bfly, "Line Mode", "Output") # this throws error when call this script from beanshell script in script ...
 
     # pull save dir from MDA
     acq_settings = mm.get_acquisition_manager().get_acquisition_settings()
@@ -264,6 +273,7 @@ with pm.Bridge() as bridge:
             store.put_image(img.copy_with(img_coords, img_md))
             # store.put_image(img)
     except Exception as e:
+        print("error at image %d" % ii)
         print(e)
     finally:
         taskDO.WaitUntilTaskDone(5)
@@ -276,6 +286,13 @@ taskDO.StopTask()
 taskDO.ClearTask()
 
 print("acquisition complete, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
+
+# #########################
+# save pattern info
+# #########################
+pattern_log_fname = os.path.join(save_dir, "pattern_data.pkl")
+with open(pattern_log_fname, "wb") as f:
+    pickle.dump(pattern_info, f)
 
 # #########################
 # turn off lines at end
