@@ -440,7 +440,7 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
     fy, fx = fcoords
     dfy = fy[1] - fy[0]
     dfx = fx[1] - fx[0]
-    extent_fxfy = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx, fy[0]- 0.5 * dfy, fy[-1] + 0.5 * dfy]
+    extent_fxfy = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx, fy[0] - 0.5 * dfy, fy[-1] + 0.5 * dfy]
 
     # intensity
     img_int_ft = fft.fftshift(fft.ifft2(fft.ifftshift(img_int)))
@@ -467,7 +467,7 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
 
     # first column: intensity
     ax = plt.subplot(grid[0, 0])
-    ax.imshow(np.abs(img_int), cmap="bone")
+    ax.imshow(np.abs(img_int), cmap="bone", vmin=np.percentile(img_int, 1), vmax=np.percentile(img_int, 99.9))
     ax.set_title("$|I(r)|$")
     ax.set_xticks([])
     ax.set_yticks([])
@@ -487,13 +487,17 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
     labels = ["E", "E_{shifted}", "E_{bg}", "E_{bg,shifted}", "E_{scatt}", "E_{scatt,shifted}"]
     fields_r = [img_efield, img_efield_shift, img_efield_bg, img_efield_shift_bg,
                 img_efield_scattered, img_efield_shift_scatt]
+    vmin_e = np.percentile(np.abs(img_efield), 0.1)
+    vmax_e = np.percentile(np.abs(img_efield), 99.9)
+    vmin_r = [vmin_e, vmin_e, vmin_e, vmin_e, 0, 0]
+    vmax_r = [vmax_e, vmax_e, vmax_e, vmax_e, 1, 1]
     fields_ft = [img_efield_ft, img_efield_shift_ft, img_efield_bg_ft, img_efield_shift_bg_ft,
                  img_efield_scatt_ft, img_efield_shift_scatt_ft]
     for ii in range(6):
         d = labels[ii]
 
         ax = plt.subplot(grid[0, ii + 1])
-        ax.imshow(np.abs(fields_r[ii]), cmap="bone")
+        ax.imshow(np.abs(fields_r[ii]), cmap="bone", vmin=vmin_r[ii], vmax=vmax_r[ii])
         ax.set_title("$|%s(r)|$" % d)
         ax.set_xticks([])
         ax.set_yticks([])
