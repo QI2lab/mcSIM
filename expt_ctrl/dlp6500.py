@@ -830,7 +830,8 @@ class dlp6500():
     # trigger setup
     def set_trigger_out(self, trigger_number=1, invert=False, rising_edge_delay_us=0, falling_edge_delay_us=0):
         """
-        Set DMD output trigger delays and polarity.
+        Set DMD output trigger delays and polarity. Trigger 1 is the "advance frame" trigger and trigger 2 is the
+        "enable" trigger
         # todo: test this function
         :param trigger_number:
         :param invert:
@@ -865,7 +866,7 @@ class dlp6500():
 
     def get_trigger_in1(self):
         """
-        Query information about trigger 1
+        Query information about trigger 1 ("advance frame" trigger)
         :return delay_us:
         :return mode:
         """
@@ -879,7 +880,7 @@ class dlp6500():
 
     def set_trigger_in1(self, delay_us=105, edge_to_advance='rising'):
         """
-        Set delay and pattern advance edge for trigger input 1.
+        Set delay and pattern advance edge for trigger input 1 ("advance frame" trigger)
 
         Trigger input 1 is used to advance the pattern displayed on the DMD, provided trigger_in2 is in the appropriate state
 
@@ -905,7 +906,7 @@ class dlp6500():
 
     def get_trigger_in2(self):
         """
-        Query polarity of trigger in 2
+        Query polarity of trigger in 2 ("enable" trigger)
         :return:
         """
         buffer = self.send_command('r', True, 0x1A36, [])[0]
@@ -915,7 +916,7 @@ class dlp6500():
 
     def set_trigger_in2(self, edge_to_start='rising'):
         """
-        Set polarity to start/stop pattern on for input trigger 2.
+        Set polarity to start/stop pattern on for input trigger 2 ("enable" trigger)
 
         Trigger input 2 is used to start or stop the DMD pattern display.
         :param edge_to_start:
@@ -1017,7 +1018,7 @@ class dlp6500():
         :param wait_for_trigger:
         :param clear_pattern_after_trigger:
         :param bit_depth: 1, 2, 4, 8
-        :param disable_trig_2:
+        :param disable_trig_2: (disable "enable" trigger)
         :param stored_image_bit_index: index of the RGB image (in DMD memory) storing the given pattern
         this index tells which bit to look at in that image. This should be 0-23
         """
@@ -1235,8 +1236,8 @@ class dlp6500():
         # refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to which bit of that image (i.e.
         # in the RGB bytes, it is stored in.
         # todo: decide if is smaller to send compressed as 24 bit RGB or individual image...
-        stored_image_indices = np.zeros(npatterns, dtype=np.int)
-        stored_bit_indices = np.zeros(npatterns, dtype=np.int)
+        stored_image_indices = np.zeros(npatterns, dtype=int)
+        stored_bit_indices = np.zeros(npatterns, dtype=int)
         for ii, (p, et, dt) in enumerate(zip(patterns, exp_times, dark_times)):
             stored_image_indices[ii] = ii // 24
             stored_bit_indices[ii] = ii % 24
