@@ -1,5 +1,9 @@
 """
-Run this script from the command line with "python set_dmd_sim.py". Run "python set_dmd_sim.py -h" for help with parameters
+Python script which takes command line arguments to program the DMD pattern sequence from patterns previously loaded
+into DMD firmware. Firmware loading can be done using the Texas Instruments DLP6500 and DLP9000 GUI
+(https://www.ti.com/tool/DLPC900REF-SW)
+
+Run "python set_dmd_sim.py -h" on the commandline for a detailed description of command options
 """
 
 import os
@@ -10,12 +14,16 @@ import argparse
 # directory where DMD module is found, relative to this file
 instrument_dir = ''
 
-# on and off pattern positions in memory
+# #######################
+# information about which patterns are stored in the firmware
+# #######################
+# all "on" and all "off" patterns positions in DMD firmware
 on_pic_inds = 1
 on_bit_inds = 3
 off_pic_inds = 1
 off_bit_inds = 4
 
+# affine calibration patterns position in firmware
 affine_on_pic_inds = 1
 affine_on_bit_inds = 5
 affine_off_pic_inds = 1
@@ -40,7 +48,9 @@ bit_inds_sim = [np.array(list(range(9))),
 
 if __name__ == "__main__":
 
+    # #######################
     # define arguments
+    # #######################
     parser = argparse.ArgumentParser(description="Set DMD pattern sequence from the command line.")
     parser.add_argument("colors", type=str, nargs="+", choices=[c for alias in color_alises for c in alias],
                         help="supply the colors to be used in this acquisition as strings separated by spaces")
@@ -79,8 +89,11 @@ if __name__ == "__main__":
     if args.singlepattern and (args.angle is None or args.phase is None):
         parser.error("--singlepattern was passed, but either --angle or --phase was not passed.")
 
+
+    # #######################
     # pattern picture/bit indices
     # list where each element is an array giving the picture/bit indices for all images for SIM imaging with that color
+    # #######################
     if args.mode[0] == "widefield":
         # widefield
         # pic_inds = [np.atleast_1d(off_pic_inds) if inv else np.atleast_1d(on_pic_inds) for inv in inverted]
@@ -96,12 +109,16 @@ if __name__ == "__main__":
     else:
         raise ValueError("mode value '%s' was not one of the allowed values." % args.mode[0])
 
+    # #######################
     # parse color argument
+    # #######################
     color_arg_inds = np.zeros(len(args.colors), dtype=int)
     for ii, c in enumerate(args.colors):
         color_arg_inds[ii] = int([jj for jj, cc in enumerate(color_alises) if c in cc][0])
 
+    # #######################
     # find patterns to set
+    # #######################
     if args.singlepattern:
         current_pic_inds = pic_inds[color_arg_inds[0]][nphases * args.angle + args.phase]
         current_bit_inds = bit_inds[color_arg_inds[0]][nphases * args.angle + args.phase]
@@ -154,9 +171,9 @@ if __name__ == "__main__":
     fdir = os.path.dirname(fpath)
     instrument_dir = os.path.join(fdir, instrument_dir)
     sys.path.append(instrument_dir)
+    import dlp6500
 
     # load DMD and set pattern
-    import dlp6500
     dmd = dlp6500.dlp6500win(debug=args.verbose)
 
     dmd.start_stop_sequence('stop')
