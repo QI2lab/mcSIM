@@ -105,6 +105,7 @@ def get_scattering_potential(n, no, wavelength):
     return sp
 
 
+# data processing
 def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
                    dxy_sampling_factor=1, mode="born"):
     """
@@ -410,6 +411,73 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     return sp_ft
 
 
+def fit_ref_frq(img, dxy, fmax_int, nbin=10):
+    """
+    Determine the hologram reference frequency from a single imaged, based on the regions in the hologram beyond the
+    maximum imaging frequency that ahve information. These are expected to be circles centered around the reference
+    frequency. Note: when the beam angle is non-zero, the dominant tomography frequency component will not be centered
+    on this circle, but will be at position f_ref - f_beam
+    @param img:
+    @param dxy:
+    @param fmax_int:
+    @param nbin:
+    @return results, circ_dbl_fn:
+    """
+    # fourier transforms
+    img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
+    # take average of absolute value. Don't want noisy areas to average to zero...
+    img_ft_bin = tools.bin(np.abs(img_ft), (nbin, nbin), mode="mean")
+
+    ny, nx = img_ft.shape
+
+    fxs = fft.fftshift(fft.fftfreq(nx, dxy))
+    fys = fft.fftshift(fft.fftfreq(ny, dxy))
+    fxfx, fyfy = np.meshgrid(fxs, fys)
+
+    # binned frequencies
+    fxfx_bin = tools.bin(fxfx, (nbin, nbin), mode="mean")
+    dfxb = fxfx[0, 1] - fxfx[0, 0]
+    fyfy_bin = tools.bin(fyfy, (nbin, nbin), mode="mean")
+    dfyb = fyfy[1, 0] - fyfy[0, 0]
+    ff_perp_bin = np.sqrt(fxfx_bin ** 2 + fyfy_bin ** 2)
+
+
+    # #########################
+    # find threshold using expected volume of area above threshold
+    # #########################
+    beyond_fmax = ff_perp_bin > fmax_int
+
+    frq_area = (fxfx[0, -1] - fxfx[0, 0]) * (fyfy[-1, 0] - fyfy[0, 0])
+    percentile = 2 * (np.pi * (0.5 * fmax_int)**2) / (frq_area - np.pi * fmax_int**2)
+    thresh = np.percentile(np.abs(img_ft_bin[beyond_fmax]), 100 * (1 - percentile))
+
+    img_ft_ref_mask = np.logical_and(np.abs(img_ft_bin) > thresh, ff_perp_bin > fmax_int)
+
+    # #########################
+    # define fitting function and get initial guesses
+    # #########################
+
+    def circ_dbl_fn(x, y, p):
+        p = np.array([p[0], p[1], p[2], 1, 0, np.sqrt(dfxb * dfyb)])
+        p2 = np.array(p, copy=True)
+        p2[0] *= -1
+        p2[1] *= -1
+        circd = fit.circle(x, y, p) + fit.circle(x, y, p2)
+        circd[circd > 1] = 1
+        return circd
+
+    # guess based on maximum pixel value. This actually gives f_ref - f_beam, but should be a close enough starting point
+    guess_ind_1d = np.argmax(np.abs(img_ft_bin) * (fyfy_bin <= 0) * (ff_perp_bin > fmax_int))
+    guess_ind = np.unravel_index(guess_ind_1d, img_ft_bin.shape)
+
+    # do fitting
+    init_params = [fxfx_bin[guess_ind], fyfy_bin[guess_ind], 0.5 * fmax_int]
+    results = fit.fit_model(img_ft_ref_mask, lambda p: circ_dbl_fn(fxfx_bin, fyfy_bin, p), init_params)
+
+    return results, circ_dbl_fn
+
+
+# plotting functions
 def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_scattered,
                          beam_frq, frq_ref, fmax_int, fcoords, dxy, title=""):
     """
