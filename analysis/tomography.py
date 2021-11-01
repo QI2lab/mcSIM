@@ -106,7 +106,7 @@ def get_scattering_potential(n, no, wavelength):
 
 
 def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
-                   mode="born"):
+                   dxy_sampling_factor=1, mode="born"):
     """
 
     @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used
@@ -130,9 +130,6 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dxy)), axis=(0, 2))
     fz = get_fz(fx, fy, ni, wavelength)
 
-    not_detectable = (fx**2 + fy**2) > (na_det / wavelength)**2
-    fz[not_detectable] = np.nan
-
     # ##################################
     # set sampling of 3D scattering potential
     # ##################################
@@ -144,8 +141,8 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     fxy_max = (na_det + ni * np.sin(beta)) / wavelength
     fz_max = ni / wavelength * np.max([1 - np.cos(alpha), 1 - np.cos(beta)])
 
-    # generate realspace sampling from Nyquist sampling
-    dxy_sp = 0.5 * 1 / fxy_max
+    # generate real-space sampling from Nyquist sampling
+    dxy_sp = dxy_sampling_factor * 0.5 * 1 / fxy_max
     dz_sp = dz_sampling_factor * 0.5 / fz_max
 
     x_fov = nx * dxy  # um
@@ -175,9 +172,8 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
 
     # ##################################
     # find indices in scattering potential per image
+    # use the notation Fx, Fy, Fz to give the frequencies in the 3D scattering potential
     # ##################################
-
-    # find indices into reconstruction from rounding
     if mode == "born":
         # ##################################
         # construct frequencies where we have data about the 3D scattering potentials
@@ -193,9 +189,9 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         Fy = np.array(Fy, copy=True)
         Fz = np.array(Fz, copy=True)
 
-        freq_nan = np.isnan(Fz)
-        Fx[freq_nan] = np.nan
-        Fy[freq_nan] = np.nan
+        # take care of frequencies which do not contain signal
+        not_detectable = (fx ** 2 + fy ** 2) > (na_det / wavelength) ** 2
+        not_detectable = np.tile(not_detectable, [nimgs, 1, 1])
 
         # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
         # indices into the final scattering potential
@@ -212,18 +208,21 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         # fz = Fz + n/lambda * nz
         Fx_rytov = fx
         Fy_rytov = fy
+
         fx_rytov = Fx_rytov + np.expand_dims(beam_frqs[:, 0], axis=(1, 2))
         fy_rytov = Fy_rytov + np.expand_dims(beam_frqs[:, 1], axis=(1, 2))
         fz_rytov = get_fz(fx_rytov, fy_rytov, ni, wavelength)
-        # with np.errstate(invalid="ignore"):
-        #     fz_rytov = np.sqrt((ni / wavelength)**2 - fx_rytov**2 - fy_rytov**2)
+
         Fz_rytov = fz_rytov - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
 
+        # take care of frequencies which do not contain signal
+        not_detectable = (fx_rytov ** 2 + fy_rytov ** 2) > (na_det / wavelength) ** 2
+
+        # indices into the final scattering potential
         zind = (np.round(Fz_rytov / dfz_sp) + nz_sp // 2).astype(int)
         yind = (np.round(Fy_rytov / dfy_sp) + ny_sp // 2).astype(int)
         xind = (np.round(Fx_rytov / dfx_sp) + nx_sp // 2).astype(int)
 
-        # indices into the final scattering potential
         zind, yind, xind = np.broadcast_arrays(zind, yind, xind)
         zind = np.array(zind, copy=True)
         yind = np.array(yind, copy=True)
@@ -237,7 +236,7 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     to_use_ind = np.logical_and.reduce((zind >= 0, zind < nz_sp,
                                         yind >= 0, yind < ny_sp,
                                         xind >= 0, xind < nx_sp,
-                                        np.logical_not(np.tile(not_detectable, [nimgs, 1, 1]))))
+                                        np.logical_not(not_detectable)))
 
     # convert nD indices to 1D indices so can easily check if points are unique
     cind = -np.ones(zind.shape, dtype=int)
@@ -279,23 +278,15 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
                 f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
 
 
-    if mode == "rytov":
-        raise NotImplementedError("need to fix this ...")
-
     # one reconstruction per image
     tstart = time.perf_counter()
 
-    sp_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
+    spot_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
     num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=int)
     for ii in range(nimgs):
         print("reconstructing angle %d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, time.perf_counter() - tstart), end="\r")
         if ii == (nimgs - 1):
             print("")
-
-        # if mode == "born":
-        #     f_unshift_ft = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
-        # elif mode == "rytov":
-        #     f_unshift_ft = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
 
         # check we don't have duplicate indices ... otherwise need to do something else ...
         cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
@@ -310,21 +301,21 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         inds_angle = (zind[ii][to_use_ind[ii]], yind[ii][to_use_ind[ii]], xind[ii][to_use_ind[ii]])
         # since using DFT's instead of FT's have to adjust the normalization. Recall that FT ~ DFT * dr1 * ... * drn
         # sp_ft_imgs[ii][inds_angle] = f_unshift_ft[to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
-        sp_ft_imgs[ii][inds_angle] = f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
+        spot_ft_imgs[ii][inds_angle] = f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
         num_pts[ii][inds_angle] = 1
 
     # average over angles/images
     num_pts_all = np.sum(num_pts, axis=0)
     no_data = num_pts_all == 0
 
-    sp_ft = np.nansum(sp_ft_imgs, axis=0) / (num_pts_all + reg)
-    sp_ft[no_data] = np.nan
+    spot_ft = np.nansum(spot_ft_imgs, axis=0) / (num_pts_all + reg)
+    spot_ft[no_data] = np.nan
 
-
+    # real space and fourier space coordinates
     fcoords = (fx_sp, fy_sp, fz_sp)
     coords = (x_sp, y_sp, z_sp)
 
-    return sp_ft, sp_ft_imgs, coords, fcoords
+    return spot_ft, spot_ft_imgs, coords, fcoords
 
 
 def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True):
@@ -422,6 +413,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
 def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_scattered,
                          beam_frq, frq_ref, fmax_int, fcoords, dxy, title=""):
     """
+    Plot diagnostic of ODT image and background image
 
     @param img_int:
     @param img_efield_ft:
@@ -433,7 +425,7 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
     @param fcoords:
     @param dxy:
     @param title:
-    @return:
+    @return figh:
     """
 
 
@@ -615,15 +607,15 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
 def plot_n3d(sp_ft, no, wavelength, coords, title=""):
     """
     Plot 3D index of refraction
-    @param sp_ft:
-    @param no:
+    @param sp_ft: 3D Fourier transform of scattering potential
+    @param no: background index of refraction
     @param wavelength:
-    @param coords:
+    @param coords: (x, y, z)
     @return:
     """
 
     # work with coordinates
-    x_sp, y_sp, z_sp  = coords
+    x_sp, y_sp, z_sp = coords
     nx_sp = len(x_sp)
     ny_sp = len(y_sp)
     nz_sp = len(z_sp)
