@@ -411,7 +411,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     return sp_ft
 
 
-def fit_ref_frq(img, dxy, fmax_int, nbin=10):
+def fit_ref_frq(img, dxy, fmax_int, nbin=1, search_rad_fraction=1):
     """
     Determine the hologram reference frequency from a single imaged, based on the regions in the hologram beyond the
     maximum imaging frequency that ahve information. These are expected to be circles centered around the reference
@@ -431,8 +431,12 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=10):
     ny, nx = img_ft.shape
 
     fxs = fft.fftshift(fft.fftfreq(nx, dxy))
+    dfx = fxs[1] - fxs[0]
     fys = fft.fftshift(fft.fftfreq(ny, dxy))
+    dfy = fys[1] - fys[0]
     fxfx, fyfy = np.meshgrid(fxs, fys)
+
+    extent_fxy = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx, fys[0] - 0.5 * dfy, fys[-1] + 0.5 * dfy]
 
     # binned frequencies
     fxfx_bin = tools.bin(fxfx, (nbin, nbin), mode="mean")
@@ -441,10 +445,12 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=10):
     dfyb = fyfy[1, 0] - fyfy[0, 0]
     ff_perp_bin = np.sqrt(fxfx_bin ** 2 + fyfy_bin ** 2)
 
+    extent_fxy_bin = [fxfx_bin[0, 1] - 0.5 * dfxb, fxfx_bin[0, -1] + 0.5 * dfxb, fyfy_bin[0, 0] - 0.5 * dfyb, fyfy_bin[-1, 0] + 0.5 * dfyb]
+
     # #########################
     # find threshold using expected volume of area above threshold
     # #########################
-    frad_search = 0.8 * fmax_int
+    frad_search = search_rad_fraction * fmax_int
     search_region = ff_perp_bin > frad_search
 
     frq_area = (fxfx[0, -1] - fxfx[0, 0]) * (fyfy[-1, 0] - fyfy[0, 0])
@@ -462,11 +468,8 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=10):
     thresh_ind = np.argmin(np.abs(percentiles - results_thresh["fit_params"][-1]))
     thresh = thresh_all[thresh_ind]
 
-    # figh = plt.figure()
-    # plt.plot(percentiles, thresh_all, 'rx')
-    # plt.plot(percentiles, fit.line_piecewise(percentiles, r["fit_params"]))
-
-    img_ft_ref_mask = np.logical_and(np.abs(img_ft_bin) > thresh, ff_perp_bin > fmax_int)
+    # masked image
+    img_ft_ref_mask = np.logical_and(np.abs(img_ft_bin) > thresh, ff_perp_bin > frad_search)
 
     # #########################
     # define fitting function and get initial guesses
@@ -489,6 +492,44 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=10):
     # init_params = [np.mean(fxfx_bin[img_ft_ref_mask]), np.mean(fyfy_bin[img_ft_ref_mask]), 0.5 * fmax_int]
     init_params = [fxfx_bin[guess_ind], fyfy_bin[guess_ind], 0.5 * fmax_int]
     results = fit.fit_model(img_ft_ref_mask, lambda p: circ_dbl_fn(fxfx_bin, fyfy_bin, p), init_params)
+
+    # #########################
+    # plot
+    # #########################
+    # figh = plt.figure(figsize=(16, 8))
+    # grid = plt.GridSpec(2, 3)
+    #
+    # fp_ref = results["fit_params"]
+    # ax = plt.subplot(grid[0, 0])
+    # ax.set_title("img ft")
+    # ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
+    # ax.plot(fp_ref[0], fp_ref[1], 'kx')
+    # ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+    # ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+    # ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+    # ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+    #
+    # ax = plt.subplot(grid[0, 1])
+    # ax.set_title("img ft binned")
+    # ax.imshow(np.abs(img_ft_bin), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy_bin, origin="lower")
+    # ax.plot(fp_ref[0], fp_ref[1], 'kx')
+    # ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+    # ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+    # ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+    # ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+    #
+    # ax = plt.subplot(grid[0, 2])
+    # ax.set_title("img ft binned mask")
+    # ax.imshow(img_ft_ref_mask, norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy_bin, origin="lower")
+    # ax.plot(fp_ref[0], fp_ref[1], 'kx')
+    # ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+    # ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+    # ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+    # ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+    #
+    # ax = plt.subplot(grid[1, 0])
+    # ax.plot(percentiles, thresh_all, 'rx')
+    # ax.plot(percentiles, fit.line_piecewise(percentiles, results_thresh["fit_params"]))
 
     return results, circ_dbl_fn
 
