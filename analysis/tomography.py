@@ -31,14 +31,16 @@ def get_fz(fx, fy, ni, wavelength):
 
 def get_angles(frqs, no, wavelength):
     """
-    Convert from frequency vectors to angle vectors
+    Convert from frequency vectors to angle vectors. Frequency vectors should be normalized to no / wavelength
     @param frqs:
     @param no:
     @param wavelength:
     @return:
     """
+    frqs = np.atleast_2d(frqs)
+
     with np.errstate(invalid="ignore"):
-        theta = np.arccos(np.dot(frqs, np.array([0, 0, 1])) / (no / wavelength))
+        theta = np.array(np.arccos(np.dot(frqs, np.array([0, 0, 1])) / (no / wavelength)))
         theta[np.isnan(theta)] = 0
         phi = np.angle(frqs[:, 0] + 1j * frqs[:, 1])
         phi[np.isnan(phi)] = 0
@@ -411,7 +413,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     return sp_ft
 
 
-def fit_ref_frq(img, dxy, fmax_int, nbin=1, search_rad_fraction=1):
+def fit_ref_frq(img, dxy, fmax_int, nbin=1, search_rad_fraction=1, npercentiles=50):
     """
     Determine the hologram reference frequency from a single imaged, based on the regions in the hologram beyond the
     maximum imaging frequency that ahve information. These are expected to be circles centered around the reference
@@ -458,7 +460,7 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=1, search_rad_fraction=1):
     # thresh = np.percentile(np.abs(img_ft_bin[search_region]), 100 * (1 - expected_area))
 
     # find thresholds for different percentiles and look or plateau like beahvior
-    percentiles = np.linspace(0, 99, 100)
+    percentiles = np.linspace(0, 99, npercentiles)
     thresh_all = np.percentile(np.abs(img_ft_bin[search_region]), percentiles)
 
     init_params_thresh = [0, thresh_all[0], (thresh_all[-1] - thresh_all[-2]) / (percentiles[-1] - percentiles[-2]),
@@ -530,6 +532,9 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=1, search_rad_fraction=1):
     # ax = plt.subplot(grid[1, 0])
     # ax.plot(percentiles, thresh_all, 'rx')
     # ax.plot(percentiles, fit.line_piecewise(percentiles, results_thresh["fit_params"]))
+    # ax.set_xlabel("percentile")
+    # ax.set_ylabel("threshold (counts)")
+    # ax.set_title('threshold = %.0f' % results_thresh["fit_params"][-1])
 
     return results, circ_dbl_fn
 
