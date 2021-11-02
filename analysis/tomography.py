@@ -441,15 +441,30 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=10):
     dfyb = fyfy[1, 0] - fyfy[0, 0]
     ff_perp_bin = np.sqrt(fxfx_bin ** 2 + fyfy_bin ** 2)
 
-
     # #########################
     # find threshold using expected volume of area above threshold
     # #########################
-    beyond_fmax = ff_perp_bin > fmax_int
+    frad_search = 0.8 * fmax_int
+    search_region = ff_perp_bin > frad_search
 
     frq_area = (fxfx[0, -1] - fxfx[0, 0]) * (fyfy[-1, 0] - fyfy[0, 0])
-    percentile = 2 * (np.pi * (0.5 * fmax_int)**2) / (frq_area - np.pi * fmax_int**2)
-    thresh = np.percentile(np.abs(img_ft_bin[beyond_fmax]), 100 * (1 - percentile))
+    expected_area = 2 * (np.pi * (0.5 * fmax_int)**2) / (frq_area - np.pi * frad_search**2)
+    # thresh = np.percentile(np.abs(img_ft_bin[search_region]), 100 * (1 - expected_area))
+
+    # find thresholds for different percentiles and look or plateau like beahvior
+    percentiles = np.linspace(0, 99, 100)
+    thresh_all = np.percentile(np.abs(img_ft_bin[search_region]), percentiles)
+
+    init_params_thresh = [0, thresh_all[0], (thresh_all[-1] - thresh_all[-2]) / (percentiles[-1] - percentiles[-2]),
+                          100 * (1 - expected_area)]
+    results_thresh = fit.fit_model(thresh_all, lambda p: fit.line_piecewise(percentiles, p), init_params_thresh)
+
+    thresh_ind = np.argmin(np.abs(percentiles - results_thresh["fit_params"][-1]))
+    thresh = thresh_all[thresh_ind]
+
+    # figh = plt.figure()
+    # plt.plot(percentiles, thresh_all, 'rx')
+    # plt.plot(percentiles, fit.line_piecewise(percentiles, r["fit_params"]))
 
     img_ft_ref_mask = np.logical_and(np.abs(img_ft_bin) > thresh, ff_perp_bin > fmax_int)
 
@@ -471,6 +486,7 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=10):
     guess_ind = np.unravel_index(guess_ind_1d, img_ft_bin.shape)
 
     # do fitting
+    # init_params = [np.mean(fxfx_bin[img_ft_ref_mask]), np.mean(fyfy_bin[img_ft_ref_mask]), 0.5 * fmax_int]
     init_params = [fxfx_bin[guess_ind], fyfy_bin[guess_ind], 0.5 * fmax_int]
     results = fit.fit_model(img_ft_ref_mask, lambda p: circ_dbl_fn(fxfx_bin, fyfy_bin, p), init_params)
 
