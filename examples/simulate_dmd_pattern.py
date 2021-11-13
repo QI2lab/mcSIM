@@ -9,7 +9,7 @@ import numpy as np
 import simulate_dmd as dmd
 
 wavelengths = [465e-9, 532e-9, 635e-9]
-colors = [[0, 1, 1], [0, 1, 0], [1, 0, 0]]
+colors = ["b", "g", "r"]
 
 tx_ins = -np.array([35]) * np.pi / 180
 ty_ins = np.array([30]) * np.pi / 180
@@ -38,6 +38,7 @@ period = 3 * np.sqrt(2)
 pattern = np.cos(2 * np.pi / period * (xx * np.cos(theta_pattern) + yy * np.sin(theta_pattern)))
 pattern[pattern <= 0] = 0
 pattern[pattern > 0] = 1
+# pattern[pattern == 0] = 1
 
 # sample 1D simulation
 data1d = dmd.simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tm_ins)

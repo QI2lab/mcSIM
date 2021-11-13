@@ -8,7 +8,7 @@ the table. The x+y direction is the vertical direction pointing away from the ta
 to the table.
 
 The input direction is parameterized by the unit vector a = (ax, ay, az), where we must have az < 0. Similarly
-the output direction is parameterzied by unit vector b = (bx, by, bz), where we must have bz > 0.
+the output direction is parameterized by unit vector b = (bx, by, bz), where we must have bz > 0.
 
 Sometimes we will also refer to an angular parameterization of the input/output directions. In this case, the angles
 are defined differently for the input and output.
