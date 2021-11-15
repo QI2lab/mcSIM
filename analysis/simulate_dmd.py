@@ -57,7 +57,7 @@ from matplotlib.patches import Circle
 
 # main simulation function and important auxiliary functions
 def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
-                 uvec_in, uvecs_out, zshifts=None):
+                 uvec_in, uvecs_out, zshifts=None, phase_errs=None, efield_profile=None):
     """
     Simulate plane wave diffracted from a digital mirror device (DMD) naively. In most cases this function is not
     the most efficient to use! When working with SIM patterns it is much more efficient to rely on the tools
@@ -95,6 +95,12 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
     if zshifts is None:
         zshifts = np.zeros(pattern.shape)
 
+    if phase_errs is None:
+        phase_errs = np.zeros(pattern.shape)
+
+    if efield_profile is None:
+        efield_profile = np.zeros(pattern.shape)
+
     ny, nx = pattern.shape
     mxmx, mymy = np.meshgrid(range(nx), range(ny))
 
@@ -104,8 +110,11 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
         amb = uvec_in.squeeze() - bvec
 
         # efield phase for each DMD pixel
-        phases = np.exp(1j * 2*np.pi / wavelength * (dx * mxmx * amb[0] + dy * mymy * amb[1] + zshifts * amb[2]))
-        diffraction_efield = np.sum(phases)
+        efield_per_mirror = np.exp(1j * 2*np.pi / wavelength * (dx * mxmx * amb[0] +
+                                                     dy * mymy * amb[1] +
+                                                     zshifts * amb[2]) +
+                        1j * phase_errs) * efield_profile
+        diffraction_efield = np.sum(efield_per_mirror)
 
         # get envelope functions for ON and OFF states
         sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, amb)
@@ -115,7 +124,7 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
         mask_phases = np.zeros((ny, nx), dtype=complex)
         mask_phases[pattern == 0] = sinc_efield_off
         mask_phases[pattern == 1] = sinc_efield_on
-        mask_phases = mask_phases * phases
+        mask_phases = mask_phases * efield_per_mirror
 
         efields = np.sum(mask_phases)
 
@@ -451,6 +460,13 @@ def uvector2txty(vx, vy, vz):
 
 
 def uvector2tmtp(vx, vy, vz):
+    """
+    Convert unit vector to angle projections along ep and em
+    @param vx:
+    @param vy:
+    @param vz:
+    @return tp, tm:
+    """
     tx, ty = uvector2txty(vx, vy, vz)
     tp, tm = angle2pm(tx, ty)
     return tp, tm
@@ -501,7 +517,7 @@ def get_unit_vector(tx, ty, mode='in'):
 
 
 # diffraction directions for different pattern frequencies
-def freq2uvec(uvec_out_dc, fx, fy, wavelength, dx, dy):
+def dmd_frq2uvec(uvec_out_dc, fx, fy, wavelength, dx, dy):
     """
     Determine the output diffraction vector b(f) given the output vector b(0) and the
     spatial frequency f = [fx, fy] in 1/mirrors.
@@ -521,7 +537,7 @@ def freq2uvec(uvec_out_dc, fx, fy, wavelength, dx, dy):
     return bfx, bfy, bfz
 
 
-def uvec2freq(uvec_out_dc, uvec_f, wavelength, dx, dy):
+def uvec2dmd_frq(uvec_out_dc, uvec_f, wavelength, dx, dy):
     """
     Inverse function of freq2uvec
 
@@ -537,7 +553,7 @@ def uvec2freq(uvec_out_dc, uvec_f, wavelength, dx, dy):
     return fx, fy
 
 
-# Fourier plane mapping
+# Mapping from DMD coordinates to optical axis coordinates
 def get_fourier_plane_basis(optical_axis_uvec):
     """
     Get basis vectors which are orthogonal to a given optical axis. This is useful when
@@ -557,36 +573,12 @@ def get_fourier_plane_basis(optical_axis_uvec):
     return xb, yb
 
 
-def dmd_frqs2axis_frqs(fx, fy, bvec, optical_axis_vec, dx, dy, wavelength):
+def dmd_frq2opt_axis_uvec(fx, fy, bvec, opt_axis_vec, dx, dy, wavelength):
     """
-    Given a set of DMD frequencies, determine what effective frequencies the diffracted orders travel along
-    relative to the optical axis
-    @param fx: 1/mirrors
-    @param fy: 1/mirrors
-    @param bvec:
-    @param optical_axis_vec:
-    @param dx:
-    @param dy:
-    @param wavelength:
-    @return fxs_oaxis, fys_oaxis: in 1/distance units. Where dx, dy, and wavelength are in distance units
-    """
-    bf_xp, bf_yp, bf_zp = dmd_frqs2fourier_plane(fx, fy, bvec, optical_axis_vec, dx, dy, wavelength)
-    fxs_oaxis = bf_xp / wavelength
-    fys_oaxis = bf_yp / wavelength
-
-    return fxs_oaxis, fys_oaxis
-
-
-def dmd_frqs2fourier_plane(fx, fy, bvec, opt_axis_vec, dx, dy, wavelength):
-    """
-    todo: rename dmd_frqs2optical_axis_angles()
-
-    Convert from DMD pattern frequencies to (dimensionless) Fourier plane coordinates. These are dimensionless
-    in the sense that they must be multiplied by the lens focal length (and index of refraction)
-    to give the actual Fourier plane coordinates.
-
-    This is useful when we suppose that a lens has been placed one focal length after the DMD and we are interested
-    in computing the optical field in the back focal plane of the lens (i.e. the Fourier plane).
+    Convert from DMD pattern frequencies to unit vectors about the optical axis. This can be easily converted to
+    either spatial frequencies or positions in the Fourier plane.
+    fx = b_xp / wavelength
+    x_fourier_plane = b_xp * focal_len
 
     :param fx: 1/mirror
     :param fy: 1/mirror
@@ -611,9 +603,9 @@ def dmd_frqs2fourier_plane(fx, fy, bvec, opt_axis_vec, dx, dy, wavelength):
     fx = np.atleast_1d(fx)
     fy = np.atleast_1d(fy)
 
-    bf_xs, bf_ys, bf_zs = freq2uvec(bvec, fx, fy, wavelength, dx, dy)
+    bf_xs, bf_ys, bf_zs = dmd_frq2uvec(bvec, fx, fy, wavelength, dx, dy)
 
-    # pupil basis
+    # optical axis basis
     xp, yp = get_fourier_plane_basis(opt_axis_vec)
 
     # convert bfs to pupil coordinates
@@ -632,6 +624,53 @@ def dmd_frqs2fourier_plane(fx, fy, bvec, opt_axis_vec, dx, dy, wavelength):
 
     return bf_xp, bf_yp, bf_zp
 
+
+def dmd_uvec2opt_axis_uvec(dmd_uvecs, opt_axis_vec):
+    """
+    Convert unit vectors expressed relative to the dmd coordinate system
+    dmd_uvecs = bx * ex + by * ey + bz * ez
+    to expression relative to the optical axis coordinate system
+    opt_axis_uvecs = bxp * exp + byp * eyp + bzp * ezp
+
+    @param dmd_uvecs:
+    @param opt_axis_vec:
+    @return:
+    """
+    # optical axis basis
+    xp, yp = get_fourier_plane_basis(opt_axis_vec)
+
+    # convert bfs to pupil coordinates
+    bf_xs = dmd_uvecs[..., 0]
+    bf_ys = dmd_uvecs[..., 1]
+    bf_zs = dmd_uvecs[..., 2]
+    # bf_xp = b(f) \dot x_p = bx * x \dot x_p + by * y \dot y_p + bz * z \dot z_p
+    bf_xp = bf_xs * xp[0] + bf_ys * xp[1] + bf_zs * xp[2]
+    bf_yp = bf_xs * yp[0] + bf_ys * yp[1] + bf_zs * yp[2]
+    bf_zp = bf_xs * opt_axis_vec[0] + bf_ys * opt_axis_vec[1] + bf_zs * opt_axis_vec[2]
+
+    return bf_xp, bf_yp, bf_zp
+
+
+def opt_axis_uvec2dmd_uvec(opt_axis_uvecs, opt_axis_vec):
+    """
+    Convert unit vectors expressed relative to the optical axis coordinate system,
+    opt_axis_uvecs = bxp * exp + byp * eyp + bzp * ezp
+    to expression relative to the DMD coordinate system
+    dmd_uvecs = bx * ex + by * ey + bz * ez
+
+    @param opt_axis_uvecs: (bxp, byp, bzp)
+    @param opt_axis_vec: (ox, oy, oz)
+    @return bx, by, bz:
+    """
+    # optical axis basis
+    xp, yp = get_fourier_plane_basis(opt_axis_vec)
+
+    # opt_axis_uvecs = (x_oa, y_oa, z_oa)
+    bx = opt_axis_uvecs[..., 0] * xp[0] + opt_axis_uvecs[..., 1] * yp[0] + opt_axis_uvecs[..., 2] * opt_axis_vec[0]
+    by = opt_axis_uvecs[..., 0] * xp[1] + opt_axis_uvecs[..., 1] * yp[1] + opt_axis_uvecs[..., 2] * opt_axis_vec[1]
+    bz = opt_axis_uvecs[..., 0] * xp[2] + opt_axis_uvecs[..., 1] * yp[2] + opt_axis_uvecs[..., 2] * opt_axis_vec[2]
+
+    return bx, by, bz
 
 # #####################
 # functions for solving blaze + diffraction conditions
@@ -1330,19 +1369,19 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
 
             # get fourier plane positions for intensity output angles
             opt_axis = uvecs_out_diff[kk][input_ind][diff_2d_ind]
-            fx, fy = uvec2freq(opt_axis, uvecs_out[input_ind], wavelengths[kk], dx, dy)
-            xf, yf, _ = dmd_frqs2fourier_plane(fx, fy, opt_axis, opt_axis, dx, dy, wavelengths[kk])
+            fx, fy = uvec2dmd_frq(opt_axis, uvecs_out[input_ind], wavelengths[kk], dx, dy)
+            xf, yf, _ = dmd_frq2opt_axis_uvec(fx, fy, opt_axis, opt_axis, dx, dy, wavelengths[kk])
 
             # get fourier plane positions for blaze conditions
-            fx_blaze_on, fy_blaze_on = uvec2freq(opt_axis, uvecs_out_blaze_on[input_ind], wavelengths[kk], dx, dy)
-            xf_blaze_on, yf_blaze_on, _ = dmd_frqs2fourier_plane(fx_blaze_on, fy_blaze_on, opt_axis, opt_axis, dx, dy, wavelengths[kk])
+            fx_blaze_on, fy_blaze_on = uvec2dmd_frq(opt_axis, uvecs_out_blaze_on[input_ind], wavelengths[kk], dx, dy)
+            xf_blaze_on, yf_blaze_on, _ = dmd_frq2opt_axis_uvec(fx_blaze_on, fy_blaze_on, opt_axis, opt_axis, dx, dy, wavelengths[kk])
 
-            fx_blaze_off, fy_blaze_off = uvec2freq(opt_axis, uvecs_out_blaze_off[input_ind], wavelengths[kk], dx, dy)
-            xf_blaze_off, yf_blaze_off, _ = dmd_frqs2fourier_plane(fx_blaze_off, fy_blaze_off, opt_axis, opt_axis, dx, dy, wavelengths[kk])
+            fx_blaze_off, fy_blaze_off = uvec2dmd_frq(opt_axis, uvecs_out_blaze_off[input_ind], wavelengths[kk], dx, dy)
+            xf_blaze_off, yf_blaze_off, _ = dmd_frq2opt_axis_uvec(fx_blaze_off, fy_blaze_off, opt_axis, opt_axis, dx, dy, wavelengths[kk])
 
             # get fourier plane positions for diffraction peaks
-            fx_diff, fy_diff = uvec2freq(opt_axis, uvecs_out_diff[kk][input_ind], wavelengths[kk], dx, dy)
-            xf_diff, yf_diff, _ = dmd_frqs2fourier_plane(fx_diff, fy_diff, opt_axis, opt_axis, dx, dy, wavelengths[kk])
+            fx_diff, fy_diff = uvec2dmd_frq(opt_axis, uvecs_out_diff[kk][input_ind], wavelengths[kk], dx, dy)
+            xf_diff, yf_diff, _ = dmd_frq2opt_axis_uvec(fx_diff, fy_diff, opt_axis, opt_axis, dx, dy, wavelengths[kk])
 
             fig = plt.figure(figsize=figsize)
             grid = plt.GridSpec(2, 3)

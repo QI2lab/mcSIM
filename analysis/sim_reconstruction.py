@@ -3240,7 +3240,7 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
                                       np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
 
             if not coherent_projection:
-                pattern = psf.blur_img_otf(pattern, otf)
+                pattern = psf.blur_img_otf(pattern, otf).real
 
             sim_imgs[ii, jj], snrs[ii, jj] = camera_noise.simulated_img(ground_truth * pattern, gains, offsets,
                                                                         readout_noise_sds, psf=psf_mat, **kwargs)
