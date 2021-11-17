@@ -36,10 +36,11 @@ gamma_off = -12 * np.pi/180
 tout_offsets = np.linspace(-10, 10, 4800) * np.pi / 180
 # colors
 # we want to use the solution near theta_in=43deg, theta_out=19deg, n=4 for 465nm, n=3 for 635nm
-wlens = [0.465e-6, 0.635e-6, 0.532e-6, 0.785e-6, 0.980e-6]
-diff_orders = [-4, -3, 4, 3, -2]
-inverted = [False, False, True, True, False]
-display_colors = ['b', 'r', 'g', 'y', 'k']
+wlens = [0.465e-6, 0.635e-6, 0.532e-6, 0.785e-6]
+# diff_orders = [-4, -3, 4, 3, -2]
+diff_orders = [4, 3, -4, -3, 2]
+inverted = [False, False, True, True]
+display_colors = ['b', 'r', 'g', 'k']
 #base_period = np.sqrt(2) * 3
 base_period = 5
 periods = np.zeros(len(wlens))
@@ -73,12 +74,11 @@ for ii in range(len(wlens)):
 
         tx_out, ty_out = sdmd.uvector2txty(*uvec_out)
         tp_out, tm_out = sdmd.angle2pm(tx_out, ty_out)
-        tout_exact = tm_out
         uvec_out_pm = np.array(sdmd.xyz2mpz(*uvec_out))
 
         print("output angle, determined from %0.0fnm, order %d" % (wlens[ii] * 1e9, diff_orders[ii]))
         print("output angle (tx, ty) = (%0.2f, %0.2f)deg" % (tx_out * 180/np.pi, ty_out * 180/np.pi))
-        print("output angle (tm, tp) = (%0.2f, %0.2f)deg" % (tout_exact * 180/np.pi, 0))
+        print("output angle (tm, tp) = (%0.2f, %0.2f)deg" % (tm_out * 180/np.pi, tp_out))
         print("(bx, by, bz) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_out.squeeze()))
         print("(bm, bp, bz) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_out_pm))
 
@@ -115,8 +115,14 @@ for ii in range(len(wlens)):
 
 # sample 1D simulation
 figh = plt.figure(figsize=(16, 8))
-plt.suptitle("output angle = %0.2f deg\nunit vector (bx, by, bz) = (%0.4f, %0.4f, %0.4f)" %
-             (tout_exact * 180/np.pi, uvec_out[0], uvec_out[1], uvec_out[2]))
+str = r"Diffraction orders and blaze envelopes for beams diffracted along the $e_- = \frac{x - y}{\sqrt{2}}$ direction" + \
+      "\noutput angle, " + r"($\theta_-$, $\theta_+$)" + " = (%0.2f, %0.2f) deg; " + \
+      r"($\theta_x$, $\theta_y$) deg" + " = (%0.2f, %0.2f)\n" + \
+      "output unit vector (bx, by, bz) = (%0.4f, %0.4f, %0.4f)"
+plt.suptitle(str %
+             (tm_out * 180/np.pi, tp_out * 180/np.pi,
+              tx_out * 180/np.pi, ty_out * 180/np.pi,
+              uvec_out[0], uvec_out[1], uvec_out[2]))
 
 leg = []
 hs = []
@@ -128,14 +134,18 @@ for ii in range(len(wlens)):
     sinc_off = np.abs(data['sinc_efield_off'][0] / data['wx'] / data['wy']) ** 2
     int = np.abs(data['efields'][0]) ** 2
 
-    peak_angle = tout_exact + wlens[0] / (dx * base_period)
+    peak_angle = tm_out + wlens[0] / (dx * base_period)
     ind = np.argmin(np.abs(peak_angle - tout))
     int_check = np.array(int, copy=True)
     int_check[np.arange(int.size) < (ind - 10)] = 0
     imax = np.argmax(int_check)
     int = int / int[imax] * sinc[imax]
 
-    h, = plt.plot(tout * 180/np.pi, int, color=display_colors[ii])
+    label = ("%.0fnm, (nx, ny) = (%d, %d); " + r"$\theta_-$" + " = %0.2fdeg" + "\na=(%0.3f, %0.3f, %0.3f)") % \
+            (wlens[ii]*1e9, diff_orders[ii], -diff_orders[ii], tins_exact[ii] * 180/np.pi,
+             uvecs_in_exact[ii][0], uvecs_in_exact[ii][1], uvecs_in_exact[ii][2])
+
+    h, = plt.plot(tout * 180/np.pi, int, color=display_colors[ii], label=label)
     hs.append(h)
     h, = plt.plot(tout * 180/np.pi, sinc, color=display_colors[ii])
     hs.append(h)
@@ -143,12 +153,13 @@ for ii in range(len(wlens)):
     plt.ylim([-0.05, 1.1])
 
 
-    leg += ['%.0f order, tin = %0.2fdeg' % (wlens[ii]*1e9, tins_exact[ii] * 180/np.pi), '%.0f sinc envelope' % (wlens[ii]*1e9)]
+    # leg += [("%.0fnm, (nx, ny) = (%d, %d); " + r"$\theta_-$" + " = %0.2fdeg") %
+    #         (wlens[ii]*1e9, diff_orders[ii], -diff_orders[ii], tins_exact[ii] * 180/np.pi),
+    #         "sinc envelope"]
 
 # plt.xlim([12, 28])
-plt.xlim([tout_exact * 180/np.pi - 10, tout_exact * 180/np.pi + 10])
-plt.legend(hs, leg)
-plt.xlabel('Output angle in x-y plane (degrees)')
-plt.ylabel('intensity (arb)')
-
-
+plt.xlim([tm_out * 180/np.pi - 10, tm_out * 180/np.pi + 10])
+# plt.legend(hs, leg)
+plt.legend()
+plt.xlabel(r"$\theta_-$ (degrees)")
+plt.ylabel("intensity (arb)")

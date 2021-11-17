@@ -22,8 +22,9 @@ nangles = 3000 # must be even
 npts = 2 * nangles
 
 # diffraction orders
-nmin_all = int(np.ceil(-np.sqrt(2) * np.sin(gamma) / np.max(wavelengths) * d))
-nmax_all = int(np.floor(np.sqrt(2) * np.sin(gamma) / np.min(wavelengths) * d))
+nlims = np.array([simulate_dmd.get_diffraction_order_limits(wl, d, gamma) for wl in wavelengths])
+nmax_all = nlims.max()
+nmin_all = nlims.min()
 ns_all = range(nmin_all, nmax_all + 1)
 
 # #########################################

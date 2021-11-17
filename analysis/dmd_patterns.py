@@ -954,8 +954,9 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
                 uvec_in = simulate_dmd.get_unit_vector(tin_x, tin_y, "in")
                 uvec_out = simulate_dmd.get_unit_vector(tout_x + wavelength * vecs[ii, jj][0] / dx,
                                                         tout_y + wavelength * vecs[ii, jj][1] / dy, "out")
-                amb = uvec_in - uvec_out
-                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, amb)
+                # amb = uvec_in - uvec_out
+                bma = uvec_out - uvec_in
+                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, bma)
 
                 efield_fc[ii, jj] = efield_fc[ii, jj] * blaze_envelope[ii, jj]
     # for ii, n in enumerate(ns):
@@ -1097,8 +1098,9 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
                 uvec_in = simulate_dmd.get_unit_vector(tin_x, tin_y, "in")
                 uvec_out = simulate_dmd.get_unit_vector(tout_x + wavelength * vecs[ii, jj][0] / dx,
                                                         tout_y + wavelength * vecs[ii, jj][1] / dy, "out")
-                amb = uvec_in - uvec_out
-                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, amb)
+                # amb = uvec_in - uvec_out
+                bma = uvec_out - uvec_in
+                blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, bma)
 
                 efield_fc_xformed[ii, jj] = efield_fc_xformed[ii, jj] * blaze_envelope[ii, jj]
 
