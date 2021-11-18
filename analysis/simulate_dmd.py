@@ -105,31 +105,37 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
 
     ny, nx = pattern.shape
     mxmx, mymy = np.meshgrid(range(nx), range(ny))
+    mxmx = fft.fftshift(mxmx)
+    mymy = fft.fftshift(mymy)
+
+    # center correctly
+    mxmx[:, :nx//2] -= nx
+    mymy[:ny//2, :] -= ny
 
     # function to do computation for each output unit vector
     def calc_output_angle(bvec):
         # incoming minus outgoing unit vectors
         bma = bvec - uvec_in.squeeze()
-        # amb = uvec_in.squeeze() - bvec
 
         # efield phase for each DMD pixel
-        efield_per_mirror = np.exp(-1j * 2*np.pi / wavelength * (dx * mxmx * bma[0] +
-                                                     dy * mymy * bma[1] +
-                                                     zshifts * bma[2]) +
-                        1j * phase_errs) * efield_profile
+        efield_per_mirror = efield_profile * \
+                            np.exp(-1j * 2*np.pi / wavelength * (dx * mxmx * bma[0] +
+                                                                 dy * mymy * bma[1] +
+                                                                 zshifts * bma[2]) +
+                                   1j * phase_errs)
         diffraction_efield = np.sum(efield_per_mirror)
 
-        # get envelope functions for ON and OFF states
+        # get envelope functions for "on" and "off" states
         sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, bma)
         sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, bma)
 
         # multiply by blaze envelope to get full efield
-        mask_phases = np.zeros((ny, nx), dtype=complex)
-        mask_phases[pattern == 0] = sinc_efield_off
-        mask_phases[pattern == 1] = sinc_efield_on
-        mask_phases = mask_phases * efield_per_mirror
+        envelopes = np.zeros((ny, nx), dtype=complex)
+        envelopes[pattern == 0] = sinc_efield_off
+        envelopes[pattern == 1] = sinc_efield_on
 
-        efields = np.sum(mask_phases)
+        # final summation
+        efields = np.sum(envelopes * efield_per_mirror)
 
         return efields, sinc_efield_on, sinc_efield_off, diffraction_efield
 
@@ -192,6 +198,11 @@ def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, d
     sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, bma)
     sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, bma)
 
+    # unlike most cases, we want the DMD origin at the lower left corner (not in the center). So we omit the ifftshift
+    # pattern_dft = fft.fftshift(fft.fft2(pattern * efield_profile))
+    # pattern_complement_dft = fft.fftshift(fft.fft2((1 - pattern) * efield_profile))
+
+    # actually decided it was better to use convention with center as zero
     pattern_dft = fft.fftshift(fft.fft2(fft.ifftshift(pattern * efield_profile)))
     pattern_complement_dft = fft.fftshift(fft.fft2(fft.ifftshift((1 - pattern) * efield_profile)))
 
@@ -239,7 +250,12 @@ def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_of
 
     def dft_interp_1d(d, v, n, frqs):
         arg = frqs - d / wavelength * v
-        val = 1 / n * np.sin(np.pi * arg * n) / np.sin(np.pi * arg) * np.exp(np.pi * 1j * arg * (n - 1))
+        # val = 1 / n * np.sin(np.pi * arg * n) / np.sin(np.pi * arg) * np.exp(np.pi * 1j * arg * (n - 1))
+        if np.mod(n, 2) == 1:
+            val = 1 / n * np.sin(np.pi * arg * n) / np.sin(np.pi * arg)
+        else:
+            val = 1 / n * np.sin(np.pi * arg * n) / np.sin(np.pi * arg) * np.exp(-np.pi * 1j * arg)
+
         val[np.mod(np.round(arg, 14), 1) == 0] = 1
         return val
 
