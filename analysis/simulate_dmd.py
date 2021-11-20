@@ -553,6 +553,8 @@ def dmd_frq2uvec(uvec_out_dc, fx, fy, wavelength, dx, dy):
     @param dy: same units as wavelength
     @return bfx, bfy, bfz:
     """
+    uvec_out_dc = np.squeeze(uvec_out_dc)
+
     bfx = uvec_out_dc[0] + wavelength / dx * fx
     bfy = uvec_out_dc[1] + wavelength / dy * fy
     bfz = np.sqrt(1 - bfx**2 - bfy**2)
@@ -974,6 +976,116 @@ def solve_2color_on_off(d, gamma_on, wavelength_on, n_on, wavelength_off, n_off)
         a_vecs_off[ii] = mirror2xyz(a1_off, a2_off, a3_off, -gamma_on)
 
     return b_vecs, a_vecs_on, a_vecs_off
+
+
+def solve_blazed_frequency(dx, dy, gamma, wavelength, bf, order):
+    """
+    Suppose we choose a desired output direction from the DMD and an order and wavelength of interest and we
+    would like to align the diffracted order b(f) with this direction and stipulate that this direction satisfies
+    the blaze condition. Then determine the frequency f which allows this to be satisfied (and therefore also
+    the input direction a and output direction b(0) for the main grid diffraction order)
+
+    @param float dx:
+    @param float dy:
+    @param float gamma:
+    @param wavelength:
+    @param bf: unit vector pointing along direction
+    @param order: (nx, ny)
+    @return f, bvec, avec:
+    """
+
+    # get input vectors and output vectors for main order
+    avec = solve_blaze_input(bf, gamma)
+    bvec = solve_diffraction_output(avec, dx, dy, wavelength, order)
+
+    f = np.stack((dx / wavelength * (bf[..., 0] - bvec[..., 0]),
+                  dy / wavelength * (bf[..., 1] - bvec[..., 1])), axis=-1)
+
+    # unpack
+    # bfx = bf[..., 0]
+    # bfy = bf[..., 1]
+    # bfz = bf[..., 2]
+
+    # change basis
+    # bfm = np.sqrt(2) * (bfx - bfy)
+    # bfp = np.sqrt(2) * (bfx + bfy)
+
+    # solve for frequency vectors
+    # nx, ny = order
+    # fp = (nx + ny) / np.sqrt(2)
+
+    # combining...
+    # 3 blaze condition equations
+    # b1(f) - a1 = 0
+    # b2(f) - a2 = 0
+    # b3(f) - a3 = 0
+    # 2 diffraction conditions
+    # (b2 - b2(f)) = wavelength / d / np.sqrt(2) * (nx + ny)
+    # (b1 - b1(f)) * cos(gamma) + (b3 + b3(f)) * sin(gamma) = wavelength / d / np.sqrt(2) * (nx - ny)
+    # 3 equations giving connection between b(f), b, and f
+    # b1(f) = b1 + wavelength/d*f1 + (bz - bz(f)) * sin(gamma)
+    # b2(f) = b2 + wavelength/d*f2
+    # b3(f) = b3 + wavelength/d*f3 - (bz - bz(f)) * cos(gamma)
+    # To solve these, we first replace the a's in the diffraction conditions with b(f)'s using the blaze conditions
+    # then we have
+    # b2 - b2(f) = wavelength / d / np.sqrt(2) * (nx + ny)
+    # (b1 - b1(f)) * cos(gamma) + (b3 + b3(f)) * sin(gamma) = wavelength / d / np.sqrt(2) * (nx - ny)
+    # next, insert the expressions for b1(f), b2(f), b3(f)
+    # finally, express all quantities in terms of bp, bm, fp, bm
+    # k = -wavelength / d / np.sqrt(2) * (nx - ny) + \
+    #     2 * bfm * np.sin(gamma) + \
+    #     2 * np.cos(gamma) * np.sin(gamma) * bfz
+    # k1 = np.sin(gamma)**2 - np.cos(gamma)**2 - 2 * np.sin(gamma)
+    # k2 = 2 * np.cos(gamma) * (np.sin(gamma) - 1)
+    # a = (wavelength / d)**2 * (k1**2 + k2**2)
+    # b = (wavelength / d) * (k1 * k - k2**2 * 2 * bfm)
+    # c = k**2 - k2**2 * (bfz**2 + 2 * (wavelength/d) * fp * bfp - (wavelength/d * fp)**2)
+    # # solve equation for f-minus
+    # fms = np.roots([a, b, c])
+
+    # # get f in ex, ey basis
+    # f = np.stack((fp + fms, fp - fms), axis=1) / np.sqrt(2)
+    #
+    # # check which f satisfies b(f)_{x,y} = b_{x,y} + wavelength/d * f_{x, y}
+    # bf_tests = np.stack(dmd_frq2uvec(bvec, f[..., 0], f[..., 1], wavelength, d, d), axis=-1)
+    #
+    # to_use = np.linalg.norm(bf_tests - bvec, axis=-1) < 1e-12
+    # if not np.any(to_use):
+    #     f = np.array([np.nan, np.nan])
+    # elif np.all(to_use):
+    #     f = f[0]
+    # else:
+    #     f = f[to_use]
+
+    return f, bvec, avec
+
+
+def solve_diffraction_output_frq(frq, uvec_out, dx, dy, wavelength, order):
+    """
+    Suppose we want to arrange things so the output vector b(frq) points along a specific direction.
+    Given that direction, solve for the required input angle and compute b(0).
+
+    @param frq:
+    @param uvec_out:
+    @param float dx:
+    @param float dy:
+    @param float wavelength:
+    @param (int, int) order: (nx, ny)
+    @return b_out, uvec_in:
+    """
+
+    # given frequency, solve for DC direction
+    bx_out = uvec_out[..., 0] - wavelength / dx * frq[..., 0]
+    by_out = uvec_out[..., 1] - wavelength / dy * frq[..., 1]
+    bz_out = np.sqrt(1 - bx_out ** 2 - by_out ** 2)
+    b_out = np.stack((bx_out, by_out, bz_out), axis=-1)
+
+    # solve for input direction
+    uvec_in = solve_diffraction_input(b_out, dx, dy, wavelength, order)
+
+    return b_out, uvec_in
+
+
 
 # ###########################
 # convenient simulation functions for considering multiple wavelengths in a variety of situations
