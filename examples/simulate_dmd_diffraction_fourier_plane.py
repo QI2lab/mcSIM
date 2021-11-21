@@ -139,7 +139,7 @@ opt_axis_uvecs = np.stack((bxps, byps, bzps), axis=-1)
 dmd_uvecs_out = np.stack(sdmd.opt_axis_uvec2dmd_uvec(opt_axis_uvecs, optical_axis), axis=-1)
 
 # do simulations
-efields, _, _, _ = sdmd.simulate_dmd(pattern, wavelength, gamma, -gamma, dm, dm, dm, dm, uvec_in_ir, dmd_uvecs_out,
+efields, _, _ = sdmd.simulate_dmd(pattern, wavelength, gamma, -gamma, dm, dm, dm, dm, uvec_in_ir, dmd_uvecs_out,
                                      phase_errs=phase_errs, efield_profile=beam)
 
 efields_interp = sdmd.interpolate_dmd_data(pattern, beam, wavelength, gamma, -gamma,

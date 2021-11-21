@@ -7,7 +7,7 @@ There are three important effects to consider:
 at the specular reflection condition for the mirror. When light diffracts in the same direction as the peak,
 we say the blaze condition is satisfied.
 
-The simulate_dmd_dft() function is the most useful first line function for computing all three effects. Given
+The simulate_dmd_dft() function is the most useful function for computing all three effects. Given
 geometry information (input direction, DMD pitch, diffraction order of interest, etc.) and a mirror pattern,
 this provides the diffracted electric field at a number of angles, where the angles are related to the DFT
 frequencies. In some sense, this provides the complete information about the diffraction pattern. Other angles
@@ -147,21 +147,21 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
                                                                  dy * mymy * bma[1] +
                                                                  zshifts * bma[2]) +
                                    1j * phase_errs)
-        diffraction_efield = np.sum(efield_per_mirror)
 
         # get envelope functions for "on" and "off" states
         sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, bma)
         sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, bma)
 
         # multiply by blaze envelope to get full efield
-        envelopes = np.zeros((ny, nx), dtype=complex)
-        envelopes[pattern == 0] = sinc_efield_off
-        envelopes[pattern == 1] = sinc_efield_on
+        # envelopes = np.zeros((ny, nx), dtype=complex)
+        # envelopes[pattern == 0] = sinc_efield_off
+        # envelopes[pattern == 1] = sinc_efield_on
 
         # final summation
-        efields = np.sum(envelopes * efield_per_mirror)
+        # efields = np.sum(envelopes * efield_per_mirror)
+        efields = np.sum(efield_per_mirror * (sinc_efield_on * pattern + sinc_efield_off * (1 - pattern)))
 
-        return efields, sinc_efield_on, sinc_efield_off, diffraction_efield
+        return efields, sinc_efield_on, sinc_efield_off
 
     # get shape want output arrays to be
     output_shape = uvecs_out.shape[:-1]
@@ -172,16 +172,16 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
     results = joblib.Parallel(n_jobs=-1, verbose=1, timeout=None)(
         joblib.delayed(calc_output_angle)(bvec) for bvec in bvecs_to_iterate)
     # unpack results for all output directions
-    efields, sinc_efield_on, sinc_efield_off, diffraction_efield = zip(*results)
+    efields, sinc_efield_on, sinc_efield_off = zip(*results)
     efields = np.asarray(efields).reshape(output_shape)
     sinc_efield_on = np.asarray(sinc_efield_on).reshape(output_shape)
     sinc_efield_off = np.asarray(sinc_efield_off).reshape(output_shape)
-    diffraction_efield = np.asarray(diffraction_efield).reshape(output_shape)
 
-    return efields, sinc_efield_on, sinc_efield_off, diffraction_efield
+    return efields, sinc_efield_on, sinc_efield_off
 
 
-def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in, order):
+def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in, order,
+                     dn_orders=0):
     """
     Simulate DMD diffraction using DFT. These produces peaks at a discrete set of frequencies which are
     (b-a)_x = wavelength / dx * ix / nx for ix = 0, ... nx - 1
@@ -200,27 +200,43 @@ def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, d
     @param wy:
     @param uvec_in:
     @param order: (nx, ny)
+    @param dn_orders: number of orders along nx and ny to compute around the central order of interest
     @return efields, sinc_efield_on, sinc_efield_off, b:
     """
     ny, nx = pattern.shape
-    order_x, order_y = order
+
+    # get allowed diffraction orders
+    orders = np.stack(np.meshgrid(range(order[0] - dn_orders, order[0] + dn_orders + 1),
+                                  range(order[1] - dn_orders, order[1] + dn_orders + 1)), axis=-1)
+
+    order_xlims = [np.nanmin(orders[..., 0]), np.nanmax(orders[..., 0])]
+    nx_orders = np.arange(order_xlims[0], order_xlims[1] + 1)
+
+    order_ylims = [np.nanmin(orders[..., 1]), np.nanmax(orders[..., 1])]
+    ny_orders = np.arange(order_ylims[0], order_ylims[1] + 1)
+
     # dft freqs
     fxs = fft.fftshift(fft.fftfreq(nx))
     fys = fft.fftshift(fft.fftfreq(ny))
     fxfx, fyfy = np.meshgrid(fxs, fys)
 
-    # compute output unit vectors along DFT freqs
-    bma_x = wavelength / dx * (order_x + fxfx)
-    bma_y = wavelength / dy * (order_y + fyfy)
-    bx = bma_x + uvec_in.squeeze()[0]
-    by = bma_y + uvec_in.squeeze()[1]
-    uvecs_out_dft = np.stack((bx, by, np.sqrt(1 - bx**2 - by**2)), axis=2)
+    # to get effective frequencies, add diffraction orders
+    # b_x = (b-a)_x + a_x
+    uvecs_out_dft = np.zeros((len(ny_orders) * ny, len(nx_orders) * nx, 3))
+    uvecs_out_dft[..., 0] = (np.tile(fxfx, [len(ny_orders), len(nx_orders)]) +
+                             np.kron(nx_orders, np.ones((ny * len(nx_orders), nx)))) * wavelength / dx + \
+                            uvec_in.squeeze()[0]
+    # b_y = (b-a)_y + a_y
+    uvecs_out_dft[..., 1] = (np.tile(fyfy, [len(ny_orders), len(nx_orders)]) +
+                             np.kron(np.expand_dims(ny_orders, axis=1),
+                                     np.ones((ny, nx * len(ny_orders))))) * wavelength / dy + \
+                            uvec_in.squeeze()[1]
+    # b_z from normalization
+    uvecs_out_dft[..., 2] = np.sqrt(1 - uvecs_out_dft[..., 0] ** 2 - uvecs_out_dft[..., 1] ** 2)
 
-    bma = uvecs_out_dft - uvec_in
-
-    # get envelope functions for ON and OFF states
-    sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, bma)
-    sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, bma)
+    # get envelope functions for "on" and "off" states
+    sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, uvecs_out_dft - uvec_in)
+    sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, uvecs_out_dft - uvec_in)
 
     # unlike most cases, we want the DMD origin at the lower left corner (not in the center). So we omit the ifftshift
     # pattern_dft = fft.fftshift(fft.fft2(pattern * efield_profile))
@@ -230,7 +246,10 @@ def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, d
     pattern_dft = fft.fftshift(fft.fft2(fft.ifftshift(pattern * efield_profile)))
     pattern_complement_dft = fft.fftshift(fft.fft2(fft.ifftshift((1 - pattern) * efield_profile)))
 
-    efields = pattern_dft * sinc_efield_on + pattern_complement_dft * sinc_efield_off
+    # efields = pattern_dft * sinc_efield_on + pattern_complement_dft * sinc_efield_off
+    efields_on = np.tile(pattern_dft, [len(nx_orders), len(ny_orders)]) * sinc_efield_on
+    efields_off = np.tile(pattern_complement_dft, [len(nx_orders), len(ny_orders)]) * sinc_efield_off
+    efields = efields_on + efields_off
 
     return efields, pattern_dft, pattern_complement_dft, sinc_efield_on, sinc_efield_off, uvecs_out_dft
 
@@ -238,9 +257,11 @@ def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, d
 def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_off,
                          dx, dy, wx, wy, uvec_in, order, bvecs_interp):
     """
-    Interpolate dmd diffraction DFT data to other output angles using Shannon-Whittaker interpolation formula.
+    Exact interpolation of  dmd diffraction DFT data to other output angles using Shannon-Whittaker interpolation formula.
 
-    todo: not really sure this is more efficient than simulate_dmd(), but a useful sanity check
+    todo: don't expect this to be any more efficient than simulate_dmd(), but should give the same result
+    todo: possible way to speed up interpolation is with FT Fourier shift theorem. So approach would be to
+    todo: choose certain shifts (e.g. make n-times denser and compute n^2 shift theorems)
 
     @param pattern:
     @param efield_profile:
@@ -262,7 +283,8 @@ def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_of
 
     # get DFT results
     _, pattern_dft, pattern_dft_complement, _, _, bvec_dft = \
-          simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in, order)
+          simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in, order,
+                           dn_orders=0)
 
     ny, nx = pattern.shape
     # dft freqs
@@ -688,9 +710,9 @@ def blaze_envelope(wavelength, gamma, wx, wy, b_minus_a, n_vec=(1 / np.sqrt(2), 
     """
     Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
     This is the result of doing the integral
-    envelope(b-a) = \int ds dt exp[ ik Rn*(s,t,0) \cdot (a-b)]
-    = \int ds dt exp[ ik * (A_+*s + A_-*t)]
-    = w**2 * sinc(0.5 * k * w * A_+) * sinc(0.5 * k * w * A_-)
+    envelope(b-a) = \int ds dt exp[ ik Rn*(s,t,0) \cdot (a-b)] / w**2
+    = \int ds dt exp[ ik * (A_+*s + A_-*t)] / w**2
+    = sinc(0.5 * k * w * A_+) * sinc(0.5 * k * w * A_-)
 
     The overall electric field is given by
     E(b-a) = (diffraction from mirror pattern) x envelope(b-a)
@@ -1232,7 +1254,7 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
         # do simulation
         # #########################
         for ii in range(n_wavelens):
-            efields[kk, :, ii], sinc_efield_on[kk, :, ii], sinc_efield_off[kk, :, ii], _ \
+            efields[kk, :, ii], sinc_efield_on[kk, :, ii], sinc_efield_off[kk, :, ii] \
              = simulate_dmd(pattern, wavelengths[ii], gamma_on, gamma_off, dx, dy, wx, wy, uvecs_in, uvecs_out[kk])
 
             # get diffraction orders. Orders we want are along the antidiagonal
@@ -1506,7 +1528,7 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
                                                                                   (diff_nx[diff_ind], diff_ny[diff_ind]))
 
             # solve diffracted fields
-            efields[kk][input_ind], sinc_efield_on[kk][input_ind], sinc_efield_off[kk][input_ind], _ = \
+            efields[kk][input_ind], sinc_efield_on[kk][input_ind], sinc_efield_off[kk][input_ind] = \
                 simulate_dmd(pattern, wavelengths[kk], gamma_on, gamma_off, dx, dy, wx, wy,
                              uvecs_in[input_ind], uvecs_out[input_ind])
 
