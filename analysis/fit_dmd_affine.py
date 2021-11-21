@@ -106,8 +106,9 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_sq
     # loop over points
     # estimate position by guessing vec_a and vec_b from nearest pairs
     while np.sum(chisqs != 0) < chisqs.size:
-        successful_fits = np.logical_and(chisqs > 0, chisqs < chi_sq_max)
-        completed_fits = (chisqs != 0)
+        with np.errstate(invalid="ignore"):
+            successful_fits = np.logical_and(chisqs > 0, chisqs < chi_sq_max)
+            completed_fits = (chisqs != 0)
 
         # find nearest point to already fitted points, only including successful fits
         ia_fitted = iaia[successful_fits]
@@ -217,7 +218,8 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_sq
             chisqs[ind_tuple] = np.nan
 
     # final succesful fits
-    successful_fits = np.logical_and(chisqs > 0, chisqs < chi_sq_max)
+    with np.errstate(invalid="ignore"):
+        successful_fits = np.logical_and(chisqs > 0, chisqs < chi_sq_max)
 
     return fps, chisqs, successful_fits
 
@@ -272,7 +274,8 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
 
     fps = np.array(fps, copy=True)
     # ensure longer sigma is first
-    to_swap = fps[:, :, 4] > fps[:, :, 3]
+    with np.errstate(invalid="ignore"):
+        to_swap = fps[:, :, 4] > fps[:, :, 3]
     sigma_max = np.array(fps[to_swap, 4], copy=True)
     sigma_min = np.array(fps[to_swap, 3], copy=True)
 
