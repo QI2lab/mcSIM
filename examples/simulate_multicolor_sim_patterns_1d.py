@@ -1,54 +1,47 @@
 """
-Simulate a given DMD pattern for several wavelength and corresponding diffraction orders and input directions.
+A simple 1D simulation of multicolor SIM patterns with periods designed to match the positions of the
+different diffraction orders in the Fourier plane. The main diffraction order output angle is chosen
+to satisfy the blaze condition for the first wavelength. The input angles for the other wavelengths are chosen
+to match this output direction.
 
-We adopt the following coordinate system: suppose we have the DMD orientated above an optical table. Let the z-direction
-be the normal to the DMD chip, facing outward from the chip. Let the x- and y-directions be along the principle axes
-of the DMD. Suppose the DMD is rotated 45degrees about the z-axis so that the corner which is the origin is clisest to
-the table. The x+y direction is the vertical direction pointing away from the table. The x-y direction is parallel
-to the table.
+This simulation produces a visualization of the diffraction output and blaze envelopes. It captures the effect
+that violations of the blaze condition have on the SIM order strengths for different wavelengths.
 
-The input direction is parameterized by the unit vector a = (ax, ay, az), where we must have az < 0. Similarly
-the output direction is parameterized by unit vector b = (bx, by, bz), where we must have bz > 0.
+In this example, we focus on the blaze/diffraction solution for 465nm and the (4, -4) order with input angle
+theta_in~43deg and output angle theta_out~19deg.
 
-Sometimes we will also refer to an angular parameterization of the input/output directions. In this case, the angles
-are defined differently for the input and output.
-a = (tan(tx), tan(ty), -1) / sqrt( tan(tx)**2 + tan(ty)**2 + 1)
-b = (tan(tx), tan(ty), +1) / sqrt( tan(tx)**2 + tan(ty)**2 + 1)
-
-This script only considers output directions along the diagonal (vx=-vy). Also display information showing different
-diffraction orders and the blaze condition.
+For a complete description of the geometry and coordinate systems, see the docstring for simulate_dmd.py
 """
 import numpy as np
 import matplotlib.pyplot as plt
 import simulate_dmd as sdmd
 
-# define DMD values
-# pixel spacing (DMD pitch)
-dx = 7.56e-6 # meters
+# define DMD pitch, mirror size, mirror angles, etc.
+dx = 7.56e-6 # DMD pitch in meters
 dy = dx
-# pixel size, inferred from coverage fraction
-coverage_f = 0.92
+coverage_f = 0.92 # pixel size, inferred from coverage fraction
 wx = np.sqrt(coverage_f) * dx
 wy = wx
 # on and off angle of mirrors from the normal plane of the DMD body
 gamma_on = 12 * np.pi/180
 gamma_off = -12 * np.pi/180
+# output angles offset around the main output direction
 tout_offsets = np.linspace(-10, 10, 4800) * np.pi / 180
-# colors
-# we want to use the solution near theta_in=43deg, theta_out=19deg, n=4 for 465nm, n=3 for 635nm
+
+# set up different wavelengths
 wlens = [0.465e-6, 0.635e-6, 0.532e-6, 0.785e-6]
-# diff_orders = [-4, -3, 4, 3, -2]
-diff_orders = [4, 3, -4, -3, 2]
+diff_orders = [4, 3, -4, -3, 2] # todo: find closest orders instead of presetting
 inverted = [False, False, True, True]
 display_colors = ['b', 'r', 'g', 'k']
-#base_period = np.sqrt(2) * 3
-base_period = 5
+
+# set up pattern information
+base_period = 5 # period of pattern at the first wavelength listed above
 periods = np.zeros(len(wlens))
-# create small pattern (to broaden diffraction peaks
+# create small pattern (i.e. not using full DMD size) to broaden diffraction peaks and speed up calculation
 n_pattern = 50
 xx, yy = np.meshgrid(range(n_pattern), range(n_pattern))
 
-# get exact angles and do simulation
+# get exact input/ouput angles and do simulation
 uvecs_in_exact = np.zeros((len(wlens), 3))
 tins_exact = np.zeros(len(wlens))
 simulation_data = []
@@ -58,14 +51,11 @@ for ii in range(len(wlens)):
     else:
         gon, goff = gamma_on, gamma_off
 
+    # for the first/main wavelength, ensure we satisfy the blaze and diffraction conditions
     if ii == 0:
-        # ti, to = sdmd.solve_1color_1d(wlens[ii], dx, gon, diff_orders[ii])
         uvecs_in, uvecs_out = sdmd.solve_1color_1d(wlens[ii], dx, gon, diff_orders[ii])
         uvecs_in_exact[ii] = uvecs_in[1]
         uvec_out = uvecs_out[1]
-        # ti, to = sdmd.solve_1color_1d(wlens[ii], dx, gon, diff_orders[ii])
-        # tins_exact[ii] = ti[0]
-        # tout_exact = to[0]
 
         tx_in, ty_in = sdmd.uvector2txty(*uvecs_in_exact[ii])
         tp_in, tm_in = sdmd.angle2pm(tx_in, ty_in)
@@ -87,10 +77,10 @@ for ii in range(len(wlens)):
         print("input angle (tm, tp) = (%0.2f, %0.2f)deg" % (tins_exact[ii] * 180/np.pi, 0))
         print("(ax, ay, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvecs_in_exact[ii].squeeze()))
         print("(am, ap, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_in_pm))
+
+    # for other wavelength, make sure the output direction is the same
     else:
         uvecs_in_exact[ii] = sdmd.solve_diffraction_input(uvec_out, dx, dy, wlens[ii], (diff_orders[ii], -diff_orders[ii]))
-        # tins_exact[ii] = sdmd.solve_diffraction_input_1d(tout_exact, wlens[ii], dx, diff_orders[ii])
-
         tx_in, ty_in = sdmd.uvector2txty(*uvecs_in_exact[ii])
         tp_in, tm_in = sdmd.angle2pm(tx_in, ty_in)
         tins_exact[ii] = tm_in
@@ -102,23 +92,24 @@ for ii in range(len(wlens)):
         print("(ax, ay, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvecs_in_exact[ii].squeeze()))
         print("(am, ap, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_in_pm))
 
-
-    # 1D DMD simulations
+    # generate pattern for this wavelength
     periods[ii] = base_period * wlens[ii] / wlens[0]
     sinusoid = np.cos(2 * np.pi * (xx - yy) / np.sqrt(2) / periods[ii])
     pattern = np.zeros(((n_pattern, n_pattern)))
     pattern[sinusoid >= 0] = 1
-    #
+
+    # do 1D DMD simulations
     data_temp = sdmd.simulate_1d(pattern, [wlens[ii]], gon, goff, dx, dy, wx, wy, tins_exact[ii], tm_out_offsets=tout_offsets)
     simulation_data.append(data_temp)
 
-
-# sample 1D simulation
+# ##################################
+# plot results of 1D simulations
+# ##################################
 figh = plt.figure(figsize=(16, 8))
-str = r"Diffraction orders and blaze envelopes for beams diffracted along the $e_- = \frac{x - y}{\sqrt{2}}$ direction" + \
-      "\noutput angle, " + r"($\theta_-$, $\theta_+$)" + " = (%0.2f, %0.2f) deg; " + \
-      r"($\theta_x$, $\theta_y$) deg" + " = (%0.2f, %0.2f)\n" + \
-      "output unit vector (bx, by, bz) = (%0.4f, %0.4f, %0.4f)"
+str = r"Diffraction orders and blaze envelopes for beams diffracted along the $\hat{e}_- = \frac{x - y}{\sqrt{2}}$ direction" + \
+      "\noutput direction, " + r"($\theta_-$, $\theta_+$)" + " = (%0.2f, %0.2f) deg; " + \
+      r"($\theta_x$, $\theta_y$)" + " = (%0.2f, %0.2f) deg;" + \
+      " (bx, by, bz) = (%0.4f, %0.4f, %0.4f)"
 plt.suptitle(str %
              (tm_out * 180/np.pi, tp_out * 180/np.pi,
               tx_out * 180/np.pi, ty_out * 180/np.pi,
@@ -152,14 +143,7 @@ for ii in range(len(wlens)):
     plt.plot(tout * 180 / np.pi, sinc_off, '--', color=display_colors[ii])
     plt.ylim([-0.05, 1.1])
 
-
-    # leg += [("%.0fnm, (nx, ny) = (%d, %d); " + r"$\theta_-$" + " = %0.2fdeg") %
-    #         (wlens[ii]*1e9, diff_orders[ii], -diff_orders[ii], tins_exact[ii] * 180/np.pi),
-    #         "sinc envelope"]
-
-# plt.xlim([12, 28])
 plt.xlim([tm_out * 180/np.pi - 10, tm_out * 180/np.pi + 10])
-# plt.legend(hs, leg)
 plt.legend()
 plt.xlabel(r"$\theta_-$ (degrees)")
 plt.ylabel("intensity (arb)")

@@ -2,7 +2,7 @@
 Simulate diffraction from a given pattern displayed on the DMD. Do simulations both in "1D", i.e. considering only
 diffraction in the tx=-ty plane, and in "2D", i.e. considering the full output space.
 
-Unlike dmd_input_angles_multicolor.py, this file simulates the same input angles for all wavelength considered
+Unlike simulate_multicolor_sim_patterns_1d.py, this file simulates the same input angles for all wavelength considered
 """
 
 import numpy as np
