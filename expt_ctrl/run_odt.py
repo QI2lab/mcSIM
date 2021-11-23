@@ -61,8 +61,14 @@ xx, yy = np.meshgrid(range(nx), range(ny))
 cref = np.array([ny // 2, nx // 2])
 xx, yy = np.meshgrid(range(nx), range(ny))
 
-frq = np.array([0, 1/3])
+# ang = 20 * np.pi/180
+# ang = 0 * np.pi/180
+# frq = np.array([np.sin(ang), np.cos(ang)]) * 1/3
+ang = -45 * np.pi/180
+frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
+
 rad = 5
+# rad = 10
 phase = 0
 pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
 pattern_base[pattern_base <= 0] = 0
@@ -117,6 +123,7 @@ if True:
         patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
                              (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
 else:
+    # test repeates of all ON
     patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
 
 print("finished generating patterns, elapsed time %0.2fs" % (time.perf_counter() - tstart))
@@ -135,9 +142,8 @@ DAQ_sample_rate_hz = 1 / dt
 
 n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
 
-# exposure_time_est = 3e-3
 exposure_time_est = 2.8e-3
-# exposure_time_est = 3e-3
+# exposure_time_est = 1e-3
 min_frame_time = 3e-3
 
 if exposure_time_est >= min_frame_time:
@@ -146,6 +152,7 @@ if exposure_time_est >= min_frame_time:
 else:
     nsteps_exposure = int(np.ceil(min_frame_time / dt))
     exposure_time = exposure_time_est
+print("exposure time = %0.2fms" % (exposure_time * 1e3))
 
 # add extra time steps for readout time
 nsteps_pattern = nsteps_exposure + 3
@@ -199,6 +206,7 @@ with pm.Bridge() as bridge:
     mmc = bridge.get_core()
     mm = bridge.get_studio()
 
+    # get strings of all available devices
     devs_v = mmc.get_loaded_devices()
     devs = [devs_v.get(ii) for ii in range(devs_v.size())]
     bfly = devs[41]
@@ -206,8 +214,19 @@ with pm.Bridge() as bridge:
     mmc.set_camera_device(bfly)
     # set camera exposure time
     mmc.set_exposure(exposure_time / 1e-3)
-    # mmc.getDevicePropertyNames()
-    # mmc.getAllowedPropertyValues()
+
+    # get properties for devices
+    # prop_v = mmc.get_device_property_names(devs[5])
+    # props = [prop_v.get(ii) for ii in range(prop_v.size())]
+
+    # get allowed values for property
+    # prop_vals_v = mmc.get_allowed_property_values(devs[5], props[1])
+    # prop_vals = [prop_vals_v.get(ii) for ii in range(prop_vals_v.size())]
+
+    # set a value
+    # mmc.set_property("TriggerScope-DAC01", "Volts", 5.1)
+
+
     # set up trigger in
     mmc.set_property(bfly, "Trigger Mode", "On")
     mmc.set_property(bfly, "Trigger Source", "Line3")
