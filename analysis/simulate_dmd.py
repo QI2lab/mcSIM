@@ -323,6 +323,100 @@ def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_of
     return efields
 
 
+def get_diffracted_power(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in):
+    """
+    Compute input and output power.
+
+    @param pattern:
+    @param efield_profile:
+    @param wavelength:
+    @param gamma_on:
+    @param gamma_off:
+    @param dx:
+    @param dy:
+    @param wx:
+    @param wy:
+    @param uvec_in:
+    @return power_in, power_out:
+    """
+
+    ny, nx = pattern.shape
+    ax, ay, az = uvec_in.ravel()
+
+    power_in = np.sum(np.abs(efield_profile)**2)
+
+    _, pattern_dft, pattern_complement_dft, sinc_efield_on, sinc_efield_off, uvecs_out_dft = \
+        simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in,
+                         order=(0, 0), dn_orders=0)
+
+    # check that power is conserved here...
+    assert np.abs(np.sum(np.abs(pattern_dft + pattern_complement_dft)**2) / (nx * ny) - power_in) < 1e-12
+
+    # get FFT freqs
+    fxs = (uvecs_out_dft[..., 0] - ax) * dx / wavelength
+    fys = (uvecs_out_dft[..., 1] - ay) * dy / wavelength
+
+    # get allowed diffraction orders
+    ns, allowed_dc, allowed_any = get_physical_diff_orders(uvec_in, wavelength, dx, dy)
+
+    def calc_power_order(order):
+        ox, oy = order
+
+        bxs = ax + wavelength / dx * (fxs + ox)
+        bys = ay + wavelength / dy * (fys + oy)
+        with np.errstate(invalid="ignore"):
+            bzs = np.sqrt(1 - bxs ** 2 - bys ** 2)
+
+        bvecs = np.stack((bxs, bys, bzs), axis=-1)
+        bvecs[bxs ** 2 + bys ** 2 > 1] = np.nan
+
+        envelope_on = blaze_envelope(wavelength, gamma_on, wx, wy, bvecs - uvec_in)
+        envelope_off = blaze_envelope(wavelength, gamma_off, wx, wy, bvecs - uvec_in)
+
+        on_sum = np.nansum(envelope_on ** 2)
+        off_sum = np.nansum(envelope_off ** 2)
+
+        power_out = np.nansum(np.abs(envelope_on * pattern_dft + envelope_off * pattern_complement_dft) ** 2) / (nx * ny)
+
+        return power_out, on_sum, off_sum
+
+    orders_x = ns[allowed_any, 0]
+    orders_y = ns[allowed_any, 1]
+    results = joblib.Parallel(n_jobs=-1, verbose=1, timeout=None)(
+        joblib.delayed(calc_power_order)((orders_x[ii], orders_y[ii])) for ii in range(len(orders_x)))
+
+    power_out_orders, on_sum_orders, off_sum_orders = zip(*results)
+    power_out = np.sum(power_out_orders)
+    envelope_on_sum = np.sum(on_sum_orders)
+    envelope_off_sum = np.sum(off_sum_orders)
+
+    # power_out = 0
+    # envelope_on_sum = 0
+    # envelope_off_sum = 0
+    # for ii in range(ns.shape[0]):
+    #     for jj in range(ns.shape[1]):
+    #         if np.logical_not(allowed_any[ii, jj]):
+    #             continue
+    #
+    #         # print("(ii, jj) = (%d, %d)" % (ii, jj))
+    #
+    #         bxs = ax + wavelength / dx * (fxs + ns[ii, jj, 0])
+    #         bys = ay + wavelength / dy * (fys + ns[ii, jj, 1])
+    #         bzs = np.sqrt(1 - bxs**2 - bys**2)
+    #
+    #         bvecs = np.stack((bxs, bys, bzs), axis=-1)
+    #         bvecs[bxs ** 2 + bys ** 2 > 1] = np.nan
+    #
+    #         envelope_on = blaze_envelope(wavelength, gamma_on, wx, wy, bvecs - uvec_in)
+    #         envelope_off = blaze_envelope(wavelength, gamma_off, wx, wy, bvecs - uvec_in)
+    #
+    #         envelope_on_sum += np.nansum(envelope_on**2)
+    #         envelope_off_sum += np.nansum(envelope_off**2)
+    #
+    #         power_out += np.nansum(np.abs(envelope_on * pattern_dft + envelope_off * pattern_complement_dft)**2) / (nx * ny)
+
+    return power_in, power_out
+
 # ###########################################
 # misc helper functions
 # ###########################################
@@ -803,29 +897,72 @@ def get_physical_diff_orders(uvec_in, wavelength, dx, dy):
     @param wavelength:
     @param dx:
     @param dy:
-    @return ns: n x n x 2 array, where ns[ii, jj] = np.array([nx[ii, jj], ny[ii, jj])
+    @return ns, allowed_dc, allowed_any: n x n x 2 array, where ns[ii, jj] = np.array([nx[ii, jj], ny[ii, jj]).
+    allowed_dc and allowed_any are boolean arrays which indicate which ns have forbidden DC values and which ns
+    have all forbidden diffraaction orders
     """
     ax, ay, az = uvec_in.ravel()
 
-    nx_max = int(np.floor(dx / wavelength * (1 - ax)))
-    nx_min = int(np.ceil(dx / wavelength * (-1 - ax)))
-    ny_max = int(np.floor(dy / wavelength * (1 - ay)))
-    ny_min = int(np.ceil(dy / wavelength * (-1 - ay)))
+    nx_max = int(np.floor(dx / wavelength * (1 - ax))) + 1
+    nx_min = int(np.ceil(dx / wavelength * (-1 - ax))) - 1
+    ny_max = int(np.floor(dy / wavelength * (1 - ay))) + 1
+    ny_min = int(np.ceil(dy / wavelength * (-1 - ay))) - 1
 
     nxnx, nyny = np.meshgrid(range(nx_min, nx_max + 1), range(ny_min, ny_max + 1))
     nxnx = nxnx.astype(float)
     nyny = nyny.astype(float)
 
+    # check which DC orders are allowed
     bx = ax + wavelength/dx * nxnx
     by = ay + wavelength/dy * nyny
+    allowed_dc = bx**2 + by**2 <= 1
 
-    not_allowed = bx**2 + by**2 > 1
-    nxnx[not_allowed] = np.nan
-    nyny[not_allowed] = np.nan
+    # check corner diffraction orders
+    bx_c1 = ax + wavelength / dx * (nxnx + 0.5)
+    by_c1 = ay + wavelength / dy * (nyny + 0.5)
+    bx_c2 = ax + wavelength / dx * (nxnx + 0.5)
+    by_c2 = ay + wavelength / dy * (nyny - 0.5)
+    bx_c3 = ax + wavelength / dx * (nxnx - 0.5)
+    by_c3 = ay + wavelength / dy * (nyny + 0.5)
+    bx_c4 = ax + wavelength / dx * (nxnx - 0.5)
+    by_c4 = ay + wavelength / dy * (nyny - 0.5)
+    allowed_any = np.logical_or.reduce((bx_c1**2 + by_c1**2 <= 1,
+                                        bx_c2**2 + by_c2**2 <= 1,
+                                        bx_c3**2 + by_c3**2 <= 1,
+                                        bx_c4**2 + by_c4**2 <= 1))
 
     ns = np.stack((nxnx, nyny), axis=-1)
 
-    return ns
+    return ns, allowed_dc, allowed_any
+
+
+def find_nearst_diff_order(uvec_in, uvec_out, wavelength, dx, dy):
+    """
+    Given an input and output direction, find the nearest diffraction order
+
+    @param uvec_in:
+    @param uvec_out:
+    @param wavelength:
+    @param dx:
+    @param dy:
+    @return:
+    """
+    ns, allowed_dc, _ = get_physical_diff_orders(uvec_in, wavelength, dx, dy)
+    ns[np.logical_not(allowed_dc)] = np.nan
+
+    ux, uy, uz = uvec_out.ravel()
+    ax, ay, az = uvec_in.ravel()
+
+    bxs = ax + ns[..., 0] * wavelength / dx
+    bys = ay + ns[..., 1] * wavelength / dy
+    bzs = np.sqrt(1 - bxs**2 - bys**2)
+
+    dists = np.sqrt((bxs - ux)**2 + (bys - uy)**2 + (bzs - uz)**2)
+    ind_min = np.unravel_index(np.nanargmin(dists), ns[..., 0].shape)
+
+    order = ns[ind_min].astype(int)
+
+    return order
 
 
 def solve_diffraction_input(uvecs_out, dx, dy, wavelength, order):
