@@ -1,21 +1,25 @@
 """
-Control Light Crafter 6500DLP evaluation module over USB.
+Control the Light Crafter 6500DLP evaluation module over USB. The code is based around the dlp6500 class, which builds
+the command packets to be sent to the DMD. However, the details of sending the USB packets is implemented in
+operating system specific subclasses which handle the details of sending these packets. Currently, only support
+for Windows has been written and tested in the dlp6500win() class.
 
-Based on refactoring Anton Mazurenko's code, which is available at https://github.com/mazurenko/Lightcrafter6500DMDControl
-This code is written in python3, and is compatible with windows. The github code is written in python2 and did not run
-on windows (based on my limiting testing, although it is clearly intended to run on either windows or linux. I'm guessing
-it was actually run on linux and not tested on windows?)
+Extensions to Linux can be accomplished by implementing only two functions, _send_raw_packet() and _get_device(),
+in the dlp6500ix() class. This would likely also require importing an Linux compatible HID module.
 
+Although Texas Instruments has an SDK for this evaluation module (http://www.ti.com/tool/DLP-ALC-LIGHTCRAFTER-SDK), but
+it is not very well documented and we had difficulty building it. Further, it is intended to produce a static library
+which cannot be used with e.g. python and the ctypes library as a dll could be.
+
+This DMD control code was originally based on refactoring in https://github.com/mazurenko/Lightcrafter6500DMDControl.
 The combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycrafter6500.
-
-TODO: would love to use the SDK (http://www.ti.com/tool/DLP-ALC-LIGHTCRAFTER-SDK) but it is not very well document,
- and it produces a static library, not dll so can't use with ctypes.
 """
 import pywinusb.hid as pyhid
 import time
 import struct
 import numpy as np
 import copy
+
 
 ##############################################
 # compress DMD pattern data
@@ -60,6 +64,7 @@ def combine_patterns(patterns, bit_depth=1):
 
     return combined_patterns
 
+
 def split_combined_patterns(combined_patterns):
     """
     Split binary patterns which have been combined into a single uint8 RGB image back to separate images.
@@ -81,6 +86,7 @@ def split_combined_patterns(combined_patterns):
         patterns[ii] = (combined_patterns[0] & 2 ** (ii - 16)) >> (ii+8)
 
     return patterns
+
 
 def encode_erle(pattern):
     """
@@ -114,7 +120,6 @@ def encode_erle(pattern):
 
     pattern_compressed = []
     _, ny, nx = pattern.shape
-
 
     # todo: not sure if this is allowed to cross row_rgb boundaries? If so, could pattern.ravel() instead of looping
     # todo: don't think above suggestion works, but if last n pixels of above row_rgb are same as first n of this one
@@ -156,10 +161,10 @@ def encode_erle(pattern):
             #     pattern_compressed += length_bytes + [v[0], v[1], v[2]]
 
     # bytes indicating image end
-    #pattern_compressed += [0x00]
     pattern_compressed += [0x00, 0x01, 0x00]
 
     return pattern_compressed
+
 
 def encode_rle(pattern):
     """
@@ -246,6 +251,7 @@ def encode_rle(pattern):
 
     return pattern_compressed
 
+
 def decode_erle(dmd_size, pattern_bytes):
     """
     Decode pattern from ERLE or RLE.
@@ -255,9 +261,9 @@ def decode_erle(dmd_size, pattern_bytes):
     :return:
     """
 
-    ii = 0 # counter tracking position in compressed byte array
-    line_no = 0 # counter tracking line number
-    line_pos = 0 # counter tracking next position to write in line
+    ii = 0  # counter tracking position in compressed byte array
+    line_no = 0  # counter tracking line number
+    line_pos = 0  # counter tracking next position to write in line
     current_line = np.zeros((3, dmd_size[1]), dtype=np.uint8)
     rgb_pattern = np.zeros((3, 0, dmd_size[1]), dtype=np.uint8)
     # todo: maybe should rewrite popping everything to avoid dealing with at least one counter?
@@ -293,7 +299,7 @@ def decode_erle(dmd_size, pattern_bytes):
                     n_to_copy = pattern_bytes[ii + 2]
                     ii += 3
                 else:
-                    n_to_copy = erle_bytes2len(pattern_bytes[ii + 2 : ii + 4])
+                    n_to_copy = erle_bytes2len(pattern_bytes[ii + 2:ii + 4])
                     ii += 4
 
                 # copy bytes from same position in previous line
@@ -306,7 +312,7 @@ def decode_erle(dmd_size, pattern_bytes):
                     n_unencoded = pattern_bytes[ii + 1]
                     ii += 2
                 else:
-                    n_unencoded = erle_bytes2len(pattern_bytes[ii + 1 : ii + 3])
+                    n_unencoded = erle_bytes2len(pattern_bytes[ii + 1:ii + 3])
                     ii += 3
 
                 for jj in range(n_unencoded):
@@ -325,7 +331,7 @@ def decode_erle(dmd_size, pattern_bytes):
             block_len = pattern_bytes[ii]
             ii += 1
         else:
-            block_len = erle_bytes2len(pattern_bytes[ii : ii + 2])
+            block_len = erle_bytes2len(pattern_bytes[ii:ii + 2])
             ii += 2
 
         # write values to lists for rgb colors
@@ -336,6 +342,7 @@ def decode_erle(dmd_size, pattern_bytes):
         line_pos += block_len
 
     return rgb_pattern
+
 
 def erle_len2bytes(length):
     """
@@ -381,6 +388,7 @@ def erle_len2bytes(length):
 
     return len_bytes
 
+
 def erle_bytes2len(byte_list):
     """
     Convert a 1 or 2 byte list in little endian order to length
@@ -399,10 +407,11 @@ def erle_bytes2len(byte_list):
 
     return length
 
+
 ##############################################
 # controlling dmd
 ##############################################
-class dlp6500():
+class dlp6500:
     """
     Base class for communicating with DLP6500
     """
@@ -447,7 +456,7 @@ class dlp6500():
 
         :param vendor_id: vendor id, used to find DMD USB device
         :param product_id: product id, used to find DMD USB device
-        :param debug: Boolean. If true, will print output of commands.
+        :param bool debug: If True, will print output of commands.
         """
 
         # USB packet length not including report_id_byte
@@ -461,7 +470,7 @@ class dlp6500():
         pass
 
     # sending and receiving commands, operating system dependence
-    def _get_device(self, vendor_id=0x0451, product_id=0xc900):
+    def _get_device(self, vendor_id, product_id):
         """
         Return handle to DMD. This command can contain OS dependent implementation
 
@@ -522,7 +531,7 @@ class dlp6500():
 
         return reply
 
-    def send_command(self, rw_mode, reply, command, data=[], sequence_byte=0x00):
+    def send_command(self, rw_mode, reply, command, data=(), sequence_byte=0x00):
         """
         Send USB command to DLP6500 DMD. Only works on Windows. For documentation of DMD commands, see dlpu018.pdf,
         available at http://www.ti.com/product/DLPC900/technicaldocuments
@@ -538,7 +547,6 @@ class dlp6500():
         :param command: two byte integer
         :param data: data to be transmitted. List of integers, where each integer gives a byte
         :param sequence_byte: integer
-        :param print_commands:
         :return:
         """
 
@@ -580,11 +588,10 @@ class dlp6500():
         # this does not exactly correspond with what TI calls the header. It is a combination of
         # the report id_byte, the header, and the USB command bytes
         header = [flag_byte, sequence_byte, len_lsb, len_msb, cmd_lsb, cmd_msb]
-        buffer = header + data
+        buffer = header + list(data)
 
         # print commands during debugging
         if self.debug:
-
             # get command name if possible
             # header
             print('header: ' + bin(header[0]), end=' ')
@@ -683,7 +690,7 @@ class dlp6500():
         err_code = resp['data'][0]
 
         error_type = 'not defined'
-        for k,v in self.err_dictionary.items():
+        for k, v in self.err_dictionary.items():
             if v == err_code:
                 error_type = k
                 break
@@ -704,10 +711,8 @@ class dlp6500():
         # in the buffer. Do not be alarmed!
         err_description = ''
         for ii, d in enumerate(resp['data']):
-
-            #if d == 0 and ii > 0:
             if d == 0:
-                 break
+                break
 
             err_description += chr(d)
 
@@ -882,10 +887,11 @@ class dlp6500():
         """
         Set delay and pattern advance edge for trigger input 1 ("advance frame" trigger)
 
-        Trigger input 1 is used to advance the pattern displayed on the DMD, provided trigger_in2 is in the appropriate state
+        Trigger input 1 is used to advance the pattern displayed on the DMD, provided trigger_in2 is
+        in the appropriate state
 
-        :param delay_us:
-        :param edge_to_advance:
+        :param int delay_us:
+        :param str edge_to_advance: 'rsiing' or 'falling'
         :return:
         """
 
@@ -990,23 +996,23 @@ class dlp6500():
         :return:
         """
 
-        #assert num_patterns < 256
+        # assert num_patterns < 256
         num_patterns_bytes = list(struct.unpack('BB', struct.pack('<H', num_patterns)))
         num_repeats_bytes = list(struct.unpack('BBBB', struct.pack('<I', num_repeat)))
 
-        #return self.send_command('w', False, 0x1A31, data=num_patterns_bytes + num_repeats_bytes)
+        # return self.send_command('w', False, 0x1A31, data=num_patterns_bytes + num_repeats_bytes)
         return self.send_command('w', True, 0x1A31, data=num_patterns_bytes + num_repeats_bytes)
 
     def pattern_display_lut_definition(self, sequence_position_index, exposure_time_us=105, dark_time_us=0,
                                        wait_for_trigger=True, clear_pattern_after_trigger=False, bit_depth=1,
                                        disable_trig_2=True, stored_image_index=0, stored_image_bit_index=0):
         """
-        Define parameters for pattern used in on-the-fly mode. This command is listed as "MBOX_DATA" in the DLPLightcrafter software GUI.
+        Define parameters for pattern used in on-the-fly mode. This command is listed as "MBOX_DATA"
+         in the DLPLightcrafter software GUI.
 
-        Display mode and pattern display LUT configuration must be set before sending pattern LUT definition data. These
-        can be set using set_pattern_mode() and pattern_display_lut_configuration() respectively.  If the pattern display data
-        input source is set to streaming the image indices do not need to be set.
-
+        Display mode and pattern display LUT configuration must be set before sending pattern LUT definition data.
+        These can be set using set_pattern_mode() and pattern_display_lut_configuration() respectively.  If the pattern
+        display data input source is set to streaming the image indices do not need to be set.
 
         When uploading 1 bit image, each set of 24 images are first combined to a single 24 bit RGB image. pattern_index
         refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to which bit of that image (i.e.
@@ -1019,6 +1025,7 @@ class dlp6500():
         :param clear_pattern_after_trigger:
         :param bit_depth: 1, 2, 4, 8
         :param disable_trig_2: (disable "enable" trigger)
+        :param stored_image_index:
         :param stored_image_bit_index: index of the RGB image (in DMD memory) storing the given pattern
         this index tells which bit to look at in that image. This should be 0-23
         """
@@ -1090,7 +1097,7 @@ class dlp6500():
         num_bytes = list(struct.unpack('BBBB', struct.pack('<I', pattern_length)))
         data = index_bin + num_bytes
 
-        #return self.send_command('w', False, 0x1A2A, data=data)
+        # return self.send_command('w', False, 0x1A2A, data=data)
         return self.send_command('w', True, 0x1A2A, data=data)
 
     def pattern_bmp_load(self, compressed_pattern, compression_mode):
@@ -1166,14 +1173,18 @@ class dlp6500():
         This command is based on Table 5-3 in the DLP programming manual
 
         :param patterns: N x Ny x Nx NumPy array of uint8
-        :param list[int] exp_times: exposure times in us. Either a single uint8 number, or a list the same length as the number of patterns. >=105us
-        :param list[int] dark_times: dark times in us. Either a single uint8 number or a list the same length as the number of patterns
+        :param list[int] exp_times: exposure times in us. Either a single uint8 number, or a list the same
+         length as the number of patterns. >=105us
+        :param list[int] dark_times: dark times in us. Either a single uint8 number or a list the same length
+         as the number of patterns
         :param bool triggered: Whether or not DMD should wait to be triggered to display the next pattern
-        :param bool clear_pattern_after_trigger: Whether or not to keep displaying the pattern at the end of exposure time,
+        :param bool clear_pattern_after_trigger: Whether or not to keep displaying the pattern at the
+         end of exposure time,
         i.e. during time while DMD is waiting for the next trigger.
         :param int bit_depth: Bit depth of patterns
         :param int num_repeats: Number of repeats. 0 means infinite.
         :param str compression_mode: 'erle', 'rle', or 'none'
+        :param bool combine_images:
         :return stored_image_indices, stored_bit_indices: image and bit indices where each image was stored
         """
         # #########################
@@ -1241,10 +1252,12 @@ class dlp6500():
         for ii, (p, et, dt) in enumerate(zip(patterns, exp_times, dark_times)):
             stored_image_indices[ii] = ii // 24
             stored_bit_indices[ii] = ii % 24
-            buffer = self.pattern_display_lut_definition(ii, exposure_time_us=et, dark_time_us=dt, wait_for_trigger=triggered,
-                                                clear_pattern_after_trigger=clear_pattern_after_trigger, bit_depth=bit_depth,
-                                                stored_image_index=stored_image_indices[ii],
-                                                stored_image_bit_index=stored_bit_indices[ii])[0]
+            buffer = self.pattern_display_lut_definition(ii, exposure_time_us=et, dark_time_us=dt,
+                                                         wait_for_trigger=triggered,
+                                                         clear_pattern_after_trigger=clear_pattern_after_trigger,
+                                                         bit_depth=bit_depth,
+                                                         stored_image_index=stored_image_indices[ii],
+                                                         stored_image_bit_index=stored_bit_indices[ii])[0]
             resp = self.decode_response(buffer)
             if resp['error']:
                 print(self.read_error_description())
@@ -1260,7 +1273,8 @@ class dlp6500():
             if bit_depth == 1:
                 patterns = combine_patterns(patterns)
             else:
-                raise NotImplementedError("Combining multiple images into a 24-bit RGB image is only implemented for bit depth 1.")
+                raise NotImplementedError("Combining multiple images into a 24-bit RGB image is only"
+                                          " implemented for bit depth 1.")
 
         # compress and load images
         # images must be loaded in backwards order according to programming manual
@@ -1313,18 +1327,18 @@ class dlp6500():
     def set_pattern_sequence(self, image_indices, bit_indices, exp_times, dark_times, triggered=False,
                              clear_pattern_after_trigger=True, bit_depth=1, num_repeats=0, mode='pre-stored'):
         """
-        Setup pattern sequence from patterns previously stored in DMD memory, either in on-the-fly pattern mode, or in pre-stored pattern mode
+        Setup pattern sequence from patterns previously stored in DMD memory, either in on-the-fly pattern mode,
+         or in pre-stored pattern mode
 
-        :param image_indices:
-        :param bit_indices:
-        :param exp_times:
-        :param dark_times:
-        :param triggered:
-        :param clear_pattern_after_trigger:
-        :param bit_depth:
-        :param num_repeats: number of repeats. 0 repeats means repeat continuously.
-        :param mode: pre-stored or
-        :param ntotal_patterns: total number of patterns stored. This is only relevant in on-the-fly mode
+        :param list[int] image_indices:
+        :param list[int] bit_indices:
+        :param int exp_times:
+        :param int dark_times:
+        :param bool triggered:
+        :param bool clear_pattern_after_trigger:
+        :param int bit_depth:
+        :param int num_repeats: number of repeats. 0 repeats means repeat continuously.
+        :param str mode: pre-stored or
         :return:
         """
         # #########################
@@ -1347,7 +1361,7 @@ class dlp6500():
 
         if mode == 'on-the-fly' and 0 not in bit_indices:
             raise ValueError("Known issue (not with this code, but with DMD) that if 0 is not included in the bit"
-                            "indices, then the patterns displayed will not correspond with the indices supplied.")
+                             "indices, then the patterns displayed will not correspond with the indices supplied.")
 
         # if only one exp_times, apply to all patterns
         if isinstance(exp_times, int):
@@ -1395,7 +1409,7 @@ class dlp6500():
             if resp['error']:
                 print(self.read_error_description())
 
-        #PAT_CONFIG command
+        # PAT_CONFIG command
         buffer = self.pattern_display_lut_configuration(nimgs, num_repeat=num_repeats)[0]
         resp = self.decode_response(buffer)
         if resp['error']:
@@ -1450,6 +1464,7 @@ class dlp6500():
         data = list(data[:3])
         return self.send_command('w', True, 0x1A16, data)
 
+
 class dlp6500win(dlp6500):
     """
     Class for handling dlp6500 on windows os
@@ -1461,7 +1476,7 @@ class dlp6500win(dlp6500):
     def __del__(self):
         self.dmd.close()
 
-    def _get_device(self, vendor_id=0x0451, product_id=0xc900):
+    def _get_device(self, vendor_id, product_id):
         """
         Return handle to DMD. This command can contain OS dependent implenetation
 
@@ -1488,7 +1503,6 @@ class dlp6500win(dlp6500):
         :param buffer: list of bytes to send to device
         :param listen_for_reply: whether or not to listen for a reply
         :param timeout: timeout in seconds
-        :param operating_sys: "windows" or "linux"
         :return: reply: a list of bytes
         """
 
@@ -1523,23 +1537,26 @@ class dlp6500win(dlp6500):
 
         return reply
 
+
 class dlp6500ix(dlp6500):
     """
     Class for handling dlp6500 on linux os
-    # todo: implement
     """
 
     def __init__(self, vendor_id=0x0451, product_id=0xc900, debug=True):
+        raise NotImplementedError("dlp6500ix has not been fully implemented. The functions _get_device() and"
+                                  " _send_raw_packet() need to be implemented.")
         super(dlp6500ix, self).__init__(vendor_id=vendor_id, product_id=product_id, debug=debug)
 
     def __del__(self):
         pass
 
-    def _get_device(self, vendor_id=0x0451, product_id=0xc900):
+    def _get_device(self, vendor_id, product_id):
         pass
 
     def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
         pass
+
 
 class dlp6500dummy(dlp6500):
     """Dummy class, useful for testing command generation when no DMD is connected"""
@@ -1554,62 +1571,3 @@ class dlp6500dummy(dlp6500):
 
     def read_error_description(self):
         return [['']]
-
-if __name__ == "__main__":
-    import time
-    # ########################################
-    # DMD usage examples
-    # ########################################
-
-    # ########################################
-    # instantiate DMD
-    # ########################################
-    # dmd = dlp6500dummy(debug=True) # if no DMD connected, use this
-    dmd = dlp6500win(debug=True)
-
-    # ########################################
-    # read DMD status
-    # ########################################
-    print(dmd.get_hw_status())
-    print(dmd.get_system_status())
-    print(dmd.get_main_status())
-    print(dmd.get_firmware_version())
-    print(dmd.get_firmware_type())
-    print(dmd.get_fwbatch_name(0))
-    print(dmd.read_error_description())
-
-    delay1_us, mode_trig1 = dmd.get_trigger_in1()
-    print('trigger1 delay=%dus' % delay1_us)
-    print('trigger1 mode=%d' % mode_trig1)
-
-    mode_trig2 = dmd.get_trigger_in2()
-    print("trigger2 mode=%d" % mode_trig2)
-
-    # ########################################
-    # set various settings
-    # ########################################
-    dmd.start_stop_sequence('stop')
-    dmd.set_pattern_mode('on-the-fly')
-
-    # ########################################
-    # upload patterns
-    # ########################################
-    pattern = np.ones((3, 1080, 1920), dtype=np.uint8)
-    pattern[1] = 0
-    pattern[2, 500:] = 0
-
-    dark_time_us = 0
-    # illumination_time_us = 105
-    illumination_time_us = 500000
-    img_inds, bit_inds = dmd.upload_pattern_sequence(pattern, illumination_time_us, dark_time_us, triggered=False,
-                                clear_pattern_after_trigger=False, num_repeats=0, compression_mode='erle')
-    print(dmd.read_error_description())
-
-    # ########################################
-    # change parameters of uploaded pattern sequence
-    # ########################################
-    time.sleep(2)
-    dmd.set_pattern_sequence([0, 0, 0, 0], [0, 2, 2, 1], 1000000, dark_time_us, triggered=False,
-                             clear_pattern_after_trigger=False, mode='on-the-fly')
-    print(dmd.read_error_description())
-
