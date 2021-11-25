@@ -24,15 +24,15 @@ import localize
 import analysis_tools as tools
 
 # data files
-root_path = r"F:\2021_11_23"
-data_dirs = [os.path.join(root_path, "36_505_515_0.1um_beads_sim")]
+root_path = r"F:\2021_11_24"
+data_dirs = [os.path.join(root_path, "01_505_515nm_0.1um_beads_sim_zstack")]
 # color channel information
 ignore_color = [False, True, False]
 min_fit_amp = [100, 100, 25]
 bead_radii = 0.5 * np.array([0.1, 0.1, 0.1])
 
-# set parameteters
-dxy = 0.065 # um
+# set parameters
+dxy = 0.065  # um
 figsize = (21, 9)
 save_results = True
 close_fig_after_saving = False
@@ -41,11 +41,11 @@ nignored_frames = 2
 nangles = 3
 nphases = 3
 # roi/filtering parameters
-roi_size = (3, 3, 3) # (sz, sy, sx) in um
-filters_small_sigma = (0.1, 0.1, 0.1) # (sz, sy, sx) in um
-filters_large_sigma = (5, 5, 5) # (sz, sy, sx) in um
-min_boundary_distance = (1, 1) # (dz, dxy) in um
-sigma_bounds = ((0, 0.05)), ((3, 3))
+roi_size = (3, 3, 3)  # (sz, sy, sx) in um
+filters_small_sigma = (0.1, 0.1, 0.1)  # (sz, sy, sx) in um
+filters_large_sigma = (5, 5, 5)  # (sz, sy, sx) in um
+min_boundary_distance = (1, 1)  # (dz, dxy) in um
+sigma_bounds = ((0, 0.05), (3, 3))
 
 
 # ################################
@@ -81,7 +81,8 @@ for ii, p in enumerate(pattern_paths):
 
     pattern_dat.append(dat)
 
-    fxt, fyt, phit = affine.xform_sinusoid_params(dat["frqs"][:, 0], dat["frqs"][:, 1], dat["phases"], affine_xforms[ii])
+    fxt, fyt, phit = affine.xform_sinusoid_params(dat["frqs"][:, 0], dat["frqs"][:, 1],
+                                                  dat["phases"], affine_xforms[ii])
     frqs[ii, ..., 0] = 2 * fxt / dxy
     frqs[ii, ..., 1] = 2 * fyt / dxy
     phases[ii] = 2 * phit
@@ -115,25 +116,14 @@ for d in data_dirs:
             os.mkdir(save_dir)
 
     # #################################################
-    # store fit data per color
-    # each entry in the list will have size nfits x ntimes x nz x nangles x nphases x other axes
-    # #################################################
-    rois = [[]] * ncolors
-    centers = [[]] * ncolors
-    fps = [[]] * ncolors
-    # fit parameters used
-    fps_start = [[]] * ncolors
-    # parameters extracted from fits
-    cx = [[]] * ncolors
-    cy = [[]] * ncolors
-    sigma_means = [[]] * ncolors
-    amp_ests = [[]] * ncolors
-    m_ests = [[]] * ncolors
-    cos_phis = [[]] * ncolors
-
-    # #################################################
     # fit images for all times/z-planes/channels/angles/phases only
     # #################################################
+    # each entry in these lists will have size nfits x ntimes x nz x nangles x nphases x other axes
+    rois = [[]] * ncolors
+    fps = [[]] * ncolors
+    # fit parameters for central z-index and first time, each entry size nfits x nangles
+    fps_start = [[]] * ncolors
+
     tstart = time.perf_counter()
     for ic in range(ncolors):
         # #################################################
@@ -190,41 +180,52 @@ for d in data_dirs:
                     sim_inds = list(range(nignored_frames + ia * nphases, nignored_frames + (ia + 1) * nphases))
                     for ip in range(nphases):
                         print("%d/%d times, %d/%d zs, %d/%d colors, %d/%d angles, %d/%d phases, t elapsed=%0.2fs" %
-                              (it + 1, ntimes, iz + 1, nz, ic + 1, ncolors, ia + 1, nangles, ip + 1, nphases, time.perf_counter() - tstart))
+                              (it + 1, ntimes, iz + 1, nz, ic + 1, ncolors, ia + 1, nangles, ip + 1,
+                               nphases, time.perf_counter() - tstart))
 
                         imgs = tools.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
-                                                     user_indices={"UserChannelIndex": ic, "UserSimIndex": sim_inds[ip]})
-
+                                                     user_indices={"UserChannelIndex": ic,
+                                                                   "UserSimIndex": sim_inds[ip]})
 
                         # get ROI's to fit spots
                         img_rois = [roi_fns.cut_roi(r, imgs) for r in rois[ic]]
-                        coords_rois = [[roi_fns.cut_roi(r, z), roi_fns.cut_roi(r, y), roi_fns.cut_roi(r, x)] for r in rois[ic]]
+                        coords_rois = [[roi_fns.cut_roi(r, z), roi_fns.cut_roi(r, y), roi_fns.cut_roi(r, x)]
+                                       for r in rois[ic]]
                         coords_rois = list(zip(*coords_rois))
                         fixed_params = np.zeros((7), dtype=bool)
-                        fixed_params[1:5] = True
+                        fixed_params[1:4] = True
+                        fixed_params[-1] = True
 
                         # do fitting
                         fps[ic][:, it, iz, ia, ip, :], fit_states, chi_sqrs, niters, fit_t = \
                             localize.fit_gauss_rois(img_rois, coords_rois, fps_start[ic], fixed_params=fixed_params)
 
-
     # ####################################
     # compute modulation depth statistics
     # ####################################
+    # parameters extracted from fits, size nfits x ntimes x nz x nangles
+    # these combine the phase images, either necessarily as we need all three to estimate the modulation depth
+    # or we take an average to get the best estimate of the parameter
+    fps_mean = [[]] * ncolors
+    m_ests = [[]] * ncolors
+    cos_phis = [[]] * ncolors
+
     for ic in range(ncolors):
         if ignore_color[ic]:
             continue
-        brightness_exp = fps[ic][..., 0]
+        # mean value of parameters over phase axis
+        fps_mean[ic] = np.mean(fps[ic], axis=-2)
 
-        amp_ests[ic] = np.mean(brightness_exp, axis=-1)
-        m_ests[ic] = sim.sim_optical_section(brightness_exp, axis=-1) / amp_ests[ic]
+        # estimate modulation depth and amplitude
+        m_ests[ic] = sim.sim_optical_section(fps[ic][..., 0], axis=-1) / fps_mean[ic][..., 0]
 
         # if any amplitudes were negative, m_est will not be any good, so throw it away
-        amp_is_neg = brightness_exp < 0
+        amp_is_neg = fps[ic][..., 0] < 0
         m_ests[ic][np.any(amp_is_neg, axis=-1)] = np.nan
 
-        cos_phis[ic] = (brightness_exp / np.expand_dims(amp_ests[ic], axis=-1) - 1) / np.expand_dims(m_ests[ic], axis=-1)
-
+        # cos phis
+        # cos_phis[ic] = (fps_mean[ic][..., 0] / np.expand_dims(fps_mean[ic][..., 0], axis=-1) - 1) /\
+        #                np.expand_dims(m_ests[ic], axis=-1)
 
     # ####################################
     # plot results for each z/t/angle
@@ -232,7 +233,8 @@ for d in data_dirs:
     tstart = time.perf_counter()
     for iz in range(nz):
         for it in range(ntimes):
-            print("plotting iz %d/%d, it %d/%d, elapsed t=%0.2fs" % (iz + 1, nz, it + 1, ntimes, time.perf_counter() - tstart))
+            print("plotting iz %d/%d, it %d/%d, elapsed t=%0.2fs" %
+                  (iz + 1, nz, it + 1, ntimes, time.perf_counter() - tstart))
             # figure plotting all data for a given time point
             figh = plt.figure(figsize=figsize)
             plt.suptitle("%s, z=%d, time=%d, exposure=%dms" % (d, iz, it, exposure_t))
@@ -278,10 +280,10 @@ for d in data_dirs:
                     figh2 = localize.plot_bead_locations(imgs, centers_temp, weights=m_ests[ic][:, it, iz, ia],
                                                          title="modulation depth versus position ic=%d, iz=%d, it=%d, ia=%d\n"
                                                                "m = %0.3f +/- %0.3f\nadjusted=%0.3f" %
-                                                               (ic, iz, it, ia, mean_depth, std_depth, mean_depth / mod_depth_bead_size_correction),
+                                                               (ic, iz, it, ia, mean_depth, std_depth,
+                                                                mean_depth / mod_depth_bead_size_correction),
                                                          cbar_labels=["modulation depth"],
                                                          vlims_percentile=(0.001, 99.99), gamma=0.5, figsize=figsize)
-
 
                     if save_results:
                         fname = os.path.join(save_dir, "beads_ic=%d_z=%d_time=%d_angle=%d.png" % (ic, iz, it, ia))
@@ -294,20 +296,21 @@ for d in data_dirs:
 
                     # histogram of modulation depths
                     ax = plt.subplot(grid[ic, ia * nplots_per_angle])
-                    plt.title("%0.3f +/- %0.3f\nadjusted=%0.3f" % (mean_depth, std_depth, mean_depth / mod_depth_bead_size_correction))
+                    ax.set_title("%0.3f +/- %0.3f\nadjusted=%0.3f" %
+                                 (mean_depth, std_depth, mean_depth / mod_depth_bead_size_correction))
 
-                    plt.plot(bin_centers, ms_hist)
-                    plt.xlim([-0.05, 1.15])
+                    ax.plot(bin_centers, ms_hist)
 
+                    ax.set_xlim([-0.05, 1.15])
                     ax.set_yticks([])
                     ax.set_yticklabels([])
                     ax.set_ylabel("angle=%d" % ia)
 
                     # modulation depths versus amplitude
                     ax = plt.subplot(grid[ic, ia * nplots_per_angle + 1])
-                    plt.title("amp\n med %0.2f" % (med_amp))
+                    ax.set_title("amp\n med %0.2f" % (med_amp))
 
-                    ax.plot([-0.05, 1.15], [med_amp, med_amp], 'k')
+                    ax.plot([-0.05, 1.15], [med_amp, med_amp], 'b')
                     ax.plot([-0.05, 1.15], [0, 0], 'k')
                     ax.plot(m_temp, amp_temp, '.')
 
@@ -318,9 +321,9 @@ for d in data_dirs:
 
                     # size versus amplitude
                     ax = plt.subplot(grid[ic, ia * nplots_per_angle + 2])
-                    plt.title("sigma\nmed %0.2f" % (med_sigma))
+                    ax.set_title("sigma\nmed %0.2f" % (med_sigma))
 
-                    ax.plot([-0.05, 1.15], [med_sigma, med_sigma], 'k')
+                    ax.plot([-0.05, 1.15], [med_sigma, med_sigma], 'b')
                     ax.plot([-0.05, 1.15], [0, 0], 'k')
                     ax.plot(m_temp, sigma_means_temp, '.')
 
@@ -363,21 +366,16 @@ for d in data_dirs:
                 grid = plt.GridSpec(2, 2 * nangles, hspace=0.5, wspace=0.5)
 
                 for ia in range(nangles):
-                    sigma_to_plot = np.array(sigma_means[ic][:, it, :, ia, 0], copy=True)
-                    amp_to_plot = np.array(amp_ests[ic][:, it, :, ia], copy=True)
+                    sigma_to_plot = np.array(fps_mean[ic][:, it, :, ia, 4], copy=True)
+                    amp_to_plot = np.array(fps_mean[ic][:, it, :, ia, 0], copy=True)
                     m_to_plot = np.array(m_ests[ic][:, it, :, ia], copy=True)
 
                     # loop over ROI's and fit position of minimum sigmas and maximum modulation depth
                     for ii in range(len(rois[ic])):
-                        # z-positions of all points where the window fully fits inside the array
-                        # zs_windowed = zs[nwindow // 2: - nwindow // 2 + 1]
-                        mean_amp = np.mean(fps[ic][ii, it, :, ia, :, 0], axis=1)
-
                         # ############################
                         # fit modulation depth vs z
-                        # ############################
                         # smooth modulation depth vs z function and then take derivative
-
+                        # ############################
                         # remove nans, as these will mess up interpolation
                         not_nan = np.logical_not(np.isnan(m_to_plot[ii]))
 
@@ -392,7 +390,6 @@ for d in data_dirs:
                         max_guess = np.argmax(0.5 * (m_smoothed[1:] + m_smoothed[:-1]))
 
                         # interpolate zero
-
                         def fn(x): return np.interp(x, zd, m_deriv)
                         result = scipy.optimize.root_scalar(fn, x0=zd[max_guess] - dz, x1=zd[max_guess] + dz)
 
@@ -410,7 +407,7 @@ for d in data_dirs:
                         sid_deriv = (sig_smoothed[1:] - sig_smoothed[:-1]) / dz
                         zd = 0.5 * (zs_smoothed_sig[:-1] + zs_smoothed_sig[1:])
 
-                        min_guess = np.argmax(mean_amp)
+                        min_guess = np.argmax(fps_mean[ic][ii, it, :, ia, 0])
                         zmin_guess = zs[min_guess]
                         def fn(x): return np.interp(x, zd, sid_deriv)
                         result = scipy.optimize.root_scalar(fn, x0=zmin_guess - dz, x1=zmin_guess + dz)
@@ -429,7 +426,7 @@ for d in data_dirs:
                         amp_deriv = (amp_smoothed[1:] - amp_smoothed[:-1]) / dz
                         zd = 0.5 * (zs_smoothed_sig[:-1] + zs_smoothed_sig[1:])
 
-                        min_guess = np.argmax(mean_amp)
+                        min_guess = np.argmax(fps_mean[ic][ii, it, :, ia, 0])
                         zmin_guess = zs[min_guess]
 
                         def fn(x): return np.interp(x, zd, amp_deriv)
@@ -441,59 +438,59 @@ for d in data_dirs:
                         else:
                             focus_zs[ic][ii, it, ia] = result.root
 
-
                         # diagnostic plots
-                        # if ii == 0 and it == 0 and ia == 0:
-                        if False:
+                        plot_z_diagnostic = True
+                        if plot_z_diagnostic:
                             # annoying to deal with a second figure while on is already open...
                             figh_diagnostic = plt.figure(figsize=figsize)
                             plt.suptitle("channel = %d, angle = %d, time = %d, roi = %d" % (ic, ia, it, ii))
                             g = plt.GridSpec(2, 2, wspace=0.5, hspace=0.5)
 
-                            plt.subplot(g[0, 0])
-                            plt.plot(zs, sigma_to_plot[ii], 'rx')
-                            plt.plot(zs_smoothed_sig, sig_smoothed, 'r.')
-                            plt.plot([focus_zs[ic][ii, it, ia], focus_zs[ic][ii, it, ia]], [sig_smoothed.min(), sig_smoothed.max()], 'r')
-                            plt.legend(["raw", "smoothed"])
-                            plt.title("sigma, peak = %0.2f $\mu m$" % focus_zs[ic][ii, it, ia])
-                            plt.ylabel("sigma (pix)")
-                            plt.xlabel("z ($\mu$m)")
+                            ax = plt.subplot(g[0, 0])
+                            ax.plot(zs, sigma_to_plot[ii], 'rx')
+                            ax.plot(zs_smoothed_sig, sig_smoothed, 'r.')
+                            ax.plot([focus_zs[ic][ii, it, ia], focus_zs[ic][ii, it, ia]], [sig_smoothed.min(), sig_smoothed.max()], 'r')
+                            ax.legend(["raw", "smoothed"])
+                            ax.set_title("sigma, peak = %0.2f $\mu m$" % focus_zs[ic][ii, it, ia])
+                            ax.set_ylabel("sigma (pix)")
+                            ax.set_xlabel("z ($\mu$m)")
 
-                            plt.subplot(g[0, 1])
-                            plt.plot(zs, m_to_plot[ii], 'bx')
-                            plt.plot(zs_smoothed_m, m_smoothed, 'b.')
-                            plt.plot([mod_max_zs[ic][ii, it, ia], mod_max_zs[ic][ii, it, ia]], [0, 1], 'b')
-                            plt.legend(["raw", "smoothed"])
-                            plt.title("mod depth, peak = %0.2f $\mu m$" % mod_max_zs[ic][ii, it, ia])
-                            plt.ylabel("mod depth")
-                            plt.xlabel("z ($\mu$m)")
+                            ax = plt.subplot(g[0, 1])
+                            ax.plot(zs, m_to_plot[ii], 'bx')
+                            ax.plot(zs_smoothed_m, m_smoothed, 'b.')
+                            ax.plot([mod_max_zs[ic][ii, it, ia], mod_max_zs[ic][ii, it, ia]], [0, 1], 'b')
+                            ax.legend(["raw", "smoothed"])
+                            ax.set_title("mod depth, peak = %0.2f $\mu m$" % mod_max_zs[ic][ii, it, ia])
+                            ax.set_ylabel("mod depth")
+                            ax.set_xlabel("z ($\mu$m)")
 
-                            plt.subplot(g[1, 0])
-                            plt.plot(zs, fps[ic][ii, it, :, ia, :, 0])
-                            plt.plot(zs_smoothed_amp, amp_smoothed, '.')
-                            plt.plot([focus_zs[ic][ii, it, ia], focus_zs[ic][ii, it, ia]], [np.min(amp_to_plot[ii]), np.max(amp_to_plot[ii])])
-                            plt.title('amplitude (all angles), peak = %0.2f $\mu m$' % focus_zs[ic][ii, it, ia])
-                            plt.ylabel("amplitude (pix)")
-                            plt.xlabel("z ($\mu$m)")
-                            plt.ylim([0, np.max(zs_smoothed_amp) * 2])
+                            ax = plt.subplot(g[1, 0])
+                            ax.plot(zs, fps[ic][ii, it, :, ia, :, 0], 'x')
+                            ax.plot(zs_smoothed_amp, amp_smoothed, '.')
+                            ax.plot([focus_zs[ic][ii, it, ia], focus_zs[ic][ii, it, ia]],
+                                    [np.min(amp_to_plot[ii]), np.max(amp_to_plot[ii])])
+                            ax.set_title('amplitude (all angles), peak = %0.2f $\mu m$' % focus_zs[ic][ii, it, ia])
+                            ax.set_ylabel("amplitude (pix)")
+                            ax.set_xlabel("z ($\mu$m)")
+                            ax.set_ylim([-50, np.max(amp_to_plot[ii]) * 1.2])
 
-                            plt.subplot(g[1, 1])
-                            plt.plot(zs, fps[ic][ii, it, :, ia, :, -2], 'x-')
-                            plt.title('background (all angles)')
-                            plt.ylabel("background (pix)")
-                            plt.xlabel("z ($\mu$m)")
+                            ax = plt.subplot(g[1, 1])
+                            ax.plot(zs, fps[ic][ii, it, :, ia, :, -2], 'x-')
+                            ax.set_title('background (all angles)')
+                            ax.set_ylabel("background (pix)")
+                            ax.set_xlabel("z ($\mu$m)")
 
                             if save_results:
                                 fig_fname = os.path.join(save_dir, "focus_diagnostic_color=%d.png" % ic)
                                 figh_diagnostic.savefig(fig_fname)
-                            # if close_fig_after_saving:
-                            #     plt.close(figh_diagnostic)
+                            if close_fig_after_saving:
+                                plt.close(figh_diagnostic)
 
                     # ############################################
                     # find focus gradient using linear least squares: f(x,y) = C0 + C1*X + C2*Y
                     # ############################################
-                    cx = rois[ic][:, 4] + fps[ic][:, it, iz, ia, 0, 1]
-                    cy = rois[ic][:, 2] + fps[ic][:, it, iz, ia, 0, 2]
+                    cx = fps_mean[ic][:, it, iz, ia, 1]
+                    cy = fps_mean[ic][:, it, iz, ia, 2]
 
                     zf = focus_zs[ic][:, it, ia]
                     focus_not_nan = np.logical_not(np.isnan(zf))
@@ -524,6 +521,9 @@ for d in data_dirs:
                     cmap = plt.cm.get_cmap('Reds')
                     zmin = zs.min()
                     zmax = zs.max()
+
+                    # focus back to this figure...
+                    plt.figure(figh.number)
 
                     # plot focus angle shift
                     ax = plt.subplot(grid[0, ia * 2])
