@@ -294,3 +294,5 @@ dask-worker-space/
 
 # scratch space
 examples/data/**
+# temporary files
+expt_ctrl/temp*.cfg
