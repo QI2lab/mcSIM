@@ -44,7 +44,9 @@ except ImportError:
 class SimImageSet:
     def __init__(self, physical_params, imgs, frq_guess=None, phases_guess=None, mod_depths_guess=None,
                  otf=None, wiener_parameter=0.1,
-                 phase_estimation_mode="wicker-iterative", frq_estimation_mode="band-correlation", combine_bands_mode="fairSIM",
+                 phase_estimation_mode="wicker-iterative",
+                 frq_estimation_mode="band-correlation",
+                 combine_bands_mode="fairSIM",
                  use_fixed_mod_depths=False, normalize_histograms=True, determine_amplitudes=False,
                  fmax_exclude_band0=0, mod_depth_otf_mask_threshold=0.1,
                  background=0, gain=1, max_phase_err=10 * np.pi / 180, min_p2nr=1, fbounds=(0.01, 1),
@@ -76,8 +78,10 @@ class SimImageSet:
         :param bool determine_amplitudes: whether or not to determine amplitudes as part of Wicker phase optimization.
         This flag has an effect if phase_estimation_mode is "wicker-iterative"
         :param float fmax_exclude_band0: amount of the unshifted bands to exclude, as a fraction of fmax. This can
-        enhance optical sectioning by replacing the low frequency information in the reconstruction with the data
-        from the shfited bands only.
+        enhance optical sectioning by replacing the low frequency information in the reconstruction with the data.
+        from the shifted bands only.
+        For more details on the band replacement optical sectioning approach, see https://doi.org/10.1364/BOE.5.002580
+        and https://doi.org/10.1016/j.ymeth.2015.03.020
         :param background: a single number, or an array which is broadcastable to the same size as images. This will
         be subtracted from the raw data before processing.
         :param gain: gain of the camera in ADU/photons. This is a single number or an array which is broadcastable to
@@ -88,8 +92,8 @@ class SimImageSet:
          of the frequencies determined by the estimation algorithm.
         :param fbounds: frequency bounds as a fraction of fmax to be used in power spectrum fit. todo: remove ...
         :param bool interactive_plotting: show plots in python GUI windows, or save outputs only
-        :param save_dir: directory to save results. If None, then results will not be saved
-        :param use_gpu:
+        :param str save_dir: directory to save results. If None, then results will not be saved
+        :param bool use_gpu:
         :param figsize:
         """
         # #############################################
@@ -154,6 +158,7 @@ class SimImageSet:
         self.imgs = imgs.astype(np.float64)
         self.nangles, self.nphases, self.ny, self.nx = imgs.shape
         self.nbands = 3 # hardcoded for 2D SIM
+        self.band_inds = np.array([0, 1, -1]) # todo: use ...
         
         # #############################################
         # get basic parameters
@@ -450,19 +455,34 @@ class SimImageSet:
         tstart = time.perf_counter()
 
         if self.combine_mode == "openSIM":
+            if self.fmax_exclude_band0 > 0:
+                raise NotImplementedError("only fmax_exlude_band0=0 is implemented with combine_mode='openSIM'")
+
             self.weights, self.weights_norm = self.get_weights_lal()
+
         elif self.combine_mode == "fairSIM":
             # following the approach of FairSIM: https://doi.org/10.1038/ncomms10980
             self.weights = self.otf_shifted.conj()
             weights_decon = np.array(self.weights, copy=True)
 
             # "fill in missing cone" by using shifted bands instead of unshifted band for values near DC
-            # todo: can do this also for openSIM approach?
             if self.fmax_exclude_band0 > 0:
+                # correct unshifted band weights near zero frequency
                 ff_us = np.sqrt(np.expand_dims(self.fx_us, axis=0)**2 + np.expand_dims(self.fy_us, axis=1)**2)
-                self.weights[:, 0, ff_us < self.fmax * self.fmax_exclude_band0] = 0
+                self.weights[:, 0] *= (1 - np.exp(-0.5 * ff_us**2 / (self.fmax * self.fmax_exclude_band0)**2))
+
+                # correct other band weights at modulation frequencies
+                for ii in range(self.nangles):
+                    ff_us = np.sqrt(np.expand_dims(self.fx_us + self.frqs[ii, 0], axis=0)**2 +
+                                    np.expand_dims(self.fy_us + self.frqs[ii, 1], axis=1)**2)
+                    self.weights[ii, 1] *= (1 - np.exp(-0.5 * ff_us ** 2 / (self.fmax * self.fmax_exclude_band0)**2))
+
+                    ff_us = np.sqrt(np.expand_dims(self.fx_us - self.frqs[ii, 0], axis=0)**2 +
+                                    np.expand_dims(self.fy_us - self.frqs[ii, 1], axis=1)**2)
+                    self.weights[ii, 2] *= (1 - np.exp(-0.5 * ff_us ** 2 / (self.fmax * self.fmax_exclude_band0)**2))
 
             self.weights_norm = self.wiener_parameter**2 + np.nansum(np.abs(self.weights) ** 2, axis=(0, 1))
+
         else:
             raise ValueError("combine_mode must be 'fairSIM' or 'openSIM' but was '%s'" % self.combine_mode)
 
@@ -997,9 +1017,9 @@ class SimImageSet:
                     tstr = 'angle %d, relative intensity=%0.3f\nphase int=' % (ii, rel_int_angles[ii])
                     for aa in range(self.nphases):
                         tstr += "%0.3f, " % rel_int_phases[ii, aa]
-                    plt.ylabel(tstr)
+                    ax.set_ylabel(tstr)
                 if ii == (self.nangles - 1):
-                    plt.xlabel("Position (um)")
+                    ax.set_xlabel("Position (um)")
 
             # ########################################
             # histograms of real-space images
@@ -1015,9 +1035,9 @@ class SimImageSet:
 
             ax.set_yticks([])
             if ii == 0:
-                plt.title("image histogram\nmedian %0.1f" % (np.median(self.imgs[ii, jj].ravel())))
+                ax.set_title("image histogram\nmedian %0.1f" % (np.median(self.imgs[ii, jj].ravel())))
             else:
-                plt.title("median %0.1f" % (np.median(self.imgs[ii, jj].ravel())))
+                ax.set_title("median %0.1f" % (np.median(self.imgs[ii, jj].ravel())))
             if ii != (self.nangles - 1):
                 ax.set_xticks([])
 
@@ -1026,37 +1046,16 @@ class SimImageSet:
             # spatially resolved mcnr
             # ########################################
             ax = plt.subplot(grid[ii, self.nphases + 1])
-            plt.imshow(self.mcnr[ii], vmin=0, vmax=np.percentile(self.mcnr[ii], 99), cmap="bone")
-            plt.colorbar()
+            im = ax.imshow(self.mcnr[ii], vmin=0, vmax=np.percentile(self.mcnr[ii], 99), cmap="bone")
             ax.set_xticks([])
             ax.set_yticks([])
             if ii == 0:
-                plt.title("mcnr")
+                ax.set_title("mcnr")
 
-            # ########################################
-            # mcnr histograms
-            # ########################################
-            nbins = 50
-            bin_edges = np.linspace(0, np.percentile(self.mcnr, 99), nbins + 1)
-            bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-            histogram, _ = np.histogram(self.mcnr[ii].ravel(), bins=bin_edges)
-
-            median = np.median(self.mcnr[ii].ravel())
-
-            #
+            # colorbar
             ax = plt.subplot(grid[ii, self.nphases + 2])
-            plt.plot(bin_centers, histogram)
+            plt.colorbar(im, cax=ax)
 
-            ylim = ax.get_ylim()
-            ax.set_ylim([0, ylim[1]])
-
-            if ii == 0:
-                plt.title("mcnr histogram\nmedian %0.3f" % median)
-            else:
-                plt.title("median %0.3f" % median)
-            ax.set_yticks([])
-            if ii != (self.nangles - 1):
-                ax.set_xticks([])
 
         return figh
 
@@ -1367,7 +1366,7 @@ class SimImageSet:
         # #######################
         figh = plt.figure(figsize=figsize)
         grid = plt.GridSpec(1, 2)
-        plt.suptitle('Net weight, Wiener param = %0.2f' % self.wiener_parameter)
+        plt.suptitle('Normalized weight, Wiener param = %0.2f' % self.wiener_parameter)
 
         ax = plt.subplot(grid[0, 0])
         net_weight = np.abs(np.sum(self.weights, axis=(0, 1))) / self.weights_norm
@@ -1527,23 +1526,28 @@ class SimImageSet:
 
             fname = os.path.join(save_dir, "mcnr%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.mcnr.astype(np.float32), imagej=True,
-                             resolution=(1 / self.dx, 1 / self.dx), metadata={'unit': 'um'}, **kwargs)
+                             resolution=(1/self.dx, 1/self.dx),
+                             metadata={'Info': 'modulation-contrast to noise ratio', 'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "sim_os%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.sim_os.astype(np.float32), imagej=True,
-                             resolution=(1/self.dx, 1/self.dx), metadata={'unit': 'um'}, **kwargs)
+                             resolution=(1/self.dx, 1/self.dx),
+                             metadata={'Info': 'SIM optical-sectioning', 'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "widefield%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.widefield.astype(np.float32), imagej=True,
-                             resolution=(1/self.dx, 1/self.dx), metadata={'unit': 'um'}, **kwargs)
+                             resolution=(1/self.dx, 1/self.dx),
+                             metadata={'Info': 'widefield', 'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "sim_sr%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.sim_sr.astype(np.float32), imagej=True,
-                             resolution=(1/(self.dx / self.upsample_fact), 1/(self.dx/ self.upsample_fact)), metadata={'unit': 'um'}, **kwargs)
+                             resolution=(1/(self.dx / self.upsample_fact), 1/(self.dx/ self.upsample_fact)),
+                             metadata={'Info': 'SIM super-resolution', 'unit': 'um'}, **kwargs)
 
             fname = os.path.join(save_dir, "deconvolved%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.widefield_deconvolution.astype(np.float32), imagej=True,
-                             resolution=(1 / (self.dx / self.upsample_fact), 1 / (self.dx / self.upsample_fact)), metadata={'unit': 'um'}, **kwargs)
+                             resolution=(1/(self.dx / self.upsample_fact), 1/(self.dx / self.upsample_fact)),
+                             metadata={'Info': 'Wiener deconvolved', 'unit': 'um'}, **kwargs)
 
             self.print_log("saving tiff files took %0.2fs" % (time.perf_counter() - tstart_save))
 
@@ -1587,45 +1591,39 @@ class SimImageSet:
 
 def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, excitation_wavelengths,
                             affine_data_paths, otf_data_path, dmd_pattern_data_path,
-                            nangles=3, nphases=3, npatterns_ignored=0, crop_rois=None, fit_all_sim_params=False,
-                            plot_results=True,
+                            nangles=3, nphases=3, npatterns_ignored=0,
+                            crop_rois=None, fit_all_sim_params=False, plot_diagnostics=True,
                             channel_inds=None, zinds_to_use=None, tinds_to_use=None, xyinds_to_use=None,
-                            saving=True, tif_stack=True, **kwargs):
+                            id_pattern="ic=%d_it=%d_ixy=%d_iz=%d", **kwargs):
     """
     Reconstruct entire folder of SIM data and save results in TIF stacks. Responsible for loading relevant data
     (images, affine transformations, SIM pattern information), selecting images to recombine from metadata, and
     saving results for SIM superresolution, deconvolution, widefield image, etc.
 
-    :param list data_dirs: list of directories where data is stored
+    :param list[str] data_dirs: list of directories where data is stored
     :param float pixel_size: pixel size in ums
     :param float na: numerical aperture
-    :param list emission_wavelengths: list of emission wavelengths in um
-    :param list excitation_wavelengths: list of excitation wavelengths in um
-    :param list affine_data_paths: list of paths to files storing data about affine transformations between DMD and camera
+    :param list[float] emission_wavelengths: list of emission wavelengths in um
+    :param list[float] excitation_wavelengths: list of excitation wavelengths in um
+    :param list[str] affine_data_paths: list of paths to files storing data about affine transformations between DMD and camera
     space. [path_color_0, path_color_1, ...]. The affine data files store pickled dictionary objects. The dictionary
     must have an entry 'affine_xform' which contains the affine transformation matrix (in homogeneous coordinates)
     :param str otf_data_path: path to file storing optical transfer function data. Data is a pickled dictionary object
     and must have entry 'fit_params'.
-    :param list dmd_pattern_data_path: list of paths to files storing data about DMD patterns for each color. Data is
+    :param list[str] dmd_pattern_data_path: list of paths to files storing data about DMD patterns for each color. Data is
     stored in a pickled dictionary object which must contain fields 'frqs', 'phases', 'nx', and 'ny'
     :param int nangles: number of angle images
     :param int nphases: number of phase images
     :param int npatterns_ignored: number of patterns to ignore at the start of each channel.
-    :param crop_rois: [[ystart_0, yend_0, xstart_0, xend_0], [ystart_1, ...], ...]
+    :param list[list] crop_rois: [[ystart_0, yend_0, xstart_0, xend_0], [ystart_1, ...], ...]
     :param list img_centers: list of centers for images in each data directory to be used in cropping [[cy, cx], ...]
     :param list or int crop_sizes: list of crop sizes for each data directory
     :param list channel_inds: list of channel indices corresponding to each color. If set to None, will use [0, 1, ..., ncolors -1]
     :param list zinds_to_use: list of z-position indices to reconstruct
     :param list tinds_to_use: list of time indices to reconstruct
     :param list xyinds_to_use: list of xy-position indices to reconstruct
-    :param bool saving: if True, save results
-    :param bool tif_stack: save results as tif stack. Otherwise save as individual tiff images
     :param **kwargs: passed through to reconstruction
-
-    :return np.ndarray imgs_sr:
-    :return np.ndarray imgs_wf:
-    :return np.ndarray imgs_deconvolved:
-    :return np.ndarray imgs_os:
+    :return str sim_save_dir: directories where results were saved
     """
 
     nfolders = len(data_dirs)
@@ -1682,18 +1680,13 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         otf_data = pickle.load(f)
     otf_p = otf_data['fit_params']
 
-    if len(otf_p) == 1:
-        otf_fn = lambda f, fmax: 1 / (1 + (f / fmax * otf_p[0]) ** 2) * \
-                                 psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
-    else:
-        otf_fn = lambda f, fmax: 1 / (
-                    1 + (f / fmax * otf_p[0]) ** 2 + (f / fmax * otf_p[1]) ** 4 + (f / fmax * otf_p[2]) ** 6 +
-                    (f / fmax * otf_p[3]) ** 8) * psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
+    def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_p[0]) ** 2) * psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
 
     # ############################################
     # SIM images
     # ############################################
-    for rpath, crop_roi in zip(data_dirs, crop_rois):
+    save_dirs = []
+    for rpath, roi in zip(data_dirs, crop_rois):
         folder_path, folder = os.path.split(rpath)
         print("# ################################################################################")
         print("analyzing folder: %s" % folder)
@@ -1703,28 +1696,32 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
 
         # path to store processed results
-        if saving:
-            sim_results_path = os.path.join(rpath, '%s_sim_reconstruction' % tstamp)
-            if not os.path.exists(sim_results_path):
-                os.mkdir(sim_results_path)
-            print("save directory: %s" % sim_results_path)
+        sim_save_dir = os.path.join(rpath, '%s_sim_reconstruction' % tstamp)
+        save_dirs.append(sim_save_dir)
+        if not os.path.exists(sim_save_dir):
+            os.mkdir(sim_save_dir)
+        print("save directory: %s" % sim_save_dir)
 
-            # copy useful data files here
-            for kk in range(ncolors):
-                # copy affine data here
-                _, fname = os.path.split(affine_data_paths[kk])
-                fpath = os.path.join(sim_results_path, fname)
-                shutil.copyfile(affine_data_paths[kk], fpath)
+        individual_image_save_dir = os.path.join(sim_save_dir, "individual_images")
+        if not os.path.exists(individual_image_save_dir):
+            os.mkdir(individual_image_save_dir)
 
-                # copy otf data here
-                _, fname = os.path.split(otf_data_path)
-                fpath = os.path.join(sim_results_path, fname)
-                shutil.copyfile(otf_data_path, fpath)
+        # copy useful data files to results dir
+        for kk in range(ncolors):
+            # copy affine data here
+            _, fname = os.path.split(affine_data_paths[kk])
+            fpath = os.path.join(sim_save_dir, fname)
+            shutil.copyfile(affine_data_paths[kk], fpath)
 
-                # copy DMD pattern data here
-                _, fname = os.path.split(dmd_pattern_data_path[kk])
-                fpath = os.path.join(sim_results_path, fname)
-                shutil.copyfile(dmd_pattern_data_path[kk], fpath)
+            # copy otf data here
+            _, fname = os.path.split(otf_data_path)
+            fpath = os.path.join(sim_save_dir, fname)
+            shutil.copyfile(otf_data_path, fpath)
+
+            # copy DMD pattern data here
+            _, fname = os.path.split(dmd_pattern_data_path[kk])
+            fpath = os.path.join(sim_save_dir, fname)
+            shutil.copyfile(dmd_pattern_data_path[kk], fpath)
 
         # load metadata
         metadata, dims, summary = tools.parse_mm_metadata(rpath)
@@ -1734,7 +1731,8 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         nt = dims['time']
 
         # z-plane spacing
-        unique_slices = np.unique(metadata["Slice"])
+        # unique_slices = np.unique(metadata["Slice"])
+        unique_slices = np.unique(metadata["ZPositionUm"])
         unique_slices.sort()
         if len(unique_slices) > 1:
             dz = unique_slices[1] - unique_slices[0]
@@ -1743,22 +1741,24 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
 
         # use this construction as zinds can be different for different folders
         if zinds_to_use is None:
-            zinds_to_use_temp = range(nz)
+            zinds_to_use_temp = list(range(nz))
         else:
             zinds_to_use_temp = zinds_to_use
         nz_used = len(zinds_to_use_temp)
 
         if tinds_to_use is None:
-            tinds_to_use_temp = range(nt)
+            tinds_to_use_temp = list(range(nt))
         else:
             tinds_to_use_temp = tinds_to_use
         nt_used = len(tinds_to_use_temp)
 
         if xyinds_to_use is None:
-            xyinds_to_use_temp = range(nxy)
+            xyinds_to_use_temp = list(range(nxy))
         else:
             xyinds_to_use_temp = xyinds_to_use
         nxy_used = len(xyinds_to_use_temp)
+        if nxy_used > 1:
+            raise NotImplementedError("currently only implemented for one xy-position at a time")
 
         if pixel_size is None:
             pixel_size = metadata['PixelSizeUm'][0]
@@ -1768,37 +1768,30 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         tif = tifffile.TiffFile(fname, multifile=False)
         ny_raw, nx_raw = tif.series[0].shape[-2:]
 
-        if crop_roi is not None:
-            # check points don't exceed image size
-            if crop_roi[0] < 0:
-                crop_roi[0] = 0
-            if crop_roi[1] > ny_raw:
-                crop_roi[1] = ny_raw
-            if crop_roi[2] < 0:
-                crop_roi[2] = 0
-            if crop_roi[3] > nx_raw:
-                crop_roi[3] = nx_raw
+        if roi is None:
+            roi = [0, ny_raw, 0, nx_raw]
         else:
-            crop_roi = [0, ny_raw, 0, nx_raw]
+            # check points don't exceed image size
+            if roi[0] < 0:
+                roi[0] = 0
+            if roi[1] > ny_raw:
+                roi[1] = ny_raw
+            if roi[2] < 0:
+                roi[2] = 0
+            if roi[3] > nx_raw:
+                roi[3] = nx_raw
 
-        ny = crop_roi[1] - crop_roi[0]
-        nx = crop_roi[3] - crop_roi[2]
+        ny = roi[1] - roi[0]
+        nx = roi[3] - roi[2]
 
         # timing
         tstart_all = time.perf_counter()
-        # arrays to save results
-        imgs_sr = []
-        imgs_os = []
-        imgs_wf = []
-        imgs_decon = []
         counter = 1
         for kk in range(ncolors):
-            sim_options = {'pixel_size': pixel_size, 'wavelength': emission_wavelengths[kk], 'na': na}
-
             # estimate otf
             fmax = 1 / (0.5 * emission_wavelengths[kk] / na)
-            fx = fft.fftshift(fft.fftfreq(nx, sim_options['pixel_size']))
-            fy = fft.fftshift(fft.fftfreq(ny, sim_options['pixel_size']))
+            fx = fft.fftshift(fft.fftfreq(nx, pixel_size))
+            fy = fft.fftshift(fft.fftfreq(ny, pixel_size))
             ff = np.sqrt(fx[None, :] ** 2 + fy[:, None] ** 2)
             otf = otf_fn(ff, fmax)
             otf[ff >= fmax] = 0
@@ -1811,7 +1804,7 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
                     # estimate frequencies based on affine_xform
                     frqs_guess[ii, 0], frqs_guess[ii, 1], phases_guess[ii, jj] = \
                         affine.xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0], frqs_dmd[kk, ii, 1],
-                                                                 phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], crop_roi, xform)
+                                                         phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], roi, xform)
 
             # convert from 1/mirrors to 1/um
             frqs_guess = frqs_guess / pixel_size
@@ -1825,19 +1818,19 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
                     for ind_t in tinds_to_use_temp:
                         tstart_single_index = time.perf_counter()
 
-                        identifier = "%.0fnm_nt=%d_nxy=%d_nz=%d" % (excitation_wavelengths[kk] * 1e3, ind_t, ixy, iz)
-                        file_identifier = "nc=%d_nt=%d_nxy=%d_nz=%d" % (kk, ind_t, ixy, iz)
+                        file_identifier = id_pattern % (kk, ind_t, ixy, iz)
+                        identifier = "%.0fnm_%s" % (excitation_wavelengths[kk] * 1e3, file_identifier)
 
                         # where we will store results for this particular set
-                        sim_diagnostics_path = os.path.join(sim_results_path, identifier)
-                        if not os.path.exists(sim_diagnostics_path):
-                            os.mkdir(sim_diagnostics_path)
+                        diagnostics_dir = os.path.join(sim_save_dir, identifier)
+                        if not os.path.exists(diagnostics_dir):
+                            os.mkdir(diagnostics_dir)
 
                         # find images and load them
+                        img_inds = list(range(npatterns_ignored, npatterns_ignored + nangles * nphases))
                         raw_imgs = tools.read_mm_dataset(metadata, time_indices=ind_t, z_indices=iz, xy_indices=ixy,
                                                          user_indices={"UserChannelIndex": channel_inds[kk],
-                                                                    "UserSimIndex": list(range(npatterns_ignored,
-                                                                                               npatterns_ignored + nangles * nphases))})
+                                                                       "UserSimIndex": img_inds})
 
                         # error if we have wrong number of images
                         if np.shape(raw_imgs)[0] != (nangles * nphases):
@@ -1848,12 +1841,13 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
                         # reshape to [nangles, nphases, ny, nx]
                         imgs_sim = raw_imgs
                         imgs_sim = imgs_sim.reshape((nangles, nphases, raw_imgs.shape[1], raw_imgs.shape[2]))
-                        imgs_sim = imgs_sim[:, :, crop_roi[0]:crop_roi[1], crop_roi[2]:crop_roi[3]]
+                        imgs_sim = imgs_sim[:, :, roi[0]:roi[1], roi[2]:roi[3]]
 
                         # instantiate reconstruction object
                         if fit_all_sim_params or ind_t == 0:
-                            img_set = SimImageSet(sim_options, imgs_sim, frqs_guess, otf=otf, phases_guess=phases_guess,
-                                                  save_dir=sim_diagnostics_path, **kwargs)
+                            img_set = SimImageSet({'pixel_size': pixel_size, 'wavelength': emission_wavelengths[kk], 'na': na},
+                                                  imgs_sim, frqs_guess, otf=otf, phases_guess=phases_guess,
+                                                  save_dir=diagnostics_dir, save_suffix="_%s" % file_identifier, **kwargs)
                             img_set.reconstruct()
 
                             # save fit params for next iteration
@@ -1866,26 +1860,20 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
                             kwargs_reduced["frq_estimation_mode"] = "fixed"
                             kwargs_reduced["phase_estimation_mode"] = "fixed"
                             kwargs_reduced["use_fixed_mod_depths"] = True
-                            img_set = SimImageSet(sim_options, imgs_sim, frqs_real, otf=otf, phases_guess=phases_real,
-                                                  mod_depths_guess=mod_depths_real, save_dir=sim_diagnostics_path,
+                            img_set = SimImageSet({'pixel_size': pixel_size, 'wavelength': emission_wavelengths[kk], 'na': na},
+                                                  imgs_sim, frqs_real, otf=otf, phases_guess=phases_real,
+                                                  mod_depths_guess=mod_depths_real,
+                                                  save_dir=diagnostics_dir, save_suffix="_%s" % file_identifier,
                                                   **kwargs_reduced)
                             img_set.reconstruct()
 
-                        if plot_results:
+                        if plot_diagnostics:
                             # plot results
                             img_set.plot_figs()
 
                         # save reconstruction summary data
-                        img_set.save_result(os.path.join(sim_diagnostics_path, "sim_reconstruction_params.pkl"))
-
-                        if saving and not tif_stack:
-                            img_set.save_imgs(sim_results_path, start_time, file_identifier)
-                        else:
-                            # store images
-                            imgs_os.append(img_set.sim_os)
-                            imgs_wf.append(img_set.widefield)
-                            imgs_sr.append(img_set.sim_sr)
-                            imgs_decon.append(img_set.widefield_deconvolution)
+                        img_set.save_result(os.path.join(diagnostics_dir, "sim_reconstruction_params.pkl"))
+                        img_set.save_imgs(individual_image_save_dir, start_time, "_%s" % file_identifier)
 
                         tend = time.perf_counter()
                         img_set.print_log("Reconstructed %d/%d from %s in %0.2fs" %
@@ -1900,47 +1888,69 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         # #################################
         # save data for all reconstructed files
         # #################################
-        imgs_wf = np.asarray(imgs_wf)
-        imgs_os = np.asarray(imgs_os)
-        imgs_sr = np.asarray(imgs_sr)
-        imgs_decon = np.asarray(imgs_decon)
+        tstart_save = time.perf_counter()
 
-        if saving and tif_stack:
-            tstart_save = time.perf_counter()
+        ch_labels = ["%.0fnm/%.0fnm" % (a * 1e3, b * 1e3) for a, b in zip(excitation_wavelengths, emission_wavelengths)]
+        # colors = [np.array([0, 255, 255]), np.array([255, 0, 255]), np.array([255, 255, 0]),
+        #           np.array([255, 0, 0]), np.array([0, 255, 0]), np.array([0, 0, 255])]
+        # ts = np.linspace(0, 1, 255)
+        #
+        # luts = [(np.expand_dims(ts, axis=0) * np.expand_dims(c, axis=1)).astype(np.uint8) for c in colors]
+        # luts = luts[:ncolors]
 
-            # todo: this will fail if multiple positions
+        stems = ["widefield", "deconvolved", "sim_os", "sim_sr"]
+        res_factors = [1, 2, 1, 2]
+        for st, rf in zip(stems, res_factors):
+            fname_first = os.path.join(individual_image_save_dir, st + "_" +
+                                       id_pattern % (0, tinds_to_use_temp[0], xyinds_to_use_temp[0], zinds_to_use_temp[0]) +
+                                       ".tif")
+            tif = tifffile.TiffFile(fname_first, multifile=False)
+            ny_temp, nx_temp = tif.series[0].shape[-2:]
 
-            # widefield
-            fname = tools.get_unique_name(os.path.join(sim_results_path, 'widefield.tif'))
-            wf_to_save = np.reshape(imgs_wf, [ncolors, nz_used, nt_used, imgs_wf.shape[-2], imgs_wf.shape[-1]]).astype(np.float32)
-            wf_to_save = tifffile.transpose_axes(wf_to_save, "CZTYX", asaxes="TZCYXS")
-            tifffile.imwrite(fname, wf_to_save, datetime=start_time, resolution=(1/pixel_size, 1/pixel_size),
-                            metadata={"Info": "widefield image reconstructed from %s" % rpath, 'spacing': dz, 'unit': 'um'})
+            imgs = np.zeros((ncolors, nz_used, nt_used, ny_temp, nx_temp))
+            for iic, ic in enumerate(range(ncolors)):
+                for iixy, ixy in enumerate(xyinds_to_use_temp):
+                    for iiz, iz in enumerate(zinds_to_use_temp):
+                        for iit, ind_t in enumerate(tinds_to_use_temp):
+                            fname = os.path.join(individual_image_save_dir, st + "_" + id_pattern % (ic, ind_t, ixy, iz) + ".tif")
+                            imgs[iic, iiz, iit] = tifffile.imread(fname)
 
-            # optical sectioned sim
-            fname = tools.get_unique_name(os.path.join(sim_results_path, 'sim_os.tif'))
-            imgs_os_to_save = np.reshape(imgs_os, [ncolors, nz_used, nt_used, imgs_os.shape[-2], imgs_os.shape[-1]]).astype(np.float32)
-            imgs_os_to_save = tifffile.transpose_axes(imgs_os_to_save, "CZTYX", asaxes="TZCYXS")
-            tifffile.imwrite(fname, imgs_os_to_save, datetime=start_time, resolution=(1 / pixel_size, 1 / pixel_size),
-                             metadata={"Info": "SIM optical sectioned image reconstructed from %s" % rpath, 'spacing': dz, 'unit': 'um'})
+            fname = os.path.join(sim_save_dir, '%s.tif' % st)
+            imgs = tifffile.transpose_axes(imgs, "CZTYX", asaxes="TZCYXS")
+            tifffile.imwrite(fname, imgs.astype(np.float32), imagej=True, datetime=start_time,
+                             resolution=(1 / pixel_size * rf, 1 / pixel_size * rf),
+                             metadata={"Info": "%s image reconstructed from %s" % (st, rpath),
+                                       "Labels": ch_labels,
+                                       "spacing": dz,
+                                       "unit": 'um'})
 
-            # sr-sim
-            fname = tools.get_unique_name(os.path.join(sim_results_path, 'sim_sr.tif'))
-            sim_to_save = np.reshape(imgs_sr, [ncolors, nz_used, nt_used, imgs_sr.shape[-2], imgs_sr.shape[-1]]).astype(np.float32)
-            sim_to_save = tifffile.transpose_axes(sim_to_save, "CZTYX", asaxes="TZCYXS")
-            tifffile.imwrite(fname, sim_to_save, datetime=start_time, resolution=(1/(0.5*pixel_size), 1/(0.5*pixel_size)),
-                            metadata={"Info": "SIM superresolution image reconstructed from %s" % rpath, 'spacing': dz, 'unit': 'um'})
+        # also for MCNR
+        fname_first = os.path.join(individual_image_save_dir, "mcnr" + "_" +
+                                   id_pattern % (0, tinds_to_use_temp[0], xyinds_to_use_temp[0], zinds_to_use_temp[0]) +
+                                   ".tif")
+        tif = tifffile.TiffFile(fname_first)
+        ny_temp, nx_temp = tif.series[0].shape[-2:]
 
-            # deconvolved
-            fname = tools.get_unique_name(os.path.join(sim_results_path, 'deconvolved.tif'))
-            deconvolved_to_save = np.reshape(imgs_decon, [ncolors, nz_used, nt_used, imgs_decon.shape[-2], imgs_decon.shape[-1]]).astype(np.float32)
-            deconvolved_to_save = tifffile.transpose_axes(deconvolved_to_save, "CZTYX", asaxes="TZCYXS")
-            tifffile.imwrite(fname, deconvolved_to_save, datetime=start_time, resolution=(1/(0.5*pixel_size), 1/(0.5*pixel_size)),
-                            metadata={"Info": "Deconvolved image reconstructed from %s" % rpath, 'spacing': dz, 'unit': 'um'})
+        imgs = np.zeros((ncolors, nz_used, nt_used, nphases, ny_temp, nx_temp))
+        for iic, ic in enumerate(range(ncolors)):
+            for iixy, ixy in enumerate(xyinds_to_use_temp):
+                for iiz, iz in enumerate(zinds_to_use_temp):
+                    for iit, ind_t in enumerate(tinds_to_use_temp):
+                        fname = os.path.join(individual_image_save_dir,
+                                             "mcnr" + "_" + id_pattern % (ic, ind_t, ixy, iz) + ".tif")
+                        imgs[iic, iiz, iit] = tifffile.imread(fname)
 
-            print("saving tiff stacks took %0.2fs" % (time.perf_counter() - tstart_save))
+        fname = os.path.join(sim_save_dir, 'mcnr.tif')
+        imgs = tifffile.transpose_axes(imgs, "CZTQYX", asaxes="TZQCYXS")
+        tifffile.imwrite(fname, imgs.astype(np.float32), imagej=True, datetime=start_time,
+                         resolution=(1 / pixel_size, 1 / pixel_size),
+                         metadata={"Info": "MCNR image reconstructed from %s" % (rpath),
+                                   "Labels": ch_labels,
+                                   "spacing": dz,
+                                   "unit": 'um'})
+        print("saving tiff stacks took %0.2fs" % (time.perf_counter() - tstart_save))
 
-    return imgs_sr, imgs_wf, imgs_decon, imgs_os
+    return save_dirs
 
 
 # compute optical sectioned SIM image
@@ -2177,8 +2187,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     :return figh: handle to figure produced
     """
     # normalize ...
-    img1_ft = np.array(img1_ft, copy=True) / img1_ft.size
-    img2_ft = np.array(img2_ft, copy=True) / img2_ft.size
+    # img1_ft = np.array(img1_ft, copy=True) / img1_ft.size
+    # img2_ft = np.array(img2_ft, copy=True) / img2_ft.size
 
     # get physical parameters
     dy = dx
@@ -2213,7 +2223,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
         str += "%s\n" % ttl_str
     # suptitle
     str += '      fit: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g and %0.2fdeg' % \
-          (period * 1e3, 1/period, angle * 180 / np.pi, angle, fx_sim, fy_sim, np.abs(peak_cc), np.angle(peak_cc) * 180/np.pi)
+          (period * 1e3, 1/period, angle * 180 / np.pi, angle, fx_sim, fy_sim,
+           np.abs(peak_cc), np.angle(peak_cc) * 180/np.pi)
     if frqs_guess is not None:
         fx_g, fy_g = frqs_guess
         period_g = 1 / np.sqrt(fx_g ** 2 + fy_g ** 2)
@@ -2221,7 +2232,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
         peak_cc_g = tools.get_peak_value(cc, fxs, fys, frqs_guess, peak_pixels)
 
         str += '\nguess: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g and %0.2fdeg' % \
-               (period_g * 1e3, 1/period_g, angle_g * 180 / np.pi, angle_g, fx_g, fy_g, np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
+               (period_g * 1e3, 1/period_g, angle_g * 180 / np.pi, angle_g, fx_g, fy_g,
+                np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
     plt.suptitle(str)
 
     # #######################################
@@ -2281,7 +2293,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     # ft 1
     # #######################################
     ax3 = plt.subplot(gspec[1, 0:6])
-    ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0) = $"  " %0.3g and %0.2fdeg" % (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
+    ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0) = $"  " %0.3g and %0.2fdeg" %
+                  (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
