@@ -413,57 +413,59 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     return sp_ft
 
 
-def fit_ref_frq(img, dxy, fmax_int, nbin=1, search_rad_fraction=1, npercentiles=50):
+def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filter_size=0):
     """
     Determine the hologram reference frequency from a single imaged, based on the regions in the hologram beyond the
-    maximum imaging frequency that ahve information. These are expected to be circles centered around the reference
-    frequency. Note: when the beam angle is non-zero, the dominant tomography frequency component will not be centered
+    maximum imaging frequency that have information. These are expected to be circles centered around the reference
+    frequency.
+
+    The fitting strategy is this
+    (1) determine a threshold value for which points have signal in the image. To do this, first make a plot of
+    thresholds versus percentiles. This should look like two piecewise lines
+    (2) after thresholding the image, fit to circles.
+
+    Note: when the beam angle is non-zero, the dominant tomography frequency component will not be centered
     on this circle, but will be at position f_ref - f_beam
     @param img:
     @param dxy:
     @param fmax_int:
-    @param nbin:
+    @param search_rad_fraction:
+    @param npercentiles:
     @return results, circ_dbl_fn:
     """
+    ny, nx = img.shape
     # fourier transforms
     img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
-    # take average of absolute value. Don't want noisy areas to average to zero...
-    img_ft_bin = tools.bin(np.abs(img_ft), (nbin, nbin), mode="mean")
+    # filter image
+    img_ft = gaussian_filter(img_ft, (filter_size, filter_size))
 
-    ny, nx = img_ft.shape
-
+    # get frequency data
     fxs = fft.fftshift(fft.fftfreq(nx, dxy))
     dfx = fxs[1] - fxs[0]
     fys = fft.fftshift(fft.fftfreq(ny, dxy))
     dfy = fys[1] - fys[0]
     fxfx, fyfy = np.meshgrid(fxs, fys)
+    ff_perp = np.sqrt(fxfx**2 + fyfy**2)
 
     extent_fxy = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx, fys[0] - 0.5 * dfy, fys[-1] + 0.5 * dfy]
-
-    # binned frequencies
-    fxfx_bin = tools.bin(fxfx, (nbin, nbin), mode="mean")
-    dfxb = fxfx[0, 1] - fxfx[0, 0]
-    fyfy_bin = tools.bin(fyfy, (nbin, nbin), mode="mean")
-    dfyb = fyfy[1, 0] - fyfy[0, 0]
-    ff_perp_bin = np.sqrt(fxfx_bin ** 2 + fyfy_bin ** 2)
-
-    extent_fxy_bin = [fxfx_bin[0, 1] - 0.5 * dfxb, fxfx_bin[0, -1] + 0.5 * dfxb, fyfy_bin[0, 0] - 0.5 * dfyb, fyfy_bin[-1, 0] + 0.5 * dfyb]
 
     # #########################
     # find threshold using expected volume of area above threshold
     # #########################
+    # only search outside of this
     frad_search = search_rad_fraction * fmax_int
-    search_region = ff_perp_bin > frad_search
+    search_region = ff_perp > frad_search
 
     frq_area = (fxfx[0, -1] - fxfx[0, 0]) * (fyfy[-1, 0] - fyfy[0, 0])
     expected_area = 2 * (np.pi * (0.5 * fmax_int)**2) / (frq_area - np.pi * frad_search**2)
     # thresh = np.percentile(np.abs(img_ft_bin[search_region]), 100 * (1 - expected_area))
 
-    # find thresholds for different percentiles and look or plateau like beahvior
+    # find thresholds for different percentiles and look or plateau like behavior
     percentiles = np.linspace(0, 99, npercentiles)
-    thresh_all = np.percentile(np.abs(img_ft_bin[search_region]), percentiles)
+    thresh_all = np.percentile(np.abs(img_ft[search_region]), percentiles)
 
-    init_params_thresh = [0, thresh_all[0], (thresh_all[-1] - thresh_all[-2]) / (percentiles[-1] - percentiles[-2]),
+    init_params_thresh = [0, thresh_all[0],
+                          (thresh_all[-1] - thresh_all[-2]) / (percentiles[-1] - percentiles[-2]),
                           100 * (1 - expected_area)]
     results_thresh = fit.fit_model(thresh_all, lambda p: fit.line_piecewise(percentiles, p), init_params_thresh)
 
@@ -471,14 +473,14 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=1, search_rad_fraction=1, npercentiles=
     thresh = thresh_all[thresh_ind]
 
     # masked image
-    img_ft_ref_mask = np.logical_and(np.abs(img_ft_bin) > thresh, ff_perp_bin > frad_search)
+    img_ft_ref_mask = np.logical_and(np.abs(img_ft) > thresh, ff_perp > frad_search)
 
     # #########################
     # define fitting function and get initial guesses
     # #########################
 
     def circ_dbl_fn(x, y, p):
-        p = np.array([p[0], p[1], p[2], 1, 0, np.sqrt(dfxb * dfyb)])
+        p = np.array([p[0], p[1], p[2], 1, 0, np.sqrt(dfx * dfy)])
         p2 = np.array(p, copy=True)
         p2[0] *= -1
         p2[1] *= -1
@@ -487,54 +489,56 @@ def fit_ref_frq(img, dxy, fmax_int, nbin=1, search_rad_fraction=1, npercentiles=
         return circd
 
     # guess based on maximum pixel value. This actually gives f_ref - f_beam, but should be a close enough starting point
-    guess_ind_1d = np.argmax(np.abs(img_ft_bin) * (fyfy_bin <= 0) * (ff_perp_bin > fmax_int))
-    guess_ind = np.unravel_index(guess_ind_1d, img_ft_bin.shape)
+    guess_ind_1d = np.argmax(np.abs(img_ft) * (fyfy <= 0) * (ff_perp > fmax_int))
+    guess_ind = np.unravel_index(guess_ind_1d, img_ft.shape)
 
     # do fitting
     # init_params = [np.mean(fxfx_bin[img_ft_ref_mask]), np.mean(fyfy_bin[img_ft_ref_mask]), 0.5 * fmax_int]
-    init_params = [fxfx_bin[guess_ind], fyfy_bin[guess_ind], 0.5 * fmax_int]
-    results = fit.fit_model(img_ft_ref_mask, lambda p: circ_dbl_fn(fxfx_bin, fyfy_bin, p), init_params)
+    init_params = [fxfx[guess_ind], fyfy[guess_ind], 0.5 * fmax_int]
+    results = fit.fit_model(img_ft_ref_mask, lambda p: circ_dbl_fn(fxfx, fyfy, p), init_params)
 
     # #########################
     # plot
     # #########################
-    # figh = plt.figure(figsize=(16, 8))
-    # grid = plt.GridSpec(2, 3)
-    #
-    # fp_ref = results["fit_params"]
-    # ax = plt.subplot(grid[0, 0])
-    # ax.set_title("img ft")
-    # ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
-    # ax.plot(fp_ref[0], fp_ref[1], 'kx')
-    # ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
-    # ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-    # ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-    # ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
-    #
-    # ax = plt.subplot(grid[0, 1])
-    # ax.set_title("img ft binned")
-    # ax.imshow(np.abs(img_ft_bin), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy_bin, origin="lower")
-    # ax.plot(fp_ref[0], fp_ref[1], 'kx')
-    # ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
-    # ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-    # ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-    # ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
-    #
-    # ax = plt.subplot(grid[0, 2])
-    # ax.set_title("img ft binned mask")
-    # ax.imshow(img_ft_ref_mask, norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy_bin, origin="lower")
-    # ax.plot(fp_ref[0], fp_ref[1], 'kx')
-    # ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
-    # ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-    # ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-    # ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
-    #
-    # ax = plt.subplot(grid[1, 0])
-    # ax.plot(percentiles, thresh_all, 'rx')
-    # ax.plot(percentiles, fit.line_piecewise(percentiles, results_thresh["fit_params"]))
-    # ax.set_xlabel("percentile")
-    # ax.set_ylabel("threshold (counts)")
-    # ax.set_title('threshold = %.0f' % results_thresh["fit_params"][-1])
+    debug = False
+    if debug:
+        figh = plt.figure(figsize=(16, 8))
+        grid = plt.GridSpec(2, 3)
+
+        fp_ref = results["fit_params"]
+        ax = plt.subplot(grid[0, 0])
+        ax.set_title("img ft")
+        ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
+        ax.plot(fp_ref[0], fp_ref[1], 'kx')
+        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+
+        ax = plt.subplot(grid[0, 1])
+        ax.set_title("img ft binned")
+        ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
+        ax.plot(fp_ref[0], fp_ref[1], 'kx')
+        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+
+        ax = plt.subplot(grid[0, 2])
+        ax.set_title("img ft binned mask")
+        ax.imshow(img_ft_ref_mask, norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
+        ax.plot(fp_ref[0], fp_ref[1], 'kx')
+        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+
+        ax = plt.subplot(grid[1, 0])
+        ax.plot(percentiles, thresh_all, 'rx')
+        ax.plot(percentiles, fit.line_piecewise(percentiles, results_thresh["fit_params"]))
+        ax.set_xlabel("percentile")
+        ax.set_ylabel("threshold (counts)")
+        ax.set_title('threshold = %.0f' % results_thresh["fit_params"][-1])
 
     return results, circ_dbl_fn
 
