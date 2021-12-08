@@ -144,7 +144,8 @@ n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
 
 exposure_time_est = 2.8e-3
 # exposure_time_est = 1e-3
-min_frame_time = 3e-3
+# min_frame_time = 3e-3
+min_frame_time = 30e-3
 
 if exposure_time_est >= min_frame_time:
     nsteps_exposure = int(np.round(exposure_time_est / dt))
@@ -209,11 +210,6 @@ with pm.Bridge() as bridge:
     # get strings of all available devices
     devs_v = mmc.get_loaded_devices()
     devs = [devs_v.get(ii) for ii in range(devs_v.size())]
-    bfly = devs[41]
-
-    mmc.set_camera_device(bfly)
-    # set camera exposure time
-    mmc.set_exposure(exposure_time / 1e-3)
 
     # get properties for devices
     # prop_v = mmc.get_device_property_names(devs[5])
@@ -226,14 +222,43 @@ with pm.Bridge() as bridge:
     # set a value
     # mmc.set_property("TriggerScope-DAC01", "Volts", 5.1)
 
+    # ensure triggerscope DMD lines are OFF, so OR circuit only cares about NI DAQ
+    tscope_dmd_ttl_advance = devs[32] # DMD trigger in line #1 = TTL #7
+    mmc.set_property(tscope_dmd_ttl_advance, "State", 0)
 
-    # set up trigger in
-    mmc.set_property(bfly, "Trigger Mode", "On")
-    mmc.set_property(bfly, "Trigger Source", "Line3")
-    mmc.set_property(bfly, "Trigger Selector", "FrameStart")
-    mmc.set_property(bfly, "Trigger Overlap", "ReadOut")
-    # setup trigger out
-    mmc.set_property(bfly, "Line Selector", "Line2")
+    tscope_dmd_ttl_enable = devs[11] # DMD trigger in line #2 = TTL #6
+    mmc.set_property(tscope_dmd_ttl_enable, "State", 0)
+
+    # set up camera
+    # odt_cam = devs[55]
+    odt_cam = devs[1]
+    mmc.set_camera_device(odt_cam)
+    # set external triggering
+    mmc.set_property(odt_cam, "TRIGGER SOURCE", "EXTERNAL")
+    mmc.set_property(odt_cam, "TriggerPolarity", "POSITIVE")
+    # set roi
+    # roi_rect = bridge.construct_java_object("java.awt.Rectangle", args=[512, 512, 1280, 1280])
+    sx = 801
+    cx = 1024
+    sy = 511
+    cy = 1024
+    mmc.set_roi(cx - sx//2, cy - sy//2, sx, sy)
+    #mm.set_roi()
+    # set camera exposure time
+    mmc.set_exposure(exposure_time / 1e-3)
+
+    # odt_cam = devs[41]
+    # mmc.set_camera_device(odt_cam)
+    # # set camera exposure time
+    # mmc.set_exposure(exposure_time / 1e-3)
+    #
+    # # set up trigger in
+    # mmc.set_property(odt_cam, "Trigger Mode", "On")
+    # mmc.set_property(odt_cam, "Trigger Source", "Line3")
+    # mmc.set_property(odt_cam, "Trigger Selector", "FrameStart")
+    # mmc.set_property(odt_cam, "Trigger Overlap", "ReadOut")
+    # # setup trigger out
+    # mmc.set_property(odt_cam, "Line Selector", "Line2")
     # mmc.set_property(bfly, "Line Mode", "Output") # this throws error when call this script from beanshell script in script ...
 
     # pull save dir from MDA

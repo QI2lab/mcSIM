@@ -11,7 +11,8 @@ import sim_reconstruction as sim
 import fit
 
 # fname = r"F:\2021_11_23\23_odt_align\23_odt_align_MMStack_Pos0.ome.tif"
-fname = r"F:\2021_11_23\24_odt_align\24_odt_align_MMStack_Pos0.ome.tif"
+# fname = r"F:\2021_11_23\24_odt_align\24_odt_align_MMStack_Pos0.ome.tif"
+fname = r"F:\2021_12_07\13_odt_focus_test\13_odt_focus_test_MMStack_Pos0.ome.tif"
 img = tifffile.imread(fname)
 if img.ndim == 3:
     img = img[0]
@@ -21,7 +22,7 @@ img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
 ny, nx = img.shape
 wavelength = 0.785 # um
 k = 2*np.pi / wavelength
-dp = 6.9
+dp = 6.5
 mag = 50
 dxy = dp / mag
 na = 0.55
@@ -60,7 +61,7 @@ to_fit_pix = np.abs(efield_shift) > 100
 def fn(p, x, y):
     xrot = (x - p[2]) * np.cos(p[5]) + (y - p[3]) * np.sin(p[5])
     yrot = -(x - p[2]) * np.sin(p[5]) + (y - p[3]) * np.cos(p[5])
-    return p[0] * xrot**2 + p[1] * yrot**2 + p[4]
+    return -p[0] * xrot**2 - p[1] * yrot**2 + p[4]
 # p[0] = k/(2*R)
 
 results = fit.fit_model(phase_unwrapped[to_fit_pix], lambda p: fn(p, xx[to_fit_pix], yy[to_fit_pix]),

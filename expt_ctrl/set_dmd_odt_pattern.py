@@ -24,10 +24,8 @@ xx, yy = np.meshgrid(range(nx), range(ny))
 cref = np.array([ny // 2, nx // 2])
 xx, yy = np.meshgrid(range(nx), range(ny))
 
-# frq = np.array([0, 1/3])
 ang = -45 * np.pi/180
 frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
-# frq = np.array([-1/4, 1/4])
 # frq = np.array([0, 0])
 rad = 5
 phase = 0
@@ -73,7 +71,7 @@ else:
 
     n_phis = 10
     phis = np.arange(n_phis) * 2 * np.pi / n_phis
-    fractions = [0.4, 0.8, 0.95]
+    fractions = [0.9]
     n_thetas = len(fractions)
 
     xoffs = np.zeros((n_thetas, n_phis))

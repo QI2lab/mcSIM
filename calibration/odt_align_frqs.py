@@ -3,6 +3,7 @@ Find reference frequency by looking at circle in frequency space
 Useful for aligning ODT frequencies so that center DMD mirror corresponds to beam passing vertically through sample
 """
 import time
+import os
 import numpy as np
 from numpy import fft
 import matplotlib.pyplot as plt
@@ -15,13 +16,14 @@ import tomography as tm
 no = 1.474
 wavelength = 0.785 # um
 k = 2*np.pi / wavelength
-dxy = 6.9 / 50
+dxy = 6.5 / 50
 na = 0.55
 fmax_int = 1 / (0.5 * wavelength / na)
-nbin = 1
 
-fname = r"F:\2021_11_23\23_odt_align\23_odt_align_MMStack_Pos0.ome.tif"
-img = tifffile.imread(fname)
+
+# fname = r"F:\2021_12_08\37_odt_align\37_odt_align_MMStack_Pos0.ome.tif"
+fname = r"F:\2021_12_08\41_1um_beads_odt\41_1um_beads_odt_MMStack.ome.tif"
+img = tifffile.imread(fname)[0]
 if img.ndim == 2:
     img = np.expand_dims(img, axis=0)
 

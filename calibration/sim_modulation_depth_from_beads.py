@@ -24,8 +24,8 @@ import localize
 import analysis_tools as tools
 
 # data files
-root_path = r"F:\2021_11_24"
-data_dirs = [os.path.join(root_path, "01_505_515nm_0.1um_beads_sim_zstack")]
+root_path = r"F:\2021_12_01"
+data_dirs = [os.path.join(root_path, "01_505_515_0.1um_beads_zstack_shaker_sim")]
 # color channel information
 ignore_color = [False, True, False]
 min_fit_amp = [100, 100, 25]
@@ -35,8 +35,7 @@ bead_radii = 0.5 * np.array([0.1, 0.1, 0.1])
 dxy = 0.065  # um
 figsize = (21, 9)
 save_results = True
-close_fig_after_saving = False
-plot_bead_diagnostics = True
+close_fig_after_saving = True
 nignored_frames = 2
 nangles = 3
 nphases = 3
@@ -258,7 +257,8 @@ for d in data_dirs:
                     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
                     # amplitude statistics
-                    amp_temp = np.mean(amp_ests[ic][:, it, iz], axis=-1)
+                    # amp_temp = np.mean(amp_ests[ic][:, it, iz], axis=-1)
+                    amp_temp = np.mean(fps_mean[ic][:, it, iz, :, 0], axis=-1)
                     mean_amp = np.mean(amp_temp)
                     med_amp = np.median(amp_temp)
                     std_amp = np.std(amp_temp)
@@ -286,7 +286,7 @@ for d in data_dirs:
                                                          vlims_percentile=(0.001, 99.99), gamma=0.5, figsize=figsize)
 
                     if save_results:
-                        fname = os.path.join(save_dir, "beads_ic=%d_z=%d_time=%d_angle=%d.png" % (ic, iz, it, ia))
+                        fname = os.path.join(save_dir, "beads_ic=%d_angle=%d_time=%d_z=%d.png" % (ic, ia, it, iz))
                         figh2.savefig(fname)
                     if close_fig_after_saving:
                         plt.close(figh2)
@@ -340,7 +340,6 @@ for d in data_dirs:
 
     # ###############################
     # focus and maximum modulation vs z
-    # todo: I have not updated this part yet...
     # ###############################
     if nz > 1:
         # window function for smoothing data versus z-position
@@ -379,8 +378,12 @@ for d in data_dirs:
                         # remove nans, as these will mess up interpolation
                         not_nan = np.logical_not(np.isnan(m_to_plot[ii]))
 
-                        m_smoothed = np.convolve(m_to_plot[ii][not_nan], window, mode="valid")
-                        zs_smoothed_m = np.convolve(zs[not_nan], window, mode="valid")
+                        # m_smoothed = np.convolve(m_to_plot[ii][not_nan], window, mode="valid")
+                        # zs_smoothed_m = np.convolve(zs[not_nan], window, mode="valid")
+                        m_smoothed = np.convolve(m_to_plot[ii][not_nan], window, mode="same") / \
+                                     np.convolve(np.ones(m_to_plot[ii][not_nan].shape), window, mode="same")
+                        zs_smoothed_m = np.convolve(zs[not_nan], window, mode="same") / \
+                                        np.convolve(np.ones(m_to_plot[ii][not_nan].shape), window, mode="same")
 
                         zd = 0.5 * (zs_smoothed_m[:-1] + zs_smoothed_m[1:])
                         dzs = zs_smoothed_m[1:] - zs_smoothed_m[:-1]
@@ -401,8 +404,12 @@ for d in data_dirs:
                         # ############################
                         # fit sigma versus z
                         # ############################
-                        sig_smoothed = np.convolve(sigma_to_plot[ii], window, mode="valid")
-                        zs_smoothed_sig = np.convolve(zs, window, mode="valid")
+                        # sig_smoothed = np.convolve(sigma_to_plot[ii], window, mode="valid")
+                        # zs_smoothed_sig = np.convolve(zs, window, mode="valid")
+                        sig_smoothed = np.convolve(sigma_to_plot[ii], window, mode="same") / \
+                                       np.convolve(np.ones(sigma_to_plot[ii].shape), window, mode="same")
+                        zs_smoothed_sig = np.convolve(zs, window, mode="same") / \
+                                          np.convolve(np.ones(zs.shape), window, mode="same")
 
                         sid_deriv = (sig_smoothed[1:] - sig_smoothed[:-1]) / dz
                         zd = 0.5 * (zs_smoothed_sig[:-1] + zs_smoothed_sig[1:])
@@ -420,8 +427,12 @@ for d in data_dirs:
                         # ############################
                         # fit mean amp versus z
                         # ############################
-                        amp_smoothed = np.convolve(amp_to_plot[ii], window, mode="valid")
-                        zs_smoothed_amp = np.convolve(zs, window, mode="valid")
+                        # amp_smoothed = np.convolve(amp_to_plot[ii], window, mode="valid")
+                        # zs_smoothed_amp = np.convolve(zs, window, mode="valid")
+                        amp_smoothed = np.convolve(amp_to_plot[ii], window, mode="same") / \
+                                       np.convolve(np.ones(amp_to_plot[ii].shape), window, mode="same")
+                        zs_smoothed_amp = np.convolve(zs, window, mode="same") / \
+                                          np.convolve(np.ones(zs.shape), window, mode="same")
 
                         amp_deriv = (amp_smoothed[1:] - amp_smoothed[:-1]) / dz
                         zd = 0.5 * (zs_smoothed_sig[:-1] + zs_smoothed_sig[1:])
@@ -481,7 +492,7 @@ for d in data_dirs:
                             ax.set_xlabel("z ($\mu$m)")
 
                             if save_results:
-                                fig_fname = os.path.join(save_dir, "focus_diagnostic_color=%d.png" % ic)
+                                fig_fname = os.path.join(save_dir, "focus_diagnostic_color=%d_angle=%d_roi=%d.png" % (ic, ia, ii))
                                 figh_diagnostic.savefig(fig_fname)
                             if close_fig_after_saving:
                                 plt.close(figh_diagnostic)
