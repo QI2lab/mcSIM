@@ -62,7 +62,7 @@ for ii in range(nimgs):
     # ######################
     # determine reference frequency
     # ######################
-    results_ref, circ_dbl_fn = tm.fit_ref_frq(img[ii], dxy, fmax_int, nbin=1, search_rad_fraction=0.8)
+    results_ref, circ_dbl_fn = tm.fit_ref_frq(img[ii], dxy, fmax_int, search_rad_fraction=1, filter_size=1)
     fp_ref = results_ref["fit_params"]
     frq_refs[ii] = fp_ref[:2]
 

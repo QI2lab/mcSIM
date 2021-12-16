@@ -48,7 +48,7 @@ Miscellaneous tools for IO, reading metadata, image processing, etc.
 Useful tools for automatically localizing sparse fluorescent beads and performing both 2D and 3D
 PSF fitting using various PSF models. Also provides useful statistics and figures summarizing the results.
 This code has now been split out into a [separate repository](https://github.com/QI2lab/localize-psf) which is included in this repository as a
-submodule for convenience.
+submodule for convenience. For more information about these tools, see the [readme](analysis/localize-psf/README.md)
 
 # Examples
 Scripts illustrated examples of different DMD simulations and analysis are stored in [examples](examples). Associated 
@@ -88,8 +88,20 @@ describing the equipment and settings used in the experiment.
 ### [expt_ctrl/dmd_sim_umanager_plugin](expt_ctrl/dmd_sim_umanager_plugin)
 A simple [MicroManager GUI plugin](https://micro-manager.org/wiki/Version_2.0_Plugins) for controlling the DMD patterns while "cruising around" a sample before imaging.
 This plugin takes input from the user and then runs [set_dmd_sim.py](expt_ctrl/set_dmd_sim.py) with
-the appropriate arguments in a user specified Conda environment. This plugin can be compiled using IntelliJ IDEA and the resulting .jar file should be copied
-to the mmplugins subdirectory of the MicroManager installation directory.
+the appropriate arguments in a user specified Conda environment. 
+
+(todo: these instructions are a work in progress. Not working yet.)
+This plugin can be compiled using IntelliJ IDEA and the resulting .jar file should be copied
+to the mmplugins subdirectory of the MicroManager installation directory. Specifically:
+1. Import this folder as an IntelliJ IDEA project
+2. Right click this folder in the Project window and click `Open Module Settings`. Or select `File -> Project Structure`
+3. Go to the `libraries` tab, click add, and add all of the `.jar` files in the `plugins` subdirectory of the MicroManager install
+4. Repeat this process for `ij.jar` located in the main MM install directory
+5. Add the Java SDK under `Project -> Project SDK`. I used `corretto-1.8` with project language level 6.
+6. Go to the `artifacts` tab and click add. Select `jar` and `From modules with dependencies`. For the main class input `ij.ImageJ`
+7. Under `Build` select `Build artifacts...` and the jar file will be built
+8. Copy the jar file to the `mmplugins` subdirectory
+TODO: get this working and finish giving instructions...
 
 # Instrument design
 Mechanical drawings of some parts used in the setup are included in the [parts](parts) directory. For a more complete description of the setup and

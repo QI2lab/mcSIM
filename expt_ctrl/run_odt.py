@@ -19,9 +19,7 @@ import tifffile
 # sys.path.append(r"C:\Users\ptbrown2\Desktop\mcsim_private\mcSIM\expt_ctrl")
 import dlp6500
 
-
 tstart = time.perf_counter()
-# save_dir = r"F:\2021_08_04\pupil_map"
 
 # use this if device won't restart
 # daq.DAQmxResetDevice("Dev1")
@@ -30,7 +28,6 @@ taskDO = daq.Task()
 taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
 taskDO.WriteDigitalLines(1, 1, 10.0, daq.DAQmx_Val_GroupByChannel,
                          np.array([0, 1, 1, 0, 0, 0, 0, 0], dtype=np.uint8), None, None)
-
 taskDO.StopTask()
 taskDO.ClearTask()
 
@@ -61,14 +58,10 @@ xx, yy = np.meshgrid(range(nx), range(ny))
 cref = np.array([ny // 2, nx // 2])
 xx, yy = np.meshgrid(range(nx), range(ny))
 
-# ang = 20 * np.pi/180
-# ang = 0 * np.pi/180
-# frq = np.array([np.sin(ang), np.cos(ang)]) * 1/3
 ang = -45 * np.pi/180
 frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
 
 rad = 5
-# rad = 10
 phase = 0
 pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
 pattern_base[pattern_base <= 0] = 0
@@ -103,12 +96,6 @@ for ii in range(n_phis):
 xoffs = np.concatenate((np.array([0]), xoffs.ravel()))
 yoffs = np.concatenate((np.array([0]), yoffs.ravel()))
 
-# offs = np.arange(-360, 400, 40)
-# offs = np.arange(-180, 181, 20)
-# offs = np.arange(-45, 46, 5)
-# offs = np.arange(-18, 19, 2)
-# offs = np.zeros(19)
-# xoffs, yoffs = np.meshgrid(offs, offs)
 
 npatterns = xoffs.size
 
@@ -116,15 +103,20 @@ pattern_info = {"frquency": frq, "radius": rad, "cref": cref, "phase": phase, "d
                 "xoffsets": xoffs, "yoffsets": yoffs, "npatterns": npatterns}
 
 print("generating patterns...")
-if True:
-    patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
-    for ii in range(npatterns):
-        patterns[ii] = np.copy(pattern_base)
-        patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
-                             (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
-else:
-    # test repeates of all ON
-    patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
+# patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
+# for ii in range(npatterns):
+#     patterns[ii] = np.copy(pattern_base)
+#     patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
+#                          (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
+patterns = np.ones((2*npatterns, ny, nx), dtype=np.uint8)
+for ii in range(npatterns):
+    patterns[2*ii] = np.copy(pattern_base)
+    patterns[2*ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii]) ** 2 +
+                         (yy - cref[0] - yoffs.ravel()[ii]) ** 2) > rad] = 1
+    patterns[2*ii + 1] = 1
+
+# test repeats of all ON
+# patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
 
 print("finished generating patterns, elapsed time %0.2fs" % (time.perf_counter() - tstart))
 
@@ -143,20 +135,19 @@ DAQ_sample_rate_hz = 1 / dt
 n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
 
 exposure_time_est = 2.8e-3
-# exposure_time_est = 1e-3
-# min_frame_time = 3e-3
-min_frame_time = 30e-3
+min_frame_time = 15e-3
 
 if exposure_time_est >= min_frame_time:
-    nsteps_exposure = int(np.round(exposure_time_est / dt))
-    exposure_time = nsteps_exposure * dt
+    nsteps_frame = int(np.round(exposure_time_est / dt))
+    exposure_time = nsteps_frame * dt
 else:
-    nsteps_exposure = int(np.ceil(min_frame_time / dt))
+    nsteps_frame = int(np.ceil(min_frame_time / dt))
     exposure_time = exposure_time_est
+nsteps_exposure = int(np.round(exposure_time / dt))
 print("exposure time = %0.2fms" % (exposure_time * 1e3))
 
 # add extra time steps for readout time
-nsteps_pattern = nsteps_exposure + 3
+nsteps_pattern = nsteps_frame + 3
 
 # add extra steps at start to turn on laser and DMD enable trigger and allow to stabilize
 # alternatively, could set this beforehand and not be in sequence...
@@ -181,10 +172,25 @@ data_do[:, 2] = 1
 data_do[:, 4] = 1
 
 # DMD advance trigger
-# trigger on step before camera to account for 105us DMD delay
+# trigger several steps before camera to account for 105us DMD delay
 data_do[nstabilize - n_dmd_pre_trigger:-1:nsteps_pattern, 3] = 1
+# extra advance trigger to "turn off" DMD
+data_do[nstabilize - n_dmd_pre_trigger + nsteps_exposure:-1:nsteps_pattern, 3] = 1
 
-# print(data_do)
+if False:
+    # print(data_do)
+    # plot digital line data for first frame
+    figh = plt.figure(figsize=(16, 8))
+    ax = plt.subplot(1, 1, 1)
+    ax.set_title("Digital line data (first frame)")
+    ax.plot(data_do[:nsteps_pattern, 0], label="camera trigger")
+    ax.plot(data_do[:nsteps_pattern, 1], label="shutter")
+    ax.plot(data_do[:nsteps_pattern, 2], label="laser")
+    ax.plot(data_do[:nsteps_pattern, 3], label="adv trigger")
+    ax.plot(data_do[:nsteps_pattern, 4], label="enable")
+    ax.plot([])
+    ax.legend()
+    ax.set_xlabel("time step")
 
 taskDO = daq.Task()
 taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
@@ -200,6 +206,12 @@ taskDO.WriteDigitalLines(samples_per_ch, False, 10.0, daq.DAQmx_Val_GroupByChann
                          ct.byref(samples_per_ch_ct_digital), None)
 
 print("DAQ programming complete, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
+
+# #########################
+# wait to stabilize laser
+# #########################
+# time.sleep(30)
+
 # #########################
 # pycromanager
 # #########################
@@ -233,15 +245,39 @@ with pm.Bridge() as bridge:
     # odt_cam = devs[55]
     odt_cam = devs[1]
     mmc.set_camera_device(odt_cam)
+    mmc.set_property(odt_cam, "ScanMode", "2")
     # set external triggering
+    mmc.set_property(odt_cam, "TRIGGER ACTIVE", "EDGE")
+    mmc.set_property(odt_cam, "TRIGGER DELAY", "0.000")
+    # mmc.set_property(odt_cam, "TRIGGER GLOBAL EXPOSURE", "DELAYED")
+    mmc.set_property(odt_cam, "TRIGGER GLOBAL EXPOSURE", "GLOBAL RESET")
     mmc.set_property(odt_cam, "TRIGGER SOURCE", "EXTERNAL")
     mmc.set_property(odt_cam, "TriggerPolarity", "POSITIVE")
+
+    # set output signal
+    # line 1 trigger ready
+    # mmc.set_property(odt_cam, "OUTPUT TRIGGER KIND[0]", "TRIGGER READY")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER KIND[0]", "EXPOSURE")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER POLARITY[0]", "POSITIVE")
+    # line 2 at end of readout
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER DELAY[1]", "0.0000")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER KIND[1]", "PROGRAMABLE")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER PERIOD[1]", "0.001")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER POLARITY[1]", "POSITIVE")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER SOURCE[1]", "READOUT END")
+    # line 3 at start of readout
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER DELAY[2]", "0.0000")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER KIND[2]", "PROGRAMABLE")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER PERIOD[2]", "0.001")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER POLARITY[2]", "POSITIVE")
+    mmc.set_property(odt_cam, "OUTPUT TRIGGER SOURCE[2]", "VSYNC")
     # set roi
     # roi_rect = bridge.construct_java_object("java.awt.Rectangle", args=[512, 512, 1280, 1280])
     sx = 801
     cx = 1024
     sy = 511
-    cy = 1024
+    # cy = 1024
+    cy = 1120
     mmc.set_roi(cx - sx//2, cy - sy//2, sx, sy)
     #mm.set_roi()
     # set camera exposure time
