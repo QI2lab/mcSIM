@@ -339,18 +339,18 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     fig = plt.figure(figsize=figsize)
     grid = plt.GridSpec(6, 4)
 
-    plt.subplot(grid[:2, 0])
+    ax = plt.subplot(grid[:2, 0])
     no_nans = chisqs.ravel()[np.logical_not(np.isnan(chisqs.ravel()))]
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    plt.imshow(chisqs, vmin=vmin, vmax=vmax)
+    plt.imshow(chisqs, vmin=vmin, vmax=vmax, cmap="bone")
     plt.title('$\chi^2$')
     plt.colorbar()
 
     plt.subplot(grid[:2, 1])
     no_nans = residual_dist_err.ravel()[np.logical_not(np.isnan(residual_dist_err.ravel()))]
     vmax = np.percentile(no_nans, 90)
-    plt.imshow(residual_dist_err, vmin=0, vmax=vmax)
+    plt.imshow(residual_dist_err, vmin=0, vmax=vmax, cmap="bone")
     plt.title('position error (pix)')
     plt.colorbar()
 
@@ -359,7 +359,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     sigma_mean_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    plt.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax)
+    plt.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax, cmap="bone")
     sigma_m = sigma_mean_median * options["cam_pix"] / options["cam_mag"]
     plt.title('$\sqrt{\sigma_x \sigma_y}$, median=%0.2f\n$\sigma$=%0.1fnm, FWHM=%0.1fnm' %
               (sigma_mean_median, sigma_m * 1e9, sigma_m * 2 *  np.sqrt(2 * np.log(2)) * 1e9))
@@ -370,39 +370,44 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     amp_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    plt.imshow(amps, vmin=vmin, vmax=vmax)
+    plt.imshow(amps, vmin=vmin, vmax=vmax, cmap="bone")
     plt.title('amps median=%0.0f' % amp_median)
     plt.colorbar()
 
     plt.subplot(grid[4:6, 0])
     no_nans = sigma_asymmetry_cam.ravel()[np.logical_not(np.isnan(sigma_asymmetry_cam.ravel()))]
     sigma_asym_median = np.median(no_nans)
-    plt.imshow(sigma_asymmetry_cam, vmin=0, vmax=1)
+    plt.imshow(sigma_asymmetry_cam, vmin=0, vmax=1, cmap="bone")
     plt.title('$\sigma$ asym median=%0.2f' % sigma_asym_median)
     plt.colorbar()
 
     plt.subplot(grid[4:6, 1])
     no_nans = angles.ravel()[np.logical_not(np.isnan(angles.ravel()))]
     median_angle = np.median(no_nans * 180 / np.pi)
-    plt.imshow(angles * 180 /np.pi, vmin=0, vmax=180)
+    plt.imshow(angles * 180 /np.pi, vmin=0, vmax=180, cmap="bone")
     plt.title('angle, median=%0.1f$^\deg$' % median_angle)
     plt.colorbar()
 
-    plt.subplot(grid[:3, 2:])
-    plt.imshow(img, vmin=vmin_img, vmax=vmax_img)
-    plt.plot(xcam, ycam, 'rx')
-    plt.plot(xdmd_xform, ydmd_xform, 'y1')
-    plt.plot(xc_dmd_cam, yc_dmd_cam, 'mx')
-    plt.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm')
-    plt.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
-    plt.legend(["fit points", "affine xform"])
+    ax = plt.subplot(grid[:3, 2:])
+    ax.set_title('image and fits')
+    ax.imshow(img, vmin=vmin_img, vmax=vmax_img)
+    ax.plot(xcam, ycam, 'rx', label="fit points")
+    ax.plot(xdmd_xform, ydmd_xform, 'y1', label="affine xform")
+    ax.plot(xc_dmd_cam, yc_dmd_cam, 'mx')
+    ax.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm', label="dmd axes")
+    ax.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
+    ax.legend()
+    ax.set_xticks([])
+    ax.set_yticks([])
 
-    plt.subplot(grid[3:, 2:])
-    plt.imshow(mask_xformed)
-    plt.plot(xc_dmd_cam, yc_dmd_cam, c='m', marker='x')
-    plt.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm')
-    plt.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
-    plt.title('dmd mask xformed to img space')
+    ax = plt.subplot(grid[3:, 2:])
+    ax.set_title('dmd mask xformed to img space')
+    ax.imshow(mask_xformed)
+    ax.plot(xc_dmd_cam, yc_dmd_cam, c='m', marker='x')
+    ax.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm')
+    ax.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
+    ax.set_xticks([])
+    ax.set_yticks([])
 
     plt.suptitle('theta_x=%.2fdeg, mx=%0.3f, cx=%0.1f, pixel corrected mx=%.3f\n'
                  'theta_y=%.2fdeg, my=%0.3f, cy=%0.1f, pixel corrected my=%0.3f\n'
