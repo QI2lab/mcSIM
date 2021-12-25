@@ -6,23 +6,24 @@ This is a workaround to use MM for cruising around the sample but PyDaqMx for co
 """
 import time
 import os
-import sys
 import datetime
-import PyDAQmx as daq
 import ctypes as ct
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
 import pycromanager as pm
-import tifffile
-# todo: do I need this? If so should add relative path
-# sys.path.append(r"C:\Users\ptbrown2\Desktop\mcsim_private\mcSIM\expt_ctrl")
+import PyDAQmx as daq
 import dlp6500
 
 tstart = time.perf_counter()
 
+# #########################
+# turn laser and shutter on and allow laser power to stabilize
+# ensure both DMD triggers are low before programming DMD
+# #########################
 # use this if device won't restart
 # daq.DAQmxResetDevice("Dev1")
+t_stabalize = 15 # ensure stabilization is longer than this...
 
 taskDO = daq.Task()
 taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
@@ -81,9 +82,13 @@ mag_dmd2bfp = 100 / 200 * 300 / 400 * fl_mitutoyo / fl_olympus
 pupil_rad_mirrors = fl_mitutoyo * na_mitutoyo / mag_dmd2bfp / dm
 
 # center positions
-n_phis = 10
+# n_phis = 10
+# fractions = [0.25, 0.5, 0.75, 0.9]
+n_phis = 5
+fractions = [0.5, 0.9]
+# n_phis = 10
+# fractions = [0.9]
 phis = np.arange(n_phis) * 2*np.pi / n_phis
-fractions = [0.25, 0.5, 0.75, 0.9]
 n_thetas = len(fractions)
 
 xoffs = np.zeros((n_phis, n_thetas))
@@ -126,91 +131,26 @@ img_inds, bit_inds = dmd.upload_pattern_sequence(patterns, 105, 0, triggered=Tru
 print("loaded %d patterns, elapsed time %0.2fs" % (npatterns, time.perf_counter() - tstart))
 
 # #########################
-# program digital output
+# turn DMD enable trigger on
 # #########################
-dmd_delay = 105e-6
-dt = dmd_delay
-DAQ_sample_rate_hz = 1 / dt
-
-n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
-
-exposure_time_est = 2.8e-3
-min_frame_time = 15e-3
-
-if exposure_time_est >= min_frame_time:
-    nsteps_frame = int(np.round(exposure_time_est / dt))
-    exposure_time = nsteps_frame * dt
-else:
-    nsteps_frame = int(np.ceil(min_frame_time / dt))
-    exposure_time = exposure_time_est
-nsteps_exposure = int(np.round(exposure_time / dt))
-print("exposure time = %0.2fms" % (exposure_time * 1e3))
-
-# add extra time steps for readout time
-nsteps_pattern = nsteps_frame + 3
-
-# add extra steps at start to turn on laser and DMD enable trigger and allow to stabilize
-# alternatively, could set this beforehand and not be in sequence...
-stabilize_time = 5e-3
-nstabilize = int(np.ceil(stabilize_time / dt))
-# second, trigger DMD one time step early because it has a 105us delay
-samples_per_ch = nsteps_pattern * npatterns + nstabilize
-data_do = np.zeros((samples_per_ch, 8), dtype=np.uint8)
-
-# set camera trigger
-# for ii in range(nsteps_exposure):
-#     data_do[ii::nsteps_pattern, 0] = 1
-data_do[nstabilize::nsteps_pattern, 0] = 1
-
-# shutter
-data_do[:, 1] = 1
-
-# laser
-data_do[:, 2] = 1
-
-# DMD enable trigger
-data_do[:, 4] = 1
-
-# DMD advance trigger
-# trigger several steps before camera to account for 105us DMD delay
-data_do[nstabilize - n_dmd_pre_trigger:-1:nsteps_pattern, 3] = 1
-# extra advance trigger to "turn off" DMD
-data_do[nstabilize - n_dmd_pre_trigger + nsteps_exposure:-1:nsteps_pattern, 3] = 1
-
-if False:
-    # print(data_do)
-    # plot digital line data for first frame
-    figh = plt.figure(figsize=(16, 8))
-    ax = plt.subplot(1, 1, 1)
-    ax.set_title("Digital line data (first frame)")
-    ax.plot(data_do[:nsteps_pattern, 0], label="camera trigger")
-    ax.plot(data_do[:nsteps_pattern, 1], label="shutter")
-    ax.plot(data_do[:nsteps_pattern, 2], label="laser")
-    ax.plot(data_do[:nsteps_pattern, 3], label="adv trigger")
-    ax.plot(data_do[:nsteps_pattern, 4], label="enable")
-    ax.plot([])
-    ax.legend()
-    ax.set_xlabel("time step")
+# use this if device won't restart
+# daq.DAQmxResetDevice("Dev1")
 
 taskDO = daq.Task()
 taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
+taskDO.WriteDigitalLines(1, 1, 10.0, daq.DAQmx_Val_GroupByChannel,
+                         np.array([0, 1, 1, 0, 1, 0, 0, 0], dtype=np.uint8), None, None)
+taskDO.StopTask()
+taskDO.ClearTask()
 
-## Configure timing (from DI task)
-# taskDO.CfgSampClkTiming("OnBoardClock", DAQ_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
-taskDO.CfgSampClkTiming("OnBoardClock", DAQ_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_FiniteSamps, samples_per_ch)
-
-## Write the output waveform
-print("programming DAQ with %d lines" % data_do.shape[0])
-samples_per_ch_ct_digital = ct.c_int32()
-taskDO.WriteDigitalLines(samples_per_ch, False, 10.0, daq.DAQmx_Val_GroupByChannel, data_do,
-                         ct.byref(samples_per_ch_ct_digital), None)
-
-print("DAQ programming complete, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
+print("initialized DAQ lines, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
 
 # #########################
-# wait to stabilize laser
+# check lasers have had time to stabilize, otherwise wait longer
 # #########################
-# time.sleep(30)
+t_waited = time.perf_counter() - tstart
+if t_waited < t_stabalize:
+    time.sleep(t_stabalize - t_waited)
 
 # #########################
 # pycromanager
@@ -218,6 +158,101 @@ print("DAQ programming complete, elapsed time = %0.2fs" % (time.perf_counter() -
 with pm.Bridge() as bridge:
     mmc = bridge.get_core()
     mm = bridge.get_studio()
+
+    # set circular buffer size
+    mmc.set_circular_buffer_memory_footprint(3000)
+
+    # pull save dir from MDA
+    acq_settings = mm.get_acquisition_manager().get_acquisition_settings()
+    save_dir = os.path.join(acq_settings.root(), acq_settings.prefix())
+    save_dir = mm.data().get_unique_save_directory(save_dir)
+
+    # get number of time steps from MDA
+    ntimes = acq_settings.num_frames()
+    delay_time = acq_settings.interval_ms()
+
+    # #########################
+    # create program for digital output
+    # #########################
+    dmd_delay = 105e-6 # s
+    dt = dmd_delay
+    daq_sample_rate_hz = 1 / dt
+
+    exposure_time = 2.8e-3 # s
+    min_frame_time = 15e-3  # accounting for readout time
+    delay_between_frames = delay_time / 1e3
+
+    # calculate number of clock steps for different pieces ...
+    nsteps_exposure = int(np.ceil(exposure_time / dt))
+    nsteps_min_frame = int(np.ceil(min_frame_time / dt))
+    nsteps_delay = int(np.ceil(delay_between_frames / dt))
+
+    # want DMD to have time to pre-trigger so pattern is displayed when camera comes on
+    n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
+    nsteps_frame = np.max([nsteps_exposure + n_dmd_pre_trigger, nsteps_min_frame])
+    nsteps_sequence = np.max([nsteps_frame * npatterns, nsteps_delay])
+
+
+    print("exposure time = %0.2fms = %d clock cycles" % (exposure_time * 1e3, nsteps_exposure))
+    print("one frame = %0.2fms = %d clock cycles" % (nsteps_frame * dt * 1e3, nsteps_frame))
+    print("one time point = %0.2fms = %d clock cycles" % (nsteps_sequence * dt * 1e3, nsteps_sequence))
+    print("nframes = %d" % ntimes)
+
+    # generate DAQ array for digital lines
+    samples_per_ch = nsteps_sequence
+    data_do = np.zeros((samples_per_ch, 8), dtype=np.uint8)
+
+    # shutter always on
+    data_do[:, 1] = 1
+    # laser always on
+    data_do[:, 2] = 1
+    # DMD enable trigger always on
+    data_do[:, 4] = 1
+
+    # DMD advance trigger
+    data_do[:(npatterns * nsteps_frame):nsteps_frame, 3] = 1
+    # extra advance trigger to "turn off" DMD and end exposure
+    data_do[nsteps_exposure - n_dmd_pre_trigger:(npatterns * nsteps_frame):nsteps_frame, 3] = 1
+    # set camera trigger, which starts after delay time for DMD to display pattern
+    data_do[n_dmd_pre_trigger:(npatterns * nsteps_frame):nsteps_frame, 0] = 1
+    # for debugging, make trigger pulse longer so i can see it on scope
+    for ii in range(26):
+        data_do[n_dmd_pre_trigger + ii:(npatterns * nsteps_frame):nsteps_frame, 0] = 1
+
+    if False:
+        # plot digital line data for first frame
+        figh = plt.figure(figsize=(16, 8))
+        ax = plt.subplot(1, 1, 1)
+        # nstop = 2 * nsteps_frame
+        nstop = nsteps_sequence
+
+        ax.set_title("Digital line data (first frame)")
+        ax.plot(data_do[:nstop, 0], label="camera trigger")
+        ax.plot(data_do[:nstop, 1], label="shutter")
+        ax.plot(data_do[:nstop, 2], label="laser")
+        ax.plot(data_do[:nstop, 3], label="adv trigger")
+        ax.plot(data_do[:nstop, 4], label="enable")
+        ax.plot([])
+        ax.legend()
+        ax.set_xlabel("time step")
+
+    # #########################
+    # create DAQmx task
+    # #########################
+    taskDO = daq.Task()
+    taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
+
+    ## Configure timing (from DI task)
+    taskDO.CfgSampClkTiming("OnBoardClock", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
+    # taskDO.CfgSampClkTiming("OnBoardClock", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_FiniteSamps, samples_per_ch)
+
+    ## Write the output waveform
+    print("programming DAQ with %d lines" % data_do.shape[0])
+    samples_per_ch_ct_digital = ct.c_int32()
+    taskDO.WriteDigitalLines(samples_per_ch, False, 10.0, daq.DAQmx_Val_GroupByChannel, data_do,
+                             ct.byref(samples_per_ch_ct_digital), None)
+
+    print("DAQ programming complete, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
 
     # get strings of all available devices
     devs_v = mmc.get_loaded_devices()
@@ -297,11 +332,6 @@ with pm.Bridge() as bridge:
     # mmc.set_property(odt_cam, "Line Selector", "Line2")
     # mmc.set_property(bfly, "Line Mode", "Output") # this throws error when call this script from beanshell script in script ...
 
-    # pull save dir from MDA
-    acq_settings = mm.get_acquisition_manager().get_acquisition_settings()
-    save_dir = os.path.join(acq_settings.root(), acq_settings.prefix())
-    save_dir = mm.data().get_unique_save_directory(save_dir)
-
     # create datastore
     store = mm.data().create_multipage_tiff_datastore(save_dir, True, False)
     mm.displays().manage(store)
@@ -310,7 +340,7 @@ with pm.Bridge() as bridge:
     now = datetime.datetime.now()
     now_date = '%04d-%02d-%02d;%02d;%02d;%02d.%03d' % (now.year, now.month, now.day, now.hour, now.minute, now.second, 0)
 
-    dims = mm.data().get_coords_builder().z(0).stage_position(0).time(0).channel(0).build()
+    dims = mm.data().get_coords_builder().z(npatterns).stage_position(0).time(ntimes).channel(0).build()
     axis_order = ["position", "time", "z", "channel"]
 
     # pmap = mm.data().get_property_map_builder().put_int("NumPatterns", npatterns).build()
@@ -323,47 +353,54 @@ with pm.Bridge() as bridge:
     store.set_summary_metadata(summary_md)
 
     # start burst acquisition
-    mmc.start_sequence_acquisition(npatterns, 0, True)
+    mmc.start_sequence_acquisition(npatterns * ntimes, 0, True)
+    # mmc.start_sequence_acquisition(npatterns * ntimes, 0, False)
 
     # start hardware sequence on DAQ
     taskDO.StartTask()
 
     start_acquisition = time.perf_counter()
-    timeout = 30
+    timeout = 2 * dt * ntimes * nsteps_sequence
+
     try:
         # collect images
-        for ii in range(npatterns):
-            while mmc.get_remaining_image_count() == 0:
-                if time.perf_counter() - start_acquisition > 3:
-                    break
+        for tt in range(ntimes):
+            for ii in range(npatterns):
+                while mmc.get_remaining_image_count() == 0:
+                    if time.perf_counter() - start_acquisition > timeout:
+                        break
 
-            # pop image
-            img_tg = mmc.pop_next_tagged_image()
-            img = mm.data().convert_tagged_image(img_tg)
-            # # get current md and add to it
-            # # img_pm = mm.data().get_property_map_builder().put_int("odt_index", ii)
-            # img_md = img.get_metadata().copy().exposure_ms(exposure_time).user_data(img_pm).build()
-            # img_md = img.get_metadata().copy().exposure_ms(exposure_time).build()
-            # todo: store info about DMD image
-            img_md = img.get_metadata().copy().build()
-            # get current coords
-            img_coords = mm.data().get_coords_builder().stage_position(0).z(0).channel(0).time(ii).build()
-            #
-            # # put image in store with metadata and coords
-            store.put_image(img.copy_with(img_coords, img_md))
-            # store.put_image(img)
+                # pop image
+                img_tg = mmc.pop_next_tagged_image()
+                img = mm.data().convert_tagged_image(img_tg)
+                # # get current md and add to it
+                # # img_pm = mm.data().get_property_map_builder().put_int("odt_index", ii)
+                # img_md = img.get_metadata().copy().exposure_ms(exposure_time).user_data(img_pm).build()
+                # img_md = img.get_metadata().copy().exposure_ms(exposure_time).build()
+                # todo: store info about DMD image
+                img_md = img.get_metadata().copy().build()
+                # get current coords
+                img_coords = mm.data().get_coords_builder().stage_position(0).z(ii).channel(0).time(tt).build()
+                #
+                # # put image in store with metadata and coords
+                store.put_image(img.copy_with(img_coords, img_md))
+
+                # store.put_image(img)
     except Exception as e:
-        print("error at image %d" % ii)
+        print("error at pattern %d, time point %d" % (ii, tt))
         print(e)
     finally:
-        taskDO.WaitUntilTaskDone(5)
+        # taskDO.WaitUntilTaskDone(5)
         mmc.stop_sequence_acquisition()
 
     store.freeze()
     store.close()
 
-taskDO.StopTask()
-taskDO.ClearTask()
+try:
+    taskDO.StopTask()
+    taskDO.ClearTask()
+except err:
+    print(err)
 
 print("acquisition complete, elapsed time = %0.2fs" % (time.perf_counter() - tstart))
 
