@@ -15,6 +15,11 @@ import scipy.sparse as sp
 from scipy import fft
 import pandas as pd
 import tifffile
+_cupy_available = True
+try:
+    import cupy as cp
+except ImportError:
+    _cupy_available = False
 
 import rois
 import fit
@@ -161,7 +166,7 @@ def read_mm_dataset(md, time_indices=None, channel_indices=None, z_indices=None,
     :param z_indices:
     :param xy_indices:
     :param user_indices: {"name": indices}
-    :return:
+    :return imgs:
     """
 
     # md, dims, summary = parse_mm_metadata(dir)
@@ -1359,7 +1364,7 @@ def translate_pix(img, shifts, dr=(1, 1), axes=(-2, -1), wrap=True, pad_val=0):
     return img, shifts_pix
 
 
-def translate_im(img, shift, dx=1, dy=None):
+def translate_im(img, shift, dx=1, dy=None, use_gpu=_cupy_available):
     """
     Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
 
@@ -1390,51 +1395,80 @@ def translate_im(img, shift, dx=1, dy=None):
     # 2. multiply by exponential factor
     # 3. inverse ft
     exp_factor = np.exp(1j * 2 * np.pi * (shift[0] * fyfy + shift[1] * fxfx))
-    img_shifted = fft.fftshift(fft.ifft2(exp_factor * fft.fft2(fft.ifftshift(img))))
+    if not use_gpu:
+        img_shifted = fft.fftshift(fft.ifft2(exp_factor * fft.fft2(fft.ifftshift(img))))
+    else:
+        img_shifted = cp.asnumpy(cp.fft.fftshift(cp.fft.ifft2(cp.array(exp_factor) * cp.fft.fft2(cp.fft.ifftshift(img)))))
 
     return img_shifted
 
 
-def translate_ft(img_ft, shift_frq, dx=1):
+def translate_ft(img_ft, shift_frq, drs=None, apodization=None, use_gpu=_cupy_available):
     """
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
     using the FFT shift relationship, img_ft(f + shift_frq) = F[ exp(-2*pi*i * shift_frq * r) * img(r) ]
 
     This is an approximation to the Whittaker-Shannon interpolation formula which can be performed using only FFT's.
-    In this sense, it is exact for band-limited functions
+    In this sense, it is exact for band-limited functions.
+
+    If an array with more than 2 dimensions is passed in, then the shift will be applied to the last two dimensions
 
     :param img_ft: fourier transform, with frequencies centered using fftshift
-    :param shift_frq: [fx, fy]. Frequency in hertz (i.e. angular frequency is k = 2*pi*f)
-    :param dx: pixel size (sampling rate) of real space image in x-direction
-    :param dy: pixel size (sampling rate) of real space image in y-direction
+    :param list[float] shift_frq: [fx, fy]. Frequency in hertz (i.e. angular frequency is k = 2*pi*f)
+    :param list[float] drs: pixel size (sampling rate) of real space image in directions. For 2D, (dy, dx)
+    :param apodization: can be applied to the Fourier transform images
+    :param bool use_gpu:
 
     :return img_ft_shifted:
     """
-    # todo: take (dx, dy) as argument instead
-    dy = dx
+    # todo: accept arbitrary dimension arrays. Would want to give an argument telling which dimensions to shift along
 
-    if img_ft.ndim != 2:
-        raise ValueError("img_ft must be 2D")
+    if img_ft.ndim < 2:
+        raise ValueError("img_ft must be at least 2D")
+    shift_frq = np.array(shift_frq)
 
-    if shift_frq[0] == 0 and shift_frq[1] == 0:
+    if np.all(shift_frq == 0):
         return np.array(img_ft, copy=True)
     else:
         # 1. shift frequencies in img_ft so zero frequency is in corner using ifftshift
         # 2. inverse ft
         # 3. multiply by exponential factor
         # 4. take fourier transform, then shift frequencies back using fftshift
+        if drs is None:
+            drs = (1, 1)
+        dy, dx = drs
 
-        ny, nx = img_ft.shape
-        # must use symmetric frequency representation to do correctly!
+        ndims = img_ft.ndim
+        ny, nx = img_ft.shape[-2:]
+        # must use symmetric frequency representation to do shifting correctly!
         # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
         # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
-        x = get_fft_pos(nx, dx, centered=False, mode='symmetric')
-        y = get_fft_pos(ny, dy, centered=False, mode='symmetric')
+        # we do not apply an fftshift, so we don't have to apply an intermediate shift in our FFTs later
+        # x = get_fft_pos(nx, dx, centered=False, mode='symmetric')
+        # y = get_fft_pos(ny, dy, centered=False, mode='symmetric')
+        x = fft.fftfreq(nx) * nx * dx
+        y = fft.fftfreq(ny) * ny * dx
 
-        exp_factor = np.exp(-1j * 2 * np.pi * (shift_frq[0] * x[None, :] + shift_frq[1] * y[:, None]))
-        #ifft2(ifftshift(img_ft)) = ifftshift(img)
-        img_ft_shifted = fft.fftshift(fft.fft2(exp_factor * fft.ifft2(fft.ifftshift(img_ft))))
+        # exponential phase ramp
+        axis_expand_x = list(range(ndims - 2 + 1))
+        axis_expand_y = list(range(ndims - 2)) + [-1]
+        exp_factor = np.exp(-1j * 2 * np.pi * (shift_frq[0] * np.expand_dims(x, axis=axis_expand_x) +
+                                               shift_frq[1] * np.expand_dims(y, axis=axis_expand_y)))
+
+        if apodization is None:
+            apodization = 1
+
+        if not use_gpu:
+            # ifft2(ifftshift(img_ft)) = ifftshift(img)
+            img_ft_shifted = fft.fftshift(fft.fft2(exp_factor *
+                                                   fft.ifft2(fft.ifftshift(img_ft * apodization, axes=(-1, -2)), axes=(-1, -2)),
+                                                   axes=(-1, -2)), axes=(-1, -2))
+        else:
+            img_ft_shifted = cp.asnumpy(cp.fft.fftshift(
+                                        cp.fft.fft2(cp.array(exp_factor) *
+                                        cp.fft.ifft2(cp.fft.ifftshift(img_ft * apodization, axes=(-1, -2)), axes=(-1, -2)),
+                                                    axes=(-1, -2)), axes=(-1, -2)))
 
         return img_ft_shifted
 
