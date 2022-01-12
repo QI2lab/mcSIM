@@ -16,35 +16,42 @@ When cloning this repo, use the following command to include submodules:
 
 `git clone --recurse-submodules https://github.com/QI2lab/mcSIM.git`
 
+If you prefer to install this code as a python package,
+```
+git clone https://github.com/QI2lab/mcSIM.git
+cd mcSIM
+pip install .
+```
+
 # Analysis and simulation code
 
-### [simulate_dmd.py](analysis/simulate_dmd.py)
+### [simulate_dmd.py](mcsim/analysis/simulate_dmd.py)
 Code for simulating the diffraction patterns produced by the DMD. Various 
 scripts illustrating the usage of this code can be found in the [examples](examples) directory
 
-### [dmd_patterns.py](analysis/dmd_patterns.py)
+### [dmd_patterns.py](mcsim/analysis/dmd_patterns.py)
 This file can be used to generate multicolor SIM patterns and other useful calibrations
 patterns for the DMD.
 
-### [sim_reconstruction.py](analysis/sim_reconstruction.py)
+### [sim_reconstruction.py](mcsim/analysis/sim_reconstruction.py)
 Code for reconstructing SIM images from raw data using a Gustafsson/Wiener filter style reconstruction. Several different
 reconstruction options are available, largely following either the approach of 
 [openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980). 
 
-### [fit_dmd_affine.py](analysis/fit_dmd_affine.py)
+### [fit_dmd_affine.py](mcsim/analysis/fit_dmd_affine.py)
 Code to fit the affine transformation between the DMD coordinates and camera coordinates using imaging data from a DMD
 pattern consisting of many small points.
 
-### [otf_tools.py](analysis/otf_tools.py)
+### [otf_tools.py](mcsim/analysis/otf_tools.py)
 Code for extracting optical transfer function from measurement of the strength of various Fourier peaks for a given SIM DMD pattern.
  
-### [psd.py](analysis/psd.py)
+### [psd.py](mcsim/analysis/psd.py)
 Code for doing the periodic/smooth image decomposition, an alternative to apodization for the Fourier transform. This code is taken from https://github.com/jacobkimmel/ps_decomp (with permission), and included here for convenience.
 
-### [analysis_tools.py](analysis/analysis_tools.py)
+### [analysis_tools.py](mcsim/analysis/analysis_tools.py)
 Miscellaneous tools for IO, reading metadata, image processing, etc.
 
-### [localize-psf](analysis/localize-psf/fit.py)
+### [localize-psf](localize-psf/fit.py)
 Useful tools for automatically localizing sparse fluorescent beads and performing both 2D and 3D
 PSF fitting using various PSF models. Also provides useful statistics and figures summarizing the results.
 This code has now been split out into a [separate repository](https://github.com/QI2lab/localize-psf) which is included in this repository as a
@@ -56,18 +63,18 @@ data is located in [examples/data](examples/data)
   
 # Hardware control code
 
-### [expt_ctrl/dlp6500.py](expt_ctrl/dlp6500.py)
+### [expt_ctrl/dlp6500.py](mcsim/expt_ctrl/dlp6500.py)
 Code for controlling the DLP6500 DMD over USB on Windows. This code was initially based on the approaches 
 of [Lightcrafter6500DMDControl](https://github.com/mazurenko/Lightcrafter6500DMDControl) and
 [Pycrafter6500](https://github.com/csi-dcsc/Pycrafter6500).
 
-### [expt_ctrl/set_dmd_sim.py](expt_ctrl/set_dmd_sim.py)
+### [expt_ctrl/set_dmd_sim.py](mcsim/expt_ctrl/set_dmd_sim.py)
 This is the script used to define pattern sequences on the DMD using patterns which
 have been previously loaded onto the firmware using the [Texas Instruments DLP6500 and DLP9000
 GUI](https://www.ti.com/tool/DLPC900REF-SW). It is a command line interface to [dlp6500.py](expt_ctrl/dlp6500.py),
 and it is used by [run_sim_triggerscop.bsh](expt_ctrl/run_sim_triggerscop.bsh).
 
-### [expt_ctrl/run_sim_triggerscop.bsh](expt_ctrl/run_sim_triggerscop.bsh)
+### [expt_ctrl/run_sim_triggerscop.bsh](mcsim/expt_ctrl/run_sim_triggerscop.bsh)
 A [beanshell script](https://beanshell.github.io/) which can be run from [MicroManager 2.0 Gamma](https://micro-manager.org/wiki/Micro-Manager)
 to acquire SIM data using dlp6500.py to set the DMD patterns (assuming they have already been loaded into the 
 DMD firmware as described above). This script programs a [Triggerscope 3B](https://arc.austinblanco.com/), which then provides the analog and 
@@ -81,11 +88,11 @@ This code was initially developed with Micro-Manager 2.0.0-gamma1 20200514, MMCo
 Device API version 69, Module API version 10. But for more recent development we are using
 Micro-Manager 2.0.0-gamma1 20210516, MMCore Version 10.1.1, Device API version 70, Module API version 10.
 
-### [expt_ctrl/SIM.cfg](expt_ctrl/SIM.cfg)
+### [expt_ctrl/SIM.cfg](mcsim/expt_ctrl/SIM.cfg)
 [MicroManager configuration file](https://micro-manager.org/wiki/Micro-Manager_Configuration_Guide#Configuration_file_syntax)
 describing the equipment and settings used in the experiment.
   
-### [expt_ctrl/dmd_sim_umanager_plugin](expt_ctrl/dmd_sim_umanager_plugin)
+### [expt_ctrl/dmd_sim_umanager_plugin](mcsim/expt_ctrl/dmd_sim_umanager_plugin)
 A simple [MicroManager GUI plugin](https://micro-manager.org/wiki/Version_2.0_Plugins) for controlling the DMD patterns while "cruising around" a sample before imaging.
 This plugin takes input from the user and then runs [set_dmd_sim.py](expt_ctrl/set_dmd_sim.py) with
 the appropriate arguments in a user specified Conda environment. 
