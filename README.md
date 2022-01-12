@@ -16,6 +16,9 @@ When cloning this repo, use the following command to include submodules:
 
 `git clone --recurse-submodules https://github.com/QI2lab/mcSIM.git`
 
+Before trying to run the code, the directories `localize-psf/localize_psf`, `mcsim/analysis`, 
+and `mcsim/expt_ctrl` should be added to `PYTHONPATH`.
+
 If you prefer to install this code as a python package,
 ```
 git clone https://github.com/QI2lab/mcSIM.git
