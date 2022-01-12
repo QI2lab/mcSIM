@@ -195,7 +195,7 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
 
     if eimgs.ndim == 2:
         eimgs = np.expand_dims(eimgs, axis=0)
-    npatterns, ny, nx = eimgs.shape[0]
+    npatterns, ny, nx = eimgs.shape
 
     psi_rytov = np.zeros((npatterns, ny, nx), dtype=complex)
     for aa in range(npatterns):
