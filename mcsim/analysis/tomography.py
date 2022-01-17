@@ -10,9 +10,82 @@ from matplotlib.patches import Circle, Arc
 from matplotlib.cm import ScalarMappable
 from scipy.interpolate import interpn
 import time
+from skimage.restoration import unwrap_phase
 import fit
 import analysis_tools as tools
 
+_cupy_available = True
+try:
+    import cupy as cp
+except ImportError:
+    _cupy_available = False
+
+def get_angular_spectrum_kernel(dz, wavelength, no, shape, drs):
+    k = 2*np.pi / wavelength
+    ny, nx = shape
+    dy, dx = drs
+
+    fx = fft.fftshift(fft.fftfreq(nx, dx))
+    fy = fft.fftshift(fft.fftfreq(ny, dy))
+    fxfx, fyfy = np.meshgrid(fx, fy)
+
+    with np.errstate(invalid="ignore"):
+        kernel = np.exp(1j * dz * np.sqrt((k * no)**2 - (2*np.pi * fxfx)**2 - (2*np.pi * fyfy)**2))
+        kernel[np.isnan(kernel)] = 0
+
+    return kernel
+
+def propagate_field(efield_start, n_stack, no, drs, wavelength, use_gpu=_cupy_available):
+    """
+    Propagate electric field through medium with index of refraction n(x, y, z) using the projection approximation.
+
+    @param efield_start: ny x nx array
+    @param n_stack: nz x ny x nx array
+    @param no: background index of refraction
+    @param drs: (dz, dy, dx)
+    @param wavelength: wavelength in same units as drs
+    @return efield: nz x ny x nx electric field
+    """
+    n_stack = np.atleast_3d(n_stack)
+
+    k = 2*np.pi / wavelength
+    dz, dy, dx = drs
+    nz, ny, nx = n_stack.shape
+
+    prop_kernel = get_angular_spectrum_kernel(dz, wavelength, no, n_stack.shape[1:], drs[1:])
+    # apodization = np.expand_dims(tukey(nxy, alpha=0.1), axis=0) * np.expand_dims(tukey(nxy, alpha=0.1), axis=1)
+    apodization = 1
+
+    # ifftshift these to eliminate doing an fftshift every time
+    prop_factor = fft.ifftshift(prop_kernel * apodization)
+
+    # do simulation
+    efield = np.zeros((nz, ny, nx), dtype=complex)
+    efield[0] = efield_start
+    if use_gpu:
+        prop_factor = cp.array(prop_factor)
+        # note: also tried creating efield on GPU and putting n_stack() on the gpu, but then function took much longer
+        # dominated by time to transfer efield back to CPU
+
+    for ii in range(nz - 1):
+        # projection approximation
+        # propagate through background medium using angular spectrum method
+        # then accumulate extra phases in real space
+        if use_gpu:
+            enow = cp.asarray(efield[ii])
+            etemp1 = cp.fft.fftshift(cp.fft.ifft2(cp.fft.fft2(cp.fft.ifftshift(enow)) * prop_factor)) # k-space propagation
+            efield[ii + 1] = cp.asnumpy(etemp1 * cp.exp(1j * k * dz * (cp.asarray(n_stack[ii]) - no)))  # real space phase
+        else:
+            efield[ii + 1] = fft.fftshift(fft.ifft2(
+                                 fft.fft2(fft.ifftshift(efield[ii])) * prop_factor  # k-space propagation
+                                 )) * \
+                                 np.exp(1j * k * dz * (n_stack[ii] - no))  # real space phase
+
+
+    return efield
+
+
+# helper functions
 def get_fz(fx, fy, ni, wavelength):
     """
     Get z-component of frequency given fx, fy
@@ -80,6 +153,7 @@ def get_global_phase_shifts(imgs, ref_imgs):
     return phase_shifts
 
 
+# convert between index of refraction and scattering potential
 def get_n(scattering_pot, no, wavelength):
     """
     convert from the scattering potential to the index of refraction
@@ -107,9 +181,39 @@ def get_scattering_potential(n, no, wavelength):
     return sp
 
 
+def get_rytov_phase(eimgs, eimgs_bg, regularization):
+    """
+    Compute rytov phase from field and background field. The Rytov phase is \psi_s(r) where
+    U_total(r) = exp[\psi_o(r) + \psi_s(r)]
+    where U_o(r) = exp[\psi_o(r)] is the unscattered field
+
+    @param eimgs: npatterns x ny x nx
+    @param eimgs_bg: same size as eimgs
+    @param float regularization: regularization value
+    @return psi_rytov:
+    """
+
+    if eimgs.ndim == 2:
+        eimgs = np.expand_dims(eimgs, axis=0)
+    npatterns, ny, nx = eimgs.shape
+
+    psi_rytov = np.zeros((npatterns, ny, nx), dtype=complex)
+    for aa in range(npatterns):
+        # convert phase difference to interval [-np.pi, np.pi)
+        phase_diff = np.mod(np.angle(eimgs[aa]) - np.angle(eimgs_bg[aa]), 2 * np.pi)
+        phase_diff[phase_diff >= np.pi] = phase_diff[phase_diff >= np.pi] - 2 * np.pi
+
+        # get rytov phase change
+
+        # psi_rytov[aa] = np.log(np.abs(eimg[aa]) / (np.abs(eimg_bg[aa]) + delta)) + 1j * unwrap_phase(phase_diff)
+        psi_rytov[aa] = np.log(np.abs(eimgs[aa]) / (np.abs(eimgs_bg[aa]))) + 1j * unwrap_phase(phase_diff)
+        psi_rytov[aa][np.abs(eimgs_bg[aa]) < regularization] = 0
+
+    return psi_rytov
+
 # data processing
 def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
-                   dxy_sampling_factor=1, mode="born"):
+                   dxy_sampling_factor=1, mode="born", use_interpolation=True):
     """
 
     @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used
@@ -198,6 +302,7 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
 
         # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
         # indices into the final scattering potential
+        # taking advantage of the fact that the final scattering potential indices have FFT structure
         zind = (np.round(Fz / dfz_sp) + nz_sp // 2).astype(int)
         yind = (np.round(Fy / dfy_sp) + ny_sp // 2).astype(int)
         xind = (np.round(Fx / dfx_sp) + nx_sp // 2).astype(int)
@@ -257,10 +362,12 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     Fx_on_pix = dfx_sp * (xind - nx_sp // 2)
     Fy_on_pix = dfy_sp * (yind - ny_sp // 2)
 
-    use_interpolation = True
     f_unshift_ft = np.zeros(efield_fts.shape, dtype=complex)
     for ii in range(nimgs):
         if use_interpolation:
+            if mode == "rytov":
+                raise NotImplementedError("Current interpolation implementation does nto work with mode 'rytov'")
+
             # only interpolate at points we are going to use
             interp_fcoords = np.stack((Fy_on_pix[ii, to_use_ind[ii]] + beam_frqs[ii, 1],
                                        Fx_on_pix[ii, to_use_ind[ii]] + beam_frqs[ii, 0]), axis=1)
@@ -321,7 +428,8 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     return spot_ft, spot_ft_imgs, coords, fcoords
 
 
-def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True):
+def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True,
+                        require_real_part_greater_bg=False, use_gpu=_cupy_available):
     """
     Iterative apply constraints on the scattering potential and the index of refraction
 
@@ -348,6 +456,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     sp_ft[no_data] = 0 #np.exp(1j * np.random.rand(*scattering_potential_ft[no_data].shape))
 
     # try smoothing image first ...
+    # todo: is this useful?
     sp_ft = gaussian_filter(sp_ft, (4, 4, 4))
 
     tstart = time.perf_counter()
@@ -358,19 +467,26 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
         # ############################
         # ensure n is physical
         # ############################
-        sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft)))
+        if not use_gpu:
+            sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft)))
+        else:
+            sp = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft))))
         n = get_n(sp, no, wavelength)
 
-        # real part must be >= no
-        correct_real = np.real(n) < no
-        n[correct_real] = no + np.imag(n[correct_real])
+        if require_real_part_greater_bg:
+            # real part must be >= no
+            correct_real = np.real(n) < no
+            n[correct_real] = no + np.imag(n[correct_real])
 
         # imaginary part must be >= 0
         correct_imag = np.imag(n) < 0
         n[correct_imag] = np.real(n[correct_imag]) + 0*1j
 
         sp_ps = get_scattering_potential(n, no, wavelength)
-        sp_ps_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps)))
+        if not use_gpu:
+            sp_ps_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps)))
+        else:
+            sp_ps_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps))))
 
         # ############################
         # ensure img matches data
@@ -388,19 +504,26 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
         # projected Ps * Pm
         # ############################
         sp_ft_ps_pm = np.array(sp_ft_pm, copy=True)
-        sp_ps_pm = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_ps_pm)))
+        if not use_gpu:
+            sp_ps_pm = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_ps_pm)))
+        else:
+            sp_ps_pm = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft_ps_pm))))
         n_ps_pm = get_n(sp_ps_pm, no, wavelength)
 
-        # real part must be >= no
-        correct_real = np.real(n_ps_pm) < no
-        n_ps_pm[correct_real] = no + np.imag(n_ps_pm[correct_real])
+        if require_real_part_greater_bg:
+            # real part must be >= no
+            correct_real = np.real(n_ps_pm) < no
+            n_ps_pm[correct_real] = no + np.imag(n_ps_pm[correct_real])
 
         # imaginary part must be >= 0
         correct_imag = np.imag(n_ps_pm) < 0
         n_ps_pm[correct_imag] = np.real(n_ps_pm[correct_imag]) + 0 * 1j
 
         sp_ps_pm = get_scattering_potential(n_ps_pm, no, wavelength)
-        sp_ps_pm_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps_pm)))
+        if not use_gpu:
+            sp_ps_pm_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps_pm)))
+        else:
+            sp_ps_pm_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps_pm))))
 
         # ############################
         # update
@@ -564,6 +687,7 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
 
 
     fy, fx = fcoords
+    fxfx, fyfy = np.meshgrid(fx, fy)
     dfy = fy[1] - fy[0]
     dfx = fx[1] - fx[0]
     extent_fxfy = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx, fy[0] - 0.5 * dfy, fy[-1] + 0.5 * dfy]
@@ -571,19 +695,26 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
     # intensity
     img_int_ft = fft.fftshift(fft.ifft2(fft.ifftshift(img_int)))
 
+    # efield band limits
+    # out_of_band = np.sqrt(fxfx**2 + fyfy**2) > (0.5 * fmax_int)
+    out_of_band = np.sqrt((beam_frq[0] + fxfx) ** 2 + (beam_frq[1] + fyfy) ** 2) > (0.5 * fmax_int)
+
     # electric field
     img_efield = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_ft)))
-    img_efield_shift_ft = tools.translate_ft(img_efield_ft, beam_frq[:2], dx=dxy)
+    img_efield_shift_ft = tools.translate_ft(img_efield_ft, beam_frq[:2], drs=(dxy, dxy))
+    img_efield_shift_ft[out_of_band] = 0
     img_efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_ft)))
 
     # background electric field
     img_efield_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_bg_ft)))
-    img_efield_shift_bg_ft = tools.translate_ft(img_efield_bg_ft, beam_frq[:2], dx=dxy)
+    img_efield_shift_bg_ft = tools.translate_ft(img_efield_bg_ft, beam_frq[:2], drs=(dxy, dxy))
+    img_efield_shift_bg_ft[out_of_band] = 0
     img_efield_shift_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_bg_ft)))
 
     # scattered electric field
     img_efield_scatt_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_efield_scattered)))
-    img_efield_shift_scatt_ft = tools.translate_ft(img_efield_scatt_ft, beam_frq[:2], dx=dxy)
+    img_efield_shift_scatt_ft = tools.translate_ft(img_efield_scatt_ft, beam_frq[:2], drs=(dxy, dxy))
+    img_efield_shift_scatt_ft[out_of_band] = 0
     img_efield_shift_scatt = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_scatt_ft)))
 
 
@@ -599,26 +730,37 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
     ax.set_yticks([])
 
     ax = plt.subplot(grid[2, 0])
-    ax.imshow(np.abs(img_int_ft), norm=PowerNorm(gamma=0.2), cmap="bone", extent=extent_fxfy, origin="lower")
+    ax.imshow(np.abs(img_int_ft), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
     ax.plot(frq_ref[0], frq_ref[1], 'rx')
     ax.add_artist(Circle((0, 0), fmax_int, facecolor="none", edgecolor='r'))
     ax.add_artist(Circle(frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
     ax.add_artist(Circle(-frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
     ax.add_artist(Circle(beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
     ax.add_artist(Circle(-beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
-    plt.xlabel("$f_x$ (1 / $\mu m$)")
-    plt.ylabel("$f_y$ (1 / $\mu m$)")
-    plt.title("$|I(f)|$")
+    ax.set_xlabel("$f_x$ (1 / $\mu m$)")
+    ax.set_ylabel("$f_y$ (1 / $\mu m$)")
+    ax.set_title("$|I(f)|$")
+    fmax = np.max([fmax_int, np.linalg.norm(beam_frq[:2]) + fmax_int / 2])
+    ax.set_xlim([-fmax, fmax])
+    ax.set_ylim([-fmax, fmax])
+
 
     labels = ["E", "E_{shifted}", "E_{bg}", "E_{bg,shifted}", "E_{scatt}", "E_{scatt,shifted}"]
     fields_r = [img_efield, img_efield_shift, img_efield_bg, img_efield_shift_bg,
                 img_efield_scattered, img_efield_shift_scatt]
     vmin_e = np.percentile(np.abs(img_efield), 0.1)
     vmax_e = np.percentile(np.abs(img_efield), 99.9)
-    vmin_r = [vmin_e, vmin_e, vmin_e, vmin_e, 0, 0]
-    vmax_r = [vmax_e, vmax_e, vmax_e, vmax_e, 1, 1]
+    vmin_scat = np.percentile(np.abs(img_efield_scattered), 0.1)
+    vmax_scat = np.percentile(np.abs(img_efield_scattered), 99.9)
+    vmin_r = [vmin_e, vmin_e, vmin_e, vmin_e, vmin_scat, vmin_scat]
+    vmax_r = [vmax_e, vmax_e, vmax_e, vmax_e, vmax_scat, vmax_scat]
     fields_ft = [img_efield_ft, img_efield_shift_ft, img_efield_bg_ft, img_efield_shift_bg_ft,
                  img_efield_scatt_ft, img_efield_shift_scatt_ft]
+
+    flims = [[-0.5 * fmax_int, 0.5 * fmax_int], [-fmax_int, fmax_int],
+             [-0.5 * fmax_int, 0.5 * fmax_int], [-fmax_int, fmax_int],
+             [-0.5 * fmax_int, 0.5 * fmax_int], [-fmax_int, fmax_int]]
+    plot_pts = [beam_frq[:2], np.array([0, 0]), beam_frq[:2], np.array([0, 0]), beam_frq[:2], np.array([0, 0])]
     for ii in range(6):
         d = labels[ii]
 
@@ -636,13 +778,13 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
 
         ax = plt.subplot(grid[2, ii + 1])
         ax.imshow(np.abs(fields_ft[ii]), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
-        ax.plot(0, 0, 'rx')
+        ax.plot(plot_pts[ii][0], plot_pts[ii][1], 'r.', fillstyle="none")
         plt.xlabel("$f_x$ (1 / $\mu m$)")
         # plt.ylabel("$f_y$ (1 / $\mu m$)")
         ax.set_yticks([])
         plt.title("$|%s(f)|$" % d)
-        ax.set_xlim([-0.5 * fmax_int, 0.5 * fmax_int])
-        ax.set_ylim([-0.5 * fmax_int, 0.5 * fmax_int])
+        ax.set_xlim(flims[ii])
+        ax.set_ylim(flims[ii])
 
     return figh
 
@@ -776,9 +918,17 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
     n_recon = get_n(sp, no, wavelength)
     n_recon_ft = fft.fftshift(fft.fftn(fft.ifftshift(n_recon)))
 
-    vmax_real = 1.5 * np.percentile((np.real(n_recon) - no), 99)
-    vmax_imag = 1.5 * np.percentile(np.imag(n_recon), 99)
-    vmax_n_ft = 1.5 * np.percentile(np.abs(n_recon_ft), 99)
+    vmax_real = 1.5 * np.percentile((np.real(n_recon) - no), 99.99)
+    if vmax_real <=0:
+        vmax_real = 1e-12
+
+    vmax_imag = 1.5 * np.percentile(np.imag(n_recon), 99.99)
+    if vmax_imag <= 0:
+        vmax_imag = 1e-12
+
+    vmax_n_ft = 1.5 * np.percentile(np.abs(n_recon_ft), 99.99)
+    if vmax_n_ft <= 0:
+        vmax_n_ft = 1e-12
 
     not_nan = np.logical_not(np.isnan(sp_ft))
     vmax_sp_ft = 1.5 * np.percentile(np.abs(sp_ft[not_nan]), 99)

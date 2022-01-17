@@ -122,19 +122,19 @@ class TestTools(unittest.TestCase):
 
         # x-shifting
         for n in range(1, 20):
-            img_ft_shifted = tools.translate_ft(img_ft, [n * df, 0], dx)
+            img_ft_shifted = tools.translate_ft(img_ft, [n * df, 0], drs=(dx, dx))
             max_err = np.abs(img_ft_shifted[:, :-n] - img_ft[:, n:]).max()
             self.assertTrue(max_err < 1e-7)
 
         # y-shifting
         for n in range(1, 20):
-            img_ft_shifted = tools.translate_ft(img_ft, [0, n * df], dx)
+            img_ft_shifted = tools.translate_ft(img_ft, [0, n * df], drs=(dx, dx))
             max_err = np.abs(img_ft_shifted[:-n, :] - img_ft[n:, :]).max()
             self.assertTrue(max_err < 1e-7)
 
         # x+y shifting
         for n in range(1, 20):
-            img_ft_shifted = tools.translate_ft(img_ft, [n * df, n * df], dx)
+            img_ft_shifted = tools.translate_ft(img_ft, [n * df, n * df], drs=(dx, dx))
             max_err = np.abs(img_ft_shifted[:-n, :-n] - img_ft[n:, n:]).max()
             self.assertTrue(max_err < 1e-7)
 

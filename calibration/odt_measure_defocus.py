@@ -48,7 +48,7 @@ frq_fit, mask, _ = sim.fit_modulation_frq(img_ft, img_ft, dxy, fmax=np.inf, frq_
 # sim.plot_correlation_fit(img_ft, img_ft, frq_fit, dxy, frqs_guess=frq_guess)
 
 # shifted field
-efield_ft_shift = tools.translate_ft(img_ft, frq_fit, dx=dxy)
+efield_ft_shift = tools.translate_ft(img_ft, frq_fit, drs=(dxy, dxy))
 efield_ft_shift[ff_perp > fmax_int / 2] = 0
 
 efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(efield_ft_shift)))

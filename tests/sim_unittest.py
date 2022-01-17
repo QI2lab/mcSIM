@@ -174,8 +174,8 @@ class TestSIM(unittest.TestCase):
         gt_ft_shifted = np.zeros((nangles, nphases, ny, nx), dtype=complex)
         for ii in range(nangles):
             gt_ft_shifted[ii, 0] = fft.fftshift(fft.fft2(fft.ifftshift(gt)))
-            gt_ft_shifted[ii, 1] = tools.translate_ft(gt_ft_shifted[ii, 0], -frqs[ii], dx)
-            gt_ft_shifted[ii, 2] = tools.translate_ft(gt_ft_shifted[ii, 0], frqs[ii], dx)
+            gt_ft_shifted[ii, 1] = tools.translate_ft(gt_ft_shifted[ii, 0], -frqs[ii], drs=(dx, dx))
+            gt_ft_shifted[ii, 2] = tools.translate_ft(gt_ft_shifted[ii, 0], frqs[ii], drs=(dx, dx))
 
         sim_fs_ft = np.zeros(gt_ft_shifted.shape, dtype=complex)
         for ii in range(nangles):

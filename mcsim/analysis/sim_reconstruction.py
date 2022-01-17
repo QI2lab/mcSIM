@@ -2542,7 +2542,7 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=No
         for ii in range(nphases):  # [0, 1, 2] -> [0, 1, -1]
             for jj in range(nphases):
                 # shifted component C_j(f - l*fo)
-                cshift = tools.translate_ft(imgs_ft[jj], -ml * sim_frq, dxy)
+                cshift = tools.translate_ft(imgs_ft[jj], -ml * sim_frq, drs=(dxy, dxy))
                 # compute weighted cross correlation
                 d_cc[ii, jj, ll] = np.sum(imgs_ft[ii] * cshift.conj() * weight) / np.sum(weight)
 
