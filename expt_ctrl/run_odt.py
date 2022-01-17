@@ -17,13 +17,14 @@ import dlp6500
 
 tstart = time.perf_counter()
 
+use_dmd_as_shutter = True
 # #########################
 # turn laser and shutter on and allow laser power to stabilize
 # ensure both DMD triggers are low before programming DMD
 # #########################
 # use this if device won't restart
 # daq.DAQmxResetDevice("Dev1")
-t_stabalize = 15 # ensure stabilization is longer than this...
+t_stabilize = 15 # ensure stabilization is longer than this...
 
 taskDO = daq.Task()
 taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
@@ -108,21 +109,21 @@ pattern_info = {"frquency": frq, "radius": rad, "cref": cref, "phase": phase, "d
                 "xoffsets": xoffs, "yoffsets": yoffs, "npatterns": npatterns}
 
 print("generating patterns...")
-# patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
-# for ii in range(npatterns):
-#     patterns[ii] = np.copy(pattern_base)
-#     patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
-#                          (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
-patterns = np.ones((2*npatterns, ny, nx), dtype=np.uint8)
-for ii in range(npatterns):
-    patterns[2*ii] = np.copy(pattern_base)
-    patterns[2*ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii]) ** 2 +
-                         (yy - cref[0] - yoffs.ravel()[ii]) ** 2) > rad] = 1
-    patterns[2*ii + 1] = 1
+if use_dmd_as_shutter:
+    print("loading extra patterns to use DMD as shutter")
 
-# test repeats of all ON
-# patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
-
+    patterns = np.ones((2*npatterns, ny, nx), dtype=np.uint8)
+    for ii in range(npatterns):
+        patterns[2*ii] = np.copy(pattern_base)
+        patterns[2*ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii]) ** 2 +
+                             (yy - cref[0] - yoffs.ravel()[ii]) ** 2) > rad] = 1
+        patterns[2*ii + 1] = 1
+else:
+    patterns = np.ones((npatterns, ny, nx), dtype=np.uint8)
+    for ii in range(npatterns):
+        patterns[ii] = np.copy(pattern_base)
+        patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
+                             (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
 print("finished generating patterns, elapsed time %0.2fs" % (time.perf_counter() - tstart))
 
 
@@ -149,8 +150,8 @@ print("initialized DAQ lines, elapsed time = %0.2fs" % (time.perf_counter() - ts
 # check lasers have had time to stabilize, otherwise wait longer
 # #########################
 t_waited = time.perf_counter() - tstart
-if t_waited < t_stabalize:
-    time.sleep(t_stabalize - t_waited)
+if t_waited < t_stabilize:
+    time.sleep(t_stabilize - t_waited)
 
 # #########################
 # pycromanager
@@ -175,11 +176,16 @@ with pm.Bridge() as bridge:
     # create program for digital output
     # #########################
     dmd_delay = 105e-6 # s
+    # dmd_delay = 0
     dt = dmd_delay
+    # dt = 21e-6
+    # dt = 10e-6
     daq_sample_rate_hz = 1 / dt
 
     exposure_time = 2.8e-3 # s
     min_frame_time = 15e-3  # accounting for readout time
+    # exposure_time = 0.100e-3  # s
+    # min_frame_time = 0.100e-3  # accounting for readout time
     delay_between_frames = delay_time / 1e3
 
     # calculate number of clock steps for different pieces ...
@@ -211,8 +217,10 @@ with pm.Bridge() as bridge:
 
     # DMD advance trigger
     data_do[:(npatterns * nsteps_frame):nsteps_frame, 3] = 1
-    # extra advance trigger to "turn off" DMD and end exposure
-    data_do[nsteps_exposure - n_dmd_pre_trigger:(npatterns * nsteps_frame):nsteps_frame, 3] = 1
+    if use_dmd_as_shutter:
+        # extra advance trigger to "turn off" DMD and end exposure
+        data_do[nsteps_exposure - n_dmd_pre_trigger:(npatterns * nsteps_frame):nsteps_frame, 3] = 1
+
     # set camera trigger, which starts after delay time for DMD to display pattern
     data_do[n_dmd_pre_trigger:(npatterns * nsteps_frame):nsteps_frame, 0] = 1
     # for debugging, make trigger pulse longer so i can see it on scope
@@ -243,7 +251,8 @@ with pm.Bridge() as bridge:
     taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
 
     ## Configure timing (from DI task)
-    taskDO.CfgSampClkTiming("OnBoardClock", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
+    # taskDO.CfgSampClkTiming("OnBoardClock", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
+    taskDO.CfgSampClkTiming("/Dev1/do/SampleClockTimebase", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
     # taskDO.CfgSampClkTiming("OnBoardClock", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_FiniteSamps, samples_per_ch)
 
     ## Write the output waveform
@@ -257,6 +266,12 @@ with pm.Bridge() as bridge:
     # get strings of all available devices
     devs_v = mmc.get_loaded_devices()
     devs = [devs_v.get(ii) for ii in range(devs_v.size())]
+
+    # test sequencing
+    # daq = devs[-11]
+    # mmc.set_property(daq, "TriggerInputLine", "/Dev1/do/SampleClockTimebase")
+    # mmc.load_stage_sequence(daq, [0., 1., 0.])
+
 
     # get properties for devices
     # prop_v = mmc.get_device_property_names(devs[5])
