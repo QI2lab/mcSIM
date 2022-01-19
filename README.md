@@ -1,3 +1,8 @@
+[![preprint](https://img.shields.io/badge/preprint-bioRxiv-blue.svg)](https://doi.org/10.1101/2020.07.27.223941)
+[![paper](https://img.shields.io/badge/paper-biomedical%20optics%20expresss-blue.svg)](https://doi.org/10.1364/BOE.422703)
+[![website](https://img.shields.io/badge/website-up-green.svg)](https://shepherdlaboratory.org/)
+[![Github commit](https://img.shields.io/github/last-commit/QI2lab/mcSIM)](https://github.com/QI2lab/mcSIM)
+
 # multicolor DMD-SIM
 This repository contains code for designing, analyzing, and carrying out multicolor structured illumination microscopy
 experiments based on a digital micromirror device (DMD-SIM), including DMD simulation code, DMD pattern generation, SIM reconstruction and
@@ -25,7 +30,19 @@ git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .
 ```
-
+If you would like to edit the code, then install using the `-e` options,
+```
+git clone https://github.com/QI2lab/mcSIM.git
+cd mcSIM
+pip install -e .
+```
+The dependencies for the experimental control code are not installed by default because
+the DMD control code relies on the windows specific [pywinusb](https://pypi.org/project/pywinusb/). To install these dependencies run
+```
+git clone https://github.com/QI2lab/mcSIM.git
+cd mcSIM
+pip install .[expt_ctrl]
+```
 # Analysis and simulation code
 
 ### [simulate_dmd.py](mcsim/analysis/simulate_dmd.py)

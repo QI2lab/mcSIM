@@ -6,7 +6,6 @@ this_dir = path.abspath(path.dirname(__file__))
 with open(path.join(this_dir, "README.md")) as f:
     long_description = f.read()
 
-extras = {'gpu': ['cupy']}
 required_pkgs = ['numpy',
                  'scipy',
                  'matplotlib',
@@ -17,9 +16,14 @@ required_pkgs = ['numpy',
                  'tifffile',
                  'localize_psf @ git+https://git@github.com/qi2lab/localize-psf@master#egg=localize_psf']
 
+# extras
+extras = {'expt_ctrl': ['PyDAQmx'],
+          'gpu': ['cupy']
+          }
+
 # check what platform we are on
 if sys.platform == 'win32':
-    required_pkgs.append(['pywinusb>=0.4.2'])
+    extras['expt_ctrl'].append(['pywinusb>=0.4.2'])
 
 setup(
     name='mcsim',
@@ -28,7 +32,7 @@ setup(
                 " microscopy (SIM) experiment using a DLP6500 digital micromirror device (DMD)"
                 " and performing SIM reconstruction.",
     long_description=long_description,
-    author='Peter T. Brown',
+    author='Peter T. Brown, qi2lab',
     author_email='ptbrown1729@gmail.com',
     packages=find_packages(include=['mcsim', 'mcsim.*']),
     python_requires='>=3.7',
