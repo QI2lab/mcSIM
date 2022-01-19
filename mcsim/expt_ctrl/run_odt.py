@@ -251,8 +251,8 @@ with pm.Bridge() as bridge:
     taskDO.CreateDOChan("/Dev1/port0/line0:7", "", daq.DAQmx_Val_ChanForAllLines)
 
     ## Configure timing (from DI task)
-    # taskDO.CfgSampClkTiming("OnBoardClock", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
-    taskDO.CfgSampClkTiming("/Dev1/do/SampleClockTimebase", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
+    taskDO.CfgSampClkTiming("OnBoardClock", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
+    # taskDO.CfgSampClkTiming("/Dev1/do/SampleClockTimebase", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_ContSamps, samples_per_ch)
     # taskDO.CfgSampClkTiming("OnBoardClock", daq_sample_rate_hz, daq.DAQmx_Val_Rising, daq.DAQmx_Val_FiniteSamps, samples_per_ch)
 
     ## Write the output waveform
