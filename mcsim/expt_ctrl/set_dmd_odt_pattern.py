@@ -45,7 +45,7 @@ mag_dmd2bfp = 100 / 200 * 300 / 400 * fl_mitutoyo / fl_olympus
 
 pupil_rad_mirrors = fl_mitutoyo * na_mitutoyo / mag_dmd2bfp / dm
 
-if False:
+if True:
     # (y, x)
     offset = np.array([0, 0])
     # fraction = 0.8

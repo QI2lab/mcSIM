@@ -116,11 +116,17 @@ class nidaq(daq):
 
 
     def stop_sequence(self):
-        self.task_do.StopTask()
-        self.task_do.ClearTask()
+        try:
+            self.task_do.StopTask()
+            self.task_do.ClearTask()
+        except daqmx.DAQmxFunctions.InvalidTaskError:
+            pass
 
-        self.task_ao.StopTask()
-        self.task_ao.ClearTask()
+        try:
+            self.task_ao.StopTask()
+            self.task_ao.ClearTask()
+        except daqmx.DAQmxFunctions.InvalidTaskError:
+            pass
 
 def plot_arr(arr, line_names=None, title=""):
     """

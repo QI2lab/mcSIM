@@ -1,20 +1,23 @@
 import numpy as np
 
-def build_odt_sim_sequence(daq_do_map, daq_ao_map, sim_channels):
-    use_dmd_as_odt_shutter = True
+def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, sim_exposure_time,
+                           n_odt_patterns, n_sim_patterns, dt=105e-6, interval=0,
+                           n_odt_per_sim=1, n_trig_width=1, dmd_delay=105e-6,
+                           odt_stabilize_t=0.,
+                           use_dmd_as_odt_shutter=False):
 
     # timing variables
-    dt = 105e-6 # s
-    daq_sample_rate_hz = 1 / dt
+    # dt = 105e-6 # s
+    # daq_sample_rate_hz = 1 / dt
 
     # dmd pre-trigger
-    dmd_delay = 105e-6
+    # dmd_delay = 105e-6
     n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
 
     # delay between frames
-    delay_between_frames = 0 # s
-    nsteps_delay = int(np.ceil(delay_between_frames / dt))
-    if delay_between_frames != 0:
+    # interval = 0 # s
+    nsteps_delay = int(np.ceil(interval / dt))
+    if interval != 0:
         raise NotImplementedError()
 
     # minimum frame time
@@ -22,21 +25,19 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, sim_channels):
     nsteps_min_frame = int(np.ceil(min_frame_time / dt))
 
     # odt information
-    odt_exposure_time = 2.8e-3 # s
-    n_odt_patterns = 11
+    # odt_exposure_time = 2.8e-3 # s
+    # n_odt_patterns = 11
 
     # sim information
-    sim_exposure_time = 100e-3 # s
-    n_sim_patterns = 9
-    n_sim_channels = 3
+    # sim_exposure_time = 100e-3 # s
+    # n_sim_patterns = 9
 
     # other information
-    n_times = 1
-    n_odt_per_sim = 5
+    # n_times = 1
+    # n_odt_per_sim = 5
 
     # trigger width
-    t_trig_width = 10e-3
-    n_trig_width = int(np.ceil(t_trig_width / dt))
+    # n_trig_width = 1
 
     if nsteps_min_frame == 1 and use_dmd_as_odt_shutter:
         raise ValueError("nsteps_min_frame must be > 1 if use_dmd_as_odt_shutter=True")
@@ -49,14 +50,19 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, sim_channels):
     nsteps_odt_frame = np.max([nsteps_odt_exposure, nsteps_min_frame])
 
     # time for laser power to stabilize
-    odt_stabilize_t = 200e-3
+    # odt_stabilize_t = 200e-3
     n_odt_stabilize = int(np.ceil(odt_stabilize_t / dt))
+    if n_odt_stabilize < n_dmd_pre_trigger:
+        n_odt_stabilize = n_dmd_pre_trigger
+        print("n_odt_stabilize was less than n_dmd_pre_trigger. Increased it to %d steps" % n_odt_stabilize)
 
-    shutter_odt_delay_t = 50e-3
+    shutter_odt_delay_t = 100e-3
     n_odt_shutter_delay = int(np.ceil(shutter_odt_delay_t / dt))
     if n_odt_stabilize - n_odt_shutter_delay < 0:
         n_odt_shutter_delay = 0
 
+    # if n_odt_stabilize < n_dmd_pre_trigger:
+    #     raise ValueError("number of stabilization steps must be greater than n_dmd_pre_trigger")
 
     nsteps_odt = nsteps_odt_frame * n_odt_patterns * n_odt_per_sim + n_odt_stabilize
     do_odt = np.zeros((nsteps_odt, 16), dtype=np.uint8)
@@ -80,7 +86,9 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, sim_channels):
         do_odt[n_odt_stabilize + ii::nsteps_odt_frame, daq_do_map["odt_cam"]] = 1
 
     # DMD advance trigger
-    do_odt[n_odt_stabilize - n_dmd_pre_trigger::nsteps_odt_frame, daq_do_map["dmd_advance"]] = 1
+    do_odt[n_odt_stabilize - n_dmd_pre_trigger:-nsteps_odt_frame:nsteps_odt_frame, daq_do_map["dmd_advance"]] = 1
+    # ending point is -nsteps_odt_frame to avoid having extra trigger at the end which is really the "pretrigger"
+    # for the next frame
     if use_dmd_as_odt_shutter:
         # extra advance trigger to "turn off" DMD and end exposure
         do_odt[n_odt_stabilize - n_dmd_pre_trigger + nsteps_odt_exposure::nsteps_odt_frame, daq_do_map["dmd_advance"]] = 1
@@ -129,6 +137,7 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, sim_channels):
     ao_sim_channel = np.zeros((nsteps_sim_channel, 3))
 
     # assemble channels
+    # todo: need to read from expt_map.presets
     do_sim_blue = np.array(do_sim_channel, copy=True)
     do_sim_blue[:, daq_do_map["blue_laser"]] = 1
 
@@ -148,27 +157,44 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, sim_channels):
     ao_sim_green[:, daq_ao_map["vc_mirror_x"]] = 2
     ao_sim_green[:, daq_ao_map["vc_mirror_y"]] = 2
 
-    do_sim = np.vstack((do_sim_blue, do_sim_red, do_sim_green))
-    ao_sim = np.vstack((ao_sim_blue, ao_sim_red, ao_sim_green))
-    nsteps_sim = do_sim.shape[0]
+    sim_daq_data_ch = {"blue": {"do": do_sim_blue, "ao": ao_sim_blue},
+                       "red": {"do": do_sim_red, "ao": ao_sim_red},
+                       "green": {"do": do_sim_green, "ao": ao_sim_green}}
 
 
     print("sim channel stabilize time = %0.2fms = %d clock cycles" % (n_sim_stabilize * dt * 1e3, n_sim_stabilize))
     print("sim exposure time = %0.2fms = %d clock cycles" % (nsteps_sim_exposure * dt * 1e3, nsteps_sim_exposure))
     print("sim one frame = %0.2fms = %d clock cycles" % (nsteps_sim_frame * dt * 1e3, nsteps_sim_frame))
     print("sim one channel= %0.2fms = %d clock cycles" % (nsteps_sim_channel * dt * 1e3, nsteps_sim_channel))
-    print("sim %d channels = %0.2fms = %d clock cycles" % (3, nsteps_sim * dt * 1e3, nsteps_sim))
 
 
     # #########################
     # complete program
     # #########################
-    do_sim_odt = np.vstack((do_odt, do_sim))
-    ao_sim_odt = np.vstack((ao_odt, ao_sim))
+
+    # combine channels in correct order
+    do_list = []
+    ao_list = []
+    for ch in channels:
+        if ch == "odt":
+            do_list.append(do_odt)
+            ao_list.append(ao_odt)
+        else:
+            do_list.append(sim_daq_data_ch[ch]["do"])
+            ao_list.append(sim_daq_data_ch[ch]["ao"])
+
+
+    # build complete program
+    do_sim_odt = np.vstack(do_list)
+    ao_sim_odt = np.vstack(ao_list)
+
     assert do_sim_odt.shape[0] == ao_sim_odt.shape[0]
 
     nsteps_pgm = do_sim_odt.shape[0]
 
+    print("channels are:", end="")
+    print(" ".join(channels))
+
     print("full program = %0.2fms = %d clock cycles" % (nsteps_pgm * dt * 1e3, nsteps_pgm))
 
-    return do_sim_odt, ao_sim_odt
+    return do_sim_odt, ao_sim_odt, dt

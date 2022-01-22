@@ -3,165 +3,236 @@ Python script which takes command line arguments to program the DMD pattern sequ
 into DMD firmware. Firmware loading can be done using the Texas Instruments DLP6500 and DLP9000 GUI
 (https://www.ti.com/tool/DLPC900REF-SW)
 
+This file contains information about the DMD firmware patterns in the variables `channel_map` and two helper functions
+`get_dmd_sequence()` and `program_dmd_seq()`. This can imported from other python files and called from there,
+or this script can be run from the command line.
+
 Run "python set_dmd_sim.py -h" on the commandline for a detailed description of command options
+
+Information about which patterns are stored in the firmware and mapping onto different "channels" which
+are associated with a particular excitation wavelength and "modes" which are associated with a certain DMD
+pattern or set of DMD patterns this are stored in the variable channel_map
+This is of type dict{dict{dict{np.array}}}
+The top level dictionary keys are the names for each "channel"
+The second level down dictionary keys are the names of the "modes" for that channel,
+i.e. modes = channel_map["channel_name"].keys()
+note that all channels must have a mode called 'default'
+The third level dictionary specify the DMD patterns, i.e.
+# modes["default"] = {"picture_indices", "bit_indices"}
+So e.g. for channel="blue" to get the picture indices associated with the "sim" mode slice as follows:
+channel_map["blue"]["sim"]["picture_indices"]
 """
 
 import numpy as np
 import argparse
 from mcsim.expt_ctrl import dlp6500
+
 # #######################
-# information about which patterns are stored in the firmware
+# define channels and modes
 # #######################
-# all "on" and all "off" patterns positions in DMD firmware
-on_pic_inds = 1
-on_bit_inds = 3
-off_pic_inds = 1
-off_bit_inds = 4
-
-# affine calibration patterns position in firmware
-affine_on_pic_inds = 1
-affine_on_bit_inds = 5
-affine_off_pic_inds = 1
-affine_off_bit_inds = 6
-
-# SIM pattern positions as stored in DMD firmware. Load these using the DLP GUI
-# sublists give multiple aliases for given color
-color_alises = [['473', 'blue'], ['635', 'red'], ['532', 'green'], ['405', 'purple']]
-inverted = [False, False, True, False]
-nangles = 3
-nphases = 3
-
-pic_inds_sim = [np.array([0] * 9),
-                np.array([0] * 9),
-                np.array([0] * 6 + [1] * 3),
-                np.array([1] * 9)]
-
-bit_inds_sim = [np.array(list(range(9))),
-                np.array(list(range(9, 18))),
-                np.array(list(range(18, 24)) + list(range(3))),
-                np.array([3] * 9)]
-
-# define different DMD channels and modes
-# modes = channel["channel_name"]
-# modes["mode_name"] = {"pictures_indices", "bit_indices"}
-channel_map = {"off": {"default": {"picture_indices": off_pic_inds, "bit_indices": off_bit_inds}},
-                "on":  {"default": {"picture_indices": on_pic_inds, "bit_indices": on_bit_inds}},
-                "blue": {"sim": {"picture_indices": np.zeros(9), "bit_indices": np.arange(9, dtype=int)},
-                         "widefield": {"picture_indices": on_pic_inds, "bit_indices": on_bit_inds},
-                         "affine": {"picture_indices": affine_on_pic_inds, "bit_indices": affine_on_bit_inds},
-                         "on": {"picture_indices": on_pic_inds, "bit_indices": on_bit_inds},
-                         "off": {"picture_indices": off_pic_inds, "bit_indices": off_bit_inds}},
-                "red": {"sim": {"picture_indices": np.zeros(9), "bit_indices": np.arange(9, 18, dtype=int)},
-                         "widefield": {"picture_indices": on_pic_inds, "bit_indices": on_bit_inds},
-                         "affine": {"picture_indices": affine_on_pic_inds, "bit_indices": affine_on_bit_inds},
-                         "on": {"picture_indices": on_pic_inds, "bit_indices": on_bit_inds},
-                         "off": {"picture_indices": off_pic_inds, "bit_indices": off_bit_inds}},
-                "green": {"sim": {"picture_indices": np.array([0] * 6 + [1] * 3), "bit_indices": np.array(list(range(18, 24)) + list(range(3)))},
-                         "widefield": {"picture_indices": off_pic_inds, "bit_indices": off_bit_inds},
-                         "affine": {"picture_indices": affine_off_pic_inds, "bit_indices": affine_off_bit_inds},
-                         "on": {"picture_indices": off_pic_inds, "bit_indices": off_bit_inds},
-                         "off": {"picture_indices": on_pic_inds, "bit_indices": on_bit_inds}},
-                "odt": {"default": {"pictures_indices": np.zeros(1), "bit_indices": np.zeros(1)}}
+channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indices": np.array([4])}},
+               "on":  {"default": {"picture_indices": np.array([1]), "bit_indices": np.array([3])}},
+               "blue": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, dtype=int)}},
+               "red": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, 18, dtype=int)}},
+               "green": {"default": {"picture_indices": np.array([0] * 6 + [1] * 3, dtype=int), "bit_indices": np.array(list(range(18, 24)) + list(range(3)), dtype=int)}},
+               "odt": {"default": {"picture_indices": np.ones(11, dtype=int), "bit_indices": np.arange(7, 18, dtype=int)}}
             }
 
+# add on/off modes
+on_mode = channel_map["on"]["default"]
+off_mode = channel_map["off"]["default"]
+on_affine_mode = {"picture_indices": np.array([1]), "bit_indices": np.array([5])}
+off_affine_mode = {"picture_indices": np.array([1]), "bit_indices": np.array([6])}
+
+# add on/off/widefield/affine/sim modes for other colors
+# non-inverted patterns
+for m in ["red", "blue"]:
+    channel_map[m].update({"off": off_mode})
+    channel_map[m].update({"on": on_mode})
+    channel_map[m].update({"widefield": on_mode})
+    channel_map[m].update({'affine': on_affine_mode})
+    channel_map[m].update({'sim': channel_map[m]["default"]})
+
+# inverted-patterns
+for m in ["green", "odt"]:
+    channel_map[m].update({"off": on_mode})
+    channel_map[m].update({"on": off_mode})
+    channel_map[m].update({"widefield": off_mode})
+    channel_map[m].update({'affine': off_affine_mode})
+    channel_map[m].update({'sim': channel_map[m]["default"]})
 
 
-def run_dmd_sequence(dmd: dlp6500.dlp6500, mode: list[str], colors: list[str], widefieldrepeats, triggered: bool,
-                     darkframes: int, blank: bool, singlepattern, angle: int, phase: int, verbose: bool):
+def validate_channel_map(cm):
     """
+    check that channel_map is of the correct format
+    @param cm:
+    @return:
+    """
+    for ch in list(cm.keys()):
+        modes = list(cm[ch].keys())
 
-    @param list[str] mode:
-    @param list[str] colors:
-    @param int widefieldrepeats:
-    @param bool triggered:
-    @param int darkframes:
-    @param bool blank:
-    @param bool singlepattern:
-    @param int angle:
-    @param int phase:
-    @param bool verbose:
+        if "default" not in modes:
+            return False
+
+        for m in modes:
+            keys = list(cm[ch][m].keys())
+            if "picture_indices" not in keys:
+                return False
+
+            pi = cm[ch][m]["picture_indices"]
+            if not isinstance(pi, np.ndarray) or pi.ndim != 1:
+                return False
+
+            if "bit_indices" not in keys:
+                return False
+
+            bi = cm[ch][m]["bit_indices"]
+            if not isinstance(bi, np.ndarray) or bi.ndim != 1:
+                return False
+
+    return True
+
+
+def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
+                     blank: bool, mode_pattern_indices=None):
+    """
+    Generate DMD patterns from a list of modes and channels
+    @param modes:
+    @param channels:
+    @param nrepeats:
+    @param ndarkframes:
+    @param blank:
+    @param mode_pattern_indices:
+    @return picture_indices, bit_indices:
+    """
+    # check channel argument
+    if isinstance(channels, str):
+        channels = [channels]
+
+    if not isinstance(channels, list):
+        raise ValueError()
+
+    nmodes = len(channels)
+
+    # check mode argument
+    if isinstance(modes, str):
+        modes = [modes]
+
+    if not isinstance(modes, list):
+        raise ValueError()
+
+    if len(modes) == 1 and nmodes > 1:
+        modes = modes * nmodes
+
+    if len(modes) != nmodes:
+        raise ValueError()
+
+    # check pattern indices argument
+    if mode_pattern_indices is None:
+        mode_pattern_indices = []
+        for c, m in zip(channels, modes):
+            npatterns = len(channel_map[c][m]["picture_indices"])
+            mode_pattern_indices.append(np.arange(npatterns, dtype=int))
+
+    if isinstance(mode_pattern_indices, int):
+        mode_pattern_indices = [mode_pattern_indices]
+
+    if not isinstance(mode_pattern_indices, list):
+        raise ValueError()
+
+    if len(mode_pattern_indices) == 1 and nmodes > 1:
+        mode_pattern_indices = mode_pattern_indices * nmodes
+
+    if len(mode_pattern_indices) != nmodes:
+        raise ValueError()
+
+    # check nrepeats correct type
+    if isinstance(nrepeats, int):
+        nrepeats = [nrepeats]
+
+    if not isinstance(nrepeats, list):
+        raise ValueError()
+
+    if nrepeats is None:
+        nrepeats = []
+        for _ in zip(channels, modes):
+            nrepeats.append(1)
+
+    if len(nrepeats) == 1 and nmodes > 1:
+        nrepeats = nrepeats * nmodes
+
+    if len(nrepeats) != nmodes:
+        raise ValueError()
+
+    # processing
+    pic_inds = []
+    bit_inds = []
+    for c, m, ind, nreps in zip(channels, modes, mode_pattern_indices, nrepeats):
+        # need np.array(..., copy=True) to don't get references in arrays
+        pi = np.array(np.atleast_1d(channel_map[c][m]["picture_indices"]), copy=True)
+        bi = np.array(np.atleast_1d(channel_map[c][m]["bit_indices"]), copy=True)
+        # select indices
+        pi = pi[ind]
+        bi = bi[ind]
+        # repeats
+        pi = np.hstack([pi] * nreps)
+        bi = np.hstack([bi] * nreps)
+
+        pic_inds.append(pi)
+        bit_inds.append(bi)
+
+    # insert dark frames
+    if ndarkframes != 0:
+        for ii in range(nmodes):
+            ipic_off = channel_map[channels[ii]]["off"]["picture_indices"]
+            ibit_off = channel_map[channels[ii]]["off"]["bit_indices"]
+
+            pic_inds[ii] = np.concatenate((ipic_off * np.ones(ndarkframes, dtype=int), pic_inds[ii]), axis=0).astype(int)
+            bit_inds[ii] = np.concatenate((ibit_off * np.ones(ndarkframes, dtype=int), bit_inds[ii]), axis=0).astype(int)
+
+    # insert blanking frames
+    if blank:
+        # insert blank images for each mode
+        for ii in range(nmodes):
+            npatterns = len(pic_inds[ii])
+            ipic_off = channel_map[channels[ii]]["off"]["picture_indices"]
+            ibit_off = channel_map[channels[ii]]["off"]["bit_indices"]
+
+            ipic_new = np.zeros((2 * npatterns), dtype=int)
+            ipic_new[::2] = pic_inds[ii]
+            ipic_new[1::2] = ipic_off
+
+            ibit_new = np.zeros((2 * npatterns), dtype=int)
+            ibit_new[::2] = bit_inds[ii]
+            ibit_new[1::2] = ibit_off
+
+            pic_inds[ii] = ipic_new
+            bit_inds[ii] = ibit_new
+
+    pic_inds = np.hstack(pic_inds)
+    bit_inds = np.hstack(bit_inds)
+
+    return pic_inds, bit_inds
+
+
+def program_dmd_seq(dmd: dlp6500.dlp6500, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
+                    blank: bool, mode_pattern_indices: list[int], triggered: bool, verbose=False):
+    """
+    convenience function for generating DMD pattern and programming DMD
+
+    @param dmd:
+    @param modes:
+    @param channels:
+    @param nrepeats:
+    @param ndarkframes:
+    @param blank:
+    @param mode_pattern_indices:
+    @param triggered:
+    @param verbose:
     @return:
     """
 
-    # #######################
-    # pattern picture/bit indices
-    # list where each element is an array giving the picture/bit indices for all images for SIM imaging with that color
-    # #######################
-    if mode[0] == "widefield":
-        pic_inds = [np.atleast_1d([off_pic_inds] * widefieldrepeats) if inv else np.atleast_1d(
-            [on_pic_inds] * widefieldrepeats) for inv in inverted]
-        bit_inds = [np.atleast_1d([off_bit_inds] * widefieldrepeats) if inv else np.atleast_1d(
-            [on_bit_inds] * widefieldrepeats) for inv in inverted]
-    elif mode[0] == "affine":
-        pic_inds = [np.atleast_1d([affine_off_pic_inds] * widefieldrepeats) if inv else np.atleast_1d(
-            [affine_on_pic_inds] * widefieldrepeats) for inv in inverted]
-        bit_inds = [np.atleast_1d([affine_off_bit_inds] * widefieldrepeats) if inv else np.atleast_1d(
-            [affine_on_bit_inds] * widefieldrepeats) for inv in inverted]
-    elif mode[0] == "sim":
-        pic_inds = pic_inds_sim
-        bit_inds = bit_inds_sim
-    else:
-        raise ValueError("mode value '%s' was not one of the allowed values." % mode[0])
-
-    # #######################
-    # parse color argument
-    # #######################
-    color_arg_inds = np.zeros(len(colors), dtype=int)
-    for ii, c in enumerate(colors):
-        color_arg_inds[ii] = int([jj for jj, cc in enumerate(color_alises) if c in cc][0])
-
-    # #######################
-    # find patterns to set
-    # #######################
-    if singlepattern:
-        current_pic_inds = pic_inds[color_arg_inds[0]][nphases * angle + phase]
-        current_bit_inds = bit_inds[color_arg_inds[0]][nphases * angle + phase]
-    else:
-        if not triggered:
-            current_pic_inds = np.concatenate([pic_inds[pi] for pi in color_arg_inds])
-            current_bit_inds = np.concatenate([bit_inds[pi] for pi in color_arg_inds])
-        else:
-            # OFF frames before start of each color
-            current_pic_inds = [
-                np.concatenate((np.array([off_pic_inds] * darkframes, dtype=int), pic_inds[pi])) if not inverted[
-                    pi] else
-                np.concatenate((np.array([on_pic_inds] * darkframes, dtype=int), pic_inds[pi]))
-                for pi in color_arg_inds]
-
-            current_bit_inds = [
-                np.concatenate((np.array([off_bit_inds] * darkframes, dtype=int), bit_inds[pi])) if not inverted[
-                    pi] else
-                np.concatenate((np.array([on_bit_inds] * darkframes, dtype=int), bit_inds[pi]))
-                for pi in color_arg_inds]
-
-            if blank:
-                # intersperse pattern frames with off frames
-                current_pic_inds = [
-                    np.concatenate((ps[:, None], np.array([off_pic_inds] * len(ps), dtype=int)[:, None]),
-                                   axis=1).ravel() if not inverted[pi] else
-                    np.concatenate((ps[:, None], np.array([on_pic_inds] * len(ps), dtype=int)[:, None]), axis=1).ravel()
-                    for pi, ps in zip(inverted, current_pic_inds)]
-                current_bit_inds = [
-                    np.concatenate((ps[:, None], np.array([off_bit_inds] * len(ps), dtype=int)[:, None]),
-                                   axis=1).ravel() if not inverted[pi] else
-                    np.concatenate((ps[:, None], np.array([on_bit_inds] * len(ps), dtype=int)[:, None]), axis=1).ravel()
-                    for pi, ps in enumerate(current_bit_inds)]
-
-            current_pic_inds = list(np.concatenate(current_pic_inds))
-            current_bit_inds = list(np.concatenate(current_bit_inds))
-
-    # #########################################
-    # print settings
-    # #########################################
-    if not singlepattern:
-        print("%d picture indices: " % len(current_pic_inds), end="")
-    print("picture indices: ", end="")
-    print(current_pic_inds)
-    if not singlepattern:
-        print("%d    bit indices: " % len(current_bit_inds), end="")
-    print("bit indices: ", end="")
-    print(current_bit_inds)
-
+    pic_inds, bit_inds = get_dmd_sequence(modes, channels, nrepeats, ndarkframes, blank, mode_pattern_indices)
     # #########################################
     # DMD commands
     # #########################################
@@ -171,66 +242,81 @@ def run_dmd_sequence(dmd: dlp6500.dlp6500, mode: list[str], colors: list[str], w
 
     # check DMD trigger state
     delay1_us, mode_trig1 = dmd.get_trigger_in1()
-    print('trigger1 delay=%dus' % delay1_us)
-    print('trigger1 mode=%d' % mode_trig1)
+    # print('trigger1 delay=%dus' % delay1_us)
+    # print('trigger1 mode=%d' % mode_trig1)
 
     # dmd.set_trigger_in2('rising')
     mode_trig2 = dmd.get_trigger_in2()
-    print("trigger2 mode=%d" % mode_trig2)
+    # print("trigger2 mode=%d" % mode_trig2)
 
-    dmd.set_pattern_sequence(current_pic_inds, current_bit_inds, 105, 0, triggered=triggered,
+    dmd.set_pattern_sequence(pic_inds, bit_inds, 105, 0, triggered=triggered,
                              clear_pattern_after_trigger=False, bit_depth=1, num_repeats=0, mode='pre-stored')
 
-    print("finished programming DMD")
+    if verbose:
+        # print pattern info
+        print("%d picture indices: " % len(pic_inds), end="")
+        print(pic_inds)
+        print("%d     bit indices: " % len(bit_inds), end="")
+        print(bit_inds)
+        print("finished programming DMD")
+
+    return pic_inds, bit_inds
 
 if __name__ == "__main__":
 
     # #######################
     # define arguments
     # #######################
+
     parser = argparse.ArgumentParser(description="Set DMD pattern sequence from the command line.")
-    parser.add_argument("colors", type=str, nargs="+", choices=[c for alias in color_alises for c in alias],
-                        help="supply the colors to be used in this acquisition as strings separated by spaces")
+
+    # allowed channels
+    all_channels = list(channel_map.keys())
+    parser.add_argument("channels", type=str, nargs="+", choices=all_channels,
+                        help="supply the channels to be used in this acquisition as strings separated by spaces")
+
+    # allowed modes
+    modes = list(set([m for c in all_channels for m in list(channel_map[c].keys())]))
+    modes_help = "supply the modes to be used with each channel as strings separated by spaces." \
+                 "each channel supports its own list of modes.\n"
+    for c in all_channels:
+        modes_with_parenthesis = ["'%s'" % m for m in list(channel_map[c].keys())]
+        modes_help += ("channel '%s' supports: " % c) + ", ".join(modes_with_parenthesis) + ".\n"
+
+    parser.add_argument("-m", "--modes", type=str, nargs=1, choices=modes, default=["default"],
+                        help=modes_help)
+
+    # pattern indices
+    pattern_indices_help = "Among the patterns specified in the subset specified by `channels` and `modes`," \
+                           " only run these indices. For a given channel and mode, allowed indices range from 0 to npatterns - 1." \
+                           "This options is most commonly used when only a single channel and mode are provided.\n"
+    for c in list(channel_map.keys()):
+        for m in list(channel_map[c].keys()):
+            pattern_indices_help += "channel '%s` and mode '%s' npatterns = %d.\n" % (c, m, len(channel_map[c][m]["picture_indices"]))
+
+    parser.add_argument("-i", "--pattern_indices", type=int, help=pattern_indices_help)
+
+    parser.add_argument("-r", "--nrepeats", type=int, default=1,
+                        help="number of times to repeat the patterns specificed by `channels`, `modes`, and `pattern_indices`")
+
+    # other
     parser.add_argument("-t", "--triggered", action="store_true",
                         help="set DMD to wait for trigger before switching pattern")
-    parser.add_argument("-d", "--darkframes", type=int, default=0,
+    parser.add_argument("-d", "--ndarkframes", type=int, default=0,
                         help="set number of dark frames to be added before each color of SIM/widefield pattern")
     parser.add_argument("-b", "--blank", action="store_true",
                         help="set whether or not to insert OFF patterns between each SIM pattern to blank laser")
-
-    modes = ["sim", "widefield", "affine"]
-    parser.add_argument("-m", "--mode", type=str, nargs=1, choices=modes, default=["sim"],
-                        help="pass 'sim' to run SIM patterns, 'widefield' to run widefield patterns,"
-                        "or 'affine' to run affine calibration patterns.")
-
-    # todo: rename this something more sensible
-    parser.add_argument("-wr", "--widefieldrepeats", type=int, default=nangles * nphases,
-                        help="number of times to repeat widefield or affine patterns. This simulates the SIM sequence,"
-                             " replacing the angle/phase loop with repeats of the same pattern. Note that this argument"
-                             " only has an effect if the mode is `widefield` or `affine`")
-
-    parser.add_argument("-s", "--singlepattern", action="store_true",
-                        help="Display a single pattern on the DMD. Only a single colors argument should be supplied."
-                        "The pattern index is chosen using the --angle and --phase arguments")
-    parser.add_argument("-a", "--angle", type=int, choices=list(range(nangles)),
-                        help="Angle index of SIM pattern. No effect unless --singlepattern option was passed.")
-    parser.add_argument("-p", "--phase", type=int, choices=list(range(nphases)),
-                        help="Phase index of SIM pattern. No effect unless --singlepattern option was passed.")
     parser.add_argument("-v", "--verbose", action="store_true", help="print more verbose DMD programming information")
     args = parser.parse_args()
 
     if args.verbose:
         print(args)
 
-    # ensure arguments are compatible
-    if args.singlepattern and len(args.colors) != 1:
-        parser.error("--singlepattern was passed, but number of color arguments was not 1")
-
-    if args.singlepattern and (args.angle is None or args.phase is None):
-        parser.error("--singlepattern was passed, but either --angle or --phase was not passed.")
-
+    # #########################################
     # load DMD and set pattern
+    # #########################################
     dmd = dlp6500.dlp6500win(debug=args.verbose)
 
-    run_dmd_sequence(dmd, args.mode, args.colors, args.widefieldrepeats, args.triggered, args.darkframes, args.blank,
-                     args.singlepattern, args.angle, args.phase, args.verbose)
+    pic_inds, bit_inds = program_dmd_seq(dmd, args.modes, args.channels, args.nrepeats, args.ndarkframes, args.blank,
+                                         args.pattern_indices, args.triggered, args.verbose)
+
