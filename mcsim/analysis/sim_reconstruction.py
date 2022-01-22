@@ -2027,24 +2027,42 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
 
 
 # compute optical sectioned SIM image
-def sim_optical_section(imgs, axis=0):
+def sim_optical_section(imgs, axis=0, phase_differences=(0, 2*np.pi/3, 4*np.pi/3)):
     """
-    Law of signs optical sectioning reconstruction for three sim images with relative phase differences of 2*pi/3
-    between each.
+    Optical sectioning reconstruction for three SIM images with arbitrary relative phase
+    differences following the approach of https://doi.org/10.1016/s0030-4018(98)00210-7
 
-    Point: Let I[a] = A * [1 + m * cos(phi + phi_a)]
+    In the most common case, where the phase differences are 0, 2*np.pi/3, and 4*np.pi/3 the result is
+    Let I[a] = A * [1 + m * cos(phi + phi_a)]
     Then sqrt( (I[0] - I[1])**2 + (I[1] - I[2])**2 + (I[2] - I[0])**2 ) = m*A * 3/ np.sqrt(2)
 
-    :param imgs: image
-    :param axis: axis to perform the optical sectioning computation along
-
-    :return img_os: optically sectioned image
+    :param np.ndarray imgs: images stored as nD array, where one of the dimensions is of size 3.
+    :param int axis: axis to perform the optical sectioning computation along. imgs.shape[axis] must = 3
+    :param list[float] phase_differences: list of length 3
+    :return np.ndarray img_os: optically sectioned image
     """
+
+    if imgs.shape[axis] != 3:
+        raise ValueError("imgs must be of size 3 along axis %d" % axis)
+
+    if len(phase_differences) != 3:
+        raise ValueError("phases must have length 3")
+
+    # compute inversion matrix
+    p1, p2, p3 = phase_differences
+    mat = np.array([[1, np.cos(p1), -np.sin(p1)],
+                    [1, np.cos(p2), -np.sin(p2)],
+                    [1, np.cos(p3), -np.sin(p3)]])
+    inv = np.linalg.inv(mat)
 
     # put the axis we want to compute along first
     imgs = np.swapaxes(imgs, 0, axis)
 
-    img_os = np.sqrt(2) / 3 * np.sqrt((imgs[0] - imgs[1]) ** 2 + (imgs[0] - imgs[2]) ** 2 + (imgs[1] - imgs[2]) ** 2)
+    i_c = inv[1, 0] * imgs[0] + inv[1, 1] * imgs[1] + inv[1, 2] * imgs[2]
+    i_s = inv[2, 0] * imgs[0] + inv[2, 1] * imgs[1] + inv[2, 2] * imgs[2]
+    img_os = np.sqrt(i_c**2 + i_s**2)
+
+    # img_os = np.sqrt(2) / 3 * np.sqrt((imgs[0] - imgs[1]) ** 2 + (imgs[0] - imgs[2]) ** 2 + (imgs[1] - imgs[2]) ** 2)
 
     # swap the axis we moved back, if needed
     if img_os.ndim > 1 and axis != 0:
