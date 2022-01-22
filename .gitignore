@@ -292,6 +292,9 @@ dask-worker-space/
 # java
 **/classes
 
+# python packaging
+*.egg-info
+
 # scratch space
 examples/data/**
 # temporary files
