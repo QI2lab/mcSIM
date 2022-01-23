@@ -37,7 +37,7 @@ class nidaq(daq):
         self.digital_lines = "/" + dev_name + "/" + digital_lines
         self.n_digital_lines = 16
         self.analog_lines = ["/" + dev_name + "/" + line for line in analog_lines]
-        self.n_analog_lines = 3
+        self.n_analog_lines = len(self.analog_lines)
 
         self.task_do = None
         self.task_ao = None
@@ -62,11 +62,16 @@ class nidaq(daq):
         # if array.ndim != 1 or array.size != self.n_digital_lines:
         #     raise ValueError()
 
-        self.task_ao = daqmx.Task()
-        self.task_ao.CreateAOVoltageChan(self.analog_lines, "", -6.0, 6.0, daqmx.DAQmx_Val_Volts, None)
-        self.task_ao.WriteAnalogScalarF64(True, -1, array, None)
-        self.task_ao.StopTask()
-        self.task_ao.ClearTask()
+        # can't get WriteAnalogScalarF64() to work with multiple lines, so
+        if len(array) != len(self.analog_lines):
+            raise ValueError()
+
+        for ii in range(len(self.analog_lines)):
+            self.task_ao = daqmx.Task()
+            self.task_ao.CreateAOVoltageChan(self.analog_lines[ii], "", -5.0, 5.0, daqmx.DAQmx_Val_Volts, None)
+            self.task_ao.WriteAnalogScalarF64(True, daqmx.DAQmx_Val_WaitInfinitely, array[ii], None)
+            self.task_ao.StopTask()
+            self.task_ao.ClearTask()
 
     def set_sequence(self, digital_array, analog_array, sample_rate_hz, clock_source="OnBoardClock"):
         if not digital_array.shape[0] == analog_array.shape[0]:
