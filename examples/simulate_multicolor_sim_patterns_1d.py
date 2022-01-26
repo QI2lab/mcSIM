@@ -14,7 +14,7 @@ For a complete description of the geometry and coordinate systems, see the docst
 """
 import numpy as np
 import matplotlib.pyplot as plt
-import simulate_dmd as sdmd
+import mcsim.analysis.simulate_dmd as sdmd
 
 # define DMD pitch, mirror size, mirror angles, etc.
 dx = 7.56e-6 # DMD pitch in meters

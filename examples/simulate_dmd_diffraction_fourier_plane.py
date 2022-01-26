@@ -5,13 +5,14 @@ Simulate DMD peak broadening including
 3. PSF from first lens
 """
 import numpy as np
+from numpy import fft
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
-import simulate_dmd as sdmd
-import analysis_tools as tools
-from numpy import fft
-import fit_psf
 from matplotlib.patches import Circle
+import mcsim.analysis.simulate_dmd as sdmd
+import mcsim.analysis.analysis_tools as tools
+import localize_psf.fit_psf as fit_psf
+
 
 wavelength = 0.785
 k = 2*np.pi / wavelength

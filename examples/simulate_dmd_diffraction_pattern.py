@@ -6,7 +6,7 @@ Unlike simulate_multicolor_sim_patterns_1d.py, this file simulates the same inpu
 """
 
 import numpy as np
-import simulate_dmd as dmd
+import mcsim.analysis.simulate_dmd as dmd
 
 wavelengths = [465e-9, 532e-9, 635e-9]
 colors = ["b", "g", "r"]

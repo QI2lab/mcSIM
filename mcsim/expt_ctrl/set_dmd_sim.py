@@ -27,6 +27,7 @@ import numpy as np
 import argparse
 from mcsim.expt_ctrl import dlp6500
 
+
 # #######################
 # define channels and modes
 # #######################
@@ -60,6 +61,76 @@ for m in ["green", "odt"]:
     channel_map[m].update({"widefield": off_mode})
     channel_map[m].update({'affine': off_affine_mode})
     channel_map[m].update({'sim': channel_map[m]["default"]})
+
+# #######################
+# firmware patterns
+# #######################
+ang = -45 * np.pi/180
+frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
+
+rad = 5
+phase = 0
+
+# pupil info
+na_mitutoyo = 0.55
+dm = 7.56 # DMD mirror size
+fl_mitutoyo = 4e3 # focal length of mitutoya objective
+fl_olympus = 1.8e3
+# magnification between DMD and Mitutoyo BFP
+mag_dmd2bfp = 100 / 200 * 300 / 400 * fl_mitutoyo / fl_olympus
+
+pupil_rad_mirrors = fl_mitutoyo * na_mitutoyo / mag_dmd2bfp / dm
+
+# patterns
+n_phis = 5
+fractions = [0.5, 0.9]
+phis = np.arange(n_phis) * 2*np.pi / n_phis
+n_thetas = len(fractions)
+
+xoffs = np.zeros((n_phis, n_thetas))
+yoffs = np.zeros((n_phis, n_thetas))
+for ii in range(n_phis):
+    for jj in range(n_thetas):
+        xoffs[ii, jj] = np.cos(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+        yoffs[ii, jj] = np.sin(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+
+xoffs = np.concatenate((np.array([0]), xoffs.ravel()))
+yoffs = np.concatenate((np.array([0]), yoffs.ravel()))
+
+firmware_pattern_map = [[{"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 12]), "index": 0}, # blue
+                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 12]), "index": 1},
+                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 12]), "index": 2},
+                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([12, 3]), "index": 0},
+                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([12, 3]), "index": 1},
+                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([12, 3]), "index": 2},
+                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([12, 3]), "index": 0},
+                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([12, 3]), "index": 1},
+                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([12, 3]), "index": 2},
+                         {"type": "sim", "a1": np.array([-5, 18]), "a2": np.array([-15, 24]), "index": 0}, #red
+                         {"type": "sim", "a1": np.array([-5, 18]), "a2": np.array([-15, 24]), "index": 1},
+                         {"type": "sim", "a1": np.array([-5, 18]), "a2": np.array([-15, 24]), "index": 2},
+                         {"type": "sim", "a1": np.array([-18, 5]), "a2": np.array([-24, 15]), "index": 0},
+                         {"type": "sim", "a1": np.array([-18, 5]), "a2": np.array([-24, 15]), "index": 1},
+                         {"type": "sim", "a1": np.array([-18, 5]), "a2": np.array([-24, 15]), "index": 2},
+                         {"type": "sim", "a1": np.array([-11, -10]), "a2": np.array([15, 3]), "index": 0},
+                         {"type": "sim", "a1": np.array([-11, -10]), "a2": np.array([15, 3]), "index": 1},
+                         {"type": "sim", "a1": np.array([-11, -10]), "a2": np.array([15, 3]), "index": 2},
+                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 15]), "index": 0}, # green
+                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 15]), "index": 1},
+                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 15]), "index": 2},
+                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([15, 3]), "index": 0},
+                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([15, 3]), "index": 1},
+                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([15, 3]), "index": 2}],
+                        [{"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([3, 12]), "index": 0},
+                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([3, 12]), "index": 1},
+                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([3, 12]), "index": 2},
+                         {"type": "on"},
+                         {"type": "off"},
+                         {"type": "affine on"},
+                         {"type": "affine off"}] +
+                         [{"type": "odt", "xoffset": xoffs[ii], "yoffset": yoffs[ii], "angle": ang, "frequency": frq, "phase": phase, "radius": rad}
+                          for ii in range(len(xoffs))]
+                        ]
 
 
 def validate_channel_map(cm):

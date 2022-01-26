@@ -12,8 +12,8 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 import tifffile
-import analysis_tools as tools
-import fit_psf
+import mcsim.analysis.analysis_tools as tools
+import localize_psf.fit_psf as fit_psf
 
 
 def adc2photons(img, gain_map, bg_map):

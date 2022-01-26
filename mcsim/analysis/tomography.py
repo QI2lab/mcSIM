@@ -11,8 +11,9 @@ from matplotlib.cm import ScalarMappable
 from scipy.interpolate import interpn
 import time
 from skimage.restoration import unwrap_phase
-import fit
-import analysis_tools as tools
+#
+import localize_psf.fit as fit
+import mcsim.analysis.analysis_tools as tools
 
 _cupy_available = True
 try:

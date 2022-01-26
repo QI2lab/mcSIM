@@ -21,12 +21,12 @@ from matplotlib.colors import PowerNorm
 import matplotlib.patches
 import matplotlib.pyplot as plt
 
-import dmd_patterns
-import simulate_dmd
-import affine
-import analysis_tools as tools
-import sim_reconstruction
-import fit_psf
+import mcsim.analysis.dmd_patterns as dmd_patterns
+import mcsim.analysis.simulate_dmd as simulate_dmd
+import mcsim.analysis.analysis_tools as tools
+import mcsim.analysis.sim_reconstruction as sim_reconstruction
+import localize_psf.fit_psf as fit_psf
+import localize_psf.affine as affine
 
 def frq2angles(frq_2d, wavelength, n):
     """

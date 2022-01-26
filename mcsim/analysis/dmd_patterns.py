@@ -19,9 +19,11 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 import matplotlib.patches
 import tifffile
-import analysis_tools as tools
-import affine
-import simulate_dmd
+#
+import mcsim.analysis.analysis_tools as tools
+import mcsim.analysis.mm_io as mm_io
+import mcsim.analysis.simulate_dmd as simulate_dmd
+import localize_psf.affine as affine
 
 
 def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
@@ -2331,7 +2333,7 @@ def export_all_pattern_sets(dmd_size, periods, nangles=3, nphases=3, wavelengths
         # directory to save results
         sub_dir = 'period=%.1f_nangles=%d' % (period, nangles)
         fpath = os.path.join(save_dir, sub_dir)
-        pattern_save_dir = tools.get_unique_name(fpath, mode='dir')
+        pattern_save_dir = mm_io.get_unique_name(fpath, mode='dir')
         if not os.path.exists(pattern_save_dir):
             os.mkdir(pattern_save_dir)
 
@@ -2685,7 +2687,7 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
 
     # export results
     if save_dir is not None:
-        save_dir = tools.get_unique_name(save_dir, mode='dir')
+        save_dir = mm_io.get_unique_name(save_dir, mode='dir')
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 

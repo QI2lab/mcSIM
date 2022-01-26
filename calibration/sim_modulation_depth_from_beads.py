@@ -17,6 +17,7 @@ import matplotlib.colors
 import scipy.signal
 import scipy.optimize
 
+import mm_io
 import sim_reconstruction as sim
 import affine
 import rois as roi_fns
@@ -93,7 +94,7 @@ for ii, p in enumerate(pattern_paths):
 # loop over data dirs and estimate modulation depth
 # ################################
 for d in data_dirs:
-    metadata, dims, summary = tools.parse_mm_metadata(d)
+    metadata, dims, summary = mm_io.parse_mm_metadata(d)
 
     nxy = dims['position']
     ntimes = dims['time']
@@ -110,7 +111,7 @@ for d in data_dirs:
 
     # make save directory
     if save_results:
-        save_dir = "%s_sim_modulation_depth" % os.path.join(d, tools.get_timestamp())
+        save_dir = "%s_sim_modulation_depth" % os.path.join(d, mm_io.get_timestamp())
         if not os.path.exists(save_dir):
             os.mkdir(save_dir)
 
@@ -134,7 +135,7 @@ for d in data_dirs:
 
         img_inds = list(range(nignored_frames, nignored_frames + 9))
         # grab first image and average over angles/phases to get all beads
-        img_first = np.mean(tools.read_mm_dataset(metadata, time_indices=0, z_indices=iz_center,
+        img_first = np.mean(mm_io.read_mm_dataset(metadata, time_indices=0, z_indices=iz_center,
                                                   user_indices={"UserChannelIndex": ic, "UserSimIndex": img_inds}),
                             axis=0)
 
@@ -182,7 +183,7 @@ for d in data_dirs:
                               (it + 1, ntimes, iz + 1, nz, ic + 1, ncolors, ia + 1, nangles, ip + 1,
                                nphases, time.perf_counter() - tstart))
 
-                        imgs = tools.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
+                        imgs = mm_io.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
                                                      user_indices={"UserChannelIndex": ic,
                                                                    "UserSimIndex": sim_inds[ip]})
 
@@ -268,7 +269,7 @@ for d in data_dirs:
                     med_sigma = np.median(sigma_means_temp)
 
                     # plot mod depth versus positions
-                    imgs = np.mean(tools.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
+                    imgs = np.mean(mm_io.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
                                                          user_indices={"UserChannelIndex": ic,
                                                          "UserSimIndex": nignored_frames + ia * nphases}),
                                    axis=0)

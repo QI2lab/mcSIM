@@ -13,9 +13,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import pickle
 
-import affine
-import rois
-import fit
+import localize_psf.affine as affine
+import localize_psf.rois as rois
+import localize_psf.fit as fit
 
 # helper functions for dealing with an array of dots projected on a flat background
 def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_squared_relative_max=1.5,

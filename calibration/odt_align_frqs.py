@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
 import tifffile
-import sim_reconstruction as sim
-import tomography as tm
+import mcsim.analysis.sim_reconstruction as sim
+import mcsim.analysis.tomography as tm
 
 no = 1.474
 wavelength = 0.785 # um

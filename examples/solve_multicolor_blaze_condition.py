@@ -5,7 +5,7 @@ wavelengths are locations where multicolor operation is possible.
 """
 import numpy as np
 import matplotlib.pyplot as plt
-import simulate_dmd
+import mcsim.analysis.simulate_dmd as simulate_dmd
 
 # #########################################
 # define wavelengths to calculate

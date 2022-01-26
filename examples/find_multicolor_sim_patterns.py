@@ -4,7 +4,7 @@ Generate SIM patterns for three wavelengths and DMD period of ~6 mirrors.
 import numpy as np
 import os
 import datetime
-import dmd_patterns
+import mcsim.analysis.dmd_patterns as dmd_patterns
 
 # define DMD size
 nx = 1920

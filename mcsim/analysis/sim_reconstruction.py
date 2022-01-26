@@ -7,13 +7,15 @@ reconstruct_sim_dataset() provides an example of using SimImageSet to reconstruc
 implemented for a MicroManager dataset containing multiple z-positions, color channels, and time points.
 """
 
-import analysis_tools as tools
-import psd
-import camera_noise
-import fit
-import fit_psf as psf
-import affine
-import rois
+import mcsim.analysis.analysis_tools as tools
+import mcsim.analysis.mm_io as mm_io
+import mcsim.analysis.psd as psd
+import mcsim.analysis.camera_noise as camera_noise
+# localize psf
+import localize_psf.fit as fit
+import localize_psf.fit_psf as psf
+import localize_psf.affine as affine
+import localize_psf.rois as rois
 
 import pickle
 import os
@@ -1239,16 +1241,16 @@ class SimImageSet:
         end_coord_re = [2*c for c in end_coord]
 
         # get cut from widefield image
-        coord_wf, cut_wf = tools.get_cut_profile(self.widefield, start_coord, end_coord, 1)
+        coord_wf, cut_wf = tools.get_linecut(self.widefield, start_coord, end_coord, 1)
         coord_wf = self.dx * coord_wf
 
-        coord_os, cut_os = tools.get_cut_profile(self.sim_os, start_coord, end_coord, 1)
+        coord_os, cut_os = tools.get_linecut(self.sim_os, start_coord, end_coord, 1)
         coord_os = self.dx * coord_os
 
-        coord_dc, cut_dc = tools.get_cut_profile(self.widefield_deconvolution, start_coord_re, end_coord_re, 1)
+        coord_dc, cut_dc = tools.get_linecut(self.widefield_deconvolution, start_coord_re, end_coord_re, 1)
         coord_dc = 0.5 * self.dx * coord_dc
 
-        coord_sr, cut_sr = tools.get_cut_profile(self.sim_sr, start_coord_re, end_coord_re, 1)
+        coord_sr, cut_sr = tools.get_linecut(self.sim_sr, start_coord_re, end_coord_re, 1)
         coord_sr = 0.5 * self.dx * coord_sr
 
         coords = {'wf': coord_wf, 'os': coord_os, 'dc': coord_dc, 'sr': coord_sr}
@@ -1791,7 +1793,7 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
             shutil.copyfile(dmd_pattern_data_path[kk], fpath)
 
         # load metadata
-        metadata, dims, summary = tools.parse_mm_metadata(rpath)
+        metadata, dims, summary = mm_io.parse_mm_metadata(rpath)
         start_time = datetime.datetime.strptime(summary['StartTime'],  '%Y-%d-%m;%H:%M:%S.%f')
         nz = dims['z']
         nxy = dims['position']
@@ -1895,7 +1897,7 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
 
                         # find images and load them
                         img_inds = list(range(npatterns_ignored, npatterns_ignored + nangles * nphases))
-                        raw_imgs = tools.read_mm_dataset(metadata, time_indices=ind_t, z_indices=iz, xy_indices=ixy,
+                        raw_imgs = mm_io.read_mm_dataset(metadata, time_indices=ind_t, z_indices=iz, xy_indices=ixy,
                                                          user_indices={"UserChannelIndex": channel_inds[kk],
                                                                        "UserSimIndex": img_inds})
 

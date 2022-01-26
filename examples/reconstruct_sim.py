@@ -6,10 +6,10 @@ import numpy as np
 from numpy import fft
 import pickle
 import tifffile
-import sim_reconstruction as sim
-import fit_psf as psf
-import affine
-import rois
+import mcsim.analysis.sim_reconstruction as sim
+import localize_psf.fit_psf as psf
+import localize_psf.affine as affine
+import localize_psf.rois as rois
 
 now = datetime.datetime.now()
 tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
