@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import dlp6500
+import mcsim.expt_ctrl.dlp6500 as dlp6500
 
 dmd = dlp6500.dlp6500win(debug=False)
 
@@ -71,7 +71,7 @@ else:
 
     n_phis = 10
     phis = np.arange(n_phis) * 2 * np.pi / n_phis
-    fractions = [0.9]
+    fractions = [0.5, 0.9]
     n_thetas = len(fractions)
 
     xoffs = np.zeros((n_thetas, n_phis))
