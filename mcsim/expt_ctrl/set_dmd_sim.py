@@ -165,7 +165,7 @@ def validate_channel_map(cm):
 
 
 def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
-                     blank: bool, mode_pattern_indices=None):
+                     blank: list[bool], mode_pattern_indices=None):
     """
     Generate DMD patterns from a list of modes and channels
     @param modes:
@@ -235,6 +235,19 @@ def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int],
     if len(nrepeats) != nmodes:
         raise ValueError()
 
+    # check blank argument
+    if isinstance(blank, bool):
+        blank = [blank]
+
+    if not isinstance(blank, list):
+        raise ValueError()
+
+    if len(blank) == 1 and nmodes > 1:
+        blank = blank * nmodes
+
+    if len(blank) != nmodes:
+        raise ValueError()
+
     # processing
     pic_inds = []
     bit_inds = []
@@ -262,9 +275,8 @@ def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int],
             bit_inds[ii] = np.concatenate((ibit_off * np.ones(ndarkframes, dtype=int), bit_inds[ii]), axis=0).astype(int)
 
     # insert blanking frames
-    if blank:
-        # insert blank images for each mode
-        for ii in range(nmodes):
+    for ii in range(nmodes):
+        if blank[ii]:
             npatterns = len(pic_inds[ii])
             ipic_off = channel_map[channels[ii]]["off"]["picture_indices"]
             ibit_off = channel_map[channels[ii]]["off"]["bit_indices"]
@@ -287,7 +299,7 @@ def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int],
 
 
 def program_dmd_seq(dmd: dlp6500.dlp6500, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
-                    blank: bool, mode_pattern_indices: list[int], triggered: bool, verbose=False):
+                    blank: list[bool], mode_pattern_indices: list[int], triggered: bool, verbose=False):
     """
     convenience function for generating DMD pattern and programming DMD
 

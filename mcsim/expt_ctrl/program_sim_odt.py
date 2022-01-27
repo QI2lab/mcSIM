@@ -1,43 +1,46 @@
+"""
+Create DAQ program for SIM/ODT experiment
+"""
+
 import numpy as np
+from mcsim.expt_ctrl.expt_map import presets
 
 def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, sim_exposure_time,
                            n_odt_patterns, n_sim_patterns, dt=105e-6, interval=0,
                            n_odt_per_sim=1, n_trig_width=1, dmd_delay=105e-6,
-                           odt_stabilize_t=0.,
+                           odt_stabilize_t=0., min_odt_frame_time=15e-3,
+                           sim_readout_time=10e-3, shutter_delay_time=50e-3,
                            use_dmd_as_odt_shutter=False):
+    """
+    Create DAQ program for SIM/ODT experiment
 
-    # timing variables
-    # dt = 105e-6 # s
-    # daq_sample_rate_hz = 1 / dt
+    @param dict daq_do_map: e.g. from expt_map.py
+    @param dict daq_ao_map: e.g. from expt_map.py
+    @param list[str] channels:
+    @param float odt_exposure_time: odt exposure time in s
+    @param float sim_exposure_time: sim exposure time in s
+    @param int n_odt_patterns:
+    @param int n_sim_patterns:
+    @param float dt: daq time step
+    @param float interval: interval between images
+    @param int n_odt_per_sim: number of ODT images to take per each SIM image set
+    @param int n_trig_width: width of triggers
+    @param float dmd_delay:
+    @param float odt_stabilize_t:
+    @param booluse_dmd_as_odt_shutter:
+    @return:
+    """
 
     # dmd pre-trigger
-    # dmd_delay = 105e-6
     n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
 
     # delay between frames
-    # interval = 0 # s
     nsteps_delay = int(np.ceil(interval / dt))
     if interval != 0:
         raise NotImplementedError()
 
     # minimum frame time
-    min_frame_time = 15e-3 # s
-    nsteps_min_frame = int(np.ceil(min_frame_time / dt))
-
-    # odt information
-    # odt_exposure_time = 2.8e-3 # s
-    # n_odt_patterns = 11
-
-    # sim information
-    # sim_exposure_time = 100e-3 # s
-    # n_sim_patterns = 9
-
-    # other information
-    # n_times = 1
-    # n_odt_per_sim = 5
-
-    # trigger width
-    # n_trig_width = 1
+    nsteps_min_frame = int(np.ceil(min_odt_frame_time / dt))
 
     if nsteps_min_frame == 1 and use_dmd_as_odt_shutter:
         raise ValueError("nsteps_min_frame must be > 1 if use_dmd_as_odt_shutter=True")
@@ -50,14 +53,12 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     nsteps_odt_frame = np.max([nsteps_odt_exposure, nsteps_min_frame])
 
     # time for laser power to stabilize
-    # odt_stabilize_t = 200e-3
     n_odt_stabilize = int(np.ceil(odt_stabilize_t / dt))
     if n_odt_stabilize < n_dmd_pre_trigger:
         n_odt_stabilize = n_dmd_pre_trigger
         print("n_odt_stabilize was less than n_dmd_pre_trigger. Increased it to %d steps" % n_odt_stabilize)
 
-    shutter_odt_delay_t = 100e-3
-    n_odt_shutter_delay = int(np.ceil(shutter_odt_delay_t / dt))
+    n_odt_shutter_delay = int(np.ceil(shutter_delay_time / dt))
     if n_odt_stabilize - n_odt_shutter_delay < 0:
         n_odt_shutter_delay = 0
 
@@ -99,20 +100,18 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     # #########################
     # create SIM program
     # #########################
-    nsteps_sim_exposure = int(np.ceil(sim_exposure_time / dt))
-    nsteps_sim_frame = np.max([nsteps_sim_exposure, nsteps_min_frame])
-
     # time for camera to roll open/closed
-    roll_open_t = 15e-3 # s
-    n_roll_open = int(np.round(roll_open_t / dt))
-    n_keep_on = nsteps_sim_exposure - 2 * n_roll_open
+    n_roll_open = int(np.round(sim_readout_time / dt))
+
+    # exposure time
+    nsteps_sim_exposure = int(np.ceil(sim_exposure_time / dt))
+    nsteps_sim_frame = nsteps_sim_exposure + 2 * n_roll_open
 
     # time for channel to stabilize (laser power/mirror)
     channel_stabilize_t = 200e-3
     n_sim_stabilize = int(np.ceil(channel_stabilize_t / dt))
 
-    shutter_sim_delay_t = 50e-3
-    n_sim_shutter_delay = int(np.ceil(shutter_sim_delay_t / dt))
+    n_sim_shutter_delay = int(np.ceil(shutter_delay_time / dt))
     if n_sim_stabilize - n_sim_shutter_delay < 0:
         n_sim_shutter_delay = 0
 
@@ -132,35 +131,33 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     # only want DMD on when full camera is on
     for ii in range(n_trig_width):
         do_sim_channel[n_sim_stabilize + n_roll_open - n_dmd_pre_trigger + ii::nsteps_sim_frame, daq_do_map["dmd_advance"]] = 1 # display SIM pattern
-        do_sim_channel[n_sim_stabilize + n_roll_open - n_dmd_pre_trigger + n_keep_on + ii::nsteps_sim_frame, daq_do_map["dmd_advance"]] = 1 # display OFF pattern
+        do_sim_channel[n_sim_stabilize + n_roll_open - n_dmd_pre_trigger + (nsteps_sim_exposure - n_roll_open) + ii::nsteps_sim_frame, daq_do_map["dmd_advance"]] = 1 # display OFF pattern
 
     ao_sim_channel = np.zeros((nsteps_sim_channel, 3))
 
     # assemble channels
-    # todo: need to read from expt_map.presets
     do_sim_blue = np.array(do_sim_channel, copy=True)
     do_sim_blue[:, daq_do_map["blue_laser"]] = 1
 
     ao_sim_blue = np.array(ao_sim_channel, copy=True)
-    ao_sim_blue[:, daq_ao_map["vc_mirror_x"]] = 0
-    ao_sim_blue[:, daq_ao_map["vc_mirror_y"]] = 0
+    ao_sim_blue[:, daq_ao_map["vc_mirror_x"]] = presets["blue"]["analog"]["vc_mirror_x"]
+    ao_sim_blue[:, daq_ao_map["vc_mirror_y"]] = presets["blue"]["analog"]["vc_mirror_y"]
 
     do_sim_red = np.array(do_sim_channel, copy=True)
     do_sim_red[:, daq_do_map["red_laser"]] = 1
     ao_sim_red = np.array(ao_sim_channel, copy=True)
-    ao_sim_red[:, daq_ao_map["vc_mirror_x"]] = 1
-    ao_sim_red[:, daq_ao_map["vc_mirror_y"]] = 1
+    ao_sim_red[:, daq_ao_map["vc_mirror_x"]] = presets["red"]["analog"]["vc_mirror_x"]
+    ao_sim_red[:, daq_ao_map["vc_mirror_y"]] = presets["red"]["analog"]["vc_mirror_y"]
 
     do_sim_green = np.array(do_sim_channel, copy=True)
     do_sim_green[:, daq_do_map["green_laser"]] = 1
     ao_sim_green = np.array(ao_sim_channel, copy=True)
-    ao_sim_green[:, daq_ao_map["vc_mirror_x"]] = 2
-    ao_sim_green[:, daq_ao_map["vc_mirror_y"]] = 2
+    ao_sim_green[:, daq_ao_map["vc_mirror_x"]] = presets["green"]["analog"]["vc_mirror_x"]
+    ao_sim_green[:, daq_ao_map["vc_mirror_y"]] = presets["green"]["analog"]["vc_mirror_y"]
 
     sim_daq_data_ch = {"blue": {"do": do_sim_blue, "ao": ao_sim_blue},
                        "red": {"do": do_sim_red, "ao": ao_sim_red},
                        "green": {"do": do_sim_green, "ao": ao_sim_green}}
-
 
     print("sim channel stabilize time = %0.2fms = %d clock cycles" % (n_sim_stabilize * dt * 1e3, n_sim_stabilize))
     print("sim exposure time = %0.2fms = %d clock cycles" % (nsteps_sim_exposure * dt * 1e3, nsteps_sim_exposure))
