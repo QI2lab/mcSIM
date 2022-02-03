@@ -20,7 +20,6 @@ print("trigger2 mode=%d" % mode_trig2)
 
 dmd_size = [1080, 1920]
 ny, nx = dmd_size
-xx, yy = np.meshgrid(range(nx), range(ny))
 cref = np.array([ny // 2, nx // 2])
 xx, yy = np.meshgrid(range(nx), range(ny))
 

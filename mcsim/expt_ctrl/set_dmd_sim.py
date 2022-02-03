@@ -25,8 +25,10 @@ channel_map["blue"]["sim"]["picture_indices"]
 
 import numpy as np
 import argparse
+from mcsim.analysis import dmd_patterns
 from mcsim.expt_ctrl import dlp6500
 
+dmd_size = np.array([1080, 1920], dtype=int)
 
 # #######################
 # define channels and modes
@@ -65,72 +67,119 @@ for m in ["green", "odt"]:
 # #######################
 # firmware patterns
 # #######################
-ang = -45 * np.pi/180
-frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
+def generate_firmware_patterns():
+    # ##########################
+    # sim patterns
+    # ##########################
+    nphases = 3
+    a1_vecs = np.array([[-3, 11],
+                      [-11, 3],
+                      [-13, -12],
+                      [-5, 18],
+                      [-18, 5],
+                      [-11, -10],
+                      [-3, 11],
+                      [-11, 3],
+                      [-13, -12]], dtype=int)
 
-rad = 5
-phase = 0
+    a2_vecs = np.array([[3, 12],
+                      [12, 3],
+                      [12, 3],
+                      [-15, 24],
+                      [-24, 15],
+                      [15, 3],
+                      [3, 15],
+                      [15, 3],
+                      [3, 12]], dtype=int)
 
-# pupil info
-na_mitutoyo = 0.55
-dm = 7.56 # DMD mirror size
-fl_mitutoyo = 4e3 # focal length of mitutoya objective
-fl_olympus = 1.8e3
-# magnification between DMD and Mitutoyo BFP
-mag_dmd2bfp = 100 / 200 * 300 / 400 * fl_mitutoyo / fl_olympus
+    pattern_inverted = np.array([False, False, False, False, False, False, True, True, True])
 
-pupil_rad_mirrors = fl_mitutoyo * na_mitutoyo / mag_dmd2bfp / dm
+    sim_patterns = []
+    sim_pattern_data = []
+    ny, nx = dmd_size
+    for a1, a2, inv in zip(a1_vecs, a2_vecs, pattern_inverted):
+        for ii in range(nphases):
+            pattern, _ = dmd_patterns.get_sim_pattern([nx, ny], a1, a2, nphases, phase_index=ii)
+            if inv:
+                pattern = 1 - pattern
+            sim_patterns.append(pattern)
+            sim_pattern_data.append({"type": "sim", "a1": a1, "a2": a2, "index": ii})
 
-# patterns
-n_phis = 5
-fractions = [0.5, 0.9]
-phis = np.arange(n_phis) * 2*np.pi / n_phis
-n_thetas = len(fractions)
+    # ######################################
+    # odt patterns
+    # ######################################
+    ang = -45 * np.pi/180
+    frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
 
-xoffs = np.zeros((n_phis, n_thetas))
-yoffs = np.zeros((n_phis, n_thetas))
-for ii in range(n_phis):
-    for jj in range(n_thetas):
-        xoffs[ii, jj] = np.cos(phis[ii]) * pupil_rad_mirrors * fractions[jj]
-        yoffs[ii, jj] = np.sin(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+    rad = 5
+    phase = 0
 
-xoffs = np.concatenate((np.array([0]), xoffs.ravel()))
-yoffs = np.concatenate((np.array([0]), yoffs.ravel()))
+    # pupil info
+    na_mitutoyo = 0.55
+    dm = 7.56 # DMD mirror size
+    fl_mitutoyo = 4e3 # focal length of mitutoya objective
+    fl_olympus = 1.8e3
+    # magnification between DMD and Mitutoyo BFP
+    mag_dmd2bfp = 100 / 200 * 300 / 400 * fl_mitutoyo / fl_olympus
 
-firmware_pattern_map = [[{"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 12]), "index": 0}, # blue
-                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 12]), "index": 1},
-                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 12]), "index": 2},
-                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([12, 3]), "index": 0},
-                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([12, 3]), "index": 1},
-                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([12, 3]), "index": 2},
-                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([12, 3]), "index": 0},
-                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([12, 3]), "index": 1},
-                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([12, 3]), "index": 2},
-                         {"type": "sim", "a1": np.array([-5, 18]), "a2": np.array([-15, 24]), "index": 0}, #red
-                         {"type": "sim", "a1": np.array([-5, 18]), "a2": np.array([-15, 24]), "index": 1},
-                         {"type": "sim", "a1": np.array([-5, 18]), "a2": np.array([-15, 24]), "index": 2},
-                         {"type": "sim", "a1": np.array([-18, 5]), "a2": np.array([-24, 15]), "index": 0},
-                         {"type": "sim", "a1": np.array([-18, 5]), "a2": np.array([-24, 15]), "index": 1},
-                         {"type": "sim", "a1": np.array([-18, 5]), "a2": np.array([-24, 15]), "index": 2},
-                         {"type": "sim", "a1": np.array([-11, -10]), "a2": np.array([15, 3]), "index": 0},
-                         {"type": "sim", "a1": np.array([-11, -10]), "a2": np.array([15, 3]), "index": 1},
-                         {"type": "sim", "a1": np.array([-11, -10]), "a2": np.array([15, 3]), "index": 2},
-                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 15]), "index": 0}, # green
-                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 15]), "index": 1},
-                         {"type": "sim", "a1": np.array([-3, 11]), "a2": np.array([3, 15]), "index": 2},
-                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([15, 3]), "index": 0},
-                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([15, 3]), "index": 1},
-                         {"type": "sim", "a1": np.array([-11, 3]), "a2": np.array([15, 3]), "index": 2}],
-                        [{"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([3, 12]), "index": 0},
-                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([3, 12]), "index": 1},
-                         {"type": "sim", "a1": np.array([-13, -12]), "a2": np.array([3, 12]), "index": 2},
-                         {"type": "on"},
-                         {"type": "off"},
-                         {"type": "affine on"},
-                         {"type": "affine off"}] +
-                         [{"type": "odt", "xoffset": xoffs[ii], "yoffset": yoffs[ii], "angle": ang, "frequency": frq, "phase": phase, "radius": rad}
-                          for ii in range(len(xoffs))]
-                        ]
+    pupil_rad_mirrors = fl_mitutoyo * na_mitutoyo / mag_dmd2bfp / dm
+
+    # patterns
+    n_phis = 70
+    fractions = [0.25, 0.5, 0.75, 0.9]
+    phis = np.arange(n_phis) * 2*np.pi / n_phis
+    n_thetas = len(fractions)
+
+    xoffs = np.zeros((n_phis, n_thetas))
+    yoffs = np.zeros((n_phis, n_thetas))
+    for ii in range(n_phis):
+        for jj in range(n_thetas):
+            xoffs[ii, jj] = np.cos(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+            yoffs[ii, jj] = np.sin(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+
+    xoffs = np.concatenate((np.array([0]), xoffs.ravel()))
+    yoffs = np.concatenate((np.array([0]), yoffs.ravel()))
+
+    # generate ODT patterns
+    cref = np.array([ny // 2, nx // 2])
+    xx, yy = np.meshgrid(range(nx), range(ny))
+
+    pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
+    pattern_base[pattern_base <= 0] = 0
+    pattern_base[pattern_base > 0] = 1
+    pattern_base = 1 - pattern_base
+
+    npatterns = xoffs.size
+
+    odt_patterns = np.ones((npatterns, ny, nx), dtype=bool)
+    odt_pattern_data = []
+    for ii in range(npatterns):
+        odt_patterns[ii] = np.copy(pattern_base)
+        odt_patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
+                                 (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
+
+        odt_pattern_data.append({"type": "odt", "xoffset": xoffs[ii], "yoffset": yoffs[ii], "angle": ang, "frequency": frq, "phase": phase, "radius": rad})
+
+    # ######################################
+    # generate other patterns
+    # ######################################
+    on_pattern = np.ones((ny, nx), dtype=bool)
+    off_pattern = np.zeros((ny, nx), dtype=bool)
+
+    affine_on_pattern, _, _ = dmd_patterns.get_affine_fit_pattern([nx, ny], radii=[3])
+    affine_on_pattern = affine_on_pattern.astype(bool).squeeze()
+    affine_off_pattern = 1 - affine_on_pattern
+
+
+    # assemble all patterns
+    patterns = sim_patterns + [on_pattern, off_pattern, affine_on_pattern, affine_off_pattern] + [p for p in odt_patterns]
+    patterns = np.stack(patterns, axis=0)
+
+    pattern_data = sim_pattern_data + \
+                   [{"type": "on"}, {"type": "off"}, {"type": "affine on"}, {"type": "affine off"}] + \
+                   odt_pattern_data
+
+    return patterns, pattern_data
 
 
 def validate_channel_map(cm):

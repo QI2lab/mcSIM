@@ -48,8 +48,8 @@ rad = 300
 # frq = np.array([np.sin(ang), np.cos(ang)]) * 1/3
 # frq = np.array([-1/4, 1/4])
 # frq = np.array([0, 0])
-# frq = -np.array([-1/4, 1/4])
-frq = -np.array([-1/3, 1/3])
+frq = -np.array([-1/4, 1/4])
+# frq = -np.array([-1/3, 1/3])
 
 pattern_base = np.round(np.cos(2*np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
 pattern_base[pattern_base <= 0] = 0
@@ -90,9 +90,16 @@ main_ir_order_out = np.stack((bx_out, by_out, bz_out))
 # uvec_in = sdmd.solve_diffraction_input(uvec_out, dm, dm, wavelength, order_ir)
 uvec_in_ir = sdmd.solve_diffraction_input(main_ir_order_out, dm, dm, wavelength, order_ir)
 tp, tm = sdmd.uvector2tmtp(*uvec_in_ir.ravel())
-print("input angles:")
+print("%.0fnm input angles:" % (wavelength * 1e3))
 print("theta_p = %0.2fdeg" % (tp * 180/np.pi))
 print("theta_m = %0.2fdeg" % (tm * 180/np.pi))
+print("unit vector = (%0.3f, %0.3f, %0.3f)" % tuple(uvec_in_ir.ravel()))
+
+tp_out_main, tm_out_main = sdmd.uvector2tmtp(*main_ir_order_out.ravel())
+print("main output order:")
+print("theta_p = %0.2fdeg" % (tp_out_main * 180/np.pi))
+print("theta_m = %0.2fdeg" % (tm_out_main * 180/np.pi))
+print("unit vector = (%0.3f, %0.3f, %0.3f)" % tuple(main_ir_order_out.ravel()))
 
 # blaze angle out
 uvec_blaze_off = sdmd.solve_blaze_output(uvec_in_ir, -gamma)

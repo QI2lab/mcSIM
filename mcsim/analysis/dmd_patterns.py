@@ -1069,8 +1069,6 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
     # pattern_xformed = pattern_xformed[roi[0]:roi[1], roi[2]:roi[3]]
     pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
 
-    # fxs = tools.get_fft_frqs(pattern_xformed.shape[1], dt=1)
-    # fys = tools.get_fft_frqs(pattern_xformed.shape[0], dt=1)
     fxs = fft.fftshift(fft.fftfreq(pattern_xformed.shape[1], 1))
     fys = fft.fftshift(fft.fftfreq(pattern_xformed.shape[0], 1))
 
@@ -1894,7 +1892,7 @@ def find_rational_approx_angle(angle, nmax):
     fr_lb = [0, 1]
     fr_ub = [1, 1]
     approximate_seq = []
-    while 1:
+    while True:
         mediant_num = fr_lb[0] + fr_ub[0]
         mediant_denom = fr_lb[1] + fr_ub[1]
         if mediant_denom >= nmax:
@@ -2172,10 +2170,8 @@ def plot_sim_pattern_sets(patterns, vas, vbs, wavelength=None, pitch=7560):
 
     # display FT
     # get period info
-    # fx = tools.get_fft_frqs(nx, 1)
     fx = fft.fftshift(fft.fftfreq(nx, 1))
     dfx = fx[1] - fx[0]
-    # fy = tools.get_fft_frqs(ny, 1)
     fy = fft.fftshift(fft.fftfreq(ny, 1))
     dfy = fy[1] - fy[0]
     df_min = np.min([fx[1] - fx[0], fy[1] - fy[0]])
@@ -2526,34 +2522,28 @@ def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4,
     im.save(os.path.join(save_dir, "three_corners_%d_on.png") % corner_size)
 
 
-def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 2), save_dir=None):
+def get_affine_fit_pattern(dmd_size, radii=(1, 1.5, 2), corner_size=4, point_spacing=61, mark_sep=15):
     """
-    Create DMD patterns useful for determining the affine transformation between the DMD and the camera
+    Create DMD patterns of a sparse 2D grid of points all with the same radius. This is useful for determining the
+    affine transformation between the DMD and the camera
 
     :param list[int] dmd_size: [nx, ny]
     :param tuple[float] or list[float] radii: list of radii of spots for affine patterns.
      If more than one, more than one pattern will be generated.
-    :param str save_dir:
+    :param int corner_size: size of blcosk indicating corners
+    :param point_spacing: spacing between points
+    :param mark_sep: separation between inversion/flip markers near center
 
-    :return masks:
-    :return radii:
-    :return centers:
+    :return patterns, radii, centers:
     """
-
-    if save_dir is not None:
-        if not os.path.exists(save_dir):
-            os.mkdir(save_dir)
+    if isinstance(radii, (float, int)):
+        radii = [radii]
 
     nx, ny = dmd_size
 
-    # sparse array of points
-    # set radii
-    # radii = [1, 1.5, 5]
     # set spacing between points. Does not necessarily need to divide Nx and Ny
-    point_spacing = 61
     xc = (point_spacing - 1) / 2
     yc = (point_spacing - 1) / 2
-    corner_size = 4
 
     cxs = np.arange(xc, nx, point_spacing)
     cys = np.arange(yc, ny, point_spacing)
@@ -2561,7 +2551,7 @@ def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 2), save_dir=None):
     cxcx, cycy = np.meshgrid(cxs, cys)
     centers = np.concatenate((cxcx[:, :, None], cycy[:, :, None]), axis=2)
 
-    masks = []
+    patterns = []
     for r in radii:
         one_pt = np.zeros((point_spacing, point_spacing))
         xx, yy = np.meshgrid(range(one_pt.shape[1]), range(one_pt.shape[0]))
@@ -2584,7 +2574,6 @@ def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 2), save_dir=None):
         mask[:, :1] = 1
 
         # marks near center
-        mark_sep = 15
         cx = nx // 2
         cy = ny // 2
 
@@ -2616,18 +2605,11 @@ def export_affine_fit_pattern(dmd_size, radii=(1, 1.5, 2), save_dir=None):
         yend3 = ystart3 + corner_size
         mask[ystart3:yend3, xstart3:xend3] = 1
 
-        if save_dir is not None:
-            im = Image.fromarray(mask.astype('bool'))
-            im.save(os.path.join(save_dir, "affine_cal_sparse_on_points_r=%.1f.png" % r))
+        patterns.append(mask)
 
-            im = Image.fromarray((1-mask).astype('bool'))
-            im.save(os.path.join(save_dir, "affine_cal_sparse_off_points_r=%.1f.png" % r))
+    patterns = np.asarray(patterns)
 
-        masks.append(mask)
-
-    masks = np.asarray(masks)
-
-    return masks, radii, centers
+    return patterns, radii, centers
 
 
 def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, nphases=3,
@@ -2730,4 +2712,3 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
         tifffile.imwrite(fpath, patterns_reshaped.astype(np.uint16))
 
     return patterns, vec_as, vec_bs, real_angles, real_periods
-

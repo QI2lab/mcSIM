@@ -23,7 +23,7 @@ def sigma_pix(wl1, wl2, na, cam_mag):
     return np.sqrt(wl1**2 + wl2**2) / 2 / na / (2 * np.sqrt(2 * np.log(2))) / (options["cam_pix"] / cam_mag)
 
 # load DMD pattern and dmd_centers
-masks, radii, pattern_centers = dmd.export_affine_fit_pattern([1920, 1080])
+masks, radii, pattern_centers = dmd.get_affine_fit_pattern([1920, 1080])
 mask = masks[1]
 
 
