@@ -38,7 +38,38 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                "blue": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, dtype=int)}},
                "red": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, 18, dtype=int)}},
                "green": {"default": {"picture_indices": np.array([0] * 6 + [1] * 3, dtype=int), "bit_indices": np.array(list(range(18, 24)) + list(range(3)), dtype=int)}},
-               "odt": {"default": {"picture_indices": np.ones(11, dtype=int), "bit_indices": np.arange(7, 18, dtype=int)}}
+               "odt": {"default": {"picture_indices": np.array([1, 1, 3, 6, 8, 10, 1, 3, 6, 8, 10], dtype=int),
+                                       "bit_indices": np.array([7, 9, 17, 1, 9, 17, 11, 19, 3, 11, 19], dtype=int)},
+                       "n=1-0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
+                       "n=11-50%-90%": {"picture_indices": np.array([1, 1, 3, 6, 8, 10, 1, 3, 6, 8, 10], dtype=int),
+                                       "bit_indices": np.array([7, 9, 17, 1, 9, 17, 11, 19, 3, 11, 19], dtype=int)},
+                       "n=11-90%": {"picture_indices": np.array([1, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11], dtype=int),
+                                    "bit_indices": np.array([7, 11, 15, 19, 23, 3, 7, 11, 15, 19, 23], dtype=int)},
+                       "all": {"picture_indices": np.hstack((1 * np.ones([17], dtype=int),
+                                                             2 * np.ones([24], dtype=int),
+                                                             3 * np.ones([24], dtype=int),
+                                                             4 * np.ones([24], dtype=int),
+                                                             5 * np.ones([24], dtype=int),
+                                                             6 * np.ones([24], dtype=int),
+                                                             7 * np.ones([24], dtype=int),
+                                                             8 * np.ones([24], dtype=int),
+                                                             9 * np.ones([24], dtype=int),
+                                                             10 * np.ones([24], dtype=int),
+                                                             11 * np.ones([24], dtype=int),
+                                                             12 * np.ones([24], dtype=int))),
+                               "bit_indices": np.hstack((np.arange(7, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int)))}
+                       }
             }
 
 # add on/off modes
@@ -64,10 +95,41 @@ for m in ["green", "odt"]:
     channel_map[m].update({'affine': off_affine_mode})
     channel_map[m].update({'sim': channel_map[m]["default"]})
 
+def validate_channel_map(cm):
+    """
+    check that channel_map is of the correct format
+    @param cm:
+    @return:
+    """
+    for ch in list(cm.keys()):
+        modes = list(cm[ch].keys())
+
+        if "default" not in modes:
+            return False
+
+        for m in modes:
+            keys = list(cm[ch][m].keys())
+            if "picture_indices" not in keys:
+                return False
+
+            pi = cm[ch][m]["picture_indices"]
+            if not isinstance(pi, np.ndarray) or pi.ndim != 1:
+                return False
+
+            if "bit_indices" not in keys:
+                return False
+
+            bi = cm[ch][m]["bit_indices"]
+            if not isinstance(bi, np.ndarray) or bi.ndim != 1:
+                return False
+
+    return True
+
+
 # #######################
 # firmware patterns
 # #######################
-def generate_firmware_patterns():
+def generate_firmware_patterns(generate_patterns=True):
     # ##########################
     # sim patterns
     # ##########################
@@ -99,10 +161,11 @@ def generate_firmware_patterns():
     ny, nx = dmd_size
     for a1, a2, inv in zip(a1_vecs, a2_vecs, pattern_inverted):
         for ii in range(nphases):
-            pattern, _ = dmd_patterns.get_sim_pattern([nx, ny], a1, a2, nphases, phase_index=ii)
-            if inv:
-                pattern = 1 - pattern
-            sim_patterns.append(pattern)
+            if generate_patterns:
+                pattern, _ = dmd_patterns.get_sim_pattern([nx, ny], a1, a2, nphases, phase_index=ii)
+                if inv:
+                    pattern = 1 - pattern
+                sim_patterns.append(pattern)
             sim_pattern_data.append({"type": "sim", "a1": a1, "a2": a2, "index": ii})
 
     # ######################################
@@ -130,6 +193,10 @@ def generate_firmware_patterns():
     phis = np.arange(n_phis) * 2*np.pi / n_phis
     n_thetas = len(fractions)
 
+    ff, pp = np.meshgrid(fractions, phis)
+    pp = pp.ravel()
+    ff = ff.ravel()
+
     xoffs = np.zeros((n_phis, n_thetas))
     yoffs = np.zeros((n_phis, n_thetas))
     for ii in range(n_phis):
@@ -137,80 +204,55 @@ def generate_firmware_patterns():
             xoffs[ii, jj] = np.cos(phis[ii]) * pupil_rad_mirrors * fractions[jj]
             yoffs[ii, jj] = np.sin(phis[ii]) * pupil_rad_mirrors * fractions[jj]
 
+    ff = np.concatenate((np.array([0]), ff))
+    pp = np.concatenate((np.array([0]), pp))
     xoffs = np.concatenate((np.array([0]), xoffs.ravel()))
     yoffs = np.concatenate((np.array([0]), yoffs.ravel()))
 
-    # generate ODT patterns
-    cref = np.array([ny // 2, nx // 2])
-    xx, yy = np.meshgrid(range(nx), range(ny))
+    if generate_patterns:
+        # generate ODT patterns
+        cref = np.array([ny // 2, nx // 2])
+        xx, yy = np.meshgrid(range(nx), range(ny))
 
-    pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
-    pattern_base[pattern_base <= 0] = 0
-    pattern_base[pattern_base > 0] = 1
-    pattern_base = 1 - pattern_base
+        pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
+        pattern_base[pattern_base <= 0] = 0
+        pattern_base[pattern_base > 0] = 1
+        pattern_base = 1 - pattern_base
 
     npatterns = xoffs.size
-
     odt_patterns = np.ones((npatterns, ny, nx), dtype=bool)
     odt_pattern_data = []
     for ii in range(npatterns):
-        odt_patterns[ii] = np.copy(pattern_base)
-        odt_patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
-                                 (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
+        if generate_patterns:
+            odt_patterns[ii] = np.copy(pattern_base)
+            odt_patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
+                                     (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
 
         odt_pattern_data.append({"type": "odt", "xoffset": xoffs[ii], "yoffset": yoffs[ii], "angle": ang, "frequency": frq, "phase": phase, "radius": rad})
 
     # ######################################
     # generate other patterns
     # ######################################
-    on_pattern = np.ones((ny, nx), dtype=bool)
-    off_pattern = np.zeros((ny, nx), dtype=bool)
+    if generate_patterns:
+        on_pattern = np.ones((ny, nx), dtype=bool)
+        off_pattern = np.zeros((ny, nx), dtype=bool)
 
-    affine_on_pattern, _, _ = dmd_patterns.get_affine_fit_pattern([nx, ny], radii=[3])
-    affine_on_pattern = affine_on_pattern.astype(bool).squeeze()
-    affine_off_pattern = 1 - affine_on_pattern
+        affine_on_pattern, _, _ = dmd_patterns.get_affine_fit_pattern([nx, ny], radii=[3])
+        affine_on_pattern = affine_on_pattern.astype(bool).squeeze()
+        affine_off_pattern = 1 - affine_on_pattern
 
 
-    # assemble all patterns
-    patterns = sim_patterns + [on_pattern, off_pattern, affine_on_pattern, affine_off_pattern] + [p for p in odt_patterns]
-    patterns = np.stack(patterns, axis=0)
+        # assemble all patterns
+        patterns = sim_patterns + [on_pattern, off_pattern, affine_on_pattern, affine_off_pattern] + [p for p in odt_patterns]
+        patterns = np.stack(patterns, axis=0)
+    else:
+        patterns = None
 
     pattern_data = sim_pattern_data + \
                    [{"type": "on"}, {"type": "off"}, {"type": "affine on"}, {"type": "affine off"}] + \
                    odt_pattern_data
 
     return patterns, pattern_data
-
-
-def validate_channel_map(cm):
-    """
-    check that channel_map is of the correct format
-    @param cm:
-    @return:
-    """
-    for ch in list(cm.keys()):
-        modes = list(cm[ch].keys())
-
-        if "default" not in modes:
-            return False
-
-        for m in modes:
-            keys = list(cm[ch][m].keys())
-            if "picture_indices" not in keys:
-                return False
-
-            pi = cm[ch][m]["picture_indices"]
-            if not isinstance(pi, np.ndarray) or pi.ndim != 1:
-                return False
-
-            if "bit_indices" not in keys:
-                return False
-
-            bi = cm[ch][m]["bit_indices"]
-            if not isinstance(bi, np.ndarray) or bi.ndim != 1:
-                return False
-
-    return True
 
 
 def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
@@ -346,7 +388,13 @@ def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int],
 
     return pic_inds, bit_inds
 
+_, data = generate_firmware_patterns(False)
+n_firmware_patterns = len(data)
+firmware_pattern_map = [data[ii*24: min((ii+1)*24, n_firmware_patterns)] for ii in range(int(np.ceil(n_firmware_patterns / 24)))]
 
+# #######################
+# program DMD
+# #######################
 def program_dmd_seq(dmd: dlp6500.dlp6500, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
                     blank: list[bool], mode_pattern_indices: list[int], triggered: bool, verbose=False):
     """
