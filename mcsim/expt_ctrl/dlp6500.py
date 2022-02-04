@@ -415,9 +415,21 @@ class dlp6500:
     """
     Base class for communicating with DLP6500
     """
+    width = 1920
+    height = 1080
 
     # tried to match with the DLP6500 GUI names where possible
-    command_dict = {'PAT_START_STOP': 0x1A24,
+    command_dict = {'Read_Error_Code': 0x0100,
+                    'Read_Error_Description': 0x0101,
+                    'Get_Hardware_Status': 0x1A0A,
+                    'Get_System_Status': 0x1A0B,
+                    'Get_Main_Status': 0x1A0C,
+                    'Get_Firmware_Version': 0x0205,
+                    'Get_Firmware_Type': 0x0206,
+                    'Get_Firmware_Batch_File_Name': 0x1A14,
+                    'Execute_Firmware_Batch_File': 0x1A15,
+                    'Set_Firmware_Batch_Command_Delay_Time': 0x1A16,
+                    'PAT_START_STOP': 0x1A24,
                     'DISP_MODE': 0x1A1B,
                     'MBOX_DATA': 0x1A34,
                     'PAT_CONFIG': 0x1A31,
@@ -523,8 +535,9 @@ class dlp6500:
                 data_to_send += [0x00] * (self.packet_length_bytes - len(data_to_send))
 
             packet_reply = self._send_raw_packet(data_to_send, listen_for_reply, timeout)
-            if packet_reply != []:
-                reply.append(packet_reply)
+            # if packet_reply != []:
+            #     reply.append(packet_reply)
+            reply += packet_reply
 
             # increment for next packet
             data_counter = data_counter_next
@@ -547,7 +560,7 @@ class dlp6500:
         :param command: two byte integer
         :param data: data to be transmitted. List of integers, where each integer gives a byte
         :param sequence_byte: integer
-        :return:
+        :return response_buffer:
         """
 
         # construct header, 4 bytes long
@@ -661,6 +674,9 @@ class dlp6500:
         :return:
         """
 
+        if buffer == []:
+            raise ValueError("buffer was empty")
+
         flag_byte = buffer[0]
         response = self.decode_flag_byte(flag_byte)
 
@@ -685,9 +701,12 @@ class dlp6500:
         Retrieve error code number from last executed command
         """
 
-        buffer = self.send_command('w', True, 0x0100)[0]
+        buffer = self.send_command('w', True, self.command_dict["Read_Error_Code"])
         resp = self.decode_response(buffer)
-        err_code = resp['data'][0]
+        if len(resp["data"]) > 0:
+            err_code = resp['data'][0]
+        else:
+            err_code = None
 
         error_type = 'not defined'
         for k, v in self.err_dictionary.items():
@@ -699,16 +718,18 @@ class dlp6500:
 
     def read_error_description(self):
         """
-        Retrieve error code description for last error
+        Retrieve error code description for the last error.
+
+        When new error messages are written to the DMD buffer, they are written over previous messages.
+        If the new error messages is shorter than the previous one, the remaining characters from earlier errors
+        will still be in the buffer and may be returned.
+
         :return:
         """
-        buffer = self.send_command('r', True, 0x0101)[0]
+        buffer = self.send_command('r', True, self.command_dict["Read_Error_Description"])
         resp = self.decode_response(buffer)
 
         # read until find C style string termination byte, \x00
-        # NOTE: when new error messages are written to the DMD buffer, they are written over previous messages.
-        # If the new error messages is shorter than the previous one, the remaining unoverwritten part remains
-        # in the buffer. Do not be alarmed!
         err_description = ''
         for ii, d in enumerate(resp['data']):
             if d == 0:
@@ -723,7 +744,7 @@ class dlp6500:
         Get hardware status of DMD
         :return:
         """
-        buffer = self.send_command('r', True, 0x1A0A)[0]
+        buffer = self.send_command('r', True, self.command_dict["Get_Hardware_Status"])
         resp = self.decode_response(buffer)
 
         errs = [(2**ii & resp['data'][0]) != 0 for ii in range(8)]
@@ -741,7 +762,7 @@ class dlp6500:
         Get status of internal memory test
         :return:
         """
-        buffer = self.send_command('r', True, 0x1A0B)[0]
+        buffer = self.send_command('r', True, self.command_dict["Get_System_Status"])
         resp = self.decode_response(buffer)
 
         return {'internal memory test passed': bool(resp['data'][0])}
@@ -752,7 +773,7 @@ class dlp6500:
         :return:
         """
         # todo: which byte gives info? first data byte?
-        buffer = self.send_command('r', True, 0x1A0C)[0]
+        buffer = self.send_command('r', True, self.command_dict["Get_Main_Status"])
         resp = self.decode_response(buffer)
 
         errs = [2 ** ii & resp['data'][0] != 0 for ii in range(8)]
@@ -770,7 +791,7 @@ class dlp6500:
         Get firmware version information from DMD
         :return:
         """
-        buffer = self.send_command('r', True, 0x0205)[0]
+        buffer = self.send_command('r', True, self.command_dict["Get_Firmware_Version"])
         resp = self.decode_response(buffer)
 
         app_version = resp['data'][0:4]
@@ -808,7 +829,7 @@ class dlp6500:
         Get DMD type and firmware tag
         :return:
         """
-        buffer = self.send_command('r', True, 0x0206)[0]
+        buffer = self.send_command('r', True, self.command_dict["Get_Firmware_Type"])
         resp = self.decode_response(buffer)
 
         dmd_type_flag = resp['data'][0]
@@ -861,9 +882,9 @@ class dlp6500:
         data = trig_byte + rising_edge_bytes + falling_edge_bytes
 
         if trigger_number == 1:
-            resp = self.send_command('w', True, 0x1A1D, data)[0]
+            resp = self.send_command('w', True, self.command_dict["TRIG_OUT1_CTL"], data)
         elif trigger_number == 2:
-            resp = self.send_command('w', True, 0x1A1E, data)[0]
+            resp = self.send_command('w', True, self.command_dict["TRIG_OUT2_CTL"], data)
         else:
             raise ValueError('trigger_number must be 1 or 2')
 
@@ -875,7 +896,7 @@ class dlp6500:
         :return delay_us:
         :return mode:
         """
-        buffer = self.send_command('r', True, 0x1A35, [])[0]
+        buffer = self.send_command('r', True, self.command_dict["TRIG_IN1_CTL"], [])
         resp = self.decode_response(buffer)
         data = resp['data']
         delay_us, = struct.unpack('<H', struct.pack('B', data[0]) + struct.pack('B', data[1]))
@@ -908,14 +929,14 @@ class dlp6500:
         else:
             raise ValueError("edge_to_advance must be 'rising' or 'falling', but was '%s'" % edge_to_advance)
 
-        return self.send_command('w', True, 0x1A35, delay_byte + advance_byte)
+        return self.send_command('w', True, self.command_dict["TRIG_IN1_CTL"], delay_byte + advance_byte)
 
     def get_trigger_in2(self):
         """
         Query polarity of trigger in 2 ("enable" trigger)
         :return:
         """
-        buffer = self.send_command('r', True, 0x1A36, [])[0]
+        buffer = self.send_command('r', True, self.command_dict["TRIG_IN2_CTL"], [])
         resp = self.decode_response(buffer)
         mode = resp['data'][0]
         return mode
@@ -935,16 +956,14 @@ class dlp6500:
         else:
             raise ValueError("edge_to_start must be 'rising' or 'falling', but was '%s'" % edge_to_start)
 
-        return self.send_command('w', False, 0x1A36, start_byte)
+        return self.send_command('w', False, self.command_dict["TRIG_IN2_CTL"], start_byte)
 
     # sequence start stop
     def set_pattern_mode(self, mode='on-the-fly'):
         """
         Change the DMD display mode
 
-        "DISP_MODE" according to GUI
-
-        :param mode: string. 'video', 'pre-stored', 'video-pattern', or 'on-the-fly'
+        :param str mode: 'video', 'pre-stored', 'video-pattern', or 'on-the-fly'
         """
         if mode == 'video':
             data = [0x00]
@@ -957,7 +976,7 @@ class dlp6500:
         else:
             raise ValueError("mode '%s' is not allowed" % mode)
 
-        return self.send_command('w', True, 0x1A1B, data)
+        return self.send_command('w', True, self.command_dict["DISP_MODE"], data)
 
     def start_stop_sequence(self, cmd):
         """
@@ -979,7 +998,7 @@ class dlp6500:
         else:
             raise ValueError("cmd must be 'start', 'stop', or 'pause', but was '%s'" % cmd)
 
-        return self.send_command('w', False, 0x1A24, data, sequence_byte=seq_byte)
+        return self.send_command('w', False, self.command_dict["PAT_START_STOP"], data, sequence_byte=seq_byte)
 
     #######################################
     # commands for working with patterns
@@ -995,13 +1014,14 @@ class dlp6500:
         :param num_repeat: number of times to repeat the pattern sequence
         :return:
         """
+        if num_patterns > 511:
+            raise ValueError("num_patterns must be <= 511 but was %d" % num_patterns)
 
-        # assert num_patterns < 256
         num_patterns_bytes = list(struct.unpack('BB', struct.pack('<H', num_patterns)))
         num_repeats_bytes = list(struct.unpack('BBBB', struct.pack('<I', num_repeat)))
 
         # return self.send_command('w', False, 0x1A31, data=num_patterns_bytes + num_repeats_bytes)
-        return self.send_command('w', True, 0x1A31, data=num_patterns_bytes + num_repeats_bytes)
+        return self.send_command('w', True, self.command_dict["PAT_CONFIG"], data=num_patterns_bytes + num_repeats_bytes)
 
     def pattern_display_lut_definition(self, sequence_position_index, exposure_time_us=105, dark_time_us=0,
                                        wait_for_trigger=True, clear_pattern_after_trigger=False, bit_depth=1,
@@ -1079,7 +1099,7 @@ class dlp6500:
         data = pattern_index_bytes + exposure_bytes + misc_byte + \
                dark_time_bytes + trig2_output_bytes + img_pattern_index_byte + pattern_bit_index_byte
 
-        return self.send_command('w', True, 0x1A34, data)
+        return self.send_command('w', True, self.command_dict["MBOX_DATA"], data)
 
     def init_pattern_bmp_load(self, pattern_length, pattern_index):
         """
@@ -1098,7 +1118,7 @@ class dlp6500:
         data = index_bin + num_bytes
 
         # return self.send_command('w', False, 0x1A2A, data=data)
-        return self.send_command('w', True, 0x1A2A, data=data)
+        return self.send_command('w', True, self.command_dict["PATMEM_LOAD_INIT_MASTER"], data=data)
 
     def pattern_bmp_load(self, compressed_pattern, compression_mode):
         """
@@ -1118,8 +1138,8 @@ class dlp6500:
         # get the header
         # Note: taken directly from sniffer of the TI GUI
         signature_bytes = [0x53, 0x70, 0x6C, 0x64]
-        width_byte = list(struct.unpack('BB', struct.pack('<H', 1920)))
-        height_byte = list(struct.unpack('BB', struct.pack('<H', 1080)))
+        width_byte = list(struct.unpack('BB', struct.pack('<H', self.width)))
+        height_byte = list(struct.unpack('BB', struct.pack('<H', self.height)))
         # Number of bytes in encoded image_data
         num_encoded_bytes = list(struct.unpack('BBBB', struct.pack('<I', len(compressed_pattern))))
         reserved_bytes = [0xFF] * 8  # reserved
@@ -1153,7 +1173,7 @@ class dlp6500:
             data_len_bytes = list(struct.unpack('BB', struct.pack('<H', len(data_current))))
 
             # send command
-            self.send_command('w', False, 0x1A2B, data=data_len_bytes + data_current)
+            self.send_command('w', False, self.command_dict["PATMEM_LOAD_DATA_MASTER"], data=data_len_bytes + data_current)
 
             data_index = data_index_next
             command_index += 1
@@ -1223,13 +1243,9 @@ class dlp6500:
 
         # need to issue stop before changing mode. Otherwise DMD will sometimes lock up and not be responsive.
         self.start_stop_sequence('stop')
-        # buffer = self.start_stop_sequence('stop')[0]
-        # resp = self.decode_response(buffer)
-        # if resp['error']:
-        #     print(self.read_error_description())
 
         # set to on-the-fly mode
-        buffer = self.set_pattern_mode('on-the-fly')[0]
+        buffer = self.set_pattern_mode('on-the-fly')
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
@@ -1237,10 +1253,6 @@ class dlp6500:
         # stop any currently running sequences
         # note: want to stop after changing pattern mode, because otherwise may throw error
         self.start_stop_sequence('stop')
-        # buffer = self.start_stop_sequence('stop')[0]
-        # resp = self.decode_response(buffer)
-        # if resp['error']:
-        #     print(self.read_error_description())
 
         # set image parameters for look up table
         # When uploading 1 bit image, each set of 24 images are first combined to a single 24 bit RGB image. pattern_index
@@ -1257,12 +1269,12 @@ class dlp6500:
                                                          clear_pattern_after_trigger=clear_pattern_after_trigger,
                                                          bit_depth=bit_depth,
                                                          stored_image_index=stored_image_indices[ii],
-                                                         stored_image_bit_index=stored_bit_indices[ii])[0]
+                                                         stored_image_bit_index=stored_bit_indices[ii])
             resp = self.decode_response(buffer)
             if resp['error']:
                 print(self.read_error_description())
 
-        buffer = self.pattern_display_lut_configuration(npatterns, num_repeats)[0]
+        buffer = self.pattern_display_lut_configuration(npatterns, num_repeats)
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
@@ -1292,7 +1304,7 @@ class dlp6500:
 
             # pattern has an additional 48 bytes which must be sent also.
             # todo: Maybe I should nest the call to init_pattern_bmp_load in pattern_bmp_load?
-            buffer = self.init_pattern_bmp_load(len(compressed_pattern) + 48, pattern_index=ii)[0]
+            buffer = self.init_pattern_bmp_load(len(compressed_pattern) + 48, pattern_index=ii)
             resp = self.decode_response(buffer)
             if resp['error']:
                 print(self.read_error_description())
@@ -1308,12 +1320,6 @@ class dlp6500:
 
         # start sequence
         self.start_stop_sequence('start')
-        # buffer = self.start_stop_sequence('start')[0]
-        # resp = self.decode_response(buffer)
-        # if resp['error']:
-        #     print(self.read_error_description())
-
-        # test
 
         # some weird behavior where wants to be STOPPED before starting triggered sequence. This seems to happen
         # intermittently. Probably due to some other DMD setting that I'm not aware of?
@@ -1385,11 +1391,11 @@ class dlp6500:
 
         # #########################
         # #########################
-        # need to issue stop before changing mode. Otherwise DMD will sometimes lock up and not be responsive.
+        # need to issue stop before changing mode, otherwise DMD will sometimes lock up and not be responsive.
         self.start_stop_sequence('stop')
 
         # set to pattern mode
-        buffer = self.set_pattern_mode(mode)[0]
+        buffer = self.set_pattern_mode(mode)
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
@@ -1404,16 +1410,20 @@ class dlp6500:
                                                          wait_for_trigger=triggered,
                                                          clear_pattern_after_trigger=clear_pattern_after_trigger,
                                                          bit_depth=bit_depth, stored_image_index=image_indices[ii],
-                                                         stored_image_bit_index=bit_indices[ii])[0]
+                                                         stored_image_bit_index=bit_indices[ii])
             resp = self.decode_response(buffer)
             if resp['error']:
                 print(self.read_error_description())
 
         # PAT_CONFIG command
-        buffer = self.pattern_display_lut_configuration(nimgs, num_repeat=num_repeats)[0]
-        resp = self.decode_response(buffer)
-        if resp['error']:
+        buffer = self.pattern_display_lut_configuration(nimgs, num_repeat=num_repeats)
+
+        if buffer == []:
             print(self.read_error_description())
+        else:
+            resp = self.decode_response(buffer)
+            if resp['error']:
+                print(self.read_error_description())
 
         # start sequence
         self.start_stop_sequence('start')
@@ -1430,13 +1440,11 @@ class dlp6500:
         :param batch_index:
         :return:
         """
-        buffer = self.send_command('r', True, 0x1A14, [batch_index])[0]
+        buffer = self.send_command('r', True, self.command_dict["Get_Firmware_Batch_File_Name"], [batch_index])
         resp = self.decode_response(buffer)
 
         batch_name = ''
         for ii, d in enumerate(resp['data']):
-
-            # if d == 0 and ii > 0:
             if d == 0:
                 break
 
@@ -1451,7 +1459,7 @@ class dlp6500:
         :param batch_index:
         :return:
         """
-        return self.send_command('w', True, 0x1A15, [batch_index])
+        return self.send_command('w', True, self.command_dict["Execute_Firmware_Batch_File"], [batch_index])
 
     def set_fwbatch_delay(self, delay_ms):
         """
@@ -1459,10 +1467,11 @@ class dlp6500:
         :param delay_ms:
         :return:
         """
-        # todo: test this works!
+        raise NotImplementedError("this function not yet implemented. testing needed")
+
         data = struct.unpack('BBBB', struct.pack('<I', delay_ms))
         data = list(data[:3])
-        return self.send_command('w', True, 0x1A16, data)
+        return self.send_command('w', True, self.command_dict["Set_Firmware_Batch_Command_Delay_Time"], data)
 
 
 class dlp6500win(dlp6500):
