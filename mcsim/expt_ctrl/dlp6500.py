@@ -26,14 +26,14 @@ import copy
 ##############################################
 def combine_patterns(patterns, bit_depth=1):
     """
-    Given a series of binary patterns, combine these into RGB images to send to DMD.
+    Given a series of binary patterns, combine these into 24 bit RGB images to send to DMD.
 
     For binary patterns, DMD supports sending a group of up to 24 patterns as an RGB image, with each bit of the 24 bit
     RGB values giving the pattern for one image.
 
     :param patterns: nimgs x ny x nx array of uint8
-    :param bit_depth: 1
-    :return:
+    :param int bit_depth: 1
+    :return combined_patterns:
     """
 
     # todo: don't know if there is a pattern combination for other bit depths?
@@ -90,9 +90,9 @@ def split_combined_patterns(combined_patterns):
 
 def encode_erle(pattern):
     """
+    Encode a 24bit pattern in enhanced run length encoding (ERLE).
 
-    'erle': enhanced run length encoding. Similar to RLE, but now the number of repeats byte is given by
-    either one or two bytes.
+    ERLE is similar to RLE, but now the number of repeats byte is given by either one or two bytes.
 
     specification:
     ctrl byte 1, ctrl byte 2, ctrl byte 3, description
@@ -102,7 +102,7 @@ def encode_erle(pattern):
     n>1        , n/a        , n/a        , repeat following pixel n times
 
     :param pattern: uint8 3 x Ny x Nx array of RGB values, or Ny x Nx array
-    :return:
+    :return pattern_compressed:
     """
 
     # pattern must be uint8
@@ -154,11 +154,6 @@ def encode_erle(pattern):
                 v = row_rgb[:, ii]
                 length_bytes = erle_len2bytes(rlen)
                 pattern_compressed += length_bytes + [v[0], v[1], v[2]]
-
-            # for ii in range(len(run_lens)):
-            #     v = vals[:, ii]
-            #     length_bytes = erle_len2bytes(run_lens[ii])
-            #     pattern_compressed += length_bytes + [v[0], v[1], v[2]]
 
     # bytes indicating image end
     pattern_compressed += [0x00, 0x01, 0x00]
@@ -392,8 +387,8 @@ def erle_len2bytes(length):
 def erle_bytes2len(byte_list):
     """
     Convert a 1 or 2 byte list in little endian order to length
-    :param byte_list: [byte] or [lsb, msb]
-    :return:
+    :param list byte_list: [byte] or [lsb, msb]
+    :return length:
     """
     # if msb is None:
     #     length = lsb
@@ -549,11 +544,11 @@ class dlp6500:
         Send USB command to DLP6500 DMD. Only works on Windows. For documentation of DMD commands, see dlpu018.pdf,
         available at http://www.ti.com/product/DLPC900/technicaldocuments
 
-        DMD uses little endian byte order.
+        DMD uses little endian byte order. They also use the convention that, when converting from binary to hex
+        the MSB is the rightmost. i.e. \b11000000 = \x03.
 
-        They also use the convention that, when converting from binary to hex the MSB is the rightmost. i.e.
-         \b11000000 = \x03. TODO: is this actually true??? Seems to not be true wrt to flag_byte, but true wrt to
-         pattern defining bytes...maybe only care about this for data that is passed through the DMD?
+        TODO: is this actually true??? Seems to not be true wrt to flag_byte, but true wrt to
+        pattern defining bytes...maybe only care about this for data that is passed through the DMD?
 
         :param rw_mode: 'r' for read, or 'w' for write
         :param reply: boolean
@@ -1291,7 +1286,8 @@ class dlp6500:
         # compress and load images
         # images must be loaded in backwards order according to programming manual
         for ii, dmd_pattern in reversed(list(enumerate(patterns))):
-            print("sending pattern %d/%d" % (ii + 1, len(patterns)))
+            if self.debug:
+                print("sending pattern %d/%d" % (ii + 1, len(patterns)))
 
             if compression_mode == 'none':
                 raise NotImplementedError("compression mode 'none' has not been tested.")
@@ -1313,7 +1309,7 @@ class dlp6500:
 
         # this PAT_CONFIG command is necessary, otherwise subsequent calls to set_pattern_sequence() will not behave
         # as expected.
-        buffer = self.pattern_display_lut_configuration(npatterns, num_repeats)[0]
+        buffer = self.pattern_display_lut_configuration(npatterns, num_repeats)
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
