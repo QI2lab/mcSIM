@@ -26,7 +26,8 @@ xx, yy = np.meshgrid(range(nx), range(ny))
 ang = -45 * np.pi/180
 frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
 # frq = np.array([0, 0])
-rad = 5
+# rad = 5
+rad = 0
 phase = 0
 # rad = np.inf
 pattern_base = np.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
@@ -46,19 +47,12 @@ pupil_rad_mirrors = fl_mitutoyo * na_mitutoyo / mag_dmd2bfp / dm
 
 if True:
     # (y, x)
+    # offset = np.array([0, 0])
     offset = np.array([0, 0])
-    # fraction = 0.8
-    # n_phis = 10
-    # phi = 2*np.pi / n_phis * 9
-    # offset = np.array([np.sin(phi) * pupil_rad_mirrors * fraction,
-    #                    np.cos(phi) * pupil_rad_mirrors * fraction])
-
 
     # centered pattern
     centered_pattern = np.array(pattern_base, copy=True)
     centered_pattern[np.sqrt((xx - cref[1] - offset[1])**2 + (yy - cref[0] - offset[0])**2) > rad] = 1
-    # centered_pattern[np.abs(xx - cref[1] - offset[1]) > rad] = 1
-    # centered_pattern[np.abs(yy - cref[0] - offset[0]) > rad] = 1
 
     # centered_pattern = np.ones(dmd_size)
     img_inds, bit_inds = dmd.upload_pattern_sequence(centered_pattern.astype(np.uint8), 105, 0)
