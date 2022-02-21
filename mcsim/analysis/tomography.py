@@ -122,7 +122,7 @@ def get_angles(frqs, no, wavelength):
     return theta, phi
 
 
-def get_global_phase_shifts(imgs, ref_imgs):
+def get_global_phase_shifts(imgs, ref_imgs, print_progress=False):
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
     imgs * np.exp(1j * phase_shift) ~ img_ref
@@ -131,6 +131,9 @@ def get_global_phase_shifts(imgs, ref_imgs):
     @param ref_ind:
     @return phase_shifts:
     """
+    # ensure 3D image
+    if imgs.ndim == 2:
+        imgs = np.expand_dims(imgs, axis=0)
     nimgs = imgs.shape[0]
 
     # if using only single ref image ...
@@ -142,14 +145,17 @@ def get_global_phase_shifts(imgs, ref_imgs):
     tstart = time.perf_counter()
     phase_shifts = np.zeros(nimgs)
     for ii in range(nimgs):
-        print("computing phase shift %d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, time.perf_counter() - tstart), end="\r")
+        if print_progress:
+            print("computing phase shift %d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, time.perf_counter() - tstart), end="\r")
+
         def fn(p): return np.abs(imgs[ii] * np.exp(1j * p[0]) - ref_imgs[ii]).ravel()
         # s1 = np.mean(imgs[ii])
         # s2 = np.mean(ref_imgs[ii])
         # def fn(p): return np.abs(s1 * np.exp(1j * p[0]) - s2)
         results = fit.fit_least_squares(fn, [0])
         phase_shifts[ii] = results["fit_params"]
-    print("")
+    if print_progress:
+        print("")
 
     return phase_shifts
 
@@ -213,30 +219,8 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
     return psi_rytov
 
 # data processing
-def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
-                   dxy_sampling_factor=1, mode="born", use_interpolation=True):
-    """
-
-    @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used
-    @param beam_frqs: nimgs x 3, where each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2
-    @param ni: background index of refraction
-    @param na_det: detection numerical aperture
-    @param wavelength:
-    @param dxy: pixel size
-    @param z_fov: z-field of view
-    @param reg: regularization factor
-    @param dz_sampling_factor: fraction of Nyquist sampling factor to use
-    @param mode: "born" or "rytov"
-    @return sp_ft, sp_ft_imgs, coords, fcoords:
-    """
-    nimgs, ny, nx = efield_fts.shape
-
-    # ##################################
-    # get frequencies of initial images and make broadcastable to shape (nimgs, ny, nx)
-    # ##################################
-    fx = np.expand_dims(fft.fftshift(fft.fftfreq(nx, dxy)), axis=(0, 1))
-    fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dxy)), axis=(0, 2))
-    fz = get_fz(fx, fy, ni, wavelength)
+def get_reconstruction_sampling(ni, na_det, beam_frqs, wavelength, dxy, img_size, z_fov, dz_sampling_factor, dxy_sampling_factor):
+    ny, nx = img_size
 
     # ##################################
     # set sampling of 3D scattering potential
@@ -266,6 +250,40 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     nz_sp = int(np.ceil(z_fov / dz_sp) + 1)
     if np.mod(nz_sp, 2) == 0:
         nz_sp += 1
+
+    return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max)
+
+def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
+                   dxy_sampling_factor=1, mode="born", use_interpolation=True):
+    """
+
+    @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used
+    @param beam_frqs: nimgs x 3, where each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2
+    @param ni: background index of refraction
+    @param na_det: detection numerical aperture
+    @param wavelength:
+    @param dxy: pixel size
+    @param z_fov: z-field of view
+    @param reg: regularization factor
+    @param dz_sampling_factor: fraction of Nyquist sampling factor to use
+    @param mode: "born" or "rytov"
+    @return sp_ft, sp_ft_imgs, coords, fcoords:
+    """
+    nimgs, ny, nx = efield_fts.shape
+
+    # ##################################
+    # get frequencies of initial images and make broadcastable to shape (nimgs, ny, nx)
+    # ##################################
+    fx = np.expand_dims(fft.fftshift(fft.fftfreq(nx, dxy)), axis=(0, 1))
+    fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dxy)), axis=(0, 2))
+    fz = get_fz(fx, fy, ni, wavelength)
+
+    # ##################################
+    # set sampling of 3D scattering potential
+    # ##################################
+    (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp), _ = get_reconstruction_sampling(ni, na_det, beam_frqs, wavelength,
+                                                                  dxy, (ny, nx), z_fov,
+                                                                  dz_sampling_factor, dxy_sampling_factor)
 
     x_sp = dxy_sp * (np.arange(nx_sp) - nx_sp // 2)
     y_sp = dxy_sp * (np.arange(ny_sp) - ny_sp // 2)
@@ -390,15 +408,9 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
 
 
     # one reconstruction per image
-    tstart = time.perf_counter()
-
     spot_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
     num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=int)
     for ii in range(nimgs):
-        print("reconstructing angle %d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, time.perf_counter() - tstart), end="\r")
-        if ii == (nimgs - 1):
-            print("")
-
         # check we don't have duplicate indices ... otherwise need to do something else ...
         cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
         if len(cind_unique_angle) != np.sum(to_use_ind[ii]):
@@ -430,7 +442,7 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
 
 
 def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True,
-                        require_real_part_greater_bg=False, use_gpu=_cupy_available):
+                        require_real_part_greater_bg=False, use_gpu=_cupy_available, print_info=False):
     """
     Iterative apply constraints on the scattering potential and the index of refraction
 
@@ -462,9 +474,10 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
 
     tstart = time.perf_counter()
     for ii in range(n_iterations):
-        print("constraint iteration %d/%d, elapsed time = %0.2fs" % (ii + 1, n_iterations, time.perf_counter() - tstart), end="\r")
-        if ii == (n_iterations - 1):
-            print("")
+        if print_info:
+            print("constraint iteration %d/%d, elapsed time = %0.2fs" % (ii + 1, n_iterations, time.perf_counter() - tstart), end="\r")
+            if ii == (n_iterations - 1):
+                print("")
         # ############################
         # ensure n is physical
         # ############################
