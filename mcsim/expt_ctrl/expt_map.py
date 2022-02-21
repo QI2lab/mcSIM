@@ -2,13 +2,13 @@ import numpy as np
 
 # DAQ line mapping
 daq_do_map = {"odt_cam": 0,
-              "odt_shutter": 1,
+              "odt_shutter": 2,
               "odt_laser": 2,
               "sim_cam": 5,
               "sim_shutter": 6,
               "blue_laser": 8,
               "green_laser": 7,
-              "red_laser": 9,
+              "red_laser": 1,
               "dmd_enable": 4,
               "dmd_advance": 3}
 
