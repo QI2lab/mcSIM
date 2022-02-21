@@ -1,5 +1,5 @@
 [![preprint](https://img.shields.io/badge/preprint-bioRxiv-blue.svg)](https://doi.org/10.1101/2020.07.27.223941)
-[![paper](https://img.shields.io/badge/paper-biomedical%20optics%20expresss-blue.svg)](https://doi.org/10.1364/BOE.422703)
+[![paper](https://img.shields.io/badge/paper-biomedical%20optics%20express-blue.svg)](https://doi.org/10.1364/BOE.422703)
 [![website](https://img.shields.io/badge/website-up-green.svg)](https://shepherdlaboratory.org/)
 [![Github commit](https://img.shields.io/github/last-commit/QI2lab/mcSIM)](https://github.com/QI2lab/mcSIM)
 
