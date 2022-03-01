@@ -1,3 +1,0 @@
-[submodule "analysis/localize-psf"]
-	path = localize-psf
-	url = ../localize-psf.git
