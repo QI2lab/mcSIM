@@ -11,7 +11,6 @@ from matplotlib.cm import ScalarMappable
 from scipy.interpolate import interpn
 import time
 from skimage.restoration import unwrap_phase
-#
 import localize_psf.fit as fit
 import mcsim.analysis.analysis_tools as tools
 
@@ -20,6 +19,7 @@ try:
     import cupy as cp
 except ImportError:
     _cupy_available = False
+
 
 def get_angular_spectrum_kernel(dz, wavelength, no, shape, drs):
     k = 2*np.pi / wavelength
@@ -35,6 +35,7 @@ def get_angular_spectrum_kernel(dz, wavelength, no, shape, drs):
         kernel[np.isnan(kernel)] = 0
 
     return kernel
+
 
 def propagate_field(efield_start, n_stack, no, drs, wavelength, use_gpu=_cupy_available):
     """
@@ -122,13 +123,13 @@ def get_angles(frqs, no, wavelength):
     return theta, phi
 
 
-def get_global_phase_shifts(imgs, ref_imgs, print_progress=False):
+def get_global_phase_shifts(imgs, ref_imgs):
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
     imgs * np.exp(1j * phase_shift) ~ img_ref
 
-    @param imgs:
-    @param ref_ind:
+    @param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
+    @param ref_imgs:
     @return phase_shifts:
     """
     # ensure 3D image
@@ -142,11 +143,8 @@ def get_global_phase_shifts(imgs, ref_imgs, print_progress=False):
 
     ref_imgs, imgs = np.broadcast_arrays(ref_imgs, imgs)
 
-    tstart = time.perf_counter()
     phase_shifts = np.zeros(nimgs)
     for ii in range(nimgs):
-        if print_progress:
-            print("computing phase shift %d/%d, elapsed time = %0.2fs" % (ii + 1, nimgs, time.perf_counter() - tstart), end="\r")
 
         def fn(p): return np.abs(imgs[ii] * np.exp(1j * p[0]) - ref_imgs[ii]).ravel()
         # s1 = np.mean(imgs[ii])
@@ -154,8 +152,6 @@ def get_global_phase_shifts(imgs, ref_imgs, print_progress=False):
         # def fn(p): return np.abs(s1 * np.exp(1j * p[0]) - s2)
         results = fit.fit_least_squares(fn, [0])
         phase_shifts[ii] = results["fit_params"]
-    if print_progress:
-        print("")
 
     return phase_shifts
 
@@ -218,7 +214,65 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
 
     return psi_rytov
 
-# data processing
+# tomographic reconstruction processing
+def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.ndarray, beam_frq: np.ndarray,
+                   efield_ref: np.ndarray = None):
+    """
+
+    @param img: n1 x ... x n_{-3} x n_{-2} x n_{-1} array
+    @param dxy:
+    @param fmax_int:
+    @param frq_ref:
+    @param beam_frq: n_{-m} x ... x n_{-3} x 2 array
+    @param efield_ref:
+    @return:
+    """
+    # FT of image
+    img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    ndims = img.ndim
+    ny, nx = img_ft.shape[-2:]
+
+    # get frequency data
+    fxs = fft.fftshift(fft.fftfreq(nx, dxy))
+    fys = fft.fftshift(fft.fftfreq(ny, dxy))
+    fxfx, fyfy = np.meshgrid(fxs, fys)
+    ff_perp = np.sqrt(fxfx ** 2 + fyfy ** 2)
+
+    # compute efield
+    efield_ft = tools.translate_ft(img_ft, frq_ref, drs=(dxy, dxy))
+    efield_ft[..., ff_perp > fmax_int / 2] = 0
+
+    if efield_ref is not None:
+
+        # compute shifted efield
+        efield_shifted_ft = tools.translate_ft(efield_ft, beam_frq[..., :2], drs=(dxy, dxy))
+
+        axis_f_expand = list(range(-beam_frq.ndim - 1, -2))
+        axis_bf_expand = [-2, -1]
+        ff_around = np.sqrt((np.expand_dims(fxfx, axis_f_expand) + np.expand_dims(beam_frq[..., 0], axis_bf_expand)) ** 2 +
+                            (np.expand_dims(fyfy, axis_f_expand) + np.expand_dims(beam_frq[..., 1], axis_bf_expand)) ** 2)
+
+        efield_shifted_ft[..., ff_around > fmax_int / 2] = 0
+        efield_shifted = fft.fftshift(fft.ifft2(fft.ifftshift(efield_shifted_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        # compute phase shift relative to first image
+        phase_shift_img_to_ref = get_global_phase_shifts(efield_shifted, efield_ref)
+
+        # correct phase
+        efield_ft *= np.expand_dims(np.exp(1j * phase_shift_img_to_ref), axis=(-1, -2))
+    else:
+        phase_shift_img_to_ref = 0
+
+    # compute Fourier transform
+    efield = fft.fftshift(fft.ifft2(fft.ifftshift(efield_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+    # compute powers
+    power = np.sum(np.abs(img) ** 2, axis=(-1, -2))
+    e_power = np.sum(np.abs(efield) ** 2, axis=(-1, -2))
+
+    return efield, efield_ft, phase_shift_img_to_ref, power, e_power
+
+
 def get_reconstruction_sampling(ni, na_det, beam_frqs, wavelength, dxy, img_size, z_fov, dz_sampling_factor, dxy_sampling_factor):
     ny, nx = img_size
 
@@ -252,6 +306,7 @@ def get_reconstruction_sampling(ni, na_det, beam_frqs, wavelength, dxy, img_size
         nz_sp += 1
 
     return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max)
+
 
 def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
                    dxy_sampling_factor=1, mode="born", use_interpolation=True):
@@ -449,10 +504,11 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     constraint 1: scattering potential FT must match data at points where we information
     constraint 2: real(n) >= no and imag(n) >= 0
 
-    @param sp_ft: 3D fourier transform of scattering potential
+    @param sp_ft: 3D fourier transform of scattering potential. This array should have nan values where the array
+     values are unknown.
     @param no: background index of refraction
-    @param wavelength:
-    @param n_iterations:
+    @param wavelength: wavelength in um
+    @param n_iterations: number of iterations
     @param beta:
     @param bool use_raar: whether or not to use the Relaxed-Averaged-Alternating Reflection algorithm
     @return scattering_pot_ft:
@@ -466,7 +522,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
 
     no_data = np.isnan(sp_ft)
     is_data = np.logical_not(no_data)
-    sp_ft[no_data] = 0 #np.exp(1j * np.random.rand(*scattering_potential_ft[no_data].shape))
+    sp_ft[no_data] = 0
 
     # try smoothing image first ...
     # todo: is this useful?
@@ -502,54 +558,51 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
         else:
             sp_ps_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps))))
 
-        # ############################
-        # ensure img matches data
-        # ############################
-        sp_ft_pm = np.array(sp_ft, copy=True)
-        sp_ft_pm[is_data] = sp_data[is_data]
-
-        # ############################
-        # projected Pm * Ps
-        # ############################
-        sp_ft_pm_ps = np.array(sp_ps_ft, copy=True)
-        sp_ft_pm_ps[is_data] = sp_data[is_data]
-
-        # ############################
-        # projected Ps * Pm
-        # ############################
-        sp_ft_ps_pm = np.array(sp_ft_pm, copy=True)
-        if not use_gpu:
-            sp_ps_pm = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_ps_pm)))
-        else:
-            sp_ps_pm = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft_ps_pm))))
-        n_ps_pm = get_n(sp_ps_pm, no, wavelength)
-
-        if require_real_part_greater_bg:
-            # real part must be >= no
-            correct_real = np.real(n_ps_pm) < no
-            n_ps_pm[correct_real] = no + np.imag(n_ps_pm[correct_real])
-
-        # imaginary part must be >= 0
-        correct_imag = np.imag(n_ps_pm) < 0
-        n_ps_pm[correct_imag] = np.real(n_ps_pm[correct_imag]) + 0 * 1j
-
-        sp_ps_pm = get_scattering_potential(n_ps_pm, no, wavelength)
-        if not use_gpu:
-            sp_ps_pm_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps_pm)))
-        else:
-            sp_ps_pm_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps_pm))))
-
-        # ############################
-        # update
-        # ############################
         if use_raar:
+            sp_ft_pm = np.array(sp_ft, copy=True)
+            sp_ft_pm[is_data] = sp_data[is_data]
+
+            # ############################
+            # projected Ps * Pm
+            # ############################
+            sp_ft_ps_pm = np.array(sp_ft_pm, copy=True)
+            if not use_gpu:
+                sp_ps_pm = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_ps_pm)))
+            else:
+                sp_ps_pm = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft_ps_pm))))
+            n_ps_pm = get_n(sp_ps_pm, no, wavelength)
+
+            if require_real_part_greater_bg:
+                # real part must be >= no
+                correct_real = np.real(n_ps_pm) < no
+                n_ps_pm[correct_real] = no + np.imag(n_ps_pm[correct_real])
+
+            # imaginary part must be >= 0
+            correct_imag = np.imag(n_ps_pm) < 0
+            n_ps_pm[correct_imag] = np.real(n_ps_pm[correct_imag]) + 0 * 1j
+
+            sp_ps_pm = get_scattering_potential(n_ps_pm, no, wavelength)
+            if not use_gpu:
+                sp_ps_pm_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps_pm)))
+            else:
+                sp_ps_pm_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps_pm))))
+
+            # update
             sp_ft = beta * sp_ft - beta * sp_ps_ft + (1 - 2 * beta) * sp_ft_pm + 2 * beta * sp_ps_pm_ft
         else:
+            # ############################
+            # projected Pm * Ps
+            # ############################
+            sp_ft_pm_ps = np.array(sp_ps_ft, copy=True)
+            sp_ft_pm_ps[is_data] = sp_data[is_data]
+
+            # update
             sp_ft = sp_ft_pm_ps
 
     return sp_ft
 
 
+# fit frequencies
 def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filter_size=0):
     """
     Determine the hologram reference frequency from a single imaged, based on the regions in the hologram beyond the
