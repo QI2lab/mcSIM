@@ -4,8 +4,8 @@ Tests for some important functions from sim_reconstruction.py
 import unittest
 import numpy as np
 from scipy import fft
-import sim_reconstruction as sim
-import analysis_tools as tools
+import mcsim.analysis.sim_reconstruction as sim
+import mcsim.analysis.analysis_tools as tools
 
 class TestSIM(unittest.TestCase):
 

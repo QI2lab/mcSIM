@@ -1,11 +1,8 @@
 import unittest
-import analysis_tools as tools
+import mcsim.analysis.analysis_tools as tools
 from scipy import fft
 import numpy as np
-import numpy.fft
 
-import matplotlib.pyplot as plt
-from matplotlib.colors import PowerNorm
 
 class TestTools(unittest.TestCase):
 

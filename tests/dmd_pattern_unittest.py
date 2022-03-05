@@ -1,12 +1,10 @@
 import unittest
-
 import numpy as np
 import scipy.signal
 from scipy import fft
-
-import affine
-import dmd_patterns as dmd
-import analysis_tools as tools
+from localize_psf import affine
+import mcsim.analysis.dmd_patterns as dmd
+import mcsim.analysis.analysis_tools as tools
 
 
 class TestPatterns(unittest.TestCase):
