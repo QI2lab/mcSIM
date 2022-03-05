@@ -13,13 +13,13 @@ import mcsim.analysis.simulate_dmd as sdmd
 import mcsim.analysis.analysis_tools as tools
 import localize_psf.fit_psf as fit_psf
 
-
 wavelength = 0.785
 k = 2*np.pi / wavelength
 
 # DMD
 dm = 7.56 # DMD pitch
 gamma = 12 * np.pi/180
+rot_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0)
 nx = 1920
 ny = 1080 # 1080
 xx, yy = np.meshgrid(range(nx), range(ny))
@@ -148,10 +148,12 @@ dmd_uvecs_out = np.stack(sdmd.opt_axis_uvec2dmd_uvec(opt_axis_uvecs, optical_axi
 
 # do simulations
 efields, _, _ = sdmd.simulate_dmd(pattern, wavelength, gamma, -gamma, dm, dm, dm, dm, uvec_in_ir, dmd_uvecs_out,
-                                     phase_errs=phase_errs, efield_profile=beam)
+                                  rot_axis_on=rot_axis, rot_axis_off=rot_axis,
+                                  phase_errs=phase_errs, efield_profile=beam)
 
 efields_interp = sdmd.interpolate_dmd_data(pattern, beam, wavelength, gamma, -gamma,
-                                           dm, dm, dm, dm, uvec_in_ir, order_ir, dmd_uvecs_out)
+                                           dm, dm, dm, dm, uvec_in_ir, order_ir, dmd_uvecs_out,
+                                           rot_axis, rot_axis)
 
 # ideal PSF of lens
 nyf, nxf = xf.shape
@@ -295,3 +297,4 @@ ax.imshow(beam, origin="lower", cmap="bone")
 ax.set_xlabel("x-position (mirrors)")
 ax.set_ylabel("y-position (mirrors)")
 
+plt.show()

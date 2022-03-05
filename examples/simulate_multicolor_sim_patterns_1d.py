@@ -25,6 +25,7 @@ wy = wx
 # on and off angle of mirrors from the normal plane of the DMD body
 gamma_on = 12 * np.pi/180
 gamma_off = -12 * np.pi/180
+rot_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0)
 # output angles offset around the main output direction
 tout_offsets = np.linspace(-10, 10, 4800) * np.pi / 180
 
@@ -99,7 +100,9 @@ for ii in range(len(wlens)):
     pattern[sinusoid >= 0] = 1
 
     # do 1D DMD simulations
-    data_temp = sdmd.simulate_1d(pattern, [wlens[ii]], gon, goff, dx, dy, wx, wy, tins_exact[ii], tm_out_offsets=tout_offsets)
+    data_temp = sdmd.simulate_1d(pattern, [wlens[ii]], gon, rot_axis, goff,
+                                 rot_axis, dx, dy, wx, wy, tins_exact[ii],
+                                 tm_out_offsets=tout_offsets)
     simulation_data.append(data_temp)
 
 # ##################################
@@ -109,7 +112,7 @@ figh = plt.figure(figsize=(16, 8))
 str = r"Diffraction orders and blaze envelopes for beams diffracted along the $\hat{e}_- = \frac{x - y}{\sqrt{2}}$ direction" + \
       "\noutput direction, " + r"($\theta_-$, $\theta_+$)" + " = (%0.2f, %0.2f) deg; " + \
       r"($\theta_x$, $\theta_y$)" + " = (%0.2f, %0.2f) deg;" + \
-      " (bx, by, bz) = (%0.4f, %0.4f, %0.4f)"
+      " $(b_x, b_y, b_z)$ = (%0.4f, %0.4f, %0.4f)"
 plt.suptitle(str %
              (tm_out * 180/np.pi, tp_out * 180/np.pi,
               tx_out * 180/np.pi, ty_out * 180/np.pi,
@@ -132,7 +135,7 @@ for ii in range(len(wlens)):
     imax = np.argmax(int_check)
     int = int / int[imax] * sinc[imax]
 
-    label = ("%.0fnm, (nx, ny) = (%d, %d); " + r"$\theta_-$" + " = %0.2fdeg" + "\na=(%0.3f, %0.3f, %0.3f)") % \
+    label = ("%.0fnm, $(n_x, n_y)$ = (%d, %d); " + r"$\theta_-$" + " = %0.2fdeg" + "\na=(%0.3f, %0.3f, %0.3f)") % \
             (wlens[ii]*1e9, diff_orders[ii], -diff_orders[ii], tins_exact[ii] * 180/np.pi,
              uvecs_in_exact[ii][0], uvecs_in_exact[ii][1], uvecs_in_exact[ii][2])
 
@@ -147,3 +150,5 @@ plt.xlim([tm_out * 180/np.pi - 10, tm_out * 180/np.pi + 10])
 plt.legend()
 plt.xlabel(r"$\theta_-$ (degrees)")
 plt.ylabel("intensity (arb)")
+
+plt.show()

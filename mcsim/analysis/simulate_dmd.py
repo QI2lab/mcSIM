@@ -77,8 +77,11 @@ from matplotlib.patches import Circle
 # ###########################################
 # main simulation functions
 # ###########################################
-def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
-                 uvec_in, uvecs_out, zshifts=None, phase_errs=None, efield_profile=None):
+_dlp_1stgen_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0)
+
+def simulate_dmd(pattern, wavelength: float, gamma_on: float, gamma_off: float, dx: float, dy: float, wx: float, wy: float,
+                 uvec_in, uvecs_out, zshifts=None, phase_errs=None, efield_profile=None,
+                 rot_axis_on=_dlp_1stgen_axis, rot_axis_off=_dlp_1stgen_axis):
     """
     Simulate plane wave diffracted from a digital mirror device (DMD) naively. In most cases this function is not
     the most efficient to use! When working with SIM patterns it is much more efficient to rely on the tools
@@ -149,8 +152,8 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
                                    1j * phase_errs)
 
         # get envelope functions for "on" and "off" states
-        sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, bma)
-        sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, bma)
+        sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, bma, rot_axis_on)
+        sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, bma, rot_axis_off)
 
         # multiply by blaze envelope to get full efield
         # envelopes = np.zeros((ny, nx), dtype=complex)
@@ -180,8 +183,9 @@ def simulate_dmd(pattern, wavelength, gamma_on, gamma_off, dx, dy, wx, wy,
     return efields, sinc_efield_on, sinc_efield_off
 
 
-def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in, order,
-                     dn_orders=0):
+def simulate_dmd_dft(pattern, efield_profile, wavelength: float, gamma_on: float, gamma_off: float, dx: float,
+                     dy: float, wx: float, wy: float, uvec_in, order: tuple[int, int],
+                     dn_orders=0, rot_axis_on=_dlp_1stgen_axis, rot_axis_off=_dlp_1stgen_axis):
     """
     Simulate DMD diffraction using DFT. These produces peaks at a discrete set of frequencies which are
     (b-a)_x = wavelength / dx * ix / nx for ix = 0, ... nx - 1
@@ -235,8 +239,8 @@ def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, d
     uvecs_out_dft[..., 2] = np.sqrt(1 - uvecs_out_dft[..., 0] ** 2 - uvecs_out_dft[..., 1] ** 2)
 
     # get envelope functions for "on" and "off" states
-    sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, uvecs_out_dft - uvec_in)
-    sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, uvecs_out_dft - uvec_in)
+    sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, uvecs_out_dft - uvec_in, rot_axis_on)
+    sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, uvecs_out_dft - uvec_in, rot_axis_off)
 
     # unlike most cases, we want the DMD origin at the lower left corner (not in the center). So we omit the ifftshift
     # pattern_dft = fft.fftshift(fft.fft2(pattern * efield_profile))
@@ -255,7 +259,7 @@ def simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, d
 
 
 def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_off,
-                         dx, dy, wx, wy, uvec_in, order, bvecs_interp):
+                         dx, dy, wx, wy, uvec_in, order, bvecs_interp, rot_axis_on, rot_axis_off):
     """
     Exact interpolation of  dmd diffraction DFT data to other output angles using Shannon-Whittaker interpolation formula.
 
@@ -284,7 +288,7 @@ def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_of
     # get DFT results
     _, pattern_dft, pattern_dft_complement, _, _, bvec_dft = \
           simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in, order,
-                           dn_orders=0)
+                           dn_orders=0, rot_axis_on=rot_axis_on, rot_axis_off=rot_axis_off)
 
     ny, nx = pattern.shape
     # dft freqs
@@ -292,8 +296,8 @@ def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_of
     fys = fft.fftshift(fft.fftfreq(ny))
 
     bma = bvecs_interp - uvec_in
-    sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, bma)
-    sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, bma)
+    sinc_efield_on = wx * wy * blaze_envelope(wavelength, gamma_on, wx, wy, bma, rot_axis_on)
+    sinc_efield_off = wx * wy * blaze_envelope(wavelength, gamma_off, wx, wy, bma, rot_axis_off)
 
     def dft_interp_1d(d, v, n, frqs):
         arg = frqs - d / wavelength * v
@@ -323,7 +327,8 @@ def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_of
     return efields
 
 
-def get_diffracted_power(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in):
+def get_diffracted_power(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in,
+                         rot_axis_on=_dlp_1stgen_axis, rot_axis_off=_dlp_1stgen_axis):
     """
     Compute input and output power.
 
@@ -337,6 +342,8 @@ def get_diffracted_power(pattern, efield_profile, wavelength, gamma_on, gamma_of
     @param wx:
     @param wy:
     @param uvec_in:
+    @param rot_axis_on:
+    @param rot_axis_off:
     @return power_in, power_out:
     """
 
@@ -347,7 +354,7 @@ def get_diffracted_power(pattern, efield_profile, wavelength, gamma_on, gamma_of
 
     _, pattern_dft, pattern_complement_dft, sinc_efield_on, sinc_efield_off, uvecs_out_dft = \
         simulate_dmd_dft(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in,
-                         order=(0, 0), dn_orders=0)
+                         order=(0, 0), dn_orders=0, rot_axis_on=rot_axis_on, rot_axis_off=rot_axis_off)
 
     # check that power is conserved here...
     assert np.abs(np.sum(np.abs(pattern_dft + pattern_complement_dft)**2) / (nx * ny) - power_in) < 1e-12
@@ -370,8 +377,8 @@ def get_diffracted_power(pattern, efield_profile, wavelength, gamma_on, gamma_of
         bvecs = np.stack((bxs, bys, bzs), axis=-1)
         bvecs[bxs ** 2 + bys ** 2 > 1] = np.nan
 
-        envelope_on = blaze_envelope(wavelength, gamma_on, wx, wy, bvecs - uvec_in)
-        envelope_off = blaze_envelope(wavelength, gamma_off, wx, wy, bvecs - uvec_in)
+        envelope_on = blaze_envelope(wavelength, gamma_on, wx, wy, bvecs - uvec_in, rot_axis_on)
+        envelope_off = blaze_envelope(wavelength, gamma_off, wx, wy, bvecs - uvec_in, rot_axis_off)
 
         on_sum = np.nansum(envelope_on ** 2)
         off_sum = np.nansum(envelope_off ** 2)
@@ -434,26 +441,81 @@ def sinc_fn(x):
     return y
 
 
-def get_rot_mat(n_vec, gamma):
+def get_rot_mat(rot_axis: list[float], gamma: float):
     """
-    Get matrix which rotates points about the specified axis by the given angle
+    Get matrix which rotates points about the specified axis by the given angle. Think of this rotation matrix
+    as acting on unit vectors, and hence its inverse R^{-1} transforms regular vectors. Therefore, we define
+    this matrix such that it rotates unit vectors in a lefthanded sense about the given axis for positive gamma.
+    e.g. when rotating about the z-axis this becomes
+    [[cos(gamma), -sin(gamma), 0],
+     [sin(gamma), cos(gamma), 0],
+     [0, 0, 1]]
+    since vectors are acted on by the inverse matrix, they rotated in a righthanded sense about the given axis.
 
-    :param n_vec: axis to rotate about, [nx, ny, nz]
-    :param float gamma: rotation angle in radians to transform point. A positive angle corresponds to a right-handed
-    rotation, while a negative angle corresponds to a left-handed rotation
+    :param rot_axis: unit vector specifying axis to rotate about, [nx, ny, nz]
+    :param float gamma: rotation angle in radians to transform point. A positive angle corresponds right-handed rotation
+    about the given axis
     :return mat: 3x3 rotation matrix
     """
-    nx, ny, nz = n_vec
+    if np.abs(np.linalg.norm(rot_axis) - 1) > 1e-12:
+        raise ValueError("rot_axis must be a unit vector")
+
+    nx, ny, nz = rot_axis
     mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma)],
                     [nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma), ny**2 * (1 - np.cos(gamma)) + np.cos(gamma), ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma)],
                     [nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma), ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma), nz**2 * (1 - np.cos(gamma)) + np.cos(gamma)]])
+    # mat = np.array([[nx**2 * (1 - np.cos(gamma)) + np.cos(gamma), nx * ny * (1 - np.cos(gamma)) + nz * np.sin(gamma), nx * nz * (1 - np.cos(gamma)) - ny * np.sin(gamma)],
+    #                 [nx * ny * (1 - np.cos(gamma)) - nz * np.sin(gamma), ny**2 * (1 - np.cos(gamma)) + np.cos(gamma), ny * nz * (1 - np.cos(gamma)) + nx * np.sin(gamma)],
+    #                 [nx * nz * (1 - np.cos(gamma)) + ny * np.sin(gamma), ny * nz * (1 - np.cos(gamma)) - nx * np.sin(gamma), nz**2 * (1 - np.cos(gamma)) + np.cos(gamma)]])
     return mat
+
+
+def get_rot_mat_angle_axis(rot_mat: np.ndarray):
+    """
+    Given a rotation matrix, determine the axis it rotates about and the angle it rotates through. This is
+    the inverse function for get_rot_mat()
+
+    Note that get_rot_mat_angle_axis(get_rot_mat(axis, angle)) can return either axis, angle or -axis, -angle
+    as these two rotation matrices are equivalent
+
+    @param rot_mat:
+    @return rot_axis, angle:
+    """
+    if np.linalg.norm(rot_mat.dot(rot_mat.transpose()) - np.identity(rot_mat.shape[0])) > 1e-12:
+        raise ValueError("rot_mat was not a valid rotation matrix")
+
+
+    eig_vals, eig_vects = np.linalg.eig(rot_mat)
+
+    # rotation matrix must have one eigenvalue that is 1 to numerical precision
+    ind = np.argmin(np.abs(eig_vals - 1))
+
+    # construct basis with e3 = rotation axis
+    e3 = eig_vects[:, ind].real
+
+    if np.linalg.norm(np.cross(np.array([0, 1, 0]), e3)) != 0:
+        e1 = np.cross(np.array([0, 1, 0]), e3)
+    else:
+        e1 = np.cross(np.array([1, 0, 0]), e3)
+    e1 = e1 / np.linalg.norm(e1)
+
+    e2 = np.cross(e3, e1)
+
+    # basis change matrix to look like rotation about z-axis
+    mat_basis_change = np.vstack((e1, e2, e3)).transpose()
+
+    # transformed rotation matrix
+    r_bc = np.linalg.inv(mat_basis_change).dot(rot_mat.dot(mat_basis_change))
+    angle = np.arcsin(r_bc[1, 0]).real
+    # angle = np.arcsin(r_bc[0, 1]).real
+
+    return e3, angle
 
 
 # ###########################################
 # convert between coordinate systems
 # ###########################################
-def xyz2mirror(vx, vy, vz, gamma):
+def xyz2mirror(vx, vy, vz, gamma, rot_axis=_dlp_1stgen_axis):
     """
     Convert vector with components vx, vy, vz to v1, v2, v3.
 
@@ -471,13 +533,21 @@ def xyz2mirror(vx, vy, vz, gamma):
     :param gamma:
     :return: v1, v2, v3
     """
-    v1 = np.cos(gamma) / np.sqrt(2) * (vx - vy) - np.sin(gamma) * vz
-    v2 = 1 / np.sqrt(2) * (vx + vy)
-    v3 = np.sin(gamma) / np.sqrt(2) * (vx - vy) + np.cos(gamma) * vz
+    rot_mat = get_rot_mat(rot_axis, gamma)
+
+    # v_{123} = R^{-1} * v_{xyz}
+    # v1 = e1 \cdot v = vx * e1 \cdot ex + vy * e1 \cdot ey + vz * e1 \cdot ez
+    v1 = vx * rot_mat[0, 0] + vy * rot_mat[1, 0] + vz * rot_mat[2, 0]
+    v2 = vx * rot_mat[0, 1] + vy * rot_mat[1, 1] + vz * rot_mat[2, 1]
+    v3 = vx * rot_mat[0, 2] + vy * rot_mat[1, 2] + vz * rot_mat[2, 2]
+
+    # v1 = np.cos(gamma) / np.sqrt(2) * (vx - vy) - np.sin(gamma) * vz
+    # v2 = 1 / np.sqrt(2) * (vx + vy)
+    # v3 = np.sin(gamma) / np.sqrt(2) * (vx - vy) + np.cos(gamma) * vz
     return v1, v2, v3
 
 
-def mirror2xyz(v1, v2, v3, gamma):
+def mirror2xyz(v1, v2, v3, gamma, rot_axis=_dlp_1stgen_axis):
     """
     Inverse function for xyz2mirror()
 
@@ -487,9 +557,17 @@ def mirror2xyz(v1, v2, v3, gamma):
     :param gamma:
     :return:
     """
-    vx = np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 + np.sin(gamma) / np.sqrt(2) * v3
-    vy = -np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 - np.sin(gamma) / np.sqrt(2) * v3
-    vz = -np.sin(gamma) * v1 + np.cos(gamma) * v3
+    rot_mat = get_rot_mat(rot_axis, gamma)
+
+    # v_{xyz} = R * v_{123}
+    # vx = ex \cdot v = v1 * ex \cdot e1 + v2 * ex \cdot e2 + v3 * ex \cdot e3
+    vx = v1 * rot_mat[0, 0] + v2 * rot_mat[0, 1] + v3 * rot_mat[0, 2]
+    vy = v1 * rot_mat[1, 0] + v2 * rot_mat[1, 1] + v3 * rot_mat[1, 2]
+    vz = v1 * rot_mat[2, 0] + v2 * rot_mat[2, 1] + v3 * rot_mat[2, 2]
+
+    # vx = np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 + np.sin(gamma) / np.sqrt(2) * v3
+    # vy = -np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 - np.sin(gamma) / np.sqrt(2) * v3
+    # vz = -np.sin(gamma) * v1 + np.cos(gamma) * v3
     return vx, vy, vz
 
 
@@ -593,7 +671,7 @@ def pm2uvector(tm, tp, mode="in"):
     return xy2uvector(tx, ty, mode=mode)
 
 
-def xy2uvector(tx, ty, mode='in'):
+def xy2uvector(tx, ty, mode="in"):
     """
     Get incoming or outgoing unit vector of light propagation parametrized by angles tx and ty
 
@@ -800,7 +878,7 @@ def opt_axis_uvec2dmd_uvec(opt_axis_uvecs, opt_axis_vec):
 # ###########################################
 # functions for blaze condition only
 # ###########################################
-def blaze_envelope(wavelength, gamma, wx, wy, b_minus_a, n_vec=(1 / np.sqrt(2), 1 / np.sqrt(2), 0)):
+def blaze_envelope(wavelength, gamma, wx, wy, b_minus_a, rot_axis=_dlp_1stgen_axis):
     """
     Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
     This is the result of doing the integral
@@ -816,17 +894,17 @@ def blaze_envelope(wavelength, gamma, wx, wy, b_minus_a, n_vec=(1 / np.sqrt(2), 
     :param float wx: mirror width in x-direction. Same units as wavelength.
     :param float wy: mirror width in y-direction. Same units as wavelength.
     :param b_minus_a: difference between output (b) and input (a) unit vectors. NumPy array of size N x 3
-    :param n_vec: unit vector about which the mirror swivels. Typically (1, 1, 0) / np.sqrt(2)
+    :param rot_axis: unit vector about which the mirror swivels. Typically (1, 1, 0) / np.sqrt(2)
     :return envelope: same length as b_minus_a
     """
 
     k = 2*np.pi / wavelength
-    val_plus, val_minus = blaze_condition_fn(gamma, b_minus_a, n_vec=n_vec)
+    val_plus, val_minus = blaze_condition_fn(gamma, b_minus_a, rot_axis=rot_axis)
     envelope = sinc_fn(0.5 * k * wx * val_plus) * sinc_fn(0.5 * k * wy * val_minus)
     return envelope
 
 
-def blaze_condition_fn(gamma, b_minus_a, n_vec=(1 / np.sqrt(2), 1 / np.sqrt(2), 0)):
+def blaze_condition_fn(gamma: float, b_minus_a, rot_axis=_dlp_1stgen_axis):
     """
     Return the dimensionsless part of the sinc function argument which determines the blaze condition.
     We refer to these functions as A_+(b-a, gamma) and A_-(b-a, gamma).
@@ -837,11 +915,11 @@ def blaze_condition_fn(gamma, b_minus_a, n_vec=(1 / np.sqrt(2), 1 / np.sqrt(2), 
     :param float gamma: angle micro-mirror normal makes with device normal
     :param b_minus_a: outgoing unit vector - incoming unit vector, [vx, vy, vz]. Will also accept a matrix of shape
      n0 x n1 x ... x 3
-    :param n_vec: unit vector about which the mirror swivels. Typically use (1, 1, 0) / np.sqrt(2)
+    :param rot_axis: unit vector about which the mirror swivels. Typically use (1, 1, 0) / np.sqrt(2)
     :return val: A_+ or A_-, depending on the mode
     """
 
-    rot_mat = get_rot_mat(n_vec, gamma)
+    rot_mat = get_rot_mat(rot_axis, gamma)
     # phase(s, t) = R.dot([s, t, 0]) \cdot (b-a) =
     # (R[0, 0] * vx + R[1, 0] * vy + R[2, 0] * vz) * s +
     # (R[0, 1] * vx + R[1, 1] * vy + R[2, 1] * vz) * t
@@ -856,9 +934,9 @@ def blaze_condition_fn(gamma, b_minus_a, n_vec=(1 / np.sqrt(2), 1 / np.sqrt(2), 
     return val_plus, val_minus
 
 
-def solve_blaze_output(uvecs_in, gamma):
+def solve_blaze_output(uvecs_in, gamma: float, rot_axis=_dlp_1stgen_axis):
     """
-    Find the output angle which satisfies the blaze condition for arbitrary input angle.
+    Find the output angle which satisfies the blaze condition for arbitrary input angle
 
     :param uvecs_in: N x 3 array of unit vectors (ax, ay, az)
     :param float gamma: DMD mirror angle in radians
@@ -867,14 +945,14 @@ def solve_blaze_output(uvecs_in, gamma):
 
     uvecs_in = np.atleast_2d(uvecs_in)
     # convert to convenient coordinates and apply blaze
-    a1, a2, a3 = xyz2mirror(uvecs_in[..., 0], uvecs_in[..., 1], uvecs_in[..., 2], gamma)
-    bx, by, bz = mirror2xyz(a1, a2, -a3, gamma)
+    a1, a2, a3 = xyz2mirror(uvecs_in[..., 0], uvecs_in[..., 1], uvecs_in[..., 2], gamma, rot_axis)
+    bx, by, bz = mirror2xyz(a1, a2, -a3, gamma, rot_axis)
     uvecs_out = np.stack((bx, by, bz), axis=-1)
 
     return uvecs_out
 
 
-def solve_blaze_input(uvecs_out, gamma):
+def solve_blaze_input(uvecs_out, gamma, rot_axis=_dlp_1stgen_axis):
     """
     Find the input angle which satisfies the blaze condition for arbitrary output angle.
 
@@ -882,7 +960,7 @@ def solve_blaze_input(uvecs_out, gamma):
     @param float gamma:
     @return uvecs_in:
     """
-    uvecs_in = solve_blaze_output(uvecs_out, gamma)
+    uvecs_in = solve_blaze_output(uvecs_out, gamma, rot_axis)
     return uvecs_in
 
 
@@ -1024,11 +1102,13 @@ def solve_diffraction_output(uvecs_in, dx, dy, wavelength, order):
 # ###########################################
 # functions for solving blaze + diffraction conditions
 # ###########################################
-def get_diffraction_order_limits(wavelength, d, gamma):
+def get_diffraction_order_limits(wavelength: float, d: float, gamma: float, rot_axis=_dlp_1stgen_axis):
     """
     Find the maximum and minimum diffraction orders consistent with given parameters and the blaze condition.
     Note that only diffraction orders of the form (n, -n) can satisfy the Blaze condition, hence only the value
     n is returned and not a 2D diffraction order tuple.
+
+    # todo: only gives results if mirror swivels along (x+y) axis
 
     :param wavelength: wavelength of light
     :param d: mirror pitch (in same units as wavelength)
@@ -1036,24 +1116,30 @@ def get_diffraction_order_limits(wavelength, d, gamma):
     :return nmax, nmin: maximum and minimum indices of diffraction order
     """
 
+    if np.linalg.norm(np.array(rot_axis) - np.array(_dlp_1stgen_axis)) > 1e-12:
+        raise NotImplementedError("get_diffraction_order_limits() not get implemented for arbitrary rotation axis")
+    rot_mat = get_rot_mat(rot_axis, gamma)
+
     # # solution for maximum order
-    if gamma <= 0:
-        nmax = int(np.floor(-d / wavelength * np.sqrt(2) * np.sin(gamma)))
-        nmin = 1
-    elif gamma > 0:
-        nmax = -1
-        nmin = int(np.ceil(-d / wavelength * np.sqrt(2) * np.sin(gamma)))
+    if rot_mat[0, 2] <= 0:
+        # nmax = int(np.floor(-d / wavelength * np.sqrt(2) * np.sin(gamma)))
+        # nmin = 1
+        nmax = 0
+        nmin = int(np.ceil(-d / wavelength * 2 * rot_mat[0, 2]))
     else:
-        raise ValueError()
+        # nmax = -1
+        # nmin = int(np.ceil(-d / wavelength * np.sqrt(2) * np.sin(gamma)))
+        nmax = int(np.floor(d / wavelength * 2 * rot_mat[0, 2]))
+        nmin = 0
 
     return np.array([nmin, nmax], dtype=int)
 
 
-def solve_1color_1d(wavelength, d, gamma, order):
+def solve_1color_1d(wavelength: float, d: float, gamma: float, order: int):
     """
     Solve for the input and output angles satisfying both the diffraction condition and blaze angle for a given
-    diffraction order (if possible). These function assumes that the input and output beams are in the x-y plane,
-    and the angles are given relative to the DMD normal.
+    diffraction order (if possible). These function assumes that (1) the mirror rotation axis is the (x+y) axis and
+    (2) the input and output beams are in the x-y plane.
 
     The two conditions to be solved are
     (1) theta_in - theta_out = 2*gamma
@@ -1069,18 +1155,31 @@ def solve_1color_1d(wavelength, d, gamma, order):
     :return uvecs_in: list of input angle solutions as unit vectors
     :return uvecs_out: list of output angle solutions as unit vectors
     """
-    afn, bfn, _ = solve_combined_condition(d, gamma, wavelength, order)
-    # 1D solutions are the solutions where a_{x+y} = a2 = 0
-    uvecs_in = np.array([afn(0, True), afn(0, False)])
-    uvecs_out = np.array([bfn(0, True), bfn(0, False)])
+    # uvec_fn, _ = solve_combined_condition(d, gamma, wavelength, order, rot_axis=(1/np.sqrt(2), 1/np.sqrt(2), 0))
+    # 1D solutions are the solutions where a_{x+y} = 0
+    # this implies a1 = -a2
 
+    a3 = -1 / np.sqrt(2) / np.sin(gamma) * wavelength / d * order
+    a1_p = np.sqrt(1 - a3**2) / np.sqrt(2)
+    a2_p = - a1_p
+
+    a1_m = -np.sqrt(1 - a3**2) / np.sqrt(2)
+    a2_m = -a1_m
+
+    a_p = mirror2xyz(a1_p, a2_p, a3, gamma, rot_axis=_dlp_1stgen_axis)
+    a_m = mirror2xyz(a1_m, a2_m, a3, gamma, rot_axis=_dlp_1stgen_axis)
+    b_p = mirror2xyz(a1_p, a2_p, -a3, gamma, rot_axis=_dlp_1stgen_axis)
+    b_m = mirror2xyz(a1_m, a2_m, -a3, gamma, rot_axis=_dlp_1stgen_axis)
+
+    uvecs_in = np.vstack((a_p, a_m))
+    uvecs_out = np.vstack((b_p, b_m))
     return uvecs_in, uvecs_out
 
 
-def solve_2color_on_off(d, gamma_on, wavelength_on, n_on, wavelength_off, n_off):
+def solve_2color_on_off(d: float, gamma_on: float, wavelength_on: float, n_on: int, wavelength_off: float, n_off: int):
     """
-    Solve overlap for two wavelengths, one incident on the "on" mirrors and the other on the
-     "off" mirrors
+    Solve the combined blaze and diffraction conditions jointly for two wavelengths, assuming the first wavelength
+    couples from the DMD "on" mirrors and the second from the "off" mirrors.
 
     :param d: mirror pitch
     :param gamma_on: mirror angle in ON state in radians. Assume that gamma_off = -gamma_on
@@ -1139,92 +1238,142 @@ def solve_2color_on_off(d, gamma_on, wavelength_on, n_on, wavelength_off, n_off)
     return b_vecs, a_vecs_on, a_vecs_off
 
 
-def solve_combined_condition(d, gamma, wavelength, order):
+def solve_combined_condition(d: float, gamma: float, rot_axis: tuple[float, float, float],
+                                wavelength: float, order: tuple[int, int]):
     """
-    Return functions for the simultaneous blaze/diffraction condition solution as a function of a_{x+y} = a_2.
+    Return functions for the simultaneous blaze/diffraction condition solution as a function of ax or ay
 
-    The diffraction condition is:
-    b_x - a_x = wavelength / d * nx
-    b_y - a_y = wavelength / d * nx
-
-    The blaze condition can be written:
-    b_1 - a_1 = 0
-    b_2 - a_2 = 0
-    b_3 + a_3 = 0
 
     :param float d: DMD mirror pitch
     :param float gamma: DMD mirror angle along the x-y direction in radians
+    :param rot_axis:
     :param float wavelength: wavelength in same units as DMD mirror pitch
-    :param int order: (nx, ny) = (order, -order). Note that there are no solutions to this joint problem for nx != - ny
-    :return a_fn: function which accepts a_2 as argument and returns (ax, ay, az). Input unit-vector direction solutions
-    Takes two arguments a_fn(a2, positive), where positive is boolean. If True, returns positive root, if false returns
-    negative. To get all solutions must take both
-    :return b_fn: function which accepts a_2 as argument and returns (bx, by, bz). Output unit-vector direction solutions
-    :return a2_bounds: [a2_min, a2_max], maximum and minimum allowed values for a_2
+    :param int order: (nx, ny) = (order, -order)
+    :return uvec_fn_ax:
+    :return uvec_fn_ay:
     """
 
-    # note: changed sign of order here relative to paper ... this is more convenient when we write
-    # everything in terms of b-a instead of a-b.
-    a3 = -1 / np.sqrt(2) / np.sin(gamma) * wavelength / d * order
-    # due to rounding issues sometimes a1_positive_fn() gives nans at the end points
-    a2_bounds = np.array([-np.sqrt(1 - a3**2), np.sqrt(1 - a3**2)])
+    # # note: changed sign of order here relative to paper ... this is more convenient when we write
+    # # everything in terms of b-a instead of a-b.
+    # a3 = -1 / np.sqrt(2) / np.sin(gamma) * wavelength / d * order
+    # # due to rounding issues sometimes a1_positive_fn() gives nans at the end points
+    # a2_bounds = np.array([-np.sqrt(1 - a3 ** 2), np.sqrt(1 - a3 ** 2)])
+    #
+    # def uvec_fn(a2, positive=True):
+    #     with np.errstate(invalid="ignore"):
+    #         a1 = np.sqrt(1 - a2 ** 2 - a3 ** 2)
+    #
+    #     if not positive:
+    #         a1 = -a1
+    #
+    #     axyz = np.array(mirror2xyz(a1, a2, a3, gamma, rot_axis)).transpose()
+    #     bxyz = np.array(mirror2xyz(a1, a2, -a3, gamma, rot_axis)).transpose()
+    #
+    #     return axyz, bxyz
+    #
+    # return uvec_fn, a2_bounds
 
-    def a1_positive_fn(a2): return np.sqrt(1 - a2**2 - a3**2)
+    nx, ny = order
+    rot_mat = get_rot_mat(rot_axis, gamma)
 
-    def ax_fn(a2, positive=True):
-        a1 = a1_positive_fn(a2)
-        if not positive:
-            a1 = -a1
-        return np.cos(gamma) / np.sqrt(2) * a1 + 1 / np.sqrt(2) * a2 + np.sin(gamma) / np.sqrt(2) * a3
+    # differences between vectors b and a
+    bma_x = nx * wavelength / d
+    bma_y = ny * wavelength / d
+    bma_z = -wavelength / d * (nx * (rot_mat[2, 0] * rot_mat[0, 0] + rot_mat[2, 1] * rot_mat[0, 1]) +
+                               ny * (rot_mat[2, 0] * rot_mat[1, 0] + rot_mat[2, 1] * rot_mat[1, 1])) / \
+            (rot_mat[2, 0]**2 + rot_mat[2, 1]**2)
+    #bma_1, bma_2, bma_3 = xyz2mirror(bma_x, bma_y, bma_z, gamma, rot_axis)
 
-    def ay_fn(a2, positive=True):
-        a1 = a1_positive_fn(a2)
-        if not positive:
-            a1 = -a1
-        return -np.cos(gamma) / np.sqrt(2) * a1 + 1 / np.sqrt(2) * a2 - np.sin(gamma) / np.sqrt(2) * a3
+    bma_norm = np.sqrt(bma_x**2 + bma_y**2 + bma_z**2)
+    b_dot_a = 0.5 * (2 - bma_norm**2)
 
-    def az_fn(a2, positive=True):
-        a1 = a1_positive_fn(a2)
-        if not positive:
-            a1 = -a1
-        return -np.sin(gamma) * a1 + np.cos(gamma) * a3
+    # choose value for ax, then use ax*bx + ay*by - sqrt(1 - ax^2 - ay^2) * sqrt(1 - bx^2 - by^2) = K
+    # together with diffraction condition to obtain quadratic equation for ay
+    def uvec_fn_ax(ax, positive=True):
+        ax = np.atleast_1d(ax)
+        bx = ax + bma_x
 
-    # b functions
-    def bx_fn(a2, positive=True):
-        a1 = a1_positive_fn(a2)
-        if not positive:
-            a1 = -a1
-        return np.cos(gamma) / np.sqrt(2) * a1 + 1 / np.sqrt(2) * a2 - np.sin(gamma) / np.sqrt(2) * a3
+        # solve quadratic equation to get ay
+        a = 2 * (ax*bx - b_dot_a) + (1 - bx**2) + (1 - ax**2)
+        b = 2 * ny * wavelength / d * ((ax*bx - b_dot_a) + (1 - ax**2))
+        c = (ax*bx - b_dot_a)**2 - (1 - bx**2) * (1 - ax**2) + (1 - ax**2) * (ny * wavelength / d)**2
 
-    def by_fn(a2, positive=True):
-        a1 = a1_positive_fn(a2)
-        if not positive:
-            a1 = -a1
-        return -np.cos(gamma) / np.sqrt(2) * a1 + 1 / np.sqrt(2) * a2 + np.sin(gamma) / np.sqrt(2) * a3
+        with np.errstate(invalid="ignore"):
+            if positive:
+                ay = (-b + np.sqrt(b**2 - 4 * a * c)) / (2 * a)
+            else:
+                ay = (-b - np.sqrt(b**2 - 4 * a * c)) / (2 * a)
+        by = ay + bma_y
 
-    def bz_fn(a2, positive=True):
-        a1 = a1_positive_fn(a2)
-        if not positive:
-            a1 = -a1
-        return -np.sin(gamma) * a1 - np.cos(gamma) * a3
+        # solve az, bz from unit vector equation
+        az = -np.sqrt(1 - ax**2 - ay**2)
+        bz = np.sqrt(1 - bx**2 - by**2)
 
-    def a_fn(a2, positive=True): return ax_fn(a2, positive), ay_fn(a2, positive), az_fn(a2, positive)
+        a = np.stack((ax, ay, az), axis=1)
+        b = np.stack((bx, by, bz), axis=1)
 
-    def b_fn(a2, positive=True): return bx_fn(a2, positive), by_fn(a2, positive), bz_fn(a2, positive)
+        disallowed = np.logical_or(np.any(np.isnan(a), axis=1), np.any(np.isnan(b), axis=1))
+        a[disallowed] = np.nan
+        b[disallowed] = np.nan
 
-    return a_fn, b_fn, a2_bounds
+        # get blaze angle deviation
+        with np.errstate(invalid="ignore"):
+            b_blazed = solve_blaze_output(a, gamma, rot_axis)
+            blaze_angle_deviation = np.arccos(np.sum(b * b_blazed, axis=1))
+
+        return a, b, blaze_angle_deviation
+
+    # if prefer ay instead ...
+    def uvec_fn_ay(ay, positive=True):
+        ay = np.atleast_1d(ay)
+        by = ay + bma_y
+
+        # solve quadratic equation to get ay
+        a = 2 * (ay * by - b_dot_a) + (1 - by ** 2) + (1 - ay ** 2)
+        b = 2 * nx * wavelength / d * ((ay * by - b_dot_a) + (1 - ay ** 2))
+        c = (ay * by - b_dot_a) ** 2 - (1 - by ** 2) * (1 - ay ** 2) + (1 - ay ** 2) * (nx * wavelength / d) ** 2
+
+        with np.errstate(invalid="ignore"):
+            if positive:
+                ax = (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
+            else:
+                ax = (-b - np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
+        bx = ax + bma_x
+
+        # solve az, bz from unit vector equation
+        az = -np.sqrt(1 - ax ** 2 - ay ** 2)
+        bz = np.sqrt(1 - bx ** 2 - by ** 2)
+
+        a = np.stack((ax, ay, az), axis=1)
+        b = np.stack((bx, by, bz), axis=1)
+
+        disallowed = np.logical_or(np.any(np.isnan(a), axis=1), np.any(np.isnan(b), axis=1))
+        a[disallowed] = np.nan
+        b[disallowed] = np.nan
+
+        # get blaze angle deviation
+        with np.errstate(invalid="ignore"):
+            b_blazed = solve_blaze_output(a, gamma, rot_axis)
+            blaze_angle_deviation = np.arccos(np.sum(b * b_blazed, axis=1))
+
+        return a, b, blaze_angle_deviation
+
+    return uvec_fn_ax, uvec_fn_ay
 
 
-def solve_blazed_frequency(dx, dy, gamma, wavelength, bf, order):
+def solve_blazed_pattern_frequency(dx: float, dy: float, gamma: float, rot_axis: tuple[float, float, float],
+                                   wavelength: float, bf: tuple[float, float, float], order: tuple[int, int]):
     """
     Suppose we choose a desired output direction from the DMD and an order and wavelength of interest and we
     would like to align the diffracted order b(f) with this direction and stipulate that this direction satisfies
     the blaze condition. Then determine the frequency f which allows this to be satisfied (and therefore also
     the input direction a and output direction b(0) for the main grid diffraction order)
 
+    @param rot_axis:
     @param float dx:
     @param float dy:
     @param float gamma:
+    @param rot_axis:
     @param wavelength:
     @param bf: unit vector pointing along direction
     @param order: (nx, ny)
@@ -1232,72 +1381,16 @@ def solve_blazed_frequency(dx, dy, gamma, wavelength, bf, order):
     """
 
     # get input vectors and output vectors for main order
-    avec = solve_blaze_input(bf, gamma)
+    avec = solve_blaze_input(bf, gamma, rot_axis)
     bvec = solve_diffraction_output(avec, dx, dy, wavelength, order)
 
     f = np.stack((dx / wavelength * (bf[..., 0] - bvec[..., 0]),
                   dy / wavelength * (bf[..., 1] - bvec[..., 1])), axis=-1)
 
-    # unpack
-    # bfx = bf[..., 0]
-    # bfy = bf[..., 1]
-    # bfz = bf[..., 2]
-
-    # change basis
-    # bfm = np.sqrt(2) * (bfx - bfy)
-    # bfp = np.sqrt(2) * (bfx + bfy)
-
-    # solve for frequency vectors
-    # nx, ny = order
-    # fp = (nx + ny) / np.sqrt(2)
-
-    # combining...
-    # 3 blaze condition equations
-    # b1(f) - a1 = 0
-    # b2(f) - a2 = 0
-    # b3(f) - a3 = 0
-    # 2 diffraction conditions
-    # (b2 - b2(f)) = wavelength / d / np.sqrt(2) * (nx + ny)
-    # (b1 - b1(f)) * cos(gamma) + (b3 + b3(f)) * sin(gamma) = wavelength / d / np.sqrt(2) * (nx - ny)
-    # 3 equations giving connection between b(f), b, and f
-    # b1(f) = b1 + wavelength/d*f1 + (bz - bz(f)) * sin(gamma)
-    # b2(f) = b2 + wavelength/d*f2
-    # b3(f) = b3 + wavelength/d*f3 - (bz - bz(f)) * cos(gamma)
-    # To solve these, we first replace the a's in the diffraction conditions with b(f)'s using the blaze conditions
-    # then we have
-    # b2 - b2(f) = wavelength / d / np.sqrt(2) * (nx + ny)
-    # (b1 - b1(f)) * cos(gamma) + (b3 + b3(f)) * sin(gamma) = wavelength / d / np.sqrt(2) * (nx - ny)
-    # next, insert the expressions for b1(f), b2(f), b3(f)
-    # finally, express all quantities in terms of bp, bm, fp, bm
-    # k = -wavelength / d / np.sqrt(2) * (nx - ny) + \
-    #     2 * bfm * np.sin(gamma) + \
-    #     2 * np.cos(gamma) * np.sin(gamma) * bfz
-    # k1 = np.sin(gamma)**2 - np.cos(gamma)**2 - 2 * np.sin(gamma)
-    # k2 = 2 * np.cos(gamma) * (np.sin(gamma) - 1)
-    # a = (wavelength / d)**2 * (k1**2 + k2**2)
-    # b = (wavelength / d) * (k1 * k - k2**2 * 2 * bfm)
-    # c = k**2 - k2**2 * (bfz**2 + 2 * (wavelength/d) * fp * bfp - (wavelength/d * fp)**2)
-    # # solve equation for f-minus
-    # fms = np.roots([a, b, c])
-
-    # # get f in ex, ey basis
-    # f = np.stack((fp + fms, fp - fms), axis=1) / np.sqrt(2)
-    #
-    # # check which f satisfies b(f)_{x,y} = b_{x,y} + wavelength/d * f_{x, y}
-    # bf_tests = np.stack(dmd_frq2uvec(bvec, f[..., 0], f[..., 1], wavelength, d, d), axis=-1)
-    #
-    # to_use = np.linalg.norm(bf_tests - bvec, axis=-1) < 1e-12
-    # if not np.any(to_use):
-    #     f = np.array([np.nan, np.nan])
-    # elif np.all(to_use):
-    #     f = f[0]
-    # else:
-    #     f = f[to_use]
-
     return f, bvec, avec
 
 
-def solve_diffraction_output_frq(frq, uvec_out, dx, dy, wavelength, order):
+def solve_diffraction_output_frq(frq, uvec_out, dx: float, dy: float, wavelength: float, order: tuple[int, int]):
     """
     Suppose we want to arrange things so the output vector b(frq) points along a specific direction.
     Given that direction, solve for the required input angle and compute b(0).
@@ -1326,8 +1419,9 @@ def solve_diffraction_output_frq(frq, uvec_out, dx, dy, wavelength, order):
 # ###########################################
 # 1D simulation in x-y plane and multiple wavelengths
 # ###########################################
-def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
-                tm_ins, tm_out_offsets=None, ndiff_orders=10):
+def simulate_1d(pattern, wavelengths: list[float], gamma_on: float, rot_axis_on: tuple[float, float, float],
+                gamma_off: float, rot_axis_off: tuple[float, float, float], dx: float, dy: float,
+                wx: float, wy: float, tm_ins, tm_out_offsets=None, ndiff_orders: int=10):
     """
     Simulate various colors of light incident on a DMD, assuming the DMD is oriented so that the mirrors swivel in
     the same plane the incident light travels in and that this plane makes a 45 degree angle with the principle axes
@@ -1344,6 +1438,8 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
     :param tm_ins: input angles in the plane of incidence
     :param tm_out_offsets: output angles relative to the angle satisfying the blaze condition
     :return data: dictionary storing simulation results
+    @param rot_axis_on:
+    @param rot_axis_off:
     """
 
     if isinstance(tm_ins, (float, int)):
@@ -1363,8 +1459,8 @@ def simulate_1d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy,
     uvecs_in = xy2uvector(tx_ins, ty_ins, "in")
 
     # blaze condition
-    bvec_blaze_on = solve_blaze_output(uvecs_in, gamma_on)
-    bvec_blaze_off = solve_blaze_output(uvecs_in, gamma_off)
+    bvec_blaze_on = solve_blaze_output(uvecs_in, gamma_on, rot_axis_on)
+    bvec_blaze_off = solve_blaze_output(uvecs_in, gamma_off, rot_axis_off)
 
     # variables to store simulation output data
     uvecs_out = np.zeros((ninputs, noutputs, 3))
@@ -1585,8 +1681,10 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
 # ###########################################
 # 2D simulation for multiple wavelengths
 # ###########################################
-def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in, ty_in, tout_offsets=None,
-                ndiff_orders=7):
+def simulate_2d(pattern, wavelengths: list[float], gamma_on: float, rot_axis_on: tuple[float, float, float],
+                gamma_off: float, rot_axis_off: tuple[float, float, float], dx: float, dy: float,
+                wx: float, wy: float, tx_in, ty_in,
+                tout_offsets=None, ndiff_orders: int=7):
     """
     Simulate light incident on a DMD to determine output diffraction pattern. See simulate_dmd() for more information.
 
@@ -1605,6 +1703,8 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
     :param tout_offsets: offsets from the blaze condition to solve problem
     :param ndiff_orders:
     :return data: dictionary storing simulation results
+    @param rot_axis_on:
+    @param rot_axis_off:
     """
 
     if tout_offsets is None:
@@ -1646,8 +1746,8 @@ def simulate_2d(pattern, wavelengths, gamma_on, gamma_off, dx, dy, wx, wy, tx_in
         input_ind = np.unravel_index(ii, input_shape)
 
         # solve blaze condition (does not depend on wavelength)
-        uvec_out_blaze_on[input_ind] = solve_blaze_output(uvecs_in[input_ind], gamma_on)
-        uvec_out_blaze_off[input_ind] = solve_blaze_output(uvecs_in[input_ind], gamma_off)
+        uvec_out_blaze_on[input_ind] = solve_blaze_output(uvecs_in[input_ind], gamma_on, rot_axis_on)
+        uvec_out_blaze_off[input_ind] = solve_blaze_output(uvecs_in[input_ind], gamma_off, rot_axis_off)
 
         # get output directions
         tx_blaze_on, ty_blaze_on = uvector2txty(*uvec_out_blaze_on[input_ind])
