@@ -35,6 +35,6 @@ setup(
     author='Peter T. Brown, qi2lab',
     author_email='ptbrown1729@gmail.com',
     packages=find_packages(include=['mcsim', 'mcsim.*']),
-    python_requires='>=3.7',
+    python_requires='>=3.9',
     install_requires=required_pkgs,
     extras_require=extras)

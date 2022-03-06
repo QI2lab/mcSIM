@@ -17,10 +17,6 @@ and the [BioRxiv preprint](https://doi.org/10.1101/2020.07.27.223941).
 The repository state at the time of publication is archived [here](https://doi.org/10.5281/zenodo.4773865), or available as
 a [release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0) on GitHub.
 
-When cloning this repo, use the following command to include submodules:
-
-`git clone --recurse-submodules https://github.com/QI2lab/mcSIM.git`
-
 The best way to use this python package is to install it with pip
 ```
 git clone https://github.com/QI2lab/mcSIM.git
@@ -84,8 +80,9 @@ Tools for IO of MicroManager style tif files and metadata.
 ### [localize-psf](localize-psf/fit.py)
 Useful tools for automatically localizing sparse fluorescent beads and performing both 2D and 3D
 PSF fitting using various PSF models. Also provides useful statistics and figures summarizing the results.
-This code has now been split out into a [separate repository](https://github.com/QI2lab/localize-psf) which is included in this repository as a
-submodule for convenience. For more information about these tools, see the [readme](analysis/localize-psf/README.md)
+This code has now been split out into a [separate repository](https://github.com/QI2lab/localize-psf).
+For more information about these tools, see the [readme](analysis/localize-psf/README.md)
+pip installing the mcsim repository as described above will also pull in these dependncies.
 
 # Examples
 Scripts illustrated examples of different DMD simulations and analysis are stored in [examples](examples). Associated 
