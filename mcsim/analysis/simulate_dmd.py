@@ -184,7 +184,7 @@ def simulate_dmd(pattern, wavelength: float, gamma_on: float, gamma_off: float, 
 
 
 def simulate_dmd_dft(pattern, efield_profile, wavelength: float, gamma_on: float, gamma_off: float, dx: float,
-                     dy: float, wx: float, wy: float, uvec_in, order: tuple[int, int],
+                     dy: float, wx: float, wy: float, uvec_in, order: tuple,
                      dn_orders=0, rot_axis_on=_dlp_1stgen_axis, rot_axis_off=_dlp_1stgen_axis):
     """
     Simulate DMD diffraction using DFT. These produces peaks at a discrete set of frequencies which are
@@ -441,7 +441,7 @@ def sinc_fn(x):
     return y
 
 
-def get_rot_mat(rot_axis: list[float], gamma: float):
+def get_rot_mat(rot_axis: list, gamma: float):
     """
     Get matrix which rotates points about the specified axis by the given angle. Think of this rotation matrix
     as acting on unit vectors, and hence its inverse R^{-1} transforms regular vectors. Therefore, we define
@@ -1238,8 +1238,8 @@ def solve_2color_on_off(d: float, gamma_on: float, wavelength_on: float, n_on: i
     return b_vecs, a_vecs_on, a_vecs_off
 
 
-def solve_combined_condition(d: float, gamma: float, rot_axis: tuple[float, float, float],
-                                wavelength: float, order: tuple[int, int]):
+def solve_combined_condition(d: float, gamma: float, rot_axis: tuple,
+                                wavelength: float, order: tuple):
     """
     Return functions for the simultaneous blaze/diffraction condition solution as a function of ax or ay
 
@@ -1361,8 +1361,8 @@ def solve_combined_condition(d: float, gamma: float, rot_axis: tuple[float, floa
     return uvec_fn_ax, uvec_fn_ay
 
 
-def solve_blazed_pattern_frequency(dx: float, dy: float, gamma: float, rot_axis: tuple[float, float, float],
-                                   wavelength: float, bf: tuple[float, float, float], order: tuple[int, int]):
+def solve_blazed_pattern_frequency(dx: float, dy: float, gamma: float, rot_axis: tuple,
+                                   wavelength: float, bf: tuple, order: tuple):
     """
     Suppose we choose a desired output direction from the DMD and an order and wavelength of interest and we
     would like to align the diffracted order b(f) with this direction and stipulate that this direction satisfies
@@ -1390,7 +1390,7 @@ def solve_blazed_pattern_frequency(dx: float, dy: float, gamma: float, rot_axis:
     return f, bvec, avec
 
 
-def solve_diffraction_output_frq(frq, uvec_out, dx: float, dy: float, wavelength: float, order: tuple[int, int]):
+def solve_diffraction_output_frq(frq, uvec_out, dx: float, dy: float, wavelength: float, order: tuple):
     """
     Suppose we want to arrange things so the output vector b(frq) points along a specific direction.
     Given that direction, solve for the required input angle and compute b(0).
@@ -1419,8 +1419,8 @@ def solve_diffraction_output_frq(frq, uvec_out, dx: float, dy: float, wavelength
 # ###########################################
 # 1D simulation in x-y plane and multiple wavelengths
 # ###########################################
-def simulate_1d(pattern, wavelengths: list[float], gamma_on: float, rot_axis_on: tuple[float, float, float],
-                gamma_off: float, rot_axis_off: tuple[float, float, float], dx: float, dy: float,
+def simulate_1d(pattern, wavelengths: list, gamma_on: float, rot_axis_on: tuple,
+                gamma_off: float, rot_axis_off: tuple, dx: float, dy: float,
                 wx: float, wy: float, tm_ins, tm_out_offsets=None, ndiff_orders: int=10):
     """
     Simulate various colors of light incident on a DMD, assuming the DMD is oriented so that the mirrors swivel in
@@ -1681,8 +1681,8 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
 # ###########################################
 # 2D simulation for multiple wavelengths
 # ###########################################
-def simulate_2d(pattern, wavelengths: list[float], gamma_on: float, rot_axis_on: tuple[float, float, float],
-                gamma_off: float, rot_axis_off: tuple[float, float, float], dx: float, dy: float,
+def simulate_2d(pattern, wavelengths: list, gamma_on: float, rot_axis_on: tuple,
+                gamma_off: float, rot_axis_off: tuple, dx: float, dy: float,
                 wx: float, wy: float, tx_in, ty_in,
                 tout_offsets=None, ndiff_orders: int=7):
     """
