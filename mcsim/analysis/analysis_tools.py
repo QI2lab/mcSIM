@@ -885,7 +885,8 @@ def translate_im(img, shift, dx=1, dy=None, use_gpu=_cupy_available):
     return img_shifted
 
 
-def translate_ft(img_ft, shift_frq, drs=None, apodization=None, use_gpu=_cupy_available):
+def translate_ft(img_ft: np.ndarray, shift_frq: np.ndarray, drs: list[float, float] = None,
+                 use_gpu: bool = _cupy_available) -> np.ndarray:
     """
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
@@ -896,19 +897,27 @@ def translate_ft(img_ft, shift_frq, drs=None, apodization=None, use_gpu=_cupy_av
 
     If an array with more than 2 dimensions is passed in, then the shift will be applied to the last two dimensions
 
-    :param img_ft: fourier transform, with frequencies centered using fftshift
-    :param list[float] shift_frq: [fx, fy]. Frequency in hertz (i.e. angular frequency is k = 2*pi*f)
-    :param list[float] drs: pixel size (sampling rate) of real space image in directions. For 2D, (dy, dx)
-    :param apodization: can be applied to the Fourier transform images
-    :param bool use_gpu:
+    :param img_ft: array representing the fourier transform of an image with frequency origin centered as if using fftshift.
+    Shape n1 x n2 x ... x n_{-2} x n_{-1}. Shifting is done along the last two axes.
+    :param shift_frq: array of shift frequencies with size n_{-m} x ... x n_{-3} x 2 where fx = shift_frq[..., 0] and
+    fy = shift_frq[..., 1]
+    Images along dimensions -m, ..., -3 are shifted in parallel
+    :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
+    :param use_gpu: perform Fourier transforms on GPU
 
-    :return img_ft_shifted:
+    :return img_ft_shifted: shifted images, same size as img_ft
     """
-    # todo: accept arbitrary dimension arrays. Would want to give an argument telling which dimensions to shift along
 
     if img_ft.ndim < 2:
         raise ValueError("img_ft must be at least 2D")
     shift_frq = np.array(shift_frq)
+
+    ndim_extra_frq = shift_frq.ndim - 1
+    if shift_frq.shape[:-1] != img_ft.shape[-2 - ndim_extra_frq:-2]:
+        raise ValueError("img_ft and shift_frq have incompatible shapes " +
+                         shift_frq.ndim * "%d, " % shift_frq.shape +
+                         " and " +
+                         img_ft.ndim * "%d, " % img_ft.shape)
 
     if np.all(shift_frq == 0):
         return np.array(img_ft, copy=True)
@@ -932,24 +941,22 @@ def translate_ft(img_ft, shift_frq, drs=None, apodization=None, use_gpu=_cupy_av
         x = fft.fftfreq(nx) * nx * dx
         y = fft.fftfreq(ny) * ny * dy
 
-        # exponential phase ramp
+        # exponential phase ramp. Should be broadcastable to shape of img_ft
         axis_expand_x = list(range(ndims - 2 + 1))
         axis_expand_y = list(range(ndims - 2)) + [-1]
-        exp_factor = np.exp(-1j * 2 * np.pi * (shift_frq[0] * np.expand_dims(x, axis=axis_expand_x) +
-                                               shift_frq[1] * np.expand_dims(y, axis=axis_expand_y)))
-
-        if apodization is None:
-            apodization = 1
+        axis_expand_frq = list(range(ndims - shift_frq.ndim - 1)) + [-2, -1]
+        exp_factor = np.exp(-1j * 2 * np.pi * (np.expand_dims(shift_frq[..., 0], axis=axis_expand_frq) * np.expand_dims(x, axis=axis_expand_x) +
+                                               np.expand_dims(shift_frq[..., 1], axis=axis_expand_frq) * np.expand_dims(y, axis=axis_expand_y)))
 
         if not use_gpu:
             # ifft2(ifftshift(img_ft)) = ifftshift(img)
             img_ft_shifted = fft.fftshift(fft.fft2(exp_factor *
-                                                   fft.ifft2(fft.ifftshift(img_ft * apodization, axes=(-1, -2)), axes=(-1, -2)),
+                                                   fft.ifft2(fft.ifftshift(img_ft, axes=(-1, -2)), axes=(-1, -2)),
                                                    axes=(-1, -2)), axes=(-1, -2))
         else:
             img_ft_shifted = cp.asnumpy(cp.fft.fftshift(
                                         cp.fft.fft2(cp.array(exp_factor) *
-                                        cp.fft.ifft2(cp.fft.ifftshift(img_ft * apodization, axes=(-1, -2)), axes=(-1, -2)),
+                                        cp.fft.ifft2(cp.fft.ifftshift(img_ft, axes=(-1, -2)), axes=(-1, -2)),
                                                     axes=(-1, -2)), axes=(-1, -2)))
 
         return img_ft_shifted
