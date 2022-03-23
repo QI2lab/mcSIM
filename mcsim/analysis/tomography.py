@@ -129,29 +129,25 @@ def get_global_phase_shifts(imgs, ref_imgs):
     imgs * np.exp(1j * phase_shift) ~ img_ref
 
     @param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
-    @param ref_imgs:
+    @param ref_imgs: n_{-m} x ... x n_{-1} array
     @return phase_shifts:
     """
-    # ensure 3D image
-    if imgs.ndim == 2:
-        imgs = np.expand_dims(imgs, axis=0)
-    nimgs = imgs.shape[0]
+    imgs, ref_imgs = np.broadcast_arrays(imgs, ref_imgs)
 
-    # if using only single ref image ...
-    if ref_imgs.ndim == (imgs.ndim - 1):
-        ref_imgs = np.expand_dims(ref_imgs, axis=0)
+    loop_shape = imgs.shape[:-2]
+    phase_shifts = np.zeros(loop_shape + (1, 1))
+    nfits = np.prod(loop_shape).astype(int)
+    for ii in range(nfits):
+        # print("%d/%d" % (ii+1, nfits))
+        ind = np.unravel_index(ii, loop_shape)
 
-    ref_imgs, imgs = np.broadcast_arrays(ref_imgs, imgs)
-
-    phase_shifts = np.zeros(nimgs)
-    for ii in range(nimgs):
-
-        def fn(p): return np.abs(imgs[ii] * np.exp(1j * p[0]) - ref_imgs[ii]).ravel()
+        def fn(p): return np.abs(imgs[ind] * np.exp(1j * p[0]) - ref_imgs[ind]).ravel()
+        # def jac(p): return [(1j * imgs[ind] * np.exp(1j * p[0])).ravel()]
         # s1 = np.mean(imgs[ii])
         # s2 = np.mean(ref_imgs[ii])
         # def fn(p): return np.abs(s1 * np.exp(1j * p[0]) - s2)
         results = fit.fit_least_squares(fn, [0])
-        phase_shifts[ii] = results["fit_params"]
+        phase_shifts[ind] = results["fit_params"]
 
     return phase_shifts
 
@@ -196,40 +192,51 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
     @return psi_rytov:
     """
 
-    if eimgs.ndim == 2:
-        eimgs = np.expand_dims(eimgs, axis=0)
-    npatterns, ny, nx = eimgs.shape
+    if eimgs.ndim < 3:
+        raise ValueError("eimgs must be at least 3D")
 
-    psi_rytov = np.zeros((npatterns, ny, nx), dtype=complex)
-    for aa in range(npatterns):
+    if eimgs_bg.ndim < 3:
+        raise ValueError("eimgs_bg must be at least 3D")
+
+    # output values
+    psi_rytov = np.zeros(eimgs.shape, dtype=complex)
+
+    # broadcast arrays
+    eimgs, eimgs_bg = np.broadcast_arrays(eimgs, eimgs_bg)
+
+    loop_shape = eimgs.shape[:-2]
+    nloop = np.prod(loop_shape)
+    for ii in range(nloop):
+        ind = np.unravel_index(ii, loop_shape)
+
         # convert phase difference to interval [-np.pi, np.pi)
-        phase_diff = np.mod(np.angle(eimgs[aa]) - np.angle(eimgs_bg[aa]), 2 * np.pi)
+        phase_diff = np.mod(np.angle(eimgs[ind]) - np.angle(eimgs_bg[ind]), 2 * np.pi)
         phase_diff[phase_diff >= np.pi] = phase_diff[phase_diff >= np.pi] - 2 * np.pi
 
         # get rytov phase change
-
         # psi_rytov[aa] = np.log(np.abs(eimg[aa]) / (np.abs(eimg_bg[aa]) + delta)) + 1j * unwrap_phase(phase_diff)
-        psi_rytov[aa] = np.log(np.abs(eimgs[aa]) / (np.abs(eimgs_bg[aa]))) + 1j * unwrap_phase(phase_diff)
-        psi_rytov[aa][np.abs(eimgs_bg[aa]) < regularization] = 0
+        psi_rytov[ind] = np.log(np.abs(eimgs[ind]) / (np.abs(eimgs_bg[ind]))) + 1j * unwrap_phase(phase_diff)
+        psi_rytov[ind][np.abs(eimgs_bg[ind]) < regularization] = 0
 
     return psi_rytov
 
 # tomographic reconstruction processing
-def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.ndarray, beam_frq: np.ndarray,
-                   efield_ref: np.ndarray = None):
+def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.ndarray,
+                   use_gpu: bool=_cupy_available) -> np.ndarray:
     """
+    Given an off-axis hologram image, determine the electric field represented
 
     @param img: n1 x ... x n_{-3} x n_{-2} x n_{-1} array
     @param dxy:
     @param fmax_int:
     @param frq_ref:
-    @param beam_frq: n_{-m} x ... x n_{-3} x 2 array
-    @param efield_ref:
     @return:
     """
     # FT of image
-    img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-    ndims = img.ndim
+    if not use_gpu:
+        img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    else:
+        img_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fft2(cp.fft.ifftshift(img, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1)))
     ny, nx = img_ft.shape[-2:]
 
     # get frequency data
@@ -239,38 +246,10 @@ def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.nda
     ff_perp = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
     # compute efield
-    efield_ft = tools.translate_ft(img_ft, frq_ref, drs=(dxy, dxy))
+    efield_ft = tools.translate_ft(img_ft, frq_ref, drs=(dxy, dxy), use_gpu=use_gpu)
     efield_ft[..., ff_perp > fmax_int / 2] = 0
 
-    if efield_ref is not None:
-
-        # compute shifted efield
-        efield_shifted_ft = tools.translate_ft(efield_ft, beam_frq[..., :2], drs=(dxy, dxy))
-
-        axis_f_expand = list(range(-beam_frq.ndim - 1, -2))
-        axis_bf_expand = [-2, -1]
-        ff_around = np.sqrt((np.expand_dims(fxfx, axis_f_expand) + np.expand_dims(beam_frq[..., 0], axis_bf_expand)) ** 2 +
-                            (np.expand_dims(fyfy, axis_f_expand) + np.expand_dims(beam_frq[..., 1], axis_bf_expand)) ** 2)
-
-        efield_shifted_ft[..., ff_around > fmax_int / 2] = 0
-        efield_shifted = fft.fftshift(fft.ifft2(fft.ifftshift(efield_shifted_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-        # compute phase shift relative to first image
-        phase_shift_img_to_ref = get_global_phase_shifts(efield_shifted, efield_ref)
-
-        # correct phase
-        efield_ft *= np.expand_dims(np.exp(1j * phase_shift_img_to_ref), axis=(-1, -2))
-    else:
-        phase_shift_img_to_ref = 0
-
-    # compute Fourier transform
-    efield = fft.fftshift(fft.ifft2(fft.ifftshift(efield_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-    # compute powers
-    power = np.sum(np.abs(img) ** 2, axis=(-1, -2))
-    e_power = np.sum(np.abs(efield) ** 2, axis=(-1, -2))
-
-    return efield, efield_ft, phase_shift_img_to_ref, power, e_power
+    return efield_ft
 
 
 def get_reconstruction_sampling(ni, na_det, beam_frqs, wavelength, dxy, img_size, z_fov, dz_sampling_factor, dxy_sampling_factor):
@@ -324,7 +303,7 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     @param mode: "born" or "rytov"
     @return sp_ft, sp_ft_imgs, coords, fcoords:
     """
-    nimgs, ny, nx = efield_fts.shape
+    nimgs, ny, nx = efield_fts.shape[-3:]
 
     # ##################################
     # get frequencies of initial images and make broadcastable to shape (nimgs, ny, nx)
@@ -463,7 +442,8 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
 
 
     # one reconstruction per image
-    spot_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
+    # spot_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
+    spot_ft = np.zeros((nz_sp, ny_sp, nx_sp), dtype=complex)
     num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=int)
     for ii in range(nimgs):
         # check we don't have duplicate indices ... otherwise need to do something else ...
@@ -478,22 +458,26 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         # assuming at most one point for each ...
         inds_angle = (zind[ii][to_use_ind[ii]], yind[ii][to_use_ind[ii]], xind[ii][to_use_ind[ii]])
         # since using DFT's instead of FT's have to adjust the normalization. Recall that FT ~ DFT * dr1 * ... * drn
-        # sp_ft_imgs[ii][inds_angle] = f_unshift_ft[to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
-        spot_ft_imgs[ii][inds_angle] = f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
+        # spot_ft_imgs[ii][inds_angle] = f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
+        spot_ft[inds_angle] += f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
         num_pts[ii][inds_angle] = 1
 
     # average over angles/images
     num_pts_all = np.sum(num_pts, axis=0)
     no_data = num_pts_all == 0
+    is_data = np.logical_not(no_data)
 
-    spot_ft = np.nansum(spot_ft_imgs, axis=0) / (num_pts_all + reg)
+    # spot_ft = np.nansum(spot_ft_imgs, axis=0) / (num_pts_all + reg)
+    # spot_ft[no_data] = np.nan
+
+    spot_ft[is_data] = spot_ft[is_data] / (num_pts_all[is_data] + reg)
     spot_ft[no_data] = np.nan
 
     # real space and fourier space coordinates
     fcoords = (fx_sp, fy_sp, fz_sp)
     coords = (x_sp, y_sp, z_sp)
 
-    return spot_ft, spot_ft_imgs, coords, fcoords
+    return spot_ft, coords, fcoords
 
 
 def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True,
@@ -526,7 +510,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
 
     # try smoothing image first ...
     # todo: is this useful?
-    sp_ft = gaussian_filter(sp_ft, (4, 4, 4))
+    # sp_ft = gaussian_filter(sp_ft, (4, 4, 4))
 
     tstart = time.perf_counter()
     for ii in range(n_iterations):
@@ -538,9 +522,9 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
         # ensure n is physical
         # ############################
         if not use_gpu:
-            sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft)))
+            sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
         else:
-            sp = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft))))
+            sp = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1)))
         n = get_n(sp, no, wavelength)
 
         if require_real_part_greater_bg:
@@ -554,9 +538,9 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
 
         sp_ps = get_scattering_potential(n, no, wavelength)
         if not use_gpu:
-            sp_ps_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps)))
+            sp_ps_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
         else:
-            sp_ps_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps))))
+            sp_ps_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1)))
 
         if use_raar:
             sp_ft_pm = np.array(sp_ft, copy=True)
@@ -567,9 +551,9 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
             # ############################
             sp_ft_ps_pm = np.array(sp_ft_pm, copy=True)
             if not use_gpu:
-                sp_ps_pm = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_ps_pm)))
+                sp_ps_pm = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_ps_pm, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
             else:
-                sp_ps_pm = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft_ps_pm))))
+                sp_ps_pm = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft_ps_pm, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1)))
             n_ps_pm = get_n(sp_ps_pm, no, wavelength)
 
             if require_real_part_greater_bg:
@@ -583,9 +567,9 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
 
             sp_ps_pm = get_scattering_potential(n_ps_pm, no, wavelength)
             if not use_gpu:
-                sp_ps_pm_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps_pm)))
+                sp_ps_pm_ft = fft.fftshift(fft.fftn(fft.ifftshift(sp_ps_pm, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
             else:
-                sp_ps_pm_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps_pm))))
+                sp_ps_pm_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps_pm, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1)))
 
             # update
             sp_ft = beta * sp_ft - beta * sp_ps_ft + (1 - 2 * beta) * sp_ft_pm + 2 * beta * sp_ps_pm_ft
