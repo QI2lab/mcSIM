@@ -8,7 +8,7 @@ from mcsim.expt_ctrl.expt_map import presets
 def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, sim_exposure_time,
                            n_odt_patterns, n_sim_patterns, dt=105e-6, interval=0,
                            n_odt_per_sim=1, n_trig_width=1, dmd_delay=105e-6,
-                           odt_stabilize_t=0., min_odt_frame_time=15e-3,
+                           odt_stabilize_t=0., min_odt_frame_time=8e-3,
                            sim_readout_time=10e-3, shutter_delay_time=50e-3,
                            use_dmd_as_odt_shutter=False):
     """
@@ -27,7 +27,7 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     @param int n_trig_width: width of triggers
     @param float dmd_delay:
     @param float odt_stabilize_t:
-    @param booluse_dmd_as_odt_shutter:
+    @param bool use_dmd_as_odt_shutter:
     @return:
     """
 

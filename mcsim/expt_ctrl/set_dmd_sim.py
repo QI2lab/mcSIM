@@ -38,13 +38,17 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                "blue": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, dtype=int)}},
                "red": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, 18, dtype=int)}},
                "green": {"default": {"picture_indices": np.array([0] * 6 + [1] * 3, dtype=int), "bit_indices": np.array(list(range(18, 24)) + list(range(3)), dtype=int)}},
-               "odt": {"default": {"picture_indices": np.array([1, 1, 3, 6, 8, 10, 1, 3, 6, 8, 10], dtype=int),
-                                       "bit_indices": np.array([7, 9, 17, 1, 9, 17, 11, 19, 3, 11, 19], dtype=int)},
-                       "n=1-0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
-                       "n=11-50%-90%": {"picture_indices": np.array([1, 1, 3, 6, 8, 10, 1, 3, 6, 8, 10], dtype=int),
-                                       "bit_indices": np.array([7, 9, 17, 1, 9, 17, 11, 19, 3, 11, 19], dtype=int)},
-                       "n=11-90%": {"picture_indices": np.array([1, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11], dtype=int),
-                                    "bit_indices": np.array([7, 11, 15, 19, 23, 3, 7, 11, 15, 19, 23], dtype=int)},
+               "odt": {"default": {"picture_indices": np.array([1, 12, 13, 13, 13, 13, 13, 14, 14, 14, 14, 14], dtype=int),
+                                    "bit_indices": np.array([7, 19, 0, 5, 10, 15, 20, 1, 6, 11, 16, 21], dtype=int)},
+                       "n=1_f=0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
+                       "n=12_f=84%": {"picture_indices": np.array([1, 12, 13, 13, 13, 13, 13, 14, 14, 14, 14, 14], dtype=int),
+                                    "bit_indices": np.array([7, 19, 0, 5, 10, 15, 20, 1, 6, 11, 16, 21], dtype=int)},
+                       "n=6_f=84%": {"picture_indices": np.array([1, 12, 13, 13, 14, 14], dtype=int),
+                                    "bit_indices": np.array([7, 19, 6, 17, 4, 15], dtype=int)},
+                       "n=12_f=55%": {"picture_indices": np.array([1, 5, 6, 6, 6, 6, 6, 7, 7, 7, 7, 8], dtype=int),
+                                    "bit_indices": np.array([7, 22, 3, 8, 13, 18, 23, 4, 9, 14, 19, 0], dtype=int)},
+                       "n=6_f=55%": {"picture_indices": np.array([1, 5, 6, 6, 7, 7], dtype=int),
+                                    "bit_indices": np.array([7, 22, 9, 20, 7, 18], dtype=int)},
                        "all": {"picture_indices": np.hstack((1 * np.ones([17], dtype=int),
                                                              2 * np.ones([24], dtype=int),
                                                              3 * np.ones([24], dtype=int),
@@ -56,7 +60,11 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                                                              9 * np.ones([24], dtype=int),
                                                              10 * np.ones([24], dtype=int),
                                                              11 * np.ones([24], dtype=int),
-                                                             12 * np.ones([24], dtype=int))),
+                                                             12 * np.ones([24], dtype=int),
+                                                             13 * np.ones([24], dtype=int),
+                                                             14 * np.ones([24], dtype=int),
+                                                             15 * np.ones([2], dtype=int),
+                                                             )),
                                "bit_indices": np.hstack((np.arange(7, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
@@ -68,8 +76,43 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                                                          np.arange(0, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
-                                                         np.arange(0, 24, dtype=int)))}
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 24, dtype=int),
+                                                         np.arange(0, 2, dtype=int)))}
                        }
+               # "odt": {"default": {"picture_indices": np.array([1, 1, 3, 6, 8, 10, 1, 3, 6, 8, 10], dtype=int),
+               #                         "bit_indices": np.array([7, 9, 17, 1, 9, 17, 11, 19, 3, 11, 19], dtype=int)},
+               #         "n=1-0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
+               #         "n=11-50%-90%": {"picture_indices": np.array([1, 1, 3, 6, 8, 10, 1, 3, 6, 8, 10], dtype=int),
+               #                         "bit_indices": np.array([7, 9, 17, 1, 9, 17, 11, 19, 3, 11, 19], dtype=int)},
+               #         "n=11-90%": {"picture_indices": np.array([1, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11], dtype=int),
+               #                      "bit_indices": np.array([7, 11, 15, 19, 23, 3, 7, 11, 15, 19, 23], dtype=int)},
+               #         "all": {"picture_indices": np.hstack((1 * np.ones([17], dtype=int),
+               #                                               2 * np.ones([24], dtype=int),
+               #                                               3 * np.ones([24], dtype=int),
+               #                                               4 * np.ones([24], dtype=int),
+               #                                               5 * np.ones([24], dtype=int),
+               #                                               6 * np.ones([24], dtype=int),
+               #                                               7 * np.ones([24], dtype=int),
+               #                                               8 * np.ones([24], dtype=int),
+               #                                               9 * np.ones([24], dtype=int),
+               #                                               10 * np.ones([24], dtype=int),
+               #                                               11 * np.ones([24], dtype=int),
+               #                                               12 * np.ones([24], dtype=int))),
+               #                 "bit_indices": np.hstack((np.arange(7, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int),
+               #                                           np.arange(0, 24, dtype=int)))}
+               #         }
             }
 
 # add on/off modes
@@ -178,31 +221,40 @@ def generate_firmware_patterns(generate_patterns=True):
     phase = 0
 
     # pupil info
-    na_mitutoyo = 0.55
+    # na_detection = 0.55
+    na_detection = 1
     dm = 7.56 # DMD mirror size
-    fl_mitutoyo = 4e3 # focal length of mitutoya objective
-    fl_olympus = 1.8e3
+    # fl_detection = 4e3 # focal length of mitutoya objective
+    fl_detection = 3e3
+    fl_excitation = 1.8e3
     # magnification between DMD and Mitutoyo BFP
-    mag_dmd2bfp = 100 / 200 * 300 / 400 * fl_mitutoyo / fl_olympus
+    mag_dmd2bfp = 100 / 200 * 300 / 400 * fl_detection / fl_excitation
 
-    pupil_rad_mirrors = fl_mitutoyo * na_mitutoyo / mag_dmd2bfp / dm
+    pupil_rad_mirrors = fl_detection * na_detection / mag_dmd2bfp / dm
 
     # patterns
-    n_phis = 70
-    fractions = [0.25, 0.5, 0.75, 0.9]
+    n_phis = 55
+    fractions = [0.25, 0.45, 0.55, 0.65, 0.75, 0.84]
     phis = np.arange(n_phis) * 2*np.pi / n_phis
     n_thetas = len(fractions)
 
-    ff, pp = np.meshgrid(fractions, phis)
+    pp, ff = np.meshgrid(phis, fractions)
     pp = pp.ravel()
     ff = ff.ravel()
 
-    xoffs = np.zeros((n_phis, n_thetas))
-    yoffs = np.zeros((n_phis, n_thetas))
-    for ii in range(n_phis):
-        for jj in range(n_thetas):
-            xoffs[ii, jj] = np.cos(phis[ii]) * pupil_rad_mirrors * fractions[jj]
-            yoffs[ii, jj] = np.sin(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+    # xoffs = np.zeros((n_phis, n_thetas))
+    # yoffs = np.zeros((n_phis, n_thetas))
+    # for ii in range(n_phis):
+    #     for jj in range(n_thetas):
+    #         xoffs[ii, jj] = np.cos(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+    #         yoffs[ii, jj] = np.sin(phis[ii]) * pupil_rad_mirrors * fractions[jj]
+    xoffs = np.zeros((n_thetas, n_phis))
+    yoffs = np.zeros(xoffs.shape)
+    for ii in range(n_thetas):
+        for jj in range(n_phis):
+            xoffs[ii, jj] = np.cos(phis[jj]) * pupil_rad_mirrors * fractions[ii]
+            yoffs[ii, jj] = np.sin(phis[jj]) * pupil_rad_mirrors * fractions[ii]
+
 
     ff = np.concatenate((np.array([0]), ff))
     pp = np.concatenate((np.array([0]), pp))
@@ -228,7 +280,10 @@ def generate_firmware_patterns(generate_patterns=True):
             odt_patterns[ii, np.sqrt((xx - cref[1] - xoffs.ravel()[ii])**2 +
                                      (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
 
-        odt_pattern_data.append({"type": "odt", "xoffset": xoffs[ii], "yoffset": yoffs[ii], "angle": ang, "frequency": frq, "phase": phase, "radius": rad})
+        odt_pattern_data.append({"type": "odt", "xoffset": xoffs[ii], "yoffset": yoffs[ii],
+                                 "angle": ang, "frequency": frq, "phase": phase, "radius": rad, # carier frequency information
+                                 "pupil_frequency_fraction": ff[ii],
+                                 "pupil_angle": pp[ii]})
 
     # ######################################
     # generate other patterns
@@ -252,7 +307,12 @@ def generate_firmware_patterns(generate_patterns=True):
                    [{"type": "on"}, {"type": "off"}, {"type": "affine on"}, {"type": "affine off"}] + \
                    odt_pattern_data
 
-    return patterns, pattern_data
+    npatterns = len(pattern_data)
+    npics_needed = int(np.ceil(npatterns / 24))
+    bit_inds = np.tile(np.arange(24, dtype=int), [npics_needed])[:npatterns]
+    pic_inds = np.concatenate([ii * np.ones(24, dtype=int) for ii in range(npics_needed)])[:npatterns]
+
+    return patterns, pattern_data, pic_inds, bit_inds
 
 
 def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
@@ -388,7 +448,7 @@ def get_dmd_sequence(modes: list[str], channels: list[str], nrepeats: list[int],
 
     return pic_inds, bit_inds
 
-_, data = generate_firmware_patterns(False)
+_, data, _, _ = generate_firmware_patterns(False)
 n_firmware_patterns = len(data)
 firmware_pattern_map = [data[ii*24: min((ii+1)*24, n_firmware_patterns)] for ii in range(int(np.ceil(n_firmware_patterns / 24)))]
 
