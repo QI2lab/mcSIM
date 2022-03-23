@@ -4,7 +4,6 @@ specific modules.
 """
 
 import numpy as np
-import scipy.optimize
 import scipy.sparse as sp
 from scipy import fft
 
@@ -262,96 +261,6 @@ def bin(img, bin_size, mode='sum'):
         raise ValueError("Only 1D, 2D, or 3D arrays allowed")
 
     return m_binned
-
-
-def toeplitz_filter_mat(filter, img_size, mode='valid'):
-    """
-    Return the Toeplitz matrix which performs a given 1D or 2D filter on a 1D signal or 2D image. We assume the
-    image is represented as a row-stacked vector (i.e. [m[0, 0], m[0, 1], ..., m[0, nx-1], m[1, 0], ..., m[ny-1, nx-1]])
-
-    For large images, generally a better idea to use scipy.convolve or scipy.convolve2d instead
-
-    Note that this technique cannot perform binning, although it is closely related. It can perform a rolling average.
-
-    todo: could add 'same' mode, which keeps input same size. And enforce only for odd sized filters.
-    :param filter:
-    :param img_size: [nx, ny] or [nx]
-    :param mode: 'valid' or 'full'
-    :return:
-
-    ################
-    1D case
-    ################
-    'valid' = regions of full overlap
-    mat = [ f[0], f[1], f[2], ..., f[n],   0, ...,  0  ]
-          [  0  , f[0], f[1], ...      , f[n], 0,  ... ]
-          [                   ...                      ]
-          [ ...                                   f[n] ]
-
-    'full':
-    mat = [  f[n] ,   0 , ...                     ]
-          [ f[n-1], f[n], 0, ...                  ]
-          [ ...                                   ]
-          [ ...                              f[0] ]
-
-    ################
-    2D case
-    ################
-    here fy[i] is a matrix representing a 1D type filter for y = i
-    mat = [ fy[0], fy[1], fy[2], ..., fy[n],   0  , ...,  0   ]
-          [  0  , fy[0], fy[1], ...        , fy[n],  0 ,  ... ]
-          [                     ...                           ]
-          [   ...                                       fy[n] ]
-    """
-
-    if filter.ndim == 1:
-        nx = img_size[0]
-
-        if mode == 'valid':
-            first_row = np.pad(filter, (0, nx - filter.size), mode='constant', constant_values=0)
-            first_col = np.zeros(nx - filter.size + 1)
-            first_col[0] = first_row[0]
-        elif mode == 'full':
-            first_row = np.zeros(nx)
-            first_row[0] = filter[-1]
-
-            first_col = np.pad(np.flip(filter), (0, nx - 1), mode='constant', constant_values=0)
-        else:
-            raise ValueError("mode must be 'valid' or 'full' but was '%s'" % mode)
-
-        # todo: might want to try and generate directly as sparse matrix
-        mat = sp.csc_matrix(scipy.linalg.toeplitz(first_col, r=first_row))
-
-    elif filter.ndim == 2:
-        ny, nx = img_size
-        ny_filter, nx_filter = filter.shape
-
-        # get 1D filter blocks
-        filters_1d = []
-        for row in filter:
-            filters_1d.append(toeplitz_filter_mat(row, [nx], mode=mode))
-
-        # combine blocks to full matrix
-        ny_block, _ = filters_1d[0].shape
-        if mode == 'valid':
-            # in this case, the x-filter blocks have size (nx - filter.shape[1]) x nx
-            # and these appear on the diagonals of a matrix of the size (ny - filter.shape[0]) x ny
-            skeleton_mat_ny = ny - ny_filter + 1
-
-            mat = sp.csc_matrix((ny_block * skeleton_mat_ny, nx * ny))
-            for jj in range(filter.shape[0]):
-                diag_ones = sp.diags([1], jj, shape=(skeleton_mat_ny, ny))
-                mat += sp.kron(diag_ones, filters_1d[jj])
-
-        elif mode == 'full':
-
-            skeleton_mat_ny = ny + ny_filter - 1
-            mat = sp.csc_matrix((ny_block * skeleton_mat_ny, nx * ny))
-            for jj in range(filter.shape[0]):
-                diag_ones = sp.diags([1], -jj, shape=(skeleton_mat_ny, ny))
-                mat += sp.kron(diag_ones, filters_1d[jj])
-
-    return mat
 
 
 # resampling functions
