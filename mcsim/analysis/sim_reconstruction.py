@@ -721,7 +721,7 @@ class SimImageSet:
         # e.g. could multiply each by expected phase values?
         results = joblib.Parallel(n_jobs=-1, verbose=10, timeout=None)(
             joblib.delayed(fit_modulation_frq)(
-                fts1[ii, 0], fts2[ii, 0], self.dx, self.fmax, frq_guess=frq_guess[ii])
+                fts1[ii, 0], fts2[ii, 0], self.dx, frq_guess=frq_guess[ii])
             for ii in range(nangles)
         )
 
@@ -2122,8 +2122,11 @@ def correct_modulation_for_bead_size(bead_radii, frqs):
 
 
 # estimate frequency of modulation patterns
-def fit_modulation_frq(ft1, ft2, dx, fmax=None, exclude_res=0.7, frq_guess=None, roi_pix_size=5, use_jacobian=False,
-                       max_frq_shift=None, force_start_from_guess=False, keep_guess_if_better=True):
+def fit_modulation_frq(ft1: np.ndarray, ft2: np.ndarray, dxy: float,
+                       mask: np.ndarray = None,
+                       frq_guess: tuple[float] = None, roi_pix_size: int = 5,
+                       use_jacobian: bool = False, max_frq_shift=None,
+                       keep_guess_if_better: bool = True):
     """
     todo: drop roi_pix_size argument in favor of max_frq_shift
 
@@ -2142,7 +2145,7 @@ def fit_modulation_frq(ft1, ft2, dx, fmax=None, exclude_res=0.7, frq_guess=None,
 
     :param ft1: 2D Fourier space image
     :param ft2: 2D Fourier space image to be cross correlated with ft1
-    :param dx: pixel size
+    :param dxy: pixel size
     :param fmax:
     :param exclude_res: frequencies less than this fraction of fmax are excluded from peak finding. Not
     :param frq_guess: frequency guess [fx, fy]. Can be None.
@@ -2156,43 +2159,36 @@ def fit_modulation_frq(ft1, ft2, dx, fmax=None, exclude_res=0.7, frq_guess=None,
     """
 
     # extract options
-    dy = dx
     ny, nx = ft1.shape
 
     # coords
-    x = tools.get_fft_pos(nx, dx, centered=False, mode='symmetric')
-    y = tools.get_fft_pos(ny, dy, centered=False, mode='symmetric')
+    x = tools.get_fft_pos(nx, dxy, centered=False, mode='symmetric')
+    y = tools.get_fft_pos(ny, dxy, centered=False, mode='symmetric')
     xx, yy = np.meshgrid(x, y)
 
     # get frequency data
-    fxs = fft.fftshift(fft.fftfreq(ft1.shape[1], dx))
+    fxs = fft.fftshift(fft.fftfreq(ft1.shape[1], dxy))
     dfx = fxs[1] - fxs[0]
-    fys = fft.fftshift(fft.fftfreq(ft1.shape[0], dy))
+    fys = fft.fftshift(fft.fftfreq(ft1.shape[0], dxy))
     dfy = fys[1] - fys[0]
     fxfx, fyfy = np.meshgrid(fxs, fys)
     ff = np.sqrt(fxfx ** 2 + fyfy ** 2)
-
-    if fmax is None:
-        fmax = ff.max()
 
     if max_frq_shift is None:
         max_frq_shift = dfx * roi_pix_size
 
     # mask
-    mask = np.ones(ft1.shape, dtype=bool)
-    if frq_guess is None:
-        mask[ff > fmax] = 0
-        mask[ff < exclude_res * fmax] = 0
-    else:
+    if mask is None:
+        mask = np.ones(ft1.shape, dtype=bool)
+
+    if mask.shape != ft1.shape:
+        raise ValueError("mask must have same shape as image")
+
+    # update mask to account for frequency guess
+    if frq_guess is not None:
         # account for frq_guess
         f_dist_guess = np.sqrt( (fxfx - frq_guess[0])**2 + (fyfy - frq_guess[1])**2)
         mask[f_dist_guess > max_frq_shift] = 0
-
-        # pix_x_guess = np.argmin(np.abs(fxs - frq_guess[0]))
-        # pix_y_guess = np.argmin(np.abs(fys - frq_guess[1]))
-        # mask = np.zeros(ft1.shape, dtype=bool)
-        # mask[pix_y_guess - roi_pix_size : pix_y_guess + roi_pix_size + 1,
-        #      pix_x_guess - roi_pix_size : pix_x_guess + roi_pix_size + 1] = 1
 
     # cross correlation of Fourier transforms
     # WARNING: correlate2d uses a different convention for the frequencies of the output, which will not agree with the fft convention
@@ -2200,31 +2196,28 @@ def fit_modulation_frq(ft1, ft2, dx, fmax=None, exclude_res=0.7, frq_guess=None,
     # scipy.signal.correlate(g1, g2)(fo) seems to compute \sum_f g1^*(f) * g2(f - fo), but I want g1^*(f)*g2(f+fo)
     cc = np.abs(scipy.signal.correlate(ft2, ft1, mode='same'))
 
-    # get initial frq_guess by looking at cc at discrete frequency set and finding max
-    max_ind = (cc * mask).argmax()
-    subscript = np.unravel_index(max_ind, cc.shape)
-
     if frq_guess is None:
-        # if not initial frq_guess, return frequency with positive fy. If fy=0, return with positive fx.
+        # get initial frq_guess by looking at cc at discrete frequency set and finding max
+        max_ind = np.argmax(cc * mask)
+        subscript = np.unravel_index(max_ind, cc.shape)
+
+        # if cy initial frq_guess, return frequency with positive fy. If fy=0, return with positive fx.
         # i.e. want to sort so that larger y-subscript is returned first
         # since img is real, also peak at [-fx, -fy]. Find those subscripts
         # todo: could exactly calculate where these will be, but this is good enough for now.
-        a = np.argmin(np.abs(fxfx[subscript] + fxfx[0, :]))
-        b = np.argmin(np.abs(fyfy[subscript] + fyfy[:, 0]))
-        reflected_subscript = (b, a)
+        # a = np.argmin(np.abs(fxfx[subscript] + fxfx[0, :]))
+        # b = np.argmin(np.abs(fyfy[subscript] + fyfy[:, 0]))
+        # reflected_subscript = (b, a)
 
-        subscript_list = [subscript, reflected_subscript]
+        # subscript_list = [subscript, reflected_subscript]
+        #
+        # m = np.max(ft1.shape)
+        # subscript_list.sort(key=lambda x: x[0] * m + x[1], reverse=True)
+        # subscript, reflected_subscript = subscript_list
 
-        m = np.max(ft1.shape)
-        subscript_list.sort(key=lambda x: x[0] * m + x[1], reverse=True)
-        subscript, reflected_subscript = subscript_list
-
-        init_params = [fxfx[subscript], fyfy[subscript]]
+        init_params = np.array([fxfx[subscript], fyfy[subscript]])
     else:
-        if force_start_from_guess:
-            init_params = frq_guess
-        else:
-            init_params = [fxfx[subscript], fyfy[subscript]]
+        init_params = frq_guess
 
 
     # do fitting
