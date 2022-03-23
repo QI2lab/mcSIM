@@ -6,13 +6,15 @@ from numpy import fft
 import matplotlib.pyplot as plt
 from skimage.restoration import unwrap_phase
 import tifffile
+from pathlib import Path
 import mcsim.analysis.analysis_tools as tools
 import mcsim.analysis.sim_reconstruction as sim
 import localize_psf.fit as fit
 
 # fname = r"F:\2021_11_23\23_odt_align\23_odt_align_MMStack_Pos0.ome.tif"
 # fname = r"F:\2021_11_23\24_odt_align\24_odt_align_MMStack_Pos0.ome.tif"
-fname = r"F:\2021_12_07\13_odt_focus_test\13_odt_focus_test_MMStack_Pos0.ome.tif"
+# fname = r"F:\2021_12_07\13_odt_focus_test\13_odt_focus_test_MMStack_Pos0.ome.tif"
+fname = Path(r"E:\2022_02_25\05_hologram.tif")
 img = tifffile.imread(fname)
 if img.ndim == 3:
     img = img[0]
@@ -20,12 +22,19 @@ if img.ndim == 3:
 img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
 
 ny, nx = img.shape
+
+threshold = 300
+# ################################
+# physical parameters
+# ################################
 wavelength = 0.785 # um
 k = 2*np.pi / wavelength
 dp = 6.5
-mag = 50
+# mag = 50
+mag = 60
 dxy = dp / mag
-na = 0.55
+# na = 0.55
+na = 1
 fmax_int = 1 / (0.5 * wavelength / na)
 
 x = dxy * (np.arange(nx) - nx//2)
@@ -57,7 +66,7 @@ efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(efield_ft_shift)))
 phase_unwrapped = unwrap_phase(np.angle(efield_shift))
 
 # fit defocus
-to_fit_pix = np.abs(efield_shift) > 100
+to_fit_pix = np.abs(efield_shift) > threshold
 def fn(p, x, y):
     xrot = (x - p[2]) * np.cos(p[5]) + (y - p[3]) * np.sin(p[5])
     yrot = -(x - p[2]) * np.sin(p[5]) + (y - p[3]) * np.cos(p[5])
@@ -80,18 +89,18 @@ ry = -0.5 * k / fp[1]
 extent_xy = [x[0] - 0.5 * dxy, x[-1] + 0.5 * dxy, y[-1] + 0.5 * dxy, y[0] - 0.5 * dxy]
 
 figh = plt.figure(figsize=(16, 8))
-plt.suptitle("object plane $R_x$ = %0.2fmm, $R_y$ = %0.2fmm\n"
+figh.suptitle("object plane $R_x$ = %0.2fmm, $R_y$ = %0.2fmm\n"
              "image plane  $R_x$ = %0.3fm, $R_y$ = %0.3fm\n"
              "angle = %0.2fdeg" %
              (rx / 1e3, ry / 1e3, rx * dp**2 / dxy**2 / 1e6, ry * dp**2 / dxy**2 / 1e6, fp[-1] * 180/np.pi))
 
-ax = plt.subplot(2, 3, 1)
+ax = figh.add_subplot(2, 3, 1)
 ax.imshow(np.abs(efield_shift), vmin=0, cmap="bone", extent=extent_xy)
 ax.set_title("efield")
 ax.set_xticks([])
 ax.set_yticks([])
 
-ax = plt.subplot(2, 3, 2)
+ax = figh.add_subplot(2, 3, 2)
 ax.imshow(np.angle(efield_shift), vmin=-np.pi, vmax=np.pi, cmap="RdBu", extent=extent_xy)
 ax.plot(fp[2], fp[3], 'kx')
 ax.set_title("wrapped phase")
@@ -102,20 +111,20 @@ ax.set_yticks([])
 # vmax = np.percentile(phase_unwrapped, 99.95)
 vmin = -2*np.pi
 vmax = 2*np.pi
-ax = plt.subplot(2, 3, 3)
+ax = figh.add_subplot(2, 3, 3)
 ax.imshow(phase_unwrapped - fp[-2], cmap="RdBu", vmin=vmin, vmax=vmax, extent=extent_xy)
 ax.plot(fp[2], fp[3], 'kx')
 ax.set_title("unwrapped phase")
 ax.set_xticks([])
 ax.set_yticks([])
 
-ax = plt.subplot(2, 3, 5)
+ax = figh.add_subplot(2, 3, 5)
 ax.imshow(to_fit_pix, cmap="bone", extent=extent_xy)
 ax.set_title("fit mask")
 ax.set_xticks([])
 ax.set_yticks([])
 
-ax = plt.subplot(2, 3, 6)
+ax = figh.add_subplot(2, 3, 6)
 phase_fit_plot = fn(results["fit_params"], xx, yy)
 ax.plot(fp[2], fp[3], 'kx')
 phase_fit_plot[np.logical_not(to_fit_pix)] = np.nan
