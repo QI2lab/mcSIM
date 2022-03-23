@@ -75,10 +75,10 @@ for jj in range(nc):
 # plot results
 # #########################################
 figh = plt.figure(figsize=(18, 14))
-plt.suptitle("Allowed output angles satisfying the combined blaze and diffraction conditions\n"
+figh.suptitle("Allowed output angles satisfying the combined blaze and diffraction conditions\n"
              "parameterized by output unit vector $\hat{b}=(b_x, b_y, b_z)$")
 
-ax = plt.subplot(1, 1, 1)
+ax = figh.add_subplot(1, 1, 1)
 ax.axis("equal")
 
 ph_on = []

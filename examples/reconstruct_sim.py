@@ -6,6 +6,7 @@ import numpy as np
 from numpy import fft
 import pickle
 import tifffile
+from pathlib import Path
 import mcsim.analysis.sim_reconstruction as sim
 import localize_psf.fit_psf as psf
 import localize_psf.affine as affine
@@ -22,7 +23,7 @@ nangles = 3
 nphases = 3
 nx = 2048
 ny = 2048
-imgs = tifffile.imread("data/argosim_line_pairs.tif").reshape([ncolors, nangles, nphases, ny, nx])
+imgs = tifffile.imread(Path("data", "argosim_line_pairs.tif")).reshape([ncolors, nangles, nphases, ny, nx])
 
 # ############################################
 # set ROI to reconstruction, [cy, cx]
@@ -42,7 +43,7 @@ excitation_wavelengths = [0.465, 0.532]
 # ############################################
 # load OTF data
 # ############################################
-otf_data_path = "data/2020_05_19_otf_fit_blue.pkl"
+otf_data_path = Path("data", "2020_05_19_otf_fit_blue.pkl")
 
 with open(otf_data_path, 'rb') as f:
     otf_data = pickle.load(f)
@@ -53,8 +54,8 @@ otf_fn = lambda f, fmax: 1 / (1 + (f / fmax * otf_p[0]) ** 2) * psf.circ_apertur
 # ############################################
 # load affine transformations from DMD to camera
 # ############################################
-affine_fnames = ["data/2021-02-03_09;43;06_affine_xform_blue_z=0.pkl",
-                 "data/2021-02-03_09;43;06_affine_xform_green_z=0.pkl"]
+affine_fnames = [Path("data", "2021-02-03_09;43;06_affine_xform_blue_z=0.pkl"),
+                 Path("data", "2021-02-03_09;43;06_affine_xform_green_z=0.pkl")]
 
 affine_xforms = []
 for p in affine_fnames:
@@ -64,8 +65,8 @@ for p in affine_fnames:
 # ############################################
 # load DMD patterns frequency and phase data
 # ############################################
-dmd_pattern_data_fpath = [r"data/sim_patterns_period=6.01_nangles=3.pkl",
-                          r"data/sim_patterns_period=6.82_nangles=3.pkl"]
+dmd_pattern_data_fpath = [Path("data", "sim_patterns_period=6.01_nangles=3.pkl"),
+                          Path("data", "sim_patterns_period=6.82_nangles=3.pkl")]
 
 frqs_dmd = np.zeros((2, 3, 2))
 phases_dmd = np.zeros((ncolors, nangles, nphases))

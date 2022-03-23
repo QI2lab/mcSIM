@@ -1064,8 +1064,8 @@ class SimImageSet:
         # plot
         # ########################################
         figh = plt.figure(figsize=figsize)
-        plt.suptitle('SIM images, real space and mcnr')
-        grid = plt.GridSpec(self.nangles, self.nphases + 3)
+        figh.suptitle('SIM images, real space and mcnr')
+        grid = figh.add_gridspec(self.nangles, self.nphases + 3)
         
         mean_int = np.mean(self.imgs, axis=(2, 3))
         rel_int_phases = mean_int / np.expand_dims(np.max(mean_int, axis=1), axis=1)
@@ -1079,7 +1079,7 @@ class SimImageSet:
                 # ########################################
                 # raw real-space SIM images
                 # ########################################
-                ax = plt.subplot(grid[ii, jj])
+                ax = figh.add_subplot(grid[ii, jj])
                 ax.imshow(self.imgs[ii, jj], vmin=vmin, vmax=vmax, extent=extent, interpolation=None, cmap="bone")
 
 
@@ -1098,7 +1098,7 @@ class SimImageSet:
             bin_edges = np.linspace(0, np.percentile(self.imgs, 99), nbins + 1)
             bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
 
-            ax = plt.subplot(grid[ii, self.nphases])
+            ax = figh.add_subplot(grid[ii, self.nphases])
             for jj in range(self.nphases):
                 histogram, _ = np.histogram(self.imgs[ii, jj].ravel(), bins=bin_edges)
                 ax.semilogy(bin_centers, histogram)
@@ -1115,7 +1115,7 @@ class SimImageSet:
             # ########################################
             # spatially resolved mcnr
             # ########################################
-            ax = plt.subplot(grid[ii, self.nphases + 1])
+            ax = figh.add_subplot(grid[ii, self.nphases + 1])
             vmax_mcnr = np.percentile(self.mcnr[ii], 99)
             if vmax_mcnr <= 0:
                 vmax_mcnr += 1e-12
@@ -1127,7 +1127,7 @@ class SimImageSet:
                 ax.set_title("mcnr")
 
             # colorbar
-            ax = plt.subplot(grid[ii, self.nphases + 2])
+            ax = figh.add_subplot(grid[ii, self.nphases + 2])
             plt.colorbar(im, cax=ax)
 
 
@@ -1148,12 +1148,12 @@ class SimImageSet:
 
         # create plot
         figh = plt.figure(figsize=figsize)
-        grid = plt.GridSpec(2, 4)
+        grid = figh.add_gridspec(2, 4)
         # todo: print more reconstruction information here
-        plt.suptitle("SIM reconstruction, w=%0.2f, phase estimation with %s" % (self.wiener_parameter, self.phase_estimation_mode))
+        figh.suptitle("SIM reconstruction, w=%0.2f, phase estimation with %s" % (self.wiener_parameter, self.phase_estimation_mode))
 
         # widefield, real space
-        ax = plt.subplot(grid[0, 0])
+        ax = figh.add_subplot(grid[0, 0])
 
         vmin = np.percentile(self.widefield.ravel(), min_percentile)
         vmax = np.percentile(self.widefield.ravel(), max_percentile)
@@ -1163,7 +1163,7 @@ class SimImageSet:
         ax.set_title('widefield')
 
         # deconvolved, real space
-        ax = plt.subplot(grid[0, 1])
+        ax = figh.add_subplot(grid[0, 1])
 
         vmin = np.percentile(self.widefield_deconvolution.ravel(), min_percentile)
         vmax = np.percentile(self.widefield_deconvolution.ravel(), max_percentile)
@@ -1173,7 +1173,7 @@ class SimImageSet:
         ax.set_title('widefield deconvolved')
 
         # SIM, realspace
-        ax = plt.subplot(grid[0, 2])
+        ax = figh.add_subplot(grid[0, 2])
         vmin = np.percentile(self.sim_sr.ravel()[self.sim_sr.ravel() >= 0], min_percentile)
         vmax = np.percentile(self.sim_sr.ravel()[self.sim_sr.ravel() >= 0], max_percentile)
         if vmax <= vmin:
@@ -1182,7 +1182,7 @@ class SimImageSet:
         ax.set_title('SR-SIM')
 
         #
-        ax = plt.subplot(grid[0, 3])
+        ax = figh.add_subplot(grid[0, 3])
         vmin = np.percentile(self.sim_os.ravel(), min_percentile)
         vmax = np.percentile(self.sim_os.ravel(), max_percentile)
         if vmax <= vmin:
@@ -1191,7 +1191,7 @@ class SimImageSet:
         ax.set_title('OS-SIM')
 
         # widefield Fourier space
-        ax = plt.subplot(grid[1, 0])
+        ax = figh.add_subplot(grid[1, 0])
         ax.imshow(np.abs(self.widefield_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_wf, cmap="bone")
 
         ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
@@ -1201,18 +1201,18 @@ class SimImageSet:
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
 
         # deconvolution Fourier space
-        ax = plt.subplot(grid[1, 1])
-        plt.imshow(np.abs(self.widefield_deconvolution_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
+        ax = figh.add_subplot(grid[1, 1])
+        ax.imshow(np.abs(self.widefield_deconvolution_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
 
         ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
         ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=0, ls='--'))
 
-        plt.xlim([-2 * self.fmax, 2 * self.fmax])
-        plt.ylim([2 * self.fmax, -2 * self.fmax])
+        ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
+        ax.set_ylim([2 * self.fmax, -2 * self.fmax])
 
         # SIM fourier space
-        ax = plt.subplot(grid[1 ,2])
-        plt.imshow(np.abs(self.sim_sr_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
+        ax = figh.add_subplot(grid[1 ,2])
+        ax.imshow(np.abs(self.sim_sr_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
 
         ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
         ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=0, ls='--'))
@@ -1221,8 +1221,8 @@ class SimImageSet:
         for ii in range(self.nangles):
             ax.add_artist(Circle((0, 0), radius=self.fmax + 1/self.periods[ii], color='r', fill=0, ls='--'))
 
-        plt.xlim([-2 * self.fmax, 2 * self.fmax])
-        plt.ylim([2 * self.fmax, -2 * self.fmax])
+        ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
+        ax.set_ylim([2 * self.fmax, -2 * self.fmax])
 
         return figh
 
@@ -1261,39 +1261,39 @@ class SimImageSet:
         phs = []
         pnames = []
 
-        ax = plt.subplot(1, 2, 1)
-        ph, = plt.plot(coord_sr, cut_sr)
+        ax = figh.add_subplot(1, 2, 1)
+        ph, = ax.plot(coord_sr, cut_sr)
         phs.append(ph)
         pnames.append('SR-SIM')
 
         if plot_os_sim:
-            ph, = plt.plot(coord_os, cut_os)
+            ph, = ax.plot(coord_os, cut_os)
             phs.append(ph)
             pnames.append('OS-SIM')
 
         if plot_deconvolution:
-            ph, = plt.plot(coord_dc, cut_dc)
+            ph, = ax.plot(coord_dc, cut_dc)
             phs.append(ph)
             pnames.append('deconvolved')
 
-        ph, = plt.plot(coord_wf, cut_wf)
+        ph, = ax.plot(coord_wf, cut_wf)
         phs.append(ph)
         pnames.append('widefield')
 
-        plt.xlabel("Position (um)")
-        plt.ylabel("ADC")
-        plt.legend(phs, pnames)
+        ax.set_xlabel("Position (um)")
+        ax.set_ylabel("ADC")
+        ax.legend(phs, pnames)
 
         ylim = ax.get_ylim()
         ax.set_ylim([0, ylim[1]])
 
-        plt.subplot(1, 2, 2)
+        ax = figh.add_subplot(1, 2, 2)
         vmin = np.percentile(self.widefield.ravel(), 2)
         vmax = np.percentile(self.widefield.ravel(), 99.5)
 
-        plt.imshow(self.widefield, vmin=vmin, vmax=vmax, cmap="bone")
-        plt.plot([start_coord[0], end_coord[0]], [start_coord[1], end_coord[1]], 'white')
-        plt.title('widefield')
+        ax.imshow(self.widefield, vmin=vmin, vmax=vmax, cmap="bone")
+        ax.plot([start_coord[0], end_coord[0]], [start_coord[1], end_coord[1]], 'white')
+        ax.set_title('widefield')
 
         return figh, coords, cuts
 
@@ -1313,7 +1313,7 @@ class SimImageSet:
         # plot one image for each angle
         for ii in range(self.nangles):
             fig = plt.figure(figsize=figsize)
-            plt.suptitle('Magnitude of Fourier transforms, angle %d\nperiod=%0.3fnm at %0.3fdeg=%0.3frad, f=(%0.3f,%0.3f) 1/um\n'
+            fig.suptitle('Magnitude of Fourier transforms, angle %d\nperiod=%0.3fnm at %0.3fdeg=%0.3frad, f=(%0.3f,%0.3f) 1/um\n'
                          'mod=%0.3f, min p2nr=%0.3f, wiener param=%0.2f\n'
                          'phases (deg) =%0.2f, %0.2f, %0.2f, phase diffs (deg) =%0.2f, %0.2f, %0.2f' %
                          (ii, self.periods[ii] * 1e3, self.angles[ii] * 180 / np.pi, self.angles[ii],
@@ -1322,14 +1322,14 @@ class SimImageSet:
                           self.phases[ii, 0] * 180 / np.pi, self.phases[ii, 1] * 180 / np.pi, self.phases[ii, 2] * 180 / np.pi,
                           0, np.mod(self.phases[ii, 1] - self.phases[ii, 0], 2*np.pi) * 180 / np.pi,
                           np.mod(self.phases[ii, 2] - self.phases[ii, 0], 2*np.pi) * 180 / np.pi))
-            grid = plt.GridSpec(self.nphases, 5)
+            grid = fig.add_gridspec(self.nphases, 5)
 
             for jj in range(self.nphases):
 
                 # ####################
                 # raw images at different phases
                 # ####################
-                ax = plt.subplot(grid[jj, 0])
+                ax = fig.add_subplot(grid[jj, 0])
 
                 to_plot = np.abs(self.imgs_ft[ii, jj])
                 to_plot[to_plot <= 0] = np.nan
@@ -1388,7 +1388,7 @@ class SimImageSet:
                 # ####################
                 # shifted component
                 # ####################
-                ax = plt.subplot(grid[jj, 2])
+                ax = fig.add_subplot(grid[jj, 2])
 
                 # avoid any zeros for LogNorm()
                 cs_ft_toplot = np.abs(self.bands_shifted_ft[ii, jj])
@@ -1422,7 +1422,7 @@ class SimImageSet:
                 # ####################
                 # unnormalized weights
                 # ####################
-                ax = plt.subplot(grid[jj, 3])
+                ax = fig.add_subplot(grid[jj, 3])
                 if jj == 0:
                     ax.set_title(r"$w(k)$")
 
@@ -1438,15 +1438,17 @@ class SimImageSet:
 
                 ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
                 ax.set_ylim([2 * self.fmax, -2 * self.fmax])
-                plt.setp(ax.get_xticklabels(), visible=False)
-                plt.setp(ax.get_yticklabels(), visible=False)
+                ax.set_xticklabels([])
+                ax.set_yticklabels([])
+                # plt.setp(ax.get_xticklabels(), visible=False)
+                # plt.setp(ax.get_yticklabels(), visible=False)
                 ax.set_xticks([])
                 ax.set_yticks([])
 
                 # ####################
                 # normalized weights
                 # ####################
-                ax = plt.subplot(grid[jj, 4])
+                ax = fig.add_subplot(grid[jj, 4])
                 if jj == 0:
                     ax.set_title(r"$\frac{w_i(k)}{\sum_j |w_j(k)|^2 + \eta^2}$")
 
@@ -1462,8 +1464,10 @@ class SimImageSet:
                 ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
                 ax.set_ylim([2 * self.fmax, -2 * self.fmax])
 
-                plt.setp(ax.get_xticklabels(), visible=False)
-                plt.setp(ax.get_yticklabels(), visible=False)
+                # plt.setp(ax.get_xticklabels(), visible=False)
+                # plt.setp(ax.get_yticklabels(), visible=False)
+                ax.set_xticklabels([])
+                ax.set_yticklabels([])
                 ax.set_xticks([])
                 ax.set_yticks([])
 
@@ -1544,32 +1548,32 @@ class SimImageSet:
         tstr = "OTF\nvalue at frqs="
         for ii in range(self.nangles):
             tstr += " %0.3f," % self.otf_at_frqs[ii]
-        plt.suptitle(tstr)
+        figh.suptitle(tstr)
 
         ff = np.sqrt(np.expand_dims(self.fx, axis=0) ** 2 + np.expand_dims(self.fy, axis=1) ** 2)
 
         otf_ideal = psf.circ_aperture_otf(ff, 0, self.na, self.wavelength)
 
-        ax = plt.subplot(1, 2, 1)
+        ax = figh.add_subplot(1, 2, 1)
         for ii in range(self.nangles):
-            plt.plot(ff.ravel(), self.otf[ii].ravel())
-        plt.plot(ff.ravel(), otf_ideal.ravel())
+            ax.plot(ff.ravel(), self.otf[ii].ravel())
+        ax.plot(ff.ravel(), otf_ideal.ravel())
         ylim = ax.get_ylim()
 
         # plot SIM frequencies
         fs = np.linalg.norm(self.frqs, axis=1)
         for ii in range(self.nangles):
-            plt.plot([fs[ii], fs[ii]], ylim, 'k')
+            ax.plot([fs[ii], fs[ii]], ylim, 'k')
 
         ax.set_ylim(ylim)
 
-        plt.xlabel("Frequency (1/um)")
-        plt.ylabel("OTF")
-        plt.legend(["OTF", 'Ideal OTF', 'SIM frqs'])
+        ax.set_xlabel("Frequency (1/um)")
+        ax.set_ylabel("OTF")
+        ax.legend(["OTF", 'Ideal OTF', 'SIM frqs'])
 
-        plt.subplot(1, 2, 2)
-        plt.title("Mean 2D OTF")
-        plt.imshow(np.mean(self.otf, axis=0), extent=tools.get_extent(self.fy, self.fx), cmap="bone")
+        ax = figh.add_subplot(1, 2, 2)
+        ax.set_title("Mean 2D OTF")
+        ax.imshow(np.mean(self.otf, axis=0), extent=tools.get_extent(self.fy, self.fx), cmap="bone")
 
         return figh
 
@@ -2309,7 +2313,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     # create figure
     figh = plt.figure(figsize=figsize)
-    gspec = plt.GridSpec(ncols=14, nrows=2, hspace=0.3, figure=figh)
+    gspec = figh.add_gridspec(ncols=14, nrows=2, hspace=0.3)
 
     str = ""
     if ttl_str != "":
@@ -2327,7 +2331,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
         str += '\nguess: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g and %0.2fdeg' % \
                (period_g * 1e3, 1/period_g, angle_g * 180 / np.pi, angle_g, fx_g, fy_g,
                 np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
-    plt.suptitle(str)
+    figh.suptitle(str)
 
     # #######################################
     # plot cross-correlation region of interest
@@ -2338,7 +2342,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     extent_roi = tools.get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
-    ax = plt.subplot(gspec[0, 0:6])
+    ax = figh.add_subplot(gspec[0, 0:6])
     ax.set_title("cross correlation, ROI")
     im1 = ax.imshow(rois.cut_roi(roi, cc), interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi, cmap="bone")
     ph1 = ax.scatter(frqs[0], frqs[1], color='r', marker='x')
@@ -2364,7 +2368,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     # #######################################
     # full cross-correlation
     # #######################################
-    ax2 = plt.subplot(gspec[0, 7:13])
+    ax2 = figh.add_subplot(gspec[0, 7:13])
     im2 = ax2.imshow(cc, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
     ax2.set_xlim([-fmax, fmax])
     ax2.set_ylim([fmax, -fmax])
@@ -2385,7 +2389,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     # #######################################
     # ft 1
     # #######################################
-    ax3 = plt.subplot(gspec[1, 0:6])
+    ax3 = figh.add_subplot(gspec[1, 0:6])
     ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0) = $"  " %0.3g and %0.2fdeg" %
                   (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
 
@@ -2402,7 +2406,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     figh.colorbar(im3, cax=cbar_ax)
 
     # ft 2
-    ax4 = plt.subplot(gspec[1, 7:13])
+    ax4 = figh.add_subplot(gspec[1, 7:13])
     ttl_str = r"$|g_2(f)|^2$" + r"near $f_o$, $g_2(f_p) =$" + " %0.3g and %0.2fdeg" % (np.abs(peak2), np.angle(peak2) * 180 / np.pi)
     if frqs_guess is not None:
         peak2_g = tools.get_peak_value(img2_ft, fxs, fys, frqs_guess, peak_pixels)
@@ -2574,45 +2578,45 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=No
                 if debug:
                     gamma = 0.1
 
-                    plt.figure(figsize=(16, 8))
-                    grid = plt.GridSpec(2, 3)
-                    plt.suptitle("(i, j, band) = (%d, %d, %d)" % (ii, jj, ml))
+                    figh =plt.figure(figsize=(16, 8))
+                    grid = figh.add_gridspec(2, 3)
+                    figh.suptitle("(i, j, band) = (%d, %d, %d)" % (ii, jj, ml))
 
-                    ax = plt.subplot(grid[0, 0])
-                    plt.imshow(np.abs(imgs_ft[ii]), norm=PowerNorm(gamma=gamma), extent=tools.get_extent(fy, fx))
-                    plt.plot(sim_frq[0], sim_frq[1], 'r+')
-                    plt.plot(-sim_frq[0], -sim_frq[1], 'r.')
-                    plt.title("$D_i(k)$")
+                    ax = figh.add_subplot(grid[0, 0])
+                    ax.imshow(np.abs(imgs_ft[ii]), norm=PowerNorm(gamma=gamma), extent=tools.get_extent(fy, fx))
+                    ax.plot(sim_frq[0], sim_frq[1], 'r+')
+                    ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
+                    ax.set_title("$D_i(k)$")
 
-                    ax = plt.subplot(grid[0, 1])
-                    plt.imshow(np.abs(cshift), norm=PowerNorm(gamma=gamma), extent=tools.get_extent(fy, fx))
-                    plt.plot(sim_frq[0], sim_frq[1], 'r+')
-                    plt.plot(-sim_frq[0], -sim_frq[1], 'r.')
-                    plt.title("$D_j(k-lp)$")
+                    ax = figh.add_subplot(grid[0, 1])
+                    ax.imshow(np.abs(cshift), norm=PowerNorm(gamma=gamma), extent=tools.get_extent(fy, fx))
+                    ax.plot(sim_frq[0], sim_frq[1], 'r+')
+                    ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
+                    ax.set_title("$D_j(k-lp)$")
 
-                    ax = plt.subplot(grid[0, 2])
-                    plt.imshow(np.abs(imgs_ft[ii] * cshift.conj()), norm=PowerNorm(gamma=gamma),
+                    ax = figh.add_subplot(grid[0, 2])
+                    ax.imshow(np.abs(imgs_ft[ii] * cshift.conj()), norm=PowerNorm(gamma=gamma),
                                extent=tools.get_extent(fy, fx))
-                    plt.plot(sim_frq[0], sim_frq[1], 'r+')
-                    plt.plot(-sim_frq[0], -sim_frq[1], 'r.')
-                    plt.title("$D^l_{ij} = D_i(k) x D_j^*(k-lp)$")
+                    ax.plot(sim_frq[0], sim_frq[1], 'r+')
+                    ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
+                    ax.set_title("$D^l_{ij} = D_i(k) x D_j^*(k-lp)$")
 
-                    ax = plt.subplot(grid[1, 0])
-                    plt.imshow(otf, extent=tools.get_extent(fy, fx))
-                    plt.plot(sim_frq[0], sim_frq[1], 'r+')
-                    plt.plot(-sim_frq[0], -sim_frq[1], 'r.')
-                    plt.title('$otf_i(k)$')
+                    ax = figh.add_subplot(grid[1, 0])
+                    ax.imshow(otf, extent=tools.get_extent(fy, fx))
+                    ax.plot(sim_frq[0], sim_frq[1], 'r+')
+                    ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
+                    ax.set_title('$otf_i(k)$')
 
-                    ax = plt.subplot(grid[1, 1])
-                    plt.imshow(otf_shift, extent=tools.get_extent(fy, fx))
-                    plt.plot(sim_frq[0], sim_frq[1], 'r+')
-                    plt.plot(-sim_frq[0], -sim_frq[1], 'r.')
-                    plt.title('$otf_j(k-lp)$')
+                    ax = figh.add_subplot(grid[1, 1])
+                    ax.imshow(otf_shift, extent=tools.get_extent(fy, fx))
+                    ax.plot(sim_frq[0], sim_frq[1], 'r+')
+                    ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
+                    ax.set_title('$otf_j(k-lp)$')
 
-                    ax = plt.subplot(grid[1, 2])
-                    plt.imshow(weight, extent=tools.get_extent(fy, fx))
-                    plt.plot(sim_frq[0], sim_frq[1], 'r+')
-                    plt.plot(-sim_frq[0], -sim_frq[1], 'r.')
+                    ax = figh.add_subplot(grid[1, 2])
+                    ax.imshow(weight, extent=tools.get_extent(fy, fx))
+                    ax.plot(sim_frq[0], sim_frq[1], 'r+')
+                    ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
                     ax.set_title("weight")
     # correct normalization of d_cc (inherited from FFT) so should be same for different image sizes
     d_cc = d_cc / (nx * ny)**2
@@ -2876,19 +2880,19 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     extent = tools.get_extent(fys, fxs)
 
     fig = plt.figure(figsize=figsize)
-    grid = plt.GridSpec(2, 10)
+    grid = fig.add_gridspec(2, 10)
 
     sttl_str = ""
     if ttl_str != "":
         sttl_str += "%s\n" % ttl_str
     sttl_str += 'm=%0.3g, A=%0.3g, alpha=%0.3f\nnoise=%0.3g, frq sim = (%0.2f, %0.2f) 1/um' % \
                 (pfit[-2], pfit[0], pfit[1], pfit[-1], frq_sim[0], frq_sim[1])
-    plt.suptitle(sttl_str)
+    fig.suptitle(sttl_str)
 
     # ######################
     # plot power spectrum x otf vs frequency in 1D
     # ######################
-    ax1 = plt.subplot(grid[0, :5])
+    ax1 = fig.add_subplot(grid[0, :5])
 
     ax1.semilogy(ff_shift.ravel(), ps_exp.ravel(), 'k.')
     ax1.semilogy(ff_shift[mask].ravel(), ps_exp[mask].ravel(), 'b.')
@@ -2900,12 +2904,12 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ax1.set_xlabel('frequency (1/um)')
     ax1.set_ylabel('power spectrum')
     ax1.legend(['all data', 'data used to fit', 'fit'], loc="upper right")
-    ax1.title.set_text('m^2 A^2 |f|^{-2*alpha} |otf(f)|^2 + N')
+    ax1.set_title('m^2 A^2 |f|^{-2*alpha} |otf(f)|^2 + N')
 
     # ######################
     # plot az avg divided by otf in 1D
     # ######################
-    ax2 = plt.subplot(grid[0, 5:])
+    ax2 = fig.add_subplot(grid[0, 5:])
 
     ax2.semilogy(ff_shift.ravel(), ps_exp_deconvolved.ravel(), 'k.')
     ax2.semilogy(ff_shift[mask].ravel(), ps_exp_deconvolved[mask].ravel(), 'b.')
@@ -2914,14 +2918,14 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
     ylims = ax1.get_ylim()
     ax1.set_ylim([ylims[0], 1.2 * np.max(ps_exp_deconvolved[mask].ravel())])
 
-    ax2.title.set_text('m^2 A^2 |k|^{-2*alpha} |otf|^4/(|otf|^4 + snr^2)')
+    ax2.set_title('m^2 A^2 |k|^{-2*alpha} |otf|^4/(|otf|^4 + snr^2)')
     ax2.set_xlabel('|f - f_sim| (1/um)')
     ax2.set_ylabel('power spectrum')
 
     # ######################
     # plot 2D power spectrum
     # ######################
-    ax3 = plt.subplot(grid[1, :2])
+    ax3 = fig.add_subplot(grid[1, :2])
 
     ax3.imshow(ps_exp, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
 
@@ -2931,12 +2935,12 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
 
     ax3.set_xlabel('fx (1/um)')
     ax3.set_ylabel('fy (1/um)')
-    ax3.title.set_text('raw power spectrum')
+    ax3.set_title('raw power spectrum')
 
     # ######################
     # 2D fit
     # ######################
-    ax5 = plt.subplot(grid[1, 2:4])
+    ax5 = fig.add_subplot(grid[1, 2:4])
     ax5.imshow(ps_fit, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
 
     ax5.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
@@ -2944,12 +2948,12 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
 
     ax5.set_xlabel('fx (1/um)')
     ax5.set_ylabel('fy (1/um)')
-    ax5.title.set_text('2D fit')
+    ax5.set_title('2D fit')
 
     # ######################
     # plot 2D power spectrum divided by otf with masked region
     # ######################
-    ax4 = plt.subplot(grid[1, 6:8])
+    ax4 = fig.add_subplot(grid[1, 6:8])
     # ps_over_otf[mask == 0] = np.nan
     ps_exp_deconvolved[mask == 0] = np.nan
     ax4.imshow(ps_exp_deconvolved, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
@@ -2959,10 +2963,10 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
 
     ax4.set_xlabel('fx (1/um)')
     ax4.set_ylabel('fy (1/um)')
-    ax4.title.set_text('masked, deconvolved power spectrum')
+    ax4.set_title('masked, deconvolved power spectrum')
 
     #
-    ax4 = plt.subplot(grid[1, 8:])
+    ax4 = fig.add_subplot(grid[1, 8:])
     ax4.imshow(ps_fit_deconvolved, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
 
     ax4.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
@@ -2970,7 +2974,7 @@ def plot_power_spectrum_fit(img_ft, otf, options, pfit, frq_sim=None, mask=None,
 
     ax4.set_xlabel('fx (1/um)')
     ax4.set_ylabel('fy (1/um)')
-    ax4.title.set_text('fit deconvolved')
+    ax4.set_title('fit deconvolved')
 
     return fig
 

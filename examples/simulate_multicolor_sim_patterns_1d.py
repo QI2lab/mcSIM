@@ -113,10 +113,11 @@ str = r"Diffraction orders and blaze envelopes for beams diffracted along the $\
       "\noutput direction, " + r"($\theta_-$, $\theta_+$)" + " = (%0.2f, %0.2f) deg; " + \
       r"($\theta_x$, $\theta_y$)" + " = (%0.2f, %0.2f) deg;" + \
       " $(b_x, b_y, b_z)$ = (%0.4f, %0.4f, %0.4f)"
-plt.suptitle(str %
+figh.suptitle(str %
              (tm_out * 180/np.pi, tp_out * 180/np.pi,
               tx_out * 180/np.pi, ty_out * 180/np.pi,
               uvec_out[0], uvec_out[1], uvec_out[2]))
+ax = figh.add_subplot(1, 1, 1)
 
 leg = []
 hs = []
@@ -139,16 +140,16 @@ for ii in range(len(wlens)):
             (wlens[ii]*1e9, diff_orders[ii], -diff_orders[ii], tins_exact[ii] * 180/np.pi,
              uvecs_in_exact[ii][0], uvecs_in_exact[ii][1], uvecs_in_exact[ii][2])
 
-    h, = plt.plot(tout * 180/np.pi, int, color=display_colors[ii], label=label)
+    h, = ax.plot(tout * 180/np.pi, int, color=display_colors[ii], label=label)
     hs.append(h)
-    h, = plt.plot(tout * 180/np.pi, sinc, color=display_colors[ii])
+    h, = ax.plot(tout * 180/np.pi, sinc, color=display_colors[ii])
     hs.append(h)
-    plt.plot(tout * 180 / np.pi, sinc_off, '--', color=display_colors[ii])
-    plt.ylim([-0.05, 1.1])
+    ax.plot(tout * 180 / np.pi, sinc_off, '--', color=display_colors[ii])
+    ax.set_ylim([-0.05, 1.1])
 
-plt.xlim([tm_out * 180/np.pi - 10, tm_out * 180/np.pi + 10])
-plt.legend()
-plt.xlabel(r"$\theta_-$ (degrees)")
-plt.ylabel("intensity (arb)")
+ax.set_xlim([tm_out * 180/np.pi - 10, tm_out * 180/np.pi + 10])
+ax.legend()
+ax.set_xlabel(r"$\theta_-$ (degrees)")
+ax.set_ylabel("intensity (arb)")
 
 plt.show()

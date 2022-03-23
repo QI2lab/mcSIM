@@ -178,8 +178,8 @@ efield_broad = fit_psf.blur_img_psf(efields * np.exp(-1j * (2*np.pi)**2 * (ff_fo
 gamma_norm = 1
 
 figh = plt.figure(figsize=(18, 8))
-grid = plt.GridSpec(2, 5, hspace=0.5, wspace=0.5)
-plt.suptitle(("carrier freq = (%0.2f, %0.2f) 1/mirrors; input dir = (%0.3f, %0.3f, %0.3f);" +
+grid = figh.add_gridspec(2, 5, hspace=0.5, wspace=0.5)
+figh.suptitle(("carrier freq = (%0.2f, %0.2f) 1/mirrors; input dir = (%0.3f, %0.3f, %0.3f);" +
              r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f)deg\n"
              "optical axis = (%0.3f, %0.3f, %0.3f);" + r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f);"
              " blaze direction = (%0.3f, %0.3f, %0.3f);" + r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f)\n"
@@ -194,8 +194,8 @@ plt.suptitle(("carrier freq = (%0.2f, %0.2f) 1/mirrors; input dir = (%0.3f, %0.3
               rad, phase_err_size / np.pi))
 # norm = np.max(np.abs(efields_dft_no_err))**2
 
-ax = plt.subplot(grid[0, 0])
-plt.imshow(np.abs(efields_dft)**2, origin="lower", extent=extent_fxy_dmd,
+ax = figh.add_subplot(grid[0, 0])
+ax.imshow(np.abs(efields_dft)**2, origin="lower", extent=extent_fxy_dmd,
            norm=PowerNorm(gamma=0.1), cmap="bone")
 ax.add_artist(Circle(frq, radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frq, radius=0.01, fill=False, color="m"))
@@ -203,8 +203,8 @@ ax.set_xlabel("$f_x$ (1/mirrors)")
 ax.set_ylabel("$f_y$ (1/mirrors)")
 ax.set_title("$|E(b(f) - a)|^2$ from DFT")
 
-ax = plt.subplot(grid[1, 0])
-plt.imshow(np.angle(efields_dft), origin="lower", extent=extent_fxy_dmd,
+ax = figh.add_subplot(grid[1, 0])
+ax.imshow(np.angle(efields_dft), origin="lower", extent=extent_fxy_dmd,
            vmin=-np.pi, vmax=np.pi, cmap="RdBu")
 ax.add_artist(Circle(frq, radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frq, radius=0.01, fill=False, color="m"))
@@ -212,8 +212,8 @@ ax.set_xlabel("$f_x$ (1/mirrors)")
 ax.set_ylabel("$f_y$ (1/mirrors)")
 ax.set_title("$ang[E(b(f) - a)]$ from DFT")
 
-ax = plt.subplot(grid[0, 1])
-plt.imshow(np.abs(sinc_on_dft)**2 / dm**4, origin="lower", extent=extent_fxy_dmd,
+ax = figh.add_subplot(grid[0, 1])
+ax.imshow(np.abs(sinc_on_dft)**2 / dm**4, origin="lower", extent=extent_fxy_dmd,
            norm=PowerNorm(gamma=0.1, vmin=0, vmax=1), cmap="bone")
 ax.add_artist(Circle(frq, radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frq, radius=0.01, fill=False, color="m"))
@@ -221,8 +221,8 @@ ax.set_xlabel("$f_x$ (1/mirrors)")
 ax.set_ylabel("$f_y$ (1/mirrors)")
 ax.set_title("on envelope, $|E|^2$")
 
-ax = plt.subplot(grid[1, 1])
-plt.imshow(np.abs(sinc_off_dft)**2 / dm**4, origin="lower", extent=extent_fxy_dmd,
+ax = figh.add_subplot(grid[1, 1])
+ax.imshow(np.abs(sinc_off_dft)**2 / dm**4, origin="lower", extent=extent_fxy_dmd,
            norm=PowerNorm(gamma=1, vmin=0, vmax=1), cmap="bone")
 ax.add_artist(Circle(frq, radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frq, radius=0.01, fill=False, color="m"))
@@ -230,7 +230,7 @@ ax.set_xlabel("$f_x$ (1/mirrors)")
 ax.set_ylabel("$f_y$ (1/mirrors)")
 ax.set_title("off envelope, $|E|^2$")
 
-ax = plt.subplot(grid[0, 2])
+ax = figh.add_subplot(grid[0, 2])
 ax.imshow(np.abs(efields) ** 2, origin="lower", extent=extent_xyf, norm=PowerNorm(gamma=gamma_norm), cmap="bone")
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
@@ -242,7 +242,7 @@ ax.set_xlabel("x-position, BFP (um)")
 ax.set_ylabel("y-position, BFP (um)")
 ax.set_title("|E(r)|^2, no broadening (gamma=%0.1f)" % gamma_norm)
 
-ax = plt.subplot(grid[1, 2])
+ax = figh.add_subplot(grid[1, 2])
 ax.imshow(np.angle(efields), origin="lower", extent=extent_xyf, vmin=-np.pi, vmax=np.pi, cmap="RdBu")
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
@@ -254,7 +254,7 @@ ax.set_xlabel("x-position, BFP (um)")
 ax.set_ylabel("y-position, BFP (um)")
 ax.set_title("ang(E(r))")
 
-ax = plt.subplot(grid[0, 3])
+ax = figh.add_subplot(grid[0, 3])
 ax.imshow(np.abs(efield_broad) ** 2, origin="lower", extent=extent_xyf, norm=PowerNorm(gamma=gamma_norm), cmap="bone")
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
@@ -266,7 +266,7 @@ ax.set_xlabel("x-position, BFP (um)")
 ax.set_ylabel("y-position, BFP (um)")
 ax.set_title("|E(r)|^2")
 
-ax = plt.subplot(grid[1, 3])
+ax = figh.add_subplot(grid[1, 3])
 ax.imshow(np.angle(efield_broad), origin="lower", extent=extent_xyf, vmin=-np.pi, vmax=np.pi, cmap="RdBu")
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
@@ -279,7 +279,7 @@ ax.set_ylabel("y-position, BFP (um)")
 ax.set_title("ang(E(r))")
 
 
-ax = plt.subplot(grid[0, 4])
+ax = figh.add_subplot(grid[0, 4])
 ax.set_title("pattern")
 ax.imshow(pattern, origin="lower", cmap="bone")
 ax.set_xlabel("x-position (mirrors)")
@@ -291,7 +291,7 @@ ax.set_xlim([nx // 2 - xsize - 0.5, nx // 2 + xsize + 0.5])
 ax.set_ylim([ny // 2 - ysize - 0.5, ny // 2 + ysize + 0.5])
 
 
-ax = plt.subplot(grid[1, 4])
+ax = figh.add_subplot(grid[1, 4])
 ax.set_title("beam profile, |E|, w=%0.1fmm" % (w / 1e3))
 ax.imshow(beam, origin="lower", cmap="bone")
 ax.set_xlabel("x-position (mirrors)")

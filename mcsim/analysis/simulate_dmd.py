@@ -1570,7 +1570,7 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
         _, tms_blaze_off = uvector2tmtp(*data['uvec_out_blaze_off'][kk])
 
         figh = plt.figure(figsize=figsize)
-        grid = plt.GridSpec(2, 2, hspace=0.5)
+        grid = figh.add_gridspec(2, 2, hspace=0.5)
 
         # title
         param_str = 'spacing = %0.2fum, w=%0.2fum, gamma (on,off)=(%.1f, %.1f) deg\n' \
@@ -1581,12 +1581,12 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
                      uvec_ins[kk, 0], uvec_ins[kk, 1], uvec_ins[kk, 2],
                      tms_blaze_on * 180 / np.pi, tms_blaze_off * 180 / np.pi)
 
-        plt.suptitle(param_str)
+        figh.suptitle(param_str)
 
         # ######################################
         # plot diffracted output field
         # ######################################
-        ax = plt.subplot(grid[0, 0])
+        ax = figh.add_subplot(grid[0, 0])
 
         for ii in range(n_wavelens):
             # get intensities
@@ -1598,22 +1598,22 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
             norm = intensity[im] / (intensity_sinc_on[im] / wx**2 / wy**2)
 
             # plot intensities
-            plt.plot(tms_out * 180 / np.pi, scale_fn(intensity / norm), color=colors[ii])
-            plt.plot(tms_out * 180 / np.pi, scale_fn(intensity_sinc_on / (wx*wy)**2), color=colors[ii], ls=':')
-            plt.plot(tms_out * 180 / np.pi, scale_fn(np.abs(sinc_efield_off[kk, :, ii]) ** 2 / (wx*wy)**2),
+            ax.plot(tms_out * 180 / np.pi, scale_fn(intensity / norm), color=colors[ii])
+            ax.plot(tms_out * 180 / np.pi, scale_fn(intensity_sinc_on / (wx*wy)**2), color=colors[ii], ls=':')
+            ax.plot(tms_out * 180 / np.pi, scale_fn(np.abs(sinc_efield_off[kk, :, ii]) ** 2 / (wx*wy)**2),
                      color=colors[ii], ls='--')
 
         ylim = ax.get_ylim()
 
         # plot blaze condition locations
-        plt.plot([tms_blaze_on * 180 / np.pi, tms_blaze_on * 180 / np.pi], ylim, 'k:')
-        plt.plot([tms_blaze_off * 180 / np.pi, tms_blaze_off * 180 / np.pi], ylim, 'k--')
+        ax.plot([tms_blaze_on * 180 / np.pi, tms_blaze_on * 180 / np.pi], ylim, 'k:')
+        ax.plot([tms_blaze_off * 180 / np.pi, tms_blaze_off * 180 / np.pi], ylim, 'k--')
 
         # plot diffraction peaks
         _, diff_tms = uvector2tmtp(diff_uvec_out[kk,..., 0], diff_uvec_out[kk, ..., :, 1], diff_uvec_out[kk, ..., :, 2])
         for ii in range(n_wavelens):
             plt.plot(np.array([diff_tms[ii], diff_tms[ii]]) * 180 / np.pi, ylim, color=colors[ii], ls='-')
-        plt.plot(diff_tms[0, iz] * 180 / np.pi, diff_tms[0, iz] * 180 / np.pi, ylim, 'm')
+        ax.plot(diff_tms[0, iz] * 180 / np.pi, diff_tms[0, iz] * 180 / np.pi, ylim, 'm')
 
         ax.set_ylim(ylim)
         ax.set_xlim([tms_blaze_on * 180 / np.pi - 7.5, tms_blaze_on * 180 / np.pi + 7.5])
@@ -1624,29 +1624,29 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
         # ###########################
         # plot sinc functions and wider angular range
         # ###########################
-        ax = plt.subplot(grid[0, 1])
+        ax = figh.add_subplot(grid[0, 1])
 
         for ii in range(n_wavelens):
-            plt.plot(tms_out * 180 / np.pi, scale_fn(np.abs(sinc_efield_on[kk, :, ii] / wx / wy)**2),
+            ax.plot(tms_out * 180 / np.pi, scale_fn(np.abs(sinc_efield_on[kk, :, ii] / wx / wy)**2),
                      color=colors[ii], ls=':', label="%.0f" % (1e9 * wavelengths[ii]))
-            plt.plot(tms_out * 180 / np.pi, scale_fn(np.abs(sinc_efield_off[kk, :, ii] / wx / wy)**2), color=colors[ii], ls='--')
+            ax.plot(tms_out * 180 / np.pi, scale_fn(np.abs(sinc_efield_off[kk, :, ii] / wx / wy)**2), color=colors[ii], ls='--')
 
         # get xlim, ylim, set back to these at the end
         ylim = ax.get_ylim()
         xlim = ax.get_xlim()
 
         # plot expected blaze conditions
-        plt.plot([tms_blaze_on * 180 / np.pi, tms_blaze_on * 180 / np.pi], ylim, 'k:', label="blaze on")
-        plt.plot([tms_blaze_off * 180 / np.pi, tms_blaze_off * 180 / np.pi], ylim, 'k--', label="blaze off")
+        ax.plot([tms_blaze_on * 180 / np.pi, tms_blaze_on * 180 / np.pi], ylim, 'k:', label="blaze on")
+        ax.plot([tms_blaze_off * 180 / np.pi, tms_blaze_off * 180 / np.pi], ylim, 'k--', label="blaze off")
 
         # plot expected diffraction conditions
         for ii in range(n_wavelens):
-            plt.plot(np.array([diff_tms[ii], diff_tms[ii]]) * 180 / np.pi, ylim, color=colors[ii], ls='-')
-        plt.plot(diff_tms[0, iz] * 180 / np.pi, diff_tms[0, iz] * 180 / np.pi, ylim, 'm', label="0th diffraction order")
+            ax.plot(np.array([diff_tms[ii], diff_tms[ii]]) * 180 / np.pi, ylim, color=colors[ii], ls='-')
+        ax.plot(diff_tms[0, iz] * 180 / np.pi, diff_tms[0, iz] * 180 / np.pi, ylim, 'm', label="0th diffraction order")
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
 
-        plt.legend()
+        ax.legend()
         ax.set_xlabel(r'$\theta_m$ (deg)')
         ax.set_ylabel('intensity (arb)')
         ax.set_title('blaze envelopes')
@@ -1654,12 +1654,12 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
         # ###########################
         # plot pattern
         # ###########################
-        plt.subplot(grid[1, 0])
-        plt.imshow(pattern, origin="lower", cmap="bone")
+        ax = figh.add_subplot(grid[1, 0])
+        ax.imshow(pattern, origin="lower", cmap="bone")
 
-        plt.title('DMD pattern')
-        plt.xlabel('mx')
-        plt.ylabel('my')
+        ax.set_title('DMD pattern')
+        ax.set_xlabel('mx')
+        ax.set_ylabel('my')
 
         # ###########################
         # add figure to list
@@ -1876,13 +1876,13 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
             xf_diff, yf_diff, _ = dmd_frq2opt_axis_uvec(fx_diff, fy_diff, opt_axis, opt_axis, dx, dy, wavelengths[kk])
 
             fig = plt.figure(figsize=figsize)
-            grid = plt.GridSpec(2, 3)
-            plt.suptitle(param_str)
+            grid = fig.add_gridspec(2, 3)
+            fig.suptitle(param_str)
 
             # ##################
             # intensity patterns, angular space
             # ##################
-            ax = plt.subplot(grid[0, 0])
+            ax = fig.add_subplot(grid[0, 0])
             ax.set_xlabel(r'$\theta_x$ outgoing (deg)')
             ax.set_ylabel(r'$\theta_y$ outgoing (deg)')
             ax.set_title('I / (wx*wy*nx*ny)**2 vs. output angle')
@@ -1911,7 +1911,7 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
             # ##################
             # intensity patterns, fourier plane
             # ##################
-            ax = plt.subplot(grid[1, 0])
+            ax = fig.add_subplot(grid[1, 0])
             ax.set_xlabel(r'$x$ (1 / lens focal len um)')
             ax.set_ylabel(r'$y$ (1 / lens focal len um)')
             ax.set_title('I / (wx*wy*nx*ny)**2 (fourier plane)')
@@ -1942,12 +1942,12 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
             # ##################
             # blaze envelopes
             # ##################
-            ax = plt.subplot(grid[0, 1])
+            ax = fig.add_subplot(grid[0, 1])
             ax.set_xlabel(r'$\theta_x$ outgoing')
             ax.set_ylabel(r'$\theta_y$ outgoing')
             ax.set_title('blaze condition sinc envelope (angular)')
 
-            plt.imshow(sinc_on[kk][input_ind] / (wx*wy)**2, extent=extent,
+            ax.imshow(sinc_on[kk][input_ind] / (wx*wy)**2, extent=extent,
                        norm=PowerNorm(gamma=1), cmap="bone", origin="lower")
             xlim = ax.get_xlim()
             ylim = ax.get_ylim()
@@ -1960,9 +1960,9 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
                                  radius=1, color='g', fill=0, ls='-'))
 
             # diffraction peaks
-            plt.scatter(diff_tx_out * 180 / np.pi, diff_ty_out * 180 / np.pi, edgecolor='y', facecolor='none')
+            ax.scatter(diff_tx_out * 180 / np.pi, diff_ty_out * 180 / np.pi, edgecolor='y', facecolor='none')
             # diffraction zeroth order
-            plt.scatter(diff_tx_out[iz] * 180 / np.pi, diff_ty_out[iz] * 180 / np.pi, edgecolor='m', facecolor='none')
+            ax.scatter(diff_tx_out[iz] * 180 / np.pi, diff_ty_out[iz] * 180 / np.pi, edgecolor='m', facecolor='none')
 
             ax.set_xlim(xlim)
             ax.set_ylim(ylim)
@@ -1970,7 +1970,7 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
             # ##################
             # blaze envelope, fourier plane
             # ##################
-            ax = plt.subplot(grid[1, 1])
+            ax = fig.add_subplot(grid[1, 1])
             ax.set_xlabel(r'$x$ (1 / lens focal len um)')
             ax.set_ylabel(r'$y$ (1 / lens focal len um)')
             ax.set_title('blaze condition sinc envelope (fourier plane)')
@@ -1997,7 +1997,7 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
             # ##################
             # DMD pattern
             # ##################
-            ax = plt.subplot(grid[0, 2])
+            ax = fig.add_subplot(grid[0, 2])
             ax.set_title('DMD pattern')
             ax.set_xlabel("x-position (mirrors)")
             ax.set_xlabel("y-position (mirrors)")

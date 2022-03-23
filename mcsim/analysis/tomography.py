@@ -693,10 +693,10 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
     debug = False
     if debug:
         figh = plt.figure(figsize=(16, 8))
-        grid = plt.GridSpec(2, 3)
+        grid = figh.add_gridspec(2, 3)
 
         fp_ref = results["fit_params"]
-        ax = plt.subplot(grid[0, 0])
+        ax = figh.add_subplot(grid[0, 0])
         ax.set_title("img ft")
         ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
         ax.plot(fp_ref[0], fp_ref[1], 'kx')
@@ -705,7 +705,7 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
         ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
         ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
 
-        ax = plt.subplot(grid[0, 1])
+        ax = figh.add_subplot(grid[0, 1])
         ax.set_title("img ft binned")
         ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
         ax.plot(fp_ref[0], fp_ref[1], 'kx')
@@ -714,7 +714,7 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
         ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
         ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
 
-        ax = plt.subplot(grid[0, 2])
+        ax = figh.add_subplot(grid[0, 2])
         ax.set_title("img ft binned mask")
         ax.imshow(img_ft_ref_mask, norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
         ax.plot(fp_ref[0], fp_ref[1], 'kx')
@@ -723,7 +723,7 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
         ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
         ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
 
-        ax = plt.subplot(grid[1, 0])
+        ax = figh.add_subplot(grid[1, 0])
         ax.plot(percentiles, thresh_all, 'rx')
         ax.plot(percentiles, fit.line_piecewise(percentiles, results_thresh["fit_params"]))
         ax.set_xlabel("percentile")
@@ -734,15 +734,17 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
 
 
 # plotting functions
-def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_scattered,
-                         beam_frq, frq_ref, fmax_int, fcoords, dxy, title=""):
+def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
+                         beam_frq, frq_ref, fmax_int, fcoords, dxy,
+                         title="", use_gpu=False):
     """
     Plot diagnostic of ODT image and background image
+    
+    Allows img and ft to be passed in or calculated ....
 
-    @param img_int:
     @param img_efield_ft:
     @param img_efield_bg_ft:
-    @param img_efield_scattered:
+    @param img_efield_scattered_ft:
     @param beam_frq:
     @param frq_ref:
     @param fmax_int:
@@ -752,7 +754,7 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
     @return figh:
     """
 
-
+    # frequency info
     fy, fx = fcoords
     fxfx, fyfy = np.meshgrid(fx, fy)
     dfy = fy[1] - fy[0]
@@ -760,98 +762,113 @@ def plot_scattered_angle(img_int, img_efield_ft, img_efield_bg_ft, img_efield_sc
     extent_fxfy = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx, fy[0] - 0.5 * dfy, fy[-1] + 0.5 * dfy]
 
     # intensity
-    img_int_ft = fft.fftshift(fft.ifft2(fft.ifftshift(img_int)))
+    # if img_int_ft is None:
+    #     img_int_ft = fft.fftshift(fft.ifft2(fft.ifftshift(img_int, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
     # efield band limits
     # out_of_band = np.sqrt(fxfx**2 + fyfy**2) > (0.5 * fmax_int)
     out_of_band = np.sqrt((beam_frq[0] + fxfx) ** 2 + (beam_frq[1] + fyfy) ** 2) > (0.5 * fmax_int)
 
     # electric field
-    img_efield = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_ft)))
-    img_efield_shift_ft = tools.translate_ft(img_efield_ft, beam_frq[:2], drs=(dxy, dxy))
-    img_efield_shift_ft[out_of_band] = 0
-    img_efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_ft)))
+    # if img_efield is None:
+    #     img_efield = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_ft)))
+    data_stack = np.stack((img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft), axis=0)
+    shifted_ft = tools.translate_ft(data_stack, beam_frq[:2], drs=(dxy, dxy), use_gpu=use_gpu)
+    shifted_ft[..., out_of_band] = 0
+    shifted = fft.fftshift(fft.ifft2(fft.ifftshift(shifted_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-    # background electric field
-    img_efield_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_bg_ft)))
-    img_efield_shift_bg_ft = tools.translate_ft(img_efield_bg_ft, beam_frq[:2], drs=(dxy, dxy))
-    img_efield_shift_bg_ft[out_of_band] = 0
-    img_efield_shift_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_bg_ft)))
+    img_efield_shift_ft = shifted_ft[0]
+    img_efield_shift = shifted[0]
+    img_efield_shift_bg_ft = shifted_ft[1]
+    img_efield_shift_bg = shifted[1]
+    img_efield_shift_scatt_ft = shifted_ft[2]
+    img_efield_shift_scatt = shifted[2]
 
-    # scattered electric field
-    img_efield_scatt_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_efield_scattered)))
-    img_efield_shift_scatt_ft = tools.translate_ft(img_efield_scatt_ft, beam_frq[:2], drs=(dxy, dxy))
-    img_efield_shift_scatt_ft[out_of_band] = 0
-    img_efield_shift_scatt = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_scatt_ft)))
+
+    # img_efield_shift_ft = tools.translate_ft(img_efield_ft, beam_frq[:2], drs=(dxy, dxy), use_gpu=use_gpu)
+    # img_efield_shift_ft[out_of_band] = 0
+    # img_efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    #
+    # # background electric field
+    # # if img_efield_bg is None:
+    # #     img_efield_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_bg_ft)))
+    # img_efield_shift_bg_ft = tools.translate_ft(img_efield_bg_ft, beam_frq[:2], drs=(dxy, dxy), use_gpu=use_gpu)
+    # img_efield_shift_bg_ft[out_of_band] = 0
+    # img_efield_shift_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_bg_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    #
+    # # scattered electric field
+    # # if img_efield_scatt_ft is None:
+    # #     img_efield_scatt_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_efield_scattered, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    # img_efield_shift_scatt_ft = tools.translate_ft(img_efield_scatt_ft, beam_frq[:2], drs=(dxy, dxy), use_gpu=use_gpu)
+    # img_efield_shift_scatt_ft[out_of_band] = 0
+    # img_efield_shift_scatt = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_scatt_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
 
     figh = plt.figure(figsize=(18, 10))
-    plt.suptitle(title)
-    grid = plt.GridSpec(3, 7, hspace=0.5)
+    figh.suptitle(title)
+    grid = figh.add_gridspec(3, 3, hspace=0.5)
 
     # first column: intensity
-    ax = plt.subplot(grid[0, 0])
-    ax.imshow(np.abs(img_int), cmap="bone", vmin=np.percentile(img_int, 1), vmax=np.percentile(img_int, 99.9))
-    ax.set_title("$|I(r)|$")
-    ax.set_xticks([])
-    ax.set_yticks([])
+    # ax = plt.subplot(grid[0, 0])
+    # ax.imshow(np.abs(img_int), cmap="bone", vmin=np.percentile(img_int.ravel(), 1), vmax=np.percentile(img_int.ravel(), 99.9))
+    # ax.set_title("$|I(r)|$")
+    # ax.set_xticks([])
+    # ax.set_yticks([])
 
-    ax = plt.subplot(grid[2, 0])
-    ax.imshow(np.abs(img_int_ft), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
-    ax.plot(frq_ref[0], frq_ref[1], 'rx')
-    ax.add_artist(Circle((0, 0), fmax_int, facecolor="none", edgecolor='r'))
-    ax.add_artist(Circle(frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
-    ax.add_artist(Circle(-frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
-    ax.add_artist(Circle(beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
-    ax.add_artist(Circle(-beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
-    ax.set_xlabel("$f_x$ (1 / $\mu m$)")
-    ax.set_ylabel("$f_y$ (1 / $\mu m$)")
-    ax.set_title("$|I(f)|$")
-    fmax = np.max([fmax_int, np.linalg.norm(beam_frq[:2]) + fmax_int / 2])
-    ax.set_xlim([-fmax, fmax])
-    ax.set_ylim([-fmax, fmax])
+    # ax = plt.subplot(grid[2, 0])
+    # ax.imshow(np.abs(img_int_ft), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
+    # ax.plot(frq_ref[0], frq_ref[1], 'rx')
+    # ax.add_artist(Circle((0, 0), fmax_int, facecolor="none", edgecolor='r'))
+    # ax.add_artist(Circle(frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
+    # ax.add_artist(Circle(-frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
+    # ax.add_artist(Circle(beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
+    # ax.add_artist(Circle(-beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
+    # ax.set_xlabel("$f_x$ (1 / $\mu m$)")
+    # ax.set_ylabel("$f_y$ (1 / $\mu m$)")
+    # ax.set_title("$|I(f)|$")
+    # fmax = np.max([fmax_int, np.linalg.norm(beam_frq[:2]) + fmax_int / 2])
+    # ax.set_xlim([-fmax, fmax])
+    # ax.set_ylim([-fmax, fmax])
 
 
-    labels = ["E", "E_{shifted}", "E_{bg}", "E_{bg,shifted}", "E_{scatt}", "E_{scatt,shifted}"]
-    fields_r = [img_efield, img_efield_shift, img_efield_bg, img_efield_shift_bg,
-                img_efield_scattered, img_efield_shift_scatt]
-    vmin_e = np.percentile(np.abs(img_efield), 0.1)
-    vmax_e = np.percentile(np.abs(img_efield), 99.9)
-    vmin_scat = np.percentile(np.abs(img_efield_scattered), 0.1)
-    vmax_scat = np.percentile(np.abs(img_efield_scattered), 99.9)
-    vmin_r = [vmin_e, vmin_e, vmin_e, vmin_e, vmin_scat, vmin_scat]
-    vmax_r = [vmax_e, vmax_e, vmax_e, vmax_e, vmax_scat, vmax_scat]
-    fields_ft = [img_efield_ft, img_efield_shift_ft, img_efield_bg_ft, img_efield_shift_bg_ft,
-                 img_efield_scatt_ft, img_efield_shift_scatt_ft]
+    labels = ["E_{shifted}", "E_{bg,shifted}", "E_{scatt,shifted}"]
+    fields_r = [img_efield_shift, img_efield_shift_bg, img_efield_shift_scatt]
+    vmin_e = np.percentile(np.abs(img_efield_shift).ravel(), 0.1)
+    vmax_e = np.percentile(np.abs(img_efield_shift).ravel(), 99.9)
+    vmin_scat = np.percentile(np.abs(img_efield_shift_scatt).ravel(), 0.1)
+    vmax_scat = np.percentile(np.abs(img_efield_shift_scatt).ravel(), 99.9)
+    vmin_r = [vmin_e, vmin_e, vmin_scat]
+    vmax_r = [vmax_e, vmax_e, vmax_scat]
+    fields_ft = [img_efield_shift_ft, img_efield_shift_bg_ft, img_efield_shift_scatt_ft]
 
-    flims = [[-0.5 * fmax_int, 0.5 * fmax_int], [-fmax_int, fmax_int],
-             [-0.5 * fmax_int, 0.5 * fmax_int], [-fmax_int, fmax_int],
-             [-0.5 * fmax_int, 0.5 * fmax_int], [-fmax_int, fmax_int]]
-    plot_pts = [beam_frq[:2], np.array([0, 0]), beam_frq[:2], np.array([0, 0]), beam_frq[:2], np.array([0, 0])]
-    for ii in range(6):
-        d = labels[ii]
+    flims = [[-fmax_int, fmax_int],
+             [-fmax_int, fmax_int],
+             [-fmax_int, fmax_int]]
+    plot_pts = [np.array([0, 0]), np.array([0, 0]), np.array([0, 0])]
+    for ii, label in enumerate(labels):
+        #d = labels[ii]
 
-        ax = plt.subplot(grid[0, ii + 1])
-        ax.imshow(np.abs(fields_r[ii]), cmap="bone", vmin=vmin_r[ii], vmax=vmax_r[ii])
-        ax.set_title("$|%s(r)|$" % d)
-        ax.set_xticks([])
-        ax.set_yticks([])
+        ax1 = figh.add_subplot(grid[0, ii])
+        ax1.imshow(np.abs(fields_r[ii]), cmap="bone", vmin=vmin_r[ii], vmax=vmax_r[ii])
+        ax1.set_title("$|%s(r)|$" % label)
+        ax1.set_xticks([])
+        ax1.set_yticks([])
 
-        ax = plt.subplot(grid[1, ii + 1])
-        ax.imshow(np.angle(fields_r[ii]), cmap="RdBu", vmin=-np.pi, vmax=np.pi)
-        ax.set_title("$ang[%s(r)]$" % d)
-        ax.set_xticks([])
-        ax.set_yticks([])
+        ax2 = figh.add_subplot(grid[1, ii])
+        ax2.imshow(np.angle(fields_r[ii]), cmap="RdBu", vmin=-np.pi, vmax=np.pi)
+        ax2.set_title("$ang[%s(r)]$" % label)
+        ax2.set_xticks([])
+        ax2.set_yticks([])
 
-        ax = plt.subplot(grid[2, ii + 1])
-        ax.imshow(np.abs(fields_ft[ii]), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
-        ax.plot(plot_pts[ii][0], plot_pts[ii][1], 'r.', fillstyle="none")
-        plt.xlabel("$f_x$ (1 / $\mu m$)")
-        # plt.ylabel("$f_y$ (1 / $\mu m$)")
-        ax.set_yticks([])
-        plt.title("$|%s(f)|$" % d)
-        ax.set_xlim(flims[ii])
-        ax.set_ylim(flims[ii])
+        ax3 = figh.add_subplot(grid[2, ii])
+        ax3.imshow(np.abs(fields_ft[ii]), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
+        ax3.plot(plot_pts[ii][0], plot_pts[ii][1], 'r.', fillstyle="none")
+        ax3.set_xlabel("$f_x$ (1 / $\mu m$)")
+        ax3.set_ylabel("$f_y$ (1 / $\mu m$)")
+        ax3.set_yticks([])
+        ax3.set_title("$|%s(f)|$" % label)
+        ax3.set_xlim(flims[ii])
+        ax3.set_ylim(flims[ii])
 
     return figh
 
@@ -884,14 +901,14 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
 
 
     figh = plt.figure(figsize=figsize)
-    plt.suptitle("red = maximum extent of frequency info\n"
+    figh.suptitle("red = maximum extent of frequency info\n"
                  "blue = maximum extent of centers")
-    grid = plt.GridSpec(1, 2)
+    grid = figh.add_gridspec(1, 2)
 
     # ########################
     # kx-kz plane
     # ########################
-    ax = plt.subplot(grid[0, 0])
+    ax = figh.add_subplot(grid[0, 0])
     ax.axis("equal")
 
     # plot centers
@@ -927,7 +944,7 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
     # ########################
     # kx-ky plane
     # ########################
-    ax = plt.subplot(grid[0, 1])
+    ax = figh.add_subplot(grid[0, 1])
     ax.axis("equal")
 
     ax.plot(-frqs_3d[:, 0], -frqs_3d[:, 1], 'k.')
@@ -1004,11 +1021,11 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
     fmt_fn = lambda x: "%0.6f" % x
 
     figh = plt.figure(figsize=(16, 8))
-    plt.suptitle("Index of refraction, %s" % title)
-    grid = plt.GridSpec(4, nz_sp + 1)
+    figh.suptitle("Index of refraction, %s" % title)
+    grid = figh.add_gridspec(4, nz_sp + 1)
 
     for ii in range(nz_sp):
-        ax = plt.subplot(grid[0, ii])
+        ax = figh.add_subplot(grid[0, ii])
         ax.set_title("%0.1fum" % z_sp[ii])
         im = ax.imshow(np.real(n_recon[ii]) - no, vmin=-vmax_real, vmax=vmax_real, cmap="RdBu", origin="lower", extent=extent_sp_xy)
         im.format_cursor_data = fmt_fn
@@ -1018,7 +1035,7 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
         if ii == 0:
             ax.set_ylabel("real(n) - no")
 
-        ax = plt.subplot(grid[1, ii])
+        ax = figh.add_subplot(grid[1, ii])
         im = ax.imshow(np.imag(n_recon[ii]), vmin=-vmax_imag, vmax=vmax_imag, cmap="RdBu", origin="lower", extent=extent_sp_xy)
         im.format_cursor_data = fmt_fn
         ax.set_xticks([])
@@ -1026,7 +1043,7 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
         if ii == 0:
             ax.set_ylabel("imag(n)")
 
-        ax = plt.subplot(grid[2, ii])
+        ax = figh.add_subplot(grid[2, ii])
         im = ax.imshow(np.abs(n_recon_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_n_ft),
                        origin="lower", extent=extent_fxy)
         im.format_cursor_data = fmt_fn
@@ -1035,7 +1052,7 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
         if ii == 0:
             ax.set_ylabel("|n(f)|")
 
-        ax = plt.subplot(grid[3, ii])
+        ax = figh.add_subplot(grid[3, ii])
         im = ax.imshow(np.abs(sp_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft),
                        origin="lower", extent=extent_fxy)
         im.format_cursor_data = fmt_fn
@@ -1044,11 +1061,11 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
         ax.set_xticks([])
         ax.set_yticks([])
 
-    ax = plt.subplot(grid[0, nz_sp])
+    ax = figh.add_subplot(grid[0, nz_sp])
     ax.axis("off")
     plt.colorbar(ScalarMappable(norm=Normalize(vmin=-vmax_real, vmax=vmax_real), cmap="RdBu"), ax=ax)
 
-    ax = plt.subplot(grid[1, nz_sp])
+    ax = figh.add_subplot(grid[1, nz_sp])
     ax.axis("off")
     plt.colorbar(ScalarMappable(norm=Normalize(vmin=-vmax_imag, vmax=vmax_imag), cmap="RdBu"), ax=ax)
 
