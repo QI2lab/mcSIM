@@ -81,7 +81,7 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_sq
             ax4.imshow(img, vmin=vmin, vmax=vmax)
             rec = Rectangle((roi[2], roi[0]), roi[3] - roi[2], roi[1] - roi[0], color='white', fill=0)
             ax4.add_artist(rec)
-            plt.suptitle('(ia, ib) = (%d, %d), chi sq=%0.2f' % (indices_init[ii][0], indices_init[ii][1], chi_sq))
+            fig.suptitle('(ia, ib) = (%d, %d), chi sq=%0.2f' % (indices_init[ii][0], indices_init[ii][1], chi_sq))
 
     # guess initial vec_a, vec_b
     #iia = np.array(indices_init)
@@ -211,7 +211,7 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_sq
                     ax4.imshow(img, vmin=vmin, vmax=vmax)
                     rec = Rectangle((xstart, ystart), xend - xstart, yend - ystart, color='white', fill=0)
                     ax4.add_artist(rec)
-                    plt.suptitle('(ia, ib) = (%d, %d), chi sq=%0.2f' % (ind_tuple[0], ind_tuple[1], chi_sq))
+                    fig.suptitle('(ia, ib) = (%d, %d), chi sq=%0.2f' % (ind_tuple[0], ind_tuple[1], chi_sq))
 
         else:
             fps[ind_tuple[0], ind_tuple[1], :] = np.nan
@@ -337,60 +337,70 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
 
     # plot results
     fig = plt.figure(figsize=figsize)
-    grid = plt.GridSpec(6, 4)
+    grid = fig.add_gridspec(6, 4)
 
-    ax = plt.subplot(grid[:2, 0])
+    # chi squareds
+    ax = fig.add_subplot(grid[:2, 0])
+    ax.set_title('$\chi^2$')
     no_nans = chisqs.ravel()[np.logical_not(np.isnan(chisqs.ravel()))]
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    plt.imshow(chisqs, vmin=vmin, vmax=vmax, cmap="bone")
-    plt.title('$\chi^2$')
-    plt.colorbar()
+    im = ax.imshow(chisqs, vmin=vmin, vmax=vmax, cmap="bone")
+    plt.colorbar(im)
 
-    plt.subplot(grid[:2, 1])
+    # position errors
+    ax = fig.add_subplot(grid[:2, 1])
+    ax.set_title('position error (pix)')
+
     no_nans = residual_dist_err.ravel()[np.logical_not(np.isnan(residual_dist_err.ravel()))]
     vmax = np.percentile(no_nans, 90)
-    plt.imshow(residual_dist_err, vmin=0, vmax=vmax, cmap="bone")
-    plt.title('position error (pix)')
-    plt.colorbar()
+    im = ax.imshow(residual_dist_err, vmin=0, vmax=vmax, cmap="bone")
+    plt.colorbar(im)
 
-    plt.subplot(grid[2:4, 0])
+    # sigmas
+    ax = fig.add_subplot(grid[2:4, 0])
     no_nans = sigma_mean_cam.ravel()[np.logical_not(np.isnan(sigma_mean_cam.ravel()))]
     sigma_mean_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    plt.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax, cmap="bone")
-    sigma_m = sigma_mean_median * options["cam_pix"] / options["cam_mag"]
-    plt.title('$\sqrt{\sigma_x \sigma_y}$, median=%0.2f\n$\sigma$=%0.1fnm, FWHM=%0.1fnm' %
-              (sigma_mean_median, sigma_m * 1e9, sigma_m * 2 *  np.sqrt(2 * np.log(2)) * 1e9))
-    plt.colorbar()
+    im = ax.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax, cmap="bone")
 
-    plt.subplot(grid[2:4, 1])
+    sigma_m = sigma_mean_median * options["cam_pix"] / options["cam_mag"]
+    ax.set_title('$\sqrt{\sigma_x \sigma_y}$, median=%0.2f'
+                 '\n$\sigma$=%0.1fnm, FWHM=%0.1fnm' %
+                 (sigma_mean_median, sigma_m * 1e9, sigma_m * 2 * np.sqrt(2 * np.log(2)) * 1e9))
+    plt.colorbar(im)
+
+    # amplitudes
+    ax = fig.add_subplot(grid[2:4, 1])
     no_nans = amps.ravel()[np.logical_not(np.isnan(amps.ravel()))]
     amp_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    plt.imshow(amps, vmin=vmin, vmax=vmax, cmap="bone")
-    plt.title('amps median=%0.0f' % amp_median)
-    plt.colorbar()
+    im = ax.imshow(amps, vmin=vmin, vmax=vmax, cmap="bone")
+    ax.set_title('amps median=%0.0f' % amp_median)
+    plt.colorbar(im)
 
-    plt.subplot(grid[4:6, 0])
+    # sigma asymmetry
+    ax = fig.add_subplot(grid[4:6, 0])
     no_nans = sigma_asymmetry_cam.ravel()[np.logical_not(np.isnan(sigma_asymmetry_cam.ravel()))]
     sigma_asym_median = np.median(no_nans)
-    plt.imshow(sigma_asymmetry_cam, vmin=0, vmax=1, cmap="bone")
-    plt.title('$\sigma$ asym median=%0.2f' % sigma_asym_median)
-    plt.colorbar()
+    im = ax.imshow(sigma_asymmetry_cam, vmin=0, vmax=1, cmap="bone")
+    ax.set_title('$\sigma$ asym median=%0.2f' % sigma_asym_median)
+    plt.colorbar(im)
 
-    plt.subplot(grid[4:6, 1])
+    # angles
+    ax = fig.add_subplot(grid[4:6, 1])
     no_nans = angles.ravel()[np.logical_not(np.isnan(angles.ravel()))]
     median_angle = np.median(no_nans * 180 / np.pi)
-    plt.imshow(angles * 180 /np.pi, vmin=0, vmax=180, cmap="bone")
-    plt.title('angle, median=%0.1f$^\deg$' % median_angle)
-    plt.colorbar()
+    im = ax.imshow(angles * 180 /np.pi, vmin=0, vmax=180, cmap="bone")
+    ax.set_title('angle, median=%0.1f$^\deg$' % median_angle)
+    plt.colorbar(im)
 
-    ax = plt.subplot(grid[:3, 2:])
-    ax.set_title('image and fits')
-    ax.imshow(img, vmin=vmin_img, vmax=vmax_img)
+    # raw image with fit poitns overlayed
+    ax = fig.add_subplot(grid[:3, 2:])
+    ax.set_title('raw image and fits')
+    im = ax.imshow(img, vmin=vmin_img, vmax=vmax_img)
     ax.plot(xcam, ycam, 'rx', label="fit points")
     ax.plot(xdmd_xform, ydmd_xform, 'y1', label="affine xform")
     ax.plot(xc_dmd_cam, yc_dmd_cam, 'mx')
@@ -400,16 +410,17 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     ax.set_xticks([])
     ax.set_yticks([])
 
-    ax = plt.subplot(grid[3:, 2:])
-    ax.set_title('dmd mask xformed to img space')
-    ax.imshow(mask_xformed)
+    # dmd image transformed
+    ax = fig.add_subplot(grid[3:, 2:])
+    ax.set_title('DMD pattern xformed to img space')
+    im = ax.imshow(mask_xformed)
     ax.plot(xc_dmd_cam, yc_dmd_cam, c='m', marker='x')
     ax.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm')
     ax.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
     ax.set_xticks([])
     ax.set_yticks([])
 
-    plt.suptitle('theta_x=%.2fdeg, mx=%0.3f, cx=%0.1f, pixel corrected mx=%.3f\n'
+    fig.suptitle('theta_x=%.2fdeg, mx=%0.3f, cx=%0.1f, pixel corrected mx=%.3f\n'
                  'theta_y=%.2fdeg, my=%0.3f, cy=%0.1f, pixel corrected my=%0.3f\n'
                  'expected mag=%0.3f'
                  % (affine_params[1] * 180 / np.pi, affine_params[0], affine_params[2], affine_params[0] * pixel_correction_factor,
