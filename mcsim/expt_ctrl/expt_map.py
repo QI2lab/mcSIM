@@ -2,7 +2,7 @@ import numpy as np
 
 # DAQ line mapping
 daq_do_map = {"odt_cam": 0,
-              "odt_shutter": 2,
+              "odt_shutter": 9,
               "odt_laser": 2,
               "sim_cam": 5,
               "sim_shutter": 6,

@@ -74,8 +74,7 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     print("odt one sequence of %d volumes = %0.2fms = %d clock cycles" % (n_odt_per_sim, nsteps_odt * dt * 1e3, nsteps_odt))
 
     # shutter always on
-    # todo: put this back in once stop using same line for odt laser/shutter
-    # do_odt[n_odt_stabilize - n_odt_shutter_delay:, daq_do_map["odt_shutter"]] = 1
+    do_odt[n_odt_stabilize - n_odt_shutter_delay:, daq_do_map["odt_shutter"]] = 1
     # laser always on
     do_odt[:, daq_do_map["odt_laser"]] = 1
     # DMD enable trigger always on
