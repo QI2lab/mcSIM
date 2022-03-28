@@ -4,7 +4,6 @@ Command line call to load pattern to DMD in "pattern on the fly" mode
 import numpy as np
 import dlp6500
 import sys
-import glob
 import os
 import time
 from PIL import Image

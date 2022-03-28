@@ -7,7 +7,7 @@ This file contains information about the DMD firmware patterns in the variables 
 `get_dmd_sequence()` and `program_dmd_seq()`. This can imported from other python files and called from there,
 or this script can be run from the command line.
 
-Run "python set_dmd_sim.py -h" on the commandline for a detailed description of command options
+Run "python set_dmd_pattern_firmware.py -h" on the commandline for a detailed description of command options
 
 Information about which patterns are stored in the firmware and mapping onto different "channels" which
 are associated with a particular excitation wavelength and "modes" which are associated with a certain DMD
@@ -38,17 +38,19 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                "blue": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, dtype=int)}},
                "red": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, 18, dtype=int)}},
                "green": {"default": {"picture_indices": np.array([0] * 6 + [1] * 3, dtype=int), "bit_indices": np.array(list(range(18, 24)) + list(range(3)), dtype=int)}},
-               "odt": {"default": {"picture_indices": np.array([1, 12, 13, 13, 13, 13, 13, 14, 14, 14, 14, 14], dtype=int),
-                                    "bit_indices": np.array([7, 19, 0, 5, 10, 15, 20, 1, 6, 11, 16, 21], dtype=int)},
+               "odt": {"default": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
+                                    "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
                        "n=1_f=0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
-                       "n=12_f=84%": {"picture_indices": np.array([1, 12, 13, 13, 13, 13, 13, 14, 14, 14, 14, 14], dtype=int),
-                                    "bit_indices": np.array([7, 19, 0, 5, 10, 15, 20, 1, 6, 11, 16, 21], dtype=int)},
-                       "n=6_f=84%": {"picture_indices": np.array([1, 12, 13, 13, 14, 14], dtype=int),
-                                    "bit_indices": np.array([7, 19, 6, 17, 4, 15], dtype=int)},
-                       "n=12_f=55%": {"picture_indices": np.array([1, 5, 6, 6, 6, 6, 6, 7, 7, 7, 7, 8], dtype=int),
-                                    "bit_indices": np.array([7, 22, 3, 8, 13, 18, 23, 4, 9, 14, 19, 0], dtype=int)},
-                       "n=6_f=55%": {"picture_indices": np.array([1, 5, 6, 6, 7, 7], dtype=int),
-                                    "bit_indices": np.array([7, 22, 9, 20, 7, 18], dtype=int)},
+                       "n=7_f=100%": {"picture_indices": np.array([1, 13, 14, 14, 14, 14, 14], dtype=int),
+                                    "bit_indices": np.array([7, 20, 3, 4, 11, 18, 19], dtype=int)},
+                       "n=11_f=84%": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
+                                    "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
+                       "n=6_f=84%": {"picture_indices": np.array([1, 11, 12, 12, 13, 13], dtype=int),
+                                    "bit_indices": np.array([7, 18, 4, 14, 0, 10], dtype=int)},
+                       "n=11_f=55%": {"picture_indices": np.array([1, 5, 5, 5, 6, 6, 6, 6, 6, 7, 7], dtype=int),
+                                    "bit_indices": np.array([7, 12, 17, 22, 3, 8, 13, 18, 23, 4, 9], dtype=int)},
+                       "n=6_f=55%": {"picture_indices": np.array([1, 5, 5, 6, 6, 7], dtype=int),
+                                    "bit_indices": np.array([7, 12, 22, 8, 18, 4], dtype=int)},
                        "all": {"picture_indices": np.hstack((1 * np.ones([17], dtype=int),
                                                              2 * np.ones([24], dtype=int),
                                                              3 * np.ones([24], dtype=int),
@@ -192,7 +194,6 @@ def generate_firmware_patterns(generate_patterns=True):
     # na_detection = 0.55
     na_detection = 1
     dm = 7.56 # DMD mirror size
-    # fl_detection = 4e3 # focal length of mitutoya objective
     fl_detection = 3e3
     fl_excitation = 1.8e3
     # magnification between DMD and Mitutoyo BFP
@@ -201,14 +202,12 @@ def generate_firmware_patterns(generate_patterns=True):
     pupil_rad_mirrors = fl_detection * na_detection / mag_dmd2bfp / dm
 
     # patterns
-    n_phis = 55
-    fractions = [0.25, 0.45, 0.55, 0.65, 0.75, 0.84]
+    n_phis = 50
+    fractions = [0.25, 0.45, 0.55, 0.65, 0.75, 0.84, 1.0]
     phis = np.arange(n_phis) * 2*np.pi / n_phis
     n_thetas = len(fractions)
 
     pp, ff = np.meshgrid(phis, fractions)
-    pp = pp.ravel()
-    ff = ff.ravel()
 
     xoffs = np.zeros((n_thetas, n_phis))
     yoffs = np.zeros(xoffs.shape)
@@ -217,11 +216,19 @@ def generate_firmware_patterns(generate_patterns=True):
             xoffs[ii, jj] = np.cos(phis[jj]) * pupil_rad_mirrors * fractions[ii]
             yoffs[ii, jj] = np.sin(phis[jj]) * pupil_rad_mirrors * fractions[ii]
 
+    # remove any points beyond DMD boundary
+    in_bounds = np.logical_and.reduce((yoffs + rad < ny//2,
+                                       yoffs - rad > -ny//2,
+                                       xoffs + rad < nx//2,
+                                       xoffs - rad > -nx//2))
 
-    ff = np.concatenate((np.array([0]), ff))
-    pp = np.concatenate((np.array([0]), pp))
-    xoffs = np.concatenate((np.array([0]), xoffs.ravel()))
-    yoffs = np.concatenate((np.array([0]), yoffs.ravel()))
+    # pp = pp.ravel()
+    # ff = ff.ravel()
+
+    ff = np.concatenate((np.array([0]), ff[in_bounds]))
+    pp = np.concatenate((np.array([0]), pp[in_bounds]))
+    xoffs = np.concatenate((np.array([0]), xoffs[in_bounds].ravel()))
+    yoffs = np.concatenate((np.array([0]), yoffs[in_bounds].ravel()))
 
     if generate_patterns:
         # generate ODT patterns
@@ -243,7 +250,7 @@ def generate_firmware_patterns(generate_patterns=True):
                                      (yy - cref[0] - yoffs.ravel()[ii])**2) > rad] = 1
 
         odt_pattern_data.append({"type": "odt", "xoffset": xoffs[ii], "yoffset": yoffs[ii],
-                                 "angle": ang, "frequency": frq, "phase": phase, "radius": rad, # carier frequency information
+                                 "angle": ang, "frequency": frq, "phase": phase, "radius": rad, # carrier frequency information
                                  "pupil_frequency_fraction": ff[ii],
                                  "pupil_angle": pp[ii]})
 

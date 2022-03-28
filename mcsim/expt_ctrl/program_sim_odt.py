@@ -3,7 +3,7 @@ Create DAQ program for SIM/ODT experiment
 """
 
 import numpy as np
-from mcsim.expt_ctrl.expt_map import presets
+from mcsim.expt_ctrl.daq_map import presets
 
 def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, sim_exposure_time,
                            n_odt_patterns, n_sim_patterns, dt=105e-6, interval=0,
@@ -14,8 +14,8 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     """
     Create DAQ program for SIM/ODT experiment
 
-    @param dict daq_do_map: e.g. from expt_map.py
-    @param dict daq_ao_map: e.g. from expt_map.py
+    @param dict daq_do_map: e.g. from daq_map.py
+    @param dict daq_ao_map: e.g. from daq_map.py
     @param list[str] channels:
     @param float odt_exposure_time: odt exposure time in s
     @param float sim_exposure_time: sim exposure time in s

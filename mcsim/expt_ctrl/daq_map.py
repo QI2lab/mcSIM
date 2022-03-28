@@ -1,3 +1,6 @@
+"""
+Define DAQ line names and associate alises ("presets") with various combinations of channel patterns
+"""
 import numpy as np
 
 # DAQ line mapping
@@ -20,7 +23,6 @@ daq_ao_map = {"vc_mirror_x": 0,
 # dictionary of presets
 # each preset is a dictionary with keys "digital" and "analog"
 # preset["blue"]["digital"] is a dictionary where the keys are the channel names
-# todo: should I also add the DMD pictures as an argument here?
 presets = {"off": {"digital": {"odt_cam": 0, "odt_shutter": 0, "odt_laser": 0,
                                 "sim_cam": 0, "sim_shutter": 0,
                                 "blue_laser": 0, "green_laser": 0, "red_laser": 0,
