@@ -52,7 +52,7 @@ To get started with reconstructing SIM data, see the example script [reconstruct
 Code for simulating the diffraction patterns produced by the DMD. Various 
 scripts illustrating the usage of this code can be found in the [examples](examples)
 directory. This simulation code has many useful features, including an analytic solution
-for the joint blaze/diffraction condition, pattern siulation tools, tools for extracting the intensity pattern
+for the joint blaze/diffraction condition, pattern simulation tools, tools for extracting the intensity pattern
 in the Fourier plane of a collecting lens, etc.
 
 ### [dmd_patterns.py](mcsim/analysis/dmd_patterns.py)
@@ -62,8 +62,10 @@ representation of DMD patterns. This allows a complete enumeration of DMD diffra
 in a compact and computationally efficient form.
 
 ### [fit_dmd_affine.py](mcsim/analysis/fit_dmd_affine.py)
-Code to fit the affine transformation between the DMD coordinates and camera coordinates using imaging data from a DMD
-pattern consisting of many small points.
+Code to fit the affine transformation between the DMD coordinates and camera coordinates
+using imaging data from a DMD pattern consisting of many small points. These code relies
+on tools for working with affine transformations found 
+[here](https://github.com/QI2lab/localize-psf/blob/master/localize_psf/affine.py)
 
 ### [otf_tools.py](mcsim/analysis/otf_tools.py)
 Code for extracting optical transfer function from measurement of the strength of various Fourier peaks for a given SIM DMD pattern.
@@ -77,7 +79,7 @@ Miscellaneous image processing tools
 ### [mm_io.py](mcsim/analysis/mm_io.py)
 Tools for IO of MicroManager style tif files and metadata.
 
-### [localize-psf](localize-psf/fit.py)
+### [localize-psf](https://github.com/QI2lab/localize-psf/blob/master/localize_psf)
 Useful tools for automatically localizing sparse fluorescent beads and performing both 2D and 3D
 PSF fitting using various PSF models. Also provides useful statistics and figures summarizing the results.
 This code has now been split out into a [separate repository](https://github.com/QI2lab/localize-psf).
@@ -95,7 +97,7 @@ Code for controlling the DLP6500 DMD over USB on Windows. This code was initiall
 of [Lightcrafter6500DMDControl](https://github.com/mazurenko/Lightcrafter6500DMDControl) and
 [Pycrafter6500](https://github.com/csi-dcsc/Pycrafter6500).
 
-### [expt_ctrl/set_dmd_sim.py](mcsim/expt_ctrl/set_dmd_sim.py)
+### [expt_ctrl/set_dmd_sim.py](mcsim/expt_ctrl/set_dmd_pattern_firmware.py)
 This is the script used to define pattern sequences on the DMD using patterns which
 have been previously loaded onto the firmware using the [Texas Instruments DLP6500 and DLP9000
 GUI](https://www.ti.com/tool/DLPC900REF-SW). It is a command line interface to [dlp6500.py](expt_ctrl/dlp6500.py),
@@ -121,4 +123,4 @@ describing the equipment and settings used in the experiment.
 
 # Instrument design
 Mechanical drawings of some parts used in the setup are included in the [parts](parts) directory. For a more complete description of the setup and
-a parts list, see the published paper linked above.
+a parts list, see the published paper linked above. See in particular the [parts list](parts/parts_list.md)
