@@ -41,8 +41,8 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                "odt": {"default": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
                                     "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
                        "n=1_f=0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
-                       "n=7_f=100%": {"picture_indices": np.array([1, 13, 14, 14, 14, 14, 14], dtype=int),
-                                    "bit_indices": np.array([7, 20, 3, 4, 11, 18, 19], dtype=int)},
+                       "n=7_f=97%": {"picture_indices": np.array([1, 13, 14, 14, 14, 14, 14], dtype=int),
+                                    "bit_indices": np.array([7, 20, 4, 5, 13, 21, 22], dtype=int)},
                        "n=11_f=84%": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
                                     "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
                        "n=6_f=84%": {"picture_indices": np.array([1, 11, 12, 12, 13, 13], dtype=int),
@@ -65,7 +65,7 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                                                              12 * np.ones([24], dtype=int),
                                                              13 * np.ones([24], dtype=int),
                                                              14 * np.ones([24], dtype=int),
-                                                             15 * np.ones([2], dtype=int),
+                                                             15 * np.ones([6], dtype=int),
                                                              )),
                                "bit_indices": np.hstack((np.arange(7, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
@@ -81,7 +81,7 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                                                          np.arange(0, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
-                                                         np.arange(0, 2, dtype=int)))}
+                                                         np.arange(0, 6, dtype=int)))}
                        }
             }
 
@@ -203,7 +203,7 @@ def generate_firmware_patterns(generate_patterns=True):
 
     # patterns
     n_phis = 50
-    fractions = [0.25, 0.45, 0.55, 0.65, 0.75, 0.84, 1.0]
+    fractions = [0.25, 0.45, 0.55, 0.65, 0.75, 0.84, 0.95]
     phis = np.arange(n_phis) * 2*np.pi / n_phis
     n_thetas = len(fractions)
 
