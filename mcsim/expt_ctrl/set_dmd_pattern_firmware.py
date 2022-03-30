@@ -41,12 +41,18 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                "odt": {"default": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
                                     "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
                        "n=1_f=0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
+                       # "n=7_f=97%": {"picture_indices": np.array([1, 13, 14, 14, 14, 14, 14], dtype=int),
+                       #              "bit_indices": np.array([7, 20, 4, 5, 13, 21, 22], dtype=int)},
+                       # "n=11_f=84%": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
+                       #              "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
+                       # "n=6_f=84%": {"picture_indices": np.array([1, 11, 12, 12, 13, 13], dtype=int),
+                       #              "bit_indices": np.array([7, 18, 4, 14, 0, 10], dtype=int)},
                        "n=7_f=97%": {"picture_indices": np.array([1, 13, 14, 14, 14, 14, 14], dtype=int),
-                                    "bit_indices": np.array([7, 20, 4, 5, 13, 21, 22], dtype=int)},
-                       "n=11_f=84%": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
-                                    "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
-                       "n=6_f=84%": {"picture_indices": np.array([1, 11, 12, 12, 13, 13], dtype=int),
-                                    "bit_indices": np.array([7, 18, 4, 14, 0, 10], dtype=int)},
+                                     "bit_indices": np.array([7, 16, 0, 1, 9, 17, 18], dtype=int)},
+                       "n=11_f=84%": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13], dtype=int),
+                                      "bit_indices": np.array([7, 18, 23, 4, 7, 12, 17, 22, 3, 6, 11], dtype=int)},
+                       "n=6_f=84%": {"picture_indices": np.array([1, 11, 12, 12, 12, 13], dtype=int),
+                                     "bit_indices": np.array([7, 18, 4, 12, 22, 6], dtype=int)},
                        "n=11_f=55%": {"picture_indices": np.array([1, 5, 5, 5, 6, 6, 6, 6, 6, 7, 7], dtype=int),
                                     "bit_indices": np.array([7, 12, 17, 22, 3, 8, 13, 18, 23, 4, 9], dtype=int)},
                        "n=6_f=55%": {"picture_indices": np.array([1, 5, 5, 6, 6, 7], dtype=int),
@@ -65,7 +71,8 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                                                              12 * np.ones([24], dtype=int),
                                                              13 * np.ones([24], dtype=int),
                                                              14 * np.ones([24], dtype=int),
-                                                             15 * np.ones([6], dtype=int),
+                                                             15 * np.ones([2], dtype=int)
+                                                             #15 * np.ones([6], dtype=int),
                                                              )),
                                "bit_indices": np.hstack((np.arange(7, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
@@ -81,7 +88,9 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                                                          np.arange(0, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
                                                          np.arange(0, 24, dtype=int),
-                                                         np.arange(0, 6, dtype=int)))}
+                                                         #np.arange(0, 6, dtype=int)
+                                                         np.arange(0, 2, dtype=int)
+                                                         ))}
                        }
             }
 
@@ -187,7 +196,8 @@ def generate_firmware_patterns(generate_patterns=True):
     ang = -45 * np.pi/180
     frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
 
-    rad = 5
+    # rad = 5
+    rad = 10
     phase = 0
 
     # pupil info
