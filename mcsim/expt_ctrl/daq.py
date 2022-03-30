@@ -43,10 +43,19 @@ class nidaq(daq):
         self.task_ao = None
 
     def reset(self):
+        """
+
+        @return:
+        """
         daqmx.DAQmxResetDevice(self.dev_name)
         self.set_digital_once(np.zeros(self.n_digital_lines))
 
     def set_digital_once(self, array):
+        """
+
+        @param array:
+        @return:
+        """
         array = np.array(array).astype(np.uint8)
         if array.ndim != 1 or array.size != self.n_digital_lines:
             raise ValueError()
@@ -58,6 +67,11 @@ class nidaq(daq):
         self.task_do.ClearTask()
 
     def set_analog_once(self, array):
+        """
+
+        @param array:
+        @return:
+        """
         array = np.array(array)
         # if array.ndim != 1 or array.size != self.n_digital_lines:
         #     raise ValueError()
@@ -73,7 +87,16 @@ class nidaq(daq):
             self.task_ao.StopTask()
             self.task_ao.ClearTask()
 
-    def set_sequence(self, digital_array, analog_array, sample_rate_hz, clock_source="OnBoardClock"):
+    def set_sequence(self, digital_array, analog_array, sample_rate_hz, clock_source="OnBoardClock", continuous=True):
+        """
+
+        @param digital_array:
+        @param analog_array:
+        @param sample_rate_hz:
+        @param clock_source:
+        @param continuous: if True, then sequence will be run repeatedly. If False, sequence will be run once.
+        @return:
+        """
         if not digital_array.shape[0] == analog_array.shape[0]:
             raise ValueError("digital_array and analog_array should have the same size in their first dimension")
 
@@ -86,7 +109,11 @@ class nidaq(daq):
         self.task_do.CreateDOChan(self.digital_lines, "", daqmx.DAQmx_Val_ChanForAllLines)
 
         # Configure timing (from DI task)
-        self.task_do.CfgSampClkTiming(clock_source, sample_rate_hz, daqmx.DAQmx_Val_Rising, daqmx.DAQmx_Val_ContSamps, samples_per_ch)
+        if continuous:
+            repeat = daqmx.DAQmx_Val_ContSamps
+        else:
+            repeat = daqmx.DAQmx_Val_FiniteSamps
+        self.task_do.CfgSampClkTiming(clock_source, sample_rate_hz, daqmx.DAQmx_Val_Rising, repeat, samples_per_ch)
 
         # self.task_do.ExportSignal(clock_source, "/Dev1/PFI2")
 
@@ -151,7 +178,7 @@ def plot_arr(arr, line_names=None, title=""):
 
 
     figh = plt.figure()
-    ax = plt.subplot(1, 1, 1)
+    ax = figh.add_subplot(1, 1, 1)
     ax.set_title(title)
 
     ax.imshow(arr[:, :ind_max], aspect="auto", interpolation="none")
