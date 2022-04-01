@@ -171,7 +171,7 @@ def plot_arr(arr, line_names=None, title=""):
     if line_names is None:
         line_names = [str(ii) for ii in range(arr.shape[1])]
 
-    ind_max = len(line_names) + 1
+    ind_max = len(line_names) #+ 1
     ticks = []
     for ii in range(ind_max):
         ticks.append(matplotlib.text.Text(float(ii), 0, line_names[ii]))
