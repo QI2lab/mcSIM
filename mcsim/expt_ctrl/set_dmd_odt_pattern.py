@@ -31,7 +31,7 @@ xx, yy = np.meshgrid(range(nx), range(ny))
 # pattern parameters
 ang = -45 * np.pi/180
 frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
-rad = 5
+rad = 50
 phase = 0
 
 # base pattern
@@ -59,7 +59,10 @@ one_pattern = False
 if one_pattern:
     # (y, x)
     # offset = np.array([0, 0])
-    offset = np.array([0, 0])
+
+    phi = -149 * np.pi/180
+    fraction = 0.97
+    offset = np.array([np.cos(phi) * pupil_rad_mirrors * fraction, np.sin(phi) * pupil_rad_mirrors * fraction])
 
     # centered pattern
     centered_pattern = np.array(pattern_base, copy=True)
@@ -69,9 +72,9 @@ if one_pattern:
     img_inds, bit_inds = dmd.upload_pattern_sequence(centered_pattern.astype(np.uint8), 105, 0)
 else:
     # or, many patterns
-    n_phis = 1
+    n_phis = 10
     phis = np.arange(n_phis) * 2 * np.pi / n_phis
-    fractions = [1.025]
+    fractions = [0.97]
     n_thetas = len(fractions)
 
     xoffs = np.zeros((n_thetas, n_phis))
@@ -81,7 +84,7 @@ else:
             xoffs[ii, jj] = np.cos(phis[jj]) * pupil_rad_mirrors * fractions[ii]
             yoffs[ii, jj] = np.sin(phis[jj]) * pupil_rad_mirrors * fractions[ii]
 
-    add_zero = False
+    add_zero = True
     if add_zero:
         xoffs = np.concatenate((np.array([0]), xoffs.ravel()))
         yoffs = np.concatenate((np.array([0]), yoffs.ravel()))

@@ -37,7 +37,7 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     # delay between frames
     nsteps_delay = int(np.ceil(interval / dt))
     if interval != 0:
-        raise NotImplementedError()
+        raise NotImplementedError("non-zero interval between adjacent frames not yet implemented")
 
     # minimum frame time
     nsteps_min_frame = int(np.ceil(min_odt_frame_time / dt))
@@ -79,6 +79,8 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     do_odt[:, daq_do_map["odt_laser"]] = 1
     # DMD enable trigger always on
     do_odt[:, daq_do_map["dmd_enable"]] = 1
+    # master trigger
+    do_odt[1:, daq_do_map["odt_cam_master_trig"]] = 1
 
     # set camera trigger, which starts after delay time for DMD to display pattern
     do_odt[n_odt_stabilize::nsteps_odt_frame, daq_do_map["odt_cam"]] = 1

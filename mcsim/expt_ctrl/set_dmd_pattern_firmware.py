@@ -38,8 +38,10 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                "blue": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, dtype=int)}},
                "red": {"default": {"picture_indices": np.zeros(9, dtype=int), "bit_indices": np.arange(9, 18, dtype=int)}},
                "green": {"default": {"picture_indices": np.array([0] * 6 + [1] * 3, dtype=int), "bit_indices": np.array(list(range(18, 24)) + list(range(3)), dtype=int)}},
-               "odt": {"default": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
-                                    "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
+               "odt": {#"default": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13], dtype=int),
+                        #            "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
+                       "default": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13], dtype=int),
+                                    "bit_indices": np.array([7, 18, 23, 4, 7, 12, 17, 22, 3, 6, 11], dtype=int)},
                        "n=1_f=0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
                        # "n=7_f=97%": {"picture_indices": np.array([1, 13, 14, 14, 14, 14, 14], dtype=int),
                        #              "bit_indices": np.array([7, 20, 4, 5, 13, 21, 22], dtype=int)},
@@ -151,6 +153,16 @@ def validate_channel_map(cm):
 # #######################
 # firmware patterns
 # #######################
+def firmware_index_2pic_bit(firmware_indices):
+    pic_inds = firmware_indices // 24
+    bit_inds = firmware_indices - 24 * pic_inds
+
+    return pic_inds, bit_inds
+
+def pic_bit_ind_2firmware_ind(pic_inds, bit_inds):
+    firmware_inds = pic_inds * 24 + bit_inds
+    return firmware_inds
+
 def generate_firmware_patterns(generate_patterns=True):
     # ##########################
     # sim patterns
