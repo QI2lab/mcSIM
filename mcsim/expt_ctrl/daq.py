@@ -160,7 +160,7 @@ class nidaq(daq):
         except daqmx.DAQmxFunctions.InvalidTaskError:
             pass
 
-def plot_arr(arr, line_names=None, title=""):
+def plot_arr(arr, line_names=None, title="", **kwargs):
     """
     Plot daq array
     @param arr: nsteps x nchannels array
@@ -177,7 +177,7 @@ def plot_arr(arr, line_names=None, title=""):
         ticks.append(matplotlib.text.Text(float(ii), 0, line_names[ii]))
 
 
-    figh = plt.figure()
+    figh = plt.figure(**kwargs)
     ax = figh.add_subplot(1, 1, 1)
     ax.set_title(title)
 
