@@ -68,10 +68,10 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     nsteps_odt = nsteps_odt_frame * n_odt_patterns * n_odt_per_sim + n_odt_stabilize
     do_odt = np.zeros((nsteps_odt, 16), dtype=np.uint8)
 
-    print("odt stabilize time = %0.2fms = %d clock cycles" % (odt_stabilize_t * 1e3, n_odt_stabilize))
-    print("odt exposure time = %0.2fms = %d clock cycles" % (odt_exposure_time * 1e3, nsteps_odt_exposure))
-    print("odt one frame = %0.2fms = %d clock cycles" % (nsteps_odt_frame * dt * 1e3, nsteps_odt_frame))
-    print("odt one sequence of %d volumes = %0.2fms = %d clock cycles" % (n_odt_per_sim, nsteps_odt * dt * 1e3, nsteps_odt))
+    print("odt stabilize time = %0.3fms = %d clock cycles" % (odt_stabilize_t * 1e3, n_odt_stabilize))
+    print("odt exposure time = %0.3fms = %d clock cycles" % (odt_exposure_time * 1e3, nsteps_odt_exposure))
+    print("odt one frame = %0.3fms = %d clock cycles" % (nsteps_odt_frame * dt * 1e3, nsteps_odt_frame))
+    print("odt one sequence of %d volumes = %0.3fms = %d clock cycles" % (n_odt_per_sim, nsteps_odt * dt * 1e3, nsteps_odt))
 
     # shutter always on
     do_odt[n_odt_stabilize - n_odt_shutter_delay:, daq_do_map["odt_shutter"]] = 1
@@ -161,10 +161,10 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
                        "red": {"do": do_sim_red, "ao": ao_sim_red},
                        "green": {"do": do_sim_green, "ao": ao_sim_green}}
 
-    print("sim channel stabilize time = %0.2fms = %d clock cycles" % (n_sim_stabilize * dt * 1e3, n_sim_stabilize))
-    print("sim exposure time = %0.2fms = %d clock cycles" % (nsteps_sim_exposure * dt * 1e3, nsteps_sim_exposure))
-    print("sim one frame = %0.2fms = %d clock cycles" % (nsteps_sim_frame * dt * 1e3, nsteps_sim_frame))
-    print("sim one channel= %0.2fms = %d clock cycles" % (nsteps_sim_channel * dt * 1e3, nsteps_sim_channel))
+    print("sim channel stabilize time = %0.3fms = %d clock cycles" % (n_sim_stabilize * dt * 1e3, n_sim_stabilize))
+    print("sim exposure time = %0.3fms = %d clock cycles" % (nsteps_sim_exposure * dt * 1e3, nsteps_sim_exposure))
+    print("sim one frame = %0.3fms = %d clock cycles" % (nsteps_sim_frame * dt * 1e3, nsteps_sim_frame))
+    print("sim one channel= %0.3fms = %d clock cycles" % (nsteps_sim_channel * dt * 1e3, nsteps_sim_channel))
 
 
     # #########################
@@ -194,6 +194,6 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
     print("channels are:", end="")
     print(" ".join(channels))
 
-    print("full program = %0.2fms = %d clock cycles" % (nsteps_pgm * dt * 1e3, nsteps_pgm))
+    print("full program = %0.3fms = %d clock cycles" % (nsteps_pgm * dt * 1e3, nsteps_pgm))
 
     return do_sim_odt, ao_sim_odt, dt
