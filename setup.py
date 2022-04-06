@@ -27,7 +27,7 @@ if sys.platform == 'win32':
 
 setup(
     name='mcsim',
-    version='0.1.0',
+    version='0.2.0',
     description="A package for simulating and controlling a multicolor structured illumination"
                 " microscopy (SIM) experiment using a DLP6500 digital micromirror device (DMD)"
                 " and performing SIM reconstruction.",
