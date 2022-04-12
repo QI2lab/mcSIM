@@ -2,7 +2,9 @@
 Define DAQ line names and associate alises ("presets") with various combinations of channel patterns
 """
 import numpy as np
+import json
 
+# todo: store line mapping in configuration file
 # DAQ line mapping
 daq_do_map = {"odt_cam": 0,
               "odt_shutter": 9,
@@ -88,9 +90,11 @@ presets = {"off": {"digital": {"odt_cam": 0,
                               "vc_mirror_y": 0}}
            }
 
-def get_line_names(map):
+def get_line_names(map: dict):
     """
     From a dictionary of line names, get list of line names such that line ii is called name[ii]
+    @param map:
+    @return line_names:
     """
     # get line names
     k = list(map.keys())
@@ -114,9 +118,16 @@ def get_line_names(map):
     return line_names
 
 
-def preset_to_array(preset, do_map, ao_map, n_digital_channels=None, n_analog_channels=None):
+def preset_to_array(preset: dict, do_map: dict, ao_map: dict, n_digital_channels: int = None, n_analog_channels: int = None):
     """
-    Get arrays to program daq from prese
+    Get arrays to program daq from presets
+
+    @param preset: dictionary
+    @param do_map: digital output map dictionary
+    @param ao_map:
+    @param n_digital_channels:
+    @param n_analog_channels:
+    @return digital_array, analog_array:
     """
 
     # get digital array
@@ -137,3 +148,35 @@ def preset_to_array(preset, do_map, ao_map, n_digital_channels=None, n_analog_ch
 
 
     return digital_array, analog_array
+
+
+def save_config_file(fname, analog_map, digital_map, presets):
+    """
+    Save configuration data to json file
+
+    @param fname:
+    @param analog_map:
+    @param digital_map:
+    @param presets:
+    @return:
+    """
+    with open(fname, "w") as f:
+        json.dump({"analog_map": analog_map, "digital_map": digital_map, "presets": presets}, f)
+
+
+def load_config_file(fname):
+    """
+    load configuration data from json file
+    @param fname:
+    @return analog_map, digital_map, presets:
+    """
+    with open(fname, "r") as f:
+        data = json.load(f)
+
+    analog_map = data["analog_map"]
+    digital_map = data["digital_map"]
+    presets = data["presets"]
+
+
+    return analog_map, digital_map, presets
+
