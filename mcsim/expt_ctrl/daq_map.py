@@ -15,7 +15,8 @@ daq_do_map = {"odt_cam": 0,
               "dmd_enable": 4,
               "dmd_advance": 3,
               "odt_cam_master_trig": 10,
-              "trigger_mirror": 11}
+              "signal_monitor": 11,
+              "signal_monitor_2": 12}
 
 # analog lines
 daq_ao_map = {"vc_mirror_x": 0,

@@ -182,10 +182,12 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
             do_list.append(sim_daq_data_ch[ch]["do"])
             ao_list.append(sim_daq_data_ch[ch]["ao"])
 
-
     # build complete program
     do_sim_odt = np.vstack(do_list)
     ao_sim_odt = np.vstack(ao_list)
+
+    # mirror dmd advance signal on monitor line
+    do_sim_odt[:, daq_do_map["signal_monitor"]] = do_sim_odt[:, daq_do_map["dmd_advance"]]
 
     assert do_sim_odt.shape[0] == ao_sim_odt.shape[0]
 
@@ -196,4 +198,4 @@ def build_odt_sim_sequence(daq_do_map, daq_ao_map, channels, odt_exposure_time, 
 
     print("full program = %0.3fms = %d clock cycles" % (nsteps_pgm * dt * 1e3, nsteps_pgm))
 
-    return do_sim_odt, ao_sim_odt, dt
+    return do_sim_odt, ao_sim_odt
