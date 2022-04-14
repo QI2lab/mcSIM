@@ -1,0 +1,94 @@
+{
+	"timestamp": "2022_04_13_18;15;08",
+	"analog_map": {
+		"vc_mirror_x": 0,
+		"vc_mirror_y": 1,
+		"z_stage": 2,
+		"z_stage_monitor": 3
+	},
+	"digital_map": {
+		"odt_cam": 0,
+		"odt_shutter": 9,
+		"odt_laser": 2,
+		"sim_cam": 5,
+		"sim_shutter": 6,
+		"blue_laser": 8,
+		"green_laser": 7,
+		"red_laser": 1,
+		"dmd_enable": 4,
+		"dmd_advance": 3,
+		"odt_cam_master_trig": 10,
+		"signal_monitor": 11,
+		"analog_trigger": 12
+	},
+	"presets": {
+		"off": {
+			"digital": {
+				"odt_cam": 0,
+				"odt_shutter": 0,
+				"odt_laser": 0,
+				"sim_cam": 0,
+				"sim_shutter": 0,
+				"blue_laser": 0,
+				"green_laser": 0,
+				"red_laser": 0,
+				"dmd_enable": 0,
+				"dmd_advance": 0
+			},
+			"analog": {}
+		},
+		"blue": {
+			"digital": {
+				"odt_shutter": 0,
+				"odt_laser": 0,
+				"sim_shutter": 1,
+				"blue_laser": 1,
+				"green_laser": 0,
+				"red_laser": 0
+			},
+			"analog": {
+				"vc_mirror_x": -0.25,
+				"vc_mirror_y": 0
+			}
+		},
+		"green": {
+			"digital": {
+				"odt_shutter": 0,
+				"odt_laser": 0,
+				"sim_shutter": 1,
+				"blue_laser": 0,
+				"green_laser": 1,
+				"red_laser": 0
+			},
+			"analog": {
+				"vc_mirror_x": -4.75,
+				"vc_mirror_y": -1.05
+			}
+		},
+		"red": {
+			"digital": {
+				"odt_cam": 0,
+				"odt_shutter": 0,
+				"sim_shutter": 1,
+				"blue_laser": 0,
+				"green_laser": 0,
+				"red_laser": 1
+			},
+			"analog": {
+				"vc_mirror_x": -0.7,
+				"vc_mirror_y": 0
+			}
+		},
+		"odt": {
+			"digital": {
+				"odt_shutter": 1,
+				"odt_laser": 1,
+				"sim_shutter": 0,
+				"blue_laser": 0,
+				"green_laser": 0,
+				"red_laser": 0
+			},
+			"analog": {}
+		}
+	}
+}
