@@ -114,12 +114,28 @@ for m in ["red", "blue"]:
     channel_map[m].update({'sim': channel_map[m]["default"]})
 
 # inverted-patterns
-for m in ["green", "odt"]:
+for m in ["green"]:
     channel_map[m].update({"off": on_mode})
     channel_map[m].update({"on": off_mode})
     channel_map[m].update({"widefield": off_mode})
     channel_map[m].update({'affine': off_affine_mode})
     channel_map[m].update({'sim': channel_map[m]["default"]})
+
+# add angle modes
+for m in ["red", "blue", "green"]:
+    for angle in range(3):
+        pic_inds = channel_map[m]["default"]["picture_indices"][3*angle: 3*(angle+1)]
+        bit_inds = channel_map[m]["default"]["bit_indices"][3*angle: 3*(angle+1)]
+
+        channel_map[m].update({f"sim_angle={angle:d}": {"picture_indices": pic_inds,
+                                                        "bit_indices": bit_inds}})
+
+
+# inverted-patterns
+for m in ["odt"]:
+    channel_map[m].update({"off": on_mode})
+    channel_map[m].update({"on": off_mode})
+
 
 def validate_channel_map(cm):
     """
@@ -470,7 +486,8 @@ firmware_pattern_map = [data[ii*24: min((ii+1)*24, n_firmware_patterns)] for ii 
 # program DMD
 # #######################
 def program_dmd_seq(dmd: dlp6500.dlp6500, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
-                    blank: list[bool], mode_pattern_indices: list[int], triggered: bool, verbose=False):
+                    blank: list[bool], mode_pattern_indices: list[int], triggered: bool, verbose: bool = False,
+                    exp_time_us: int = 105):
     """
     convenience function for generating DMD pattern and programming DMD
 
@@ -503,7 +520,7 @@ def program_dmd_seq(dmd: dlp6500.dlp6500, modes: list[str], channels: list[str],
     mode_trig2 = dmd.get_trigger_in2()
     # print("trigger2 mode=%d" % mode_trig2)
 
-    dmd.set_pattern_sequence(pic_inds, bit_inds, 105, 0, triggered=triggered,
+    dmd.set_pattern_sequence(pic_inds, bit_inds, exp_time_us, 0, triggered=triggered,
                              clear_pattern_after_trigger=False, bit_depth=1, num_repeats=0, mode='pre-stored')
 
     if verbose:
