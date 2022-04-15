@@ -28,7 +28,7 @@ tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
 # data files
 root_path = Path(r"G://2022_04_14")
-data_dirs = [root_path / "03_200nm_beads_sim_mod_depth"]
+data_dirs = [root_path / "04_200nm_beads_sim_mod_depth"]
 # color channel information
 ignore_color = [False, False, False]
 min_fit_amp = [5000, 1000, 300]
@@ -360,7 +360,10 @@ for d in data_dirs:
                     ax.set_xlim([-0.05, 1.15])
                     ax.set_yticks([])
                     ax.set_yticklabels([])
-                    ax.set_ylabel("angle=%d" % ia)
+                    if ia == 0:
+                        ax.set_ylabel(f"{channels[ic]}\nangle={ia:d}")
+                    else:
+                        ax.set_ylabel("angle=%d" % ia)
 
                     # modulation depths versus amplitude
                     ax = plt.subplot(grid[ic, ia * nplots_per_angle + 1])
