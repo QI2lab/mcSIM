@@ -19,10 +19,10 @@ class daq():
     def __init__(self):
         pass
 
-    def set_digital_once(self, array):
+    def set_digital_lines_by_address(self, values, addresses):
         pass
 
-    def set_analog_once(self, array):
+    def set_analog_lines_by_address(self, array, addresses):
         pass
 
     def set_sequence(self):
@@ -134,6 +134,7 @@ class nidaq(daq):
 
         return address_block
 
+
     def set_digital_once(self, array):
         """
         Set digital lines as a block
@@ -165,17 +166,25 @@ class nidaq(daq):
         #     task_do.StopTask()
         #     task_do.ClearTask()
 
-        self._task_do = daqmx.Task()
-        self._task_do.CreateDOChan(", ".join(addresses), "", daqmx.DAQmx_Val_ChanForAllLines)
-        self._task_do.WriteDigitalLines(1, 1, 10.0, daqmx.DAQmx_Val_GroupByChannel, np.atleast_1d(array).astype(np.uint8), None, None)
-        self._task_do.StopTask()
-        self._task_do.ClearTask()
+        try:
+            self._task_do = daqmx.Task()
+            self._task_do.CreateDOChan(", ".join(addresses), "", daqmx.DAQmx_Val_ChanForAllLines)
+            self._task_do.WriteDigitalLines(1, 1, 10.0, daqmx.DAQmx_Val_GroupByChannel, np.atleast_1d(array).astype(np.uint8), None, None)
 
-        # cache values
-        for ii, ad in enumerate(addresses):
-            ind = np.nonzero([a == ad for a in self.digital_lines_addresses])[0]
-            if len(ind) > 0:
-                self.last_known_digital_val[ind] = array[ii]
+            # cache values
+            for ii, ad in enumerate(addresses):
+                ind = np.nonzero([a == ad for a in self.digital_lines_addresses])[0]
+                if len(ind) > 0:
+                    self.last_known_digital_val[ind] = array[ii]
+
+        # todo: get exception type of trying to write invalid data and only catch that specific type of exception...
+        except Exception as e:
+            print(e)
+        finally:
+            self._task_do.StopTask()
+            self._task_do.ClearTask()
+
+
 
 
     def set_digital_lines_by_index(self, array: np.ndarray, lines: list = None):
@@ -220,6 +229,10 @@ class nidaq(daq):
         return self.set_digital_lines_by_index(array, lines)
 
 
+    def set_analog_lines_by_address(self, array, addresses):
+        raise NotImplementedError("todo: this should be main function for setting analog lines once")
+
+
     def set_analog_once(self, array: np.ndarray, lines: list = None, lower_lims_volts=-5.0, upper_lims_volts=5.0):
         """
         Set analog lines once
@@ -251,14 +264,18 @@ class nidaq(daq):
             upper_lims_volts = np.tile(upper_lims_volts, len(lines))
 
         # program DAQ
-        for ii, l in enumerate(lines):
-            self._task_ao = daqmx.Task()
-            self._task_ao.CreateAOVoltageChan(self.analog_lines[l], "", lower_lims_volts[ii], upper_lims_volts[ii], daqmx.DAQmx_Val_Volts, None)
-            self._task_ao.WriteAnalogScalarF64(True, daqmx.DAQmx_Val_WaitInfinitely, array[ii], None)
-            self._task_ao.StopTask()
-            self._task_ao.ClearTask()
+            for ii, l in enumerate(lines):
+                try: # ensure we dispose of task properly even if write fails because out of range
+                    self._task_ao = daqmx.Task()
+                    self._task_ao.CreateAOVoltageChan(self.analog_lines[l], "", lower_lims_volts[ii], upper_lims_volts[ii], daqmx.DAQmx_Val_Volts, None)
+                    self._task_ao.WriteAnalogScalarF64(True, daqmx.DAQmx_Val_WaitInfinitely, array[ii], None)
+                    self.last_known_analog_val[l] = array[ii]
+                except daqmx.InvalidAODataWriteError as e:
+                    print(e)
+                finally:
+                    self._task_ao.StopTask()
+                    self._task_ao.ClearTask()
 
-            self.last_known_analog_val[l] = array[ii]
 
 
     def set_analog_lines_by_name(self, array, line_names, lower_lims_volts=-5.0, upper_lims_volts=5.0):
