@@ -5,58 +5,65 @@ type approach.
 
 This script handles doing this with multiple directories, where each directory contains multidimensional data which
 may include color channels, time series, and z-scans. It does not handle different xy-positions.
-
-I assume the data has been acquired using MicroManager
 """
+import datetime
 import numpy as np
 import os
+from pathlib import Path
 import time
 import pickle
 import matplotlib.pyplot as plt
 import matplotlib.colors
 import scipy.signal
 import scipy.optimize
+import zarr
 
-import mm_io
-import sim_reconstruction as sim
-import affine
-import rois as roi_fns
-import localize
-import analysis_tools as tools
+import mcsim.analysis.sim_reconstruction as sim
+import localize_psf.affine as affine
+import localize_psf.rois as roi_fns
+import localize_psf.localize as localize
+
+
+tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
 # data files
-root_path = r"F:\2021_12_01"
-data_dirs = [os.path.join(root_path, "01_505_515_0.1um_beads_zstack_shaker_sim")]
+root_path = Path(r"G://2022_04_14")
+data_dirs = [root_path / "03_200nm_beads_sim_mod_depth"]
 # color channel information
-ignore_color = [False, True, False]
-min_fit_amp = [100, 100, 25]
-bead_radii = 0.5 * np.array([0.1, 0.1, 0.1])
+ignore_color = [False, False, False]
+min_fit_amp = [5000, 1000, 300]
+bead_radii = 0.5 * np.array([0.2, 0.2, 0.2])
+nrois_to_plot = 0
 
 # set parameters
 dxy = 0.065  # um
 figsize = (21, 9)
 save_results = True
 close_fig_after_saving = True
-nignored_frames = 2
 nangles = 3
 nphases = 3
-# roi/filtering parameters
-roi_size = (3, 3, 3)  # (sz, sy, sx) in um
+# roi/filtering parameters in um
+roi_size = (0, 1.5, 1.5)  # (sz, sy, sx) in um
 filters_small_sigma = (0.1, 0.1, 0.1)  # (sz, sy, sx) in um
 filters_large_sigma = (5, 5, 5)  # (sz, sy, sx) in um
 min_boundary_distance = (1, 1)  # (dz, dxy) in um
 sigma_bounds = ((0, 0.05), (3, 3))
+min_spot_sep = (0, 1) # (dz, dxy) in um
+
+# turn off interactive plotting
+plt.ioff()
+plt.switch_backend("agg")
 
 
 # ################################
 # load affine xform data
 # ################################
-affine_xform_paths = ["2021-04-13_12;49;32_affine_xform_blue_z=0.pkl",
-                      "2021-04-13_12;49;32_affine_xform_red_z=0.pkl",
-                      "2021-04-13_12;49;32_affine_xform_green_z=0.pkl"]
-affine_xform_paths = [os.path.join(root_path, d) for d in affine_xform_paths]
+affine_paths = ["2021-04-13_12;49;32_affine_xform_red_z=0.pkl",
+                "2021-04-13_12;49;32_affine_xform_blue_z=0.pkl",
+                "2021-04-13_12;49;32_affine_xform_green_z=0.pkl"]
+affine_paths = [root_path / d for d in affine_paths]
 affine_xforms = []
-for p in affine_xform_paths:
+for p in affine_paths:
     with open(p, "rb") as f:
         dat = pickle.load(f)
     affine_xforms.append(dat["affine_xform"])
@@ -64,12 +71,13 @@ for p in affine_xform_paths:
 # ################################
 # load pattern data
 # ################################
-pattern_paths = [r"period=6.0_nangles=3\wavelength=473nm\sim_patterns_period=6.01_nangles=3.pkl",
-                 r"period=6.0_nangles=3\wavelength=635nm\sim_patterns_period=7.98_nangles=3.pkl",
+# todo: load in correct order
+pattern_paths = [r"period=6.0_nangles=3\wavelength=635nm\sim_patterns_period=7.98_nangles=3.pkl",
+                 r"period=6.0_nangles=3\wavelength=473nm\sim_patterns_period=6.01_nangles=3.pkl",
                  r"period=6.0_nangles=3\wavelength=532nm\sim_patterns_period=6.82_nangles=3.pkl"]
 
 
-pattern_paths = [os.path.join(root_path, d) for d in pattern_paths]
+pattern_paths = [root_path / d for d in pattern_paths]
 pattern_dat = []
 xformed_angles = []
 periods = []
@@ -94,26 +102,37 @@ for ii, p in enumerate(pattern_paths):
 # loop over data dirs and estimate modulation depth
 # ################################
 for d in data_dirs:
-    metadata, dims, summary = mm_io.parse_mm_metadata(d)
+    file_path = list(d.glob("*.zarr"))[0]
+    data = zarr.open(file_path, "r")
 
-    nxy = dims['position']
-    ntimes = dims['time']
-    ncolors = dims['channel']
-    nz = dims['z']
-    exposure_t = metadata["Exposure-ms"][0]
+    imgs = np.array(data.sim)
+    ntimes, nz, ncolors, npatterns, ny, nx = imgs.shape
+    imgs = imgs.reshape([ntimes, nz, ncolors, nangles, nphases, ny, nx])
+    dz = data.attrs["dz_um"]
+    zs = data.attrs["z_position_um"]
+    exposure_t = data.sim.attrs["exposure_time_ms"]
+    channels = data.sim.attrs["channels"]
+
+    # metadata, dims, summary = mm_io.parse_mm_metadata(d)
+    #
+    # nxy = dims['position']
+    # ntimes = dims['time']
+    # ncolors = dims['channel']
+    # nz = dims['z']
+    # exposure_t = metadata["Exposure-ms"][0]
+    #     zs = np.unique(metadata["ZPositionUm"])
 
     iz_center = nz // 2
-    zs = np.unique(metadata["ZPositionUm"])
-    if len(zs) > 1:
-        dz = zs[1] - zs[0]
-    else:
-        dz = 1.
+    # if len(zs) > 1:
+    #     dz = zs[1] - zs[0]
+    # else:
+    #     dz = 1.
 
     # make save directory
     if save_results:
-        save_dir = "%s_sim_modulation_depth" % os.path.join(d, mm_io.get_timestamp())
-        if not os.path.exists(save_dir):
-            os.mkdir(save_dir)
+        save_dir = Path(d, f"{tstamp:s}_sim_modulation_depth")
+        save_dir.mkdir(exist_ok=True)
+
 
     # #################################################
     # fit images for all times/z-planes/channels/angles/phases only
@@ -133,43 +152,64 @@ for d in data_dirs:
             continue
         print("started initial fitting for channel %d" % ic)
 
-        img_inds = list(range(nignored_frames, nignored_frames + 9))
-        # grab first image and average over angles/phases to get all beads
-        img_first = np.mean(mm_io.read_mm_dataset(metadata, time_indices=0, z_indices=iz_center,
-                                                  user_indices={"UserChannelIndex": ic, "UserSimIndex": img_inds}),
-                            axis=0)
+        # img_inds = list(range(nignored_frames, nignored_frames + 9))
+        # # grab first image and average over angles/phases to get all beads
+        # img_first = np.mean(mm_io.read_mm_dataset(metadata, time_indices=0, z_indices=iz_center,
+        #                                           user_indices={"UserChannelIndex": ic, "UserSimIndex": img_inds}),
+        #                     axis=0)
+
+        # take widefield image
+        img_middle_wf = np.mean(imgs[0, nz//2, ic], axis=(0, 1))
 
         # identify beads in first image
-        coords, fps_temp, ips_temp, rois_temp, to_keep, conditions, condition_names, filter_settings = \
-            localize.localize_beads(img_first, dxy, dz, min_fit_amp[ic], roi_size, filters_small_sigma,
-                                    filters_large_sigma, min_boundary_distance, sigma_bounds, min_fit_amp[ic])
+        coords, fps_temp, ips_temp, rois_temp,\
+        to_keep, conditions, condition_names, filter_settings,\
+        fit_states, chi_sqrs, niters, imgs_filtered = \
+            localize.localize_beads(img_middle_wf, dxy, dz, min_fit_amp[ic], roi_size=roi_size,
+                                    filter_sigma_small=filters_small_sigma, filter_sigma_large=filters_large_sigma,
+                                    min_spot_sep=min_spot_sep,
+                                    dist_boundary_min=min_boundary_distance, sigma_bounds=sigma_bounds,
+                                    fit_amp_min=min_fit_amp[ic])
         z, y, x = coords
+        zz, yy, xx = np.broadcast_arrays(*(z, y, x))
+
+        if not np.any(to_keep):
+            raise ValueError("no beads found...")
 
         rois[ic] = rois_temp[to_keep]
         fps_start[ic] = fps_temp[to_keep]
 
+        # define array to hold later fit results
         fps[ic] = np.zeros((len(rois[ic]), ntimes, nz, nangles, nphases, 7))
 
         # plot localizations
-        centers_temp_all_pix = np.stack((fps_temp[:, 3] / dz,
-                                         fps_temp[:, 2] / dxy,
-                                         fps_temp[:, 1] / dxy), axis=-1)
-        centers_temp_pix = np.stack((fps_start[ic][:, 3] / dz,
-                                     fps_start[ic][:, 2] / dxy,
-                                     fps_start[ic][:, 1] / dxy), axis=-1)
-        figh1 = localize.plot_bead_locations(img_first, [centers_temp_all_pix, centers_temp_pix],
-                                            legend_labels=["all fits", "reliable fits"],
-                                            weights=[fps_temp[:, 4], fps_start[ic][:, 4]],
-                                            cbar_labels=[r"$\sigma_{xy} (\mu m)$", r"$\sigma_{xy} (\mu m)$"],
-                                            vlims_percentile=(0.001, 99.99), gamma=0.5,
-                                            title="spot centers, channel %d, threshold=%.0f" % (ic, min_fit_amp[ic]),
-                                            figsize=figsize)
+        centers_temp_all_pix = np.stack((fps_temp[:, 3],
+                                         fps_temp[:, 2],
+                                         fps_temp[:, 1]), axis=-1)
+        centers_temp_pix = np.stack((fps_start[ic][:, 3],
+                                     fps_start[ic][:, 2],
+                                     fps_start[ic][:, 1]), axis=-1)
+        figh1 = localize.plot_bead_locations(img_middle_wf, [centers_temp_all_pix, centers_temp_pix],
+                                             coords=(yy[0], xx[0]),
+                                             legend_labels=["all fits", "reliable fits"],
+                                             weights=[fps_temp[:, 4], fps_start[ic][:, 4]],
+                                             cbar_labels=[r"$\sigma_{xy} (\mu m)$", r"$\sigma_{xy} (\mu m)$"],
+                                             vlims_percentile=(0.001, 99.99), gamma=0.5,
+                                             title="spot centers, channel %d = %s, threshold=%.0f" % (ic, channels[ic], min_fit_amp[ic]),
+                                             figsize=figsize)
 
         if save_results:
-            fname = os.path.join(save_dir, "bead_centers_channel=%d.png" % ic)
-            figh1.savefig(fname)
+            figh1.savefig(Path(save_dir, f"bead_centers_channel={ic:d}.png"))
         if close_fig_after_saving:
             plt.close(figh1)
+
+        # plot fits if desired
+        for aaa in range(nrois_to_plot):
+            localize.plot_gauss_roi(fps_start[ic][aaa], rois[ic][aaa], np.expand_dims(img_middle_wf, axis=0),
+                                    coords,
+                                    #init_params=fps_start[ic][aaa],
+                                    prefix=f"reference_roi_ic={ic:d}_iz={iz_center:d}_it={0:d}_roi={aaa:d}_",
+                                    save_dir=save_dir)
 
         # #################################################
         # do fitting for all other z-slices/times/angles/phases using same ROI's with fixed centers
@@ -177,18 +217,23 @@ for d in data_dirs:
         for iz in range(nz):
             for it in range(ntimes):
                 for ia in range(nangles):
-                    sim_inds = list(range(nignored_frames + ia * nphases, nignored_frames + (ia + 1) * nphases))
+                    #sim_inds = list(range(nignored_frames + ia * nphases, nignored_frames + (ia + 1) * nphases))
                     for ip in range(nphases):
-                        print("%d/%d times, %d/%d zs, %d/%d colors, %d/%d angles, %d/%d phases, t elapsed=%0.2fs" %
-                              (it + 1, ntimes, iz + 1, nz, ic + 1, ncolors, ia + 1, nangles, ip + 1,
-                               nphases, time.perf_counter() - tstart))
+                        print(f"{it+1:d}/{ntimes:d} times,"
+                              f" {iz + 1:d}/{nz:d} zs,"
+                              f" {ic + 1:d}/{ncolors:d} colors,"
+                              f"{ia+1:d}/{nangles:d} angles,"
+                              f" {ip+1:d}/{nphases:d} phases,"
+                              f" t elapsed={time.perf_counter() - tstart:.2f}")
 
-                        imgs = mm_io.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
-                                                     user_indices={"UserChannelIndex": ic,
-                                                                   "UserSimIndex": sim_inds[ip]})
+                        # imgs = mm_io.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
+                        #                              user_indices={"UserChannelIndex": ic,
+                        #                                            "UserSimIndex": sim_inds[ip]})
+
+                        imgs_now = np.expand_dims(imgs[it, iz, ic, ia, ip], axis=0)
 
                         # get ROI's to fit spots
-                        img_rois = [roi_fns.cut_roi(r, imgs) for r in rois[ic]]
+                        img_rois = [roi_fns.cut_roi(r, imgs_now) for r in rois[ic]]
                         coords_rois = [[roi_fns.cut_roi(r, z), roi_fns.cut_roi(r, y), roi_fns.cut_roi(r, x)]
                                        for r in rois[ic]]
                         coords_rois = list(zip(*coords_rois))
@@ -197,8 +242,16 @@ for d in data_dirs:
                         fixed_params[-1] = True
 
                         # do fitting
+                        # todo: fitting on gpu not working ... not sure if the problem is the fixed parameters or something else
                         fps[ic][:, it, iz, ia, ip, :], fit_states, chi_sqrs, niters, fit_t = \
-                            localize.fit_gauss_rois(img_rois, coords_rois, fps_start[ic], fixed_params=fixed_params)
+                            localize.fit_gauss_rois(img_rois, coords_rois, fps_start[ic], fixed_params=fixed_params, use_gpu=False) #, use_gpu=False #, debug=True)
+
+                        for aaa in range(nrois_to_plot):
+                            localize.plot_gauss_roi(fps[ic][aaa, it, iz, ia, ip], rois[ic][aaa], imgs_now,
+                                                    coords,
+                                                    init_params=fps_start[ic][aaa],
+                                                    prefix=f"roi_ic={ic:d}_iz={iz:d}_it={it:d}_ia={ia:d}_ip={ip:d}_roi={aaa:d}_",
+                                                    save_dir=save_dir)
 
     # ####################################
     # compute modulation depth statistics
@@ -233,13 +286,17 @@ for d in data_dirs:
     tstart = time.perf_counter()
     for iz in range(nz):
         for it in range(ntimes):
+
+            # todo: think better to have one plot per color
             print("plotting iz %d/%d, it %d/%d, elapsed t=%0.2fs" %
                   (iz + 1, nz, it + 1, ntimes, time.perf_counter() - tstart))
+
             # figure plotting all data for a given time point
             figh = plt.figure(figsize=figsize)
-            plt.suptitle("%s, z=%d, time=%d, exposure=%dms" % (d, iz, it, exposure_t))
+            figh.suptitle(f"{d}\nz={iz:d}, time={it:d}, exposure={exposure_t:.1f}ms")
+
             nplots_per_angle = 3
-            grid = plt.GridSpec(ncolors, nplots_per_angle * nangles, wspace=0.1, hspace=0.5)
+            grid = figh.add_gridspec(ncolors, nplots_per_angle * nangles, wspace=0.1, hspace=0.5)
 
             for ic in range(ncolors):
                 if ignore_color[ic]:
@@ -268,27 +325,23 @@ for d in data_dirs:
                     sigma_means_temp = np.mean(fps[ic][:, it, iz, ia, :, 4], axis=-1)
                     med_sigma = np.median(sigma_means_temp)
 
-                    # plot mod depth versus positions
-                    imgs = np.mean(mm_io.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
-                                                         user_indices={"UserChannelIndex": ic,
-                                                         "UserSimIndex": nignored_frames + ia * nphases}),
-                                   axis=0)
+                    imgs_now_wf = np.mean(imgs[it, iz, ic], axis=(0, 1))
 
-                    centers_temp = np.stack((fps[ic][:, it, iz, ia, 0, 3] / dz,
-                                             fps[ic][:, it, iz, ia, 0, 2] / dxy,
-                                             fps[ic][:, it, iz, ia, 0, 1] / dxy), axis=-1)
+                    centers_temp = np.stack((fps[ic][:, it, iz, ia, 0, 3],
+                                             fps[ic][:, it, iz, ia, 0, 2],
+                                             fps[ic][:, it, iz, ia, 0, 1]), axis=-1)
 
-                    figh2 = localize.plot_bead_locations(imgs, centers_temp, weights=m_ests[ic][:, it, iz, ia],
-                                                         title="modulation depth versus position ic=%d, iz=%d, it=%d, ia=%d\n"
+                    figh2 = localize.plot_bead_locations(imgs_now_wf, centers_temp, weights=m_ests[ic][:, it, iz, ia],
+                                                         coords=(yy[0], xx[0]),
+                                                         title="modulation depth versus position ic=%d = %s, iz=%d, it=%d, ia=%d\n"
                                                                "m = %0.3f +/- %0.3f\nadjusted=%0.3f" %
-                                                               (ic, iz, it, ia, mean_depth, std_depth,
+                                                               (ic, channels[ic], iz, it, ia, mean_depth, std_depth,
                                                                 mean_depth / mod_depth_bead_size_correction),
                                                          cbar_labels=["modulation depth"],
                                                          vlims_percentile=(0.001, 99.99), gamma=0.5, figsize=figsize)
 
                     if save_results:
-                        fname = os.path.join(save_dir, "beads_ic=%d_angle=%d_time=%d_z=%d.png" % (ic, ia, it, iz))
-                        figh2.savefig(fname)
+                        figh2.savefig(Path(save_dir, f"beads_ic={ic:d}_angle={ia:d}_time={it:d}_z={iz:d}.png"))
                     if close_fig_after_saving:
                         plt.close(figh2)
 
@@ -297,8 +350,10 @@ for d in data_dirs:
 
                     # histogram of modulation depths
                     ax = plt.subplot(grid[ic, ia * nplots_per_angle])
-                    ax.set_title("%0.3f +/- %0.3f\nadjusted=%0.3f" %
-                                 (mean_depth, std_depth, mean_depth / mod_depth_bead_size_correction))
+                    ax.set_title("mean=%0.3f(%.0f)\npeak=%0.3f" %
+                                 (mean_depth / mod_depth_bead_size_correction,
+                                  std_depth * 1e3 / mod_depth_bead_size_correction,
+                                  bin_centers[np.argmax(ms_hist)]))
 
                     ax.plot(bin_centers, ms_hist)
 
@@ -334,8 +389,7 @@ for d in data_dirs:
                     ax.set_yticklabels([])
 
             if save_results:
-                fig_fname = os.path.join(save_dir, "modulation_estimate_z=%d_time=%d.png" % (iz, it))
-                figh.savefig(fig_fname)
+                figh.savefig(Path(save_dir, f"modulation_estimate_z={iz:d}_time={it:d}.png"))
             if close_fig_after_saving:
                 plt.close(figh)
 
@@ -362,7 +416,7 @@ for d in data_dirs:
                     continue
 
                 figh = plt.figure(figsize=figsize)
-                plt.suptitle("focus and modulation max versus z, ic=%d, it = %d" % (ic, it))
+                plt.suptitle("focus and modulation max versus z, ic=%d = %s, it = %d" % (ic, channels[ic], it))
                 grid = plt.GridSpec(2, 2 * nangles, hspace=0.5, wspace=0.5)
 
                 for ia in range(nangles):
@@ -493,8 +547,8 @@ for d in data_dirs:
                             ax.set_xlabel("z ($\mu$m)")
 
                             if save_results:
-                                fig_fname = os.path.join(save_dir, "focus_diagnostic_color=%d_angle=%d_roi=%d.png" % (ic, ia, ii))
-                                figh_diagnostic.savefig(fig_fname)
+
+                                figh_diagnostic.savefig(Path(save_dir, f"focus_diagnostic_color={ic:d}_angle={ia:d}_roi={ii:d}.png"))
                             if close_fig_after_saving:
                                 plt.close(figh_diagnostic)
 
@@ -585,8 +639,7 @@ for d in data_dirs:
                         cb1.set_label("Position ($\mu m$)", rotation=270)
 
                 if save_results:
-                    fig_fname = os.path.join(save_dir, "focus_color=%d_time=%d.png" % (ic, it))
-                    figh.savefig(fig_fname)
+                    figh.savefig(Path(save_dir, f"focus_color={ic:d}_time={it:d}.png"))
                 if close_fig_after_saving:
                     plt.close(figh)
 

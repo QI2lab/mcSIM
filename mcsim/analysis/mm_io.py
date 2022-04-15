@@ -429,5 +429,7 @@ def get_unique_name(fname, mode='file'):
 
 
 def get_timestamp():
-    now = datetime.datetime.now()
-    return '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
+    # now = datetime.datetime.now()
+    # tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
+    tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
+    return tstamp
