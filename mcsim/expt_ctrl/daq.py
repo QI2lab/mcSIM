@@ -62,7 +62,7 @@ class nidaq(daq):
         self.dev_name = dev_name
 
         # digital lines
-        self.digital_lines = f"/{dev_name}/{digital_lines}"
+        self.digital_lines = f"/{dev_name}/{digital_lines}" # todo: get rid of in favor of digital_lines_addresses
         self.n_digital_lines = 16
         self.digital_lines_addresses = [f"/{dev_name:s}/port0/line{ii:d}" for ii in range(16)]
         self.digital_line_names = digital_line_names
@@ -207,6 +207,8 @@ class nidaq(daq):
     def set_digital_lines_by_name(self, array: np.ndarray, line_names: list):
         """
         Set digital lines by name
+
+        # todo: better to take dictionary as argument? {line: value}
         @param array:
         @param line_names:
         @return:
@@ -406,10 +408,15 @@ class nidaq(daq):
                                            analog_array.shape[0])
             self._task_ao.CfgDigEdgeStartTrig(start_trigger, daqmx.DAQmx_Val_Rising)
 
+            # if analog task has only one step, then we need to add a second step, otherwise WriteAnalogF64 will complain
+            # This can happen if we are using a digital line to trigger the analog lines that only rarely change,
+            if analog_array.shape[0] == 1:
+                analog_array = np.concatenate((analog_array, analog_array), axis=0)
+
+
             samples_per_ch_ct = ct.c_int32()
             self._task_ao.WriteAnalogF64(analog_array.shape[0], False, 10.0, daqmx.DAQmx_Val_GroupByScanNumber,
                                          analog_array, ct.byref(samples_per_ch_ct), None)
-
 
 
         # todo: give option to block/wait for sequence to finish
