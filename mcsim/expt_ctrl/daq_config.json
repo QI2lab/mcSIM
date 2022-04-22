@@ -1,5 +1,5 @@
 {
-	"timestamp": "2022_04_13_18;15;08",
+	"timestamp": "2022_04_21_14;28;47",
 	"analog_map": {
 		"vc_mirror_x": 0,
 		"vc_mirror_y": 1,
@@ -19,7 +19,8 @@
 		"dmd_advance": 3,
 		"odt_cam_master_trig": 10,
 		"signal_monitor": 11,
-		"analog_trigger": 12
+		"analog_trigger": 12,
+		"camera_trigger_monitor": 14
 	},
 	"presets": {
 		"off": {
@@ -33,7 +34,11 @@
 				"green_laser": 0,
 				"red_laser": 0,
 				"dmd_enable": 0,
-				"dmd_advance": 0
+				"dmd_advance": 0,
+				"odt_cam_master_trig": 0,
+				"signal_monitor": 0,
+				"analog_trigger": 0,
+				"camera_trigger_monitor": 0
 			},
 			"analog": {}
 		},
