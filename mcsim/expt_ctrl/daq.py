@@ -453,14 +453,14 @@ class nidaq(daq):
         try:
             self._task_do.StopTask()
             self._task_do.ClearTask()
-        except daqmx.DAQmxFunctions.InvalidTaskError:
+        except (daqmx.DAQmxFunctions.InvalidTaskError, AttributeError):
             pass
 
         # stop analog output task
         try:
             self._task_ao.StopTask()
             self._task_ao.ClearTask()
-        except daqmx.DAQmxFunctions.InvalidTaskError:
+        except (daqmx.DAQmxFunctions.InvalidTaskError, AttributeError):
             pass
 
         # stop digital input task
@@ -468,7 +468,7 @@ class nidaq(daq):
             try:
                 self._task_di.StopTask()
                 self._task_di.ClearTask()
-            except daqmx.DAQmxFunctions.InvalidTaskError:
+            except (daqmx.DAQmxFunctions.InvalidTaskError, AttributeError):
                 pass
 
 
