@@ -22,6 +22,15 @@ except ImportError:
 
 
 def get_angular_spectrum_kernel(dz, wavelength, no, shape, drs):
+    """
+
+    @param dz:
+    @param wavelength:
+    @param no:
+    @param shape:
+    @param drs:
+    @return:
+    """
     k = 2*np.pi / wavelength
     ny, nx = shape
     dy, dx = drs
