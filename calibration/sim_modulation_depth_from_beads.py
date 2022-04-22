@@ -28,7 +28,8 @@ tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
 # data files
 root_path = Path(r"G://2022_04_14")
-data_dirs = [root_path / "04_200nm_beads_sim_mod_depth"]
+data_dirs = [root_path / "03_200nm_beads_sim_mod_depth",
+             root_path / "04_200nm_beads_sim_mod_depth"]
 # color channel information
 ignore_color = [False, False, False]
 min_fit_amp = [5000, 1000, 300]
@@ -306,8 +307,9 @@ for d in data_dirs:
 
                 for ia in range(nangles):
                     # calculate modulation depth statistics
-                    m_temp = m_ests[ic][:, it, iz, ia]
+                    m_temp = m_ests[ic][:, it, iz, ia] / mod_depth_bead_size_correction
                     m_allowed = m_temp[np.logical_and(m_temp > 0, m_temp < 1)]
+
                     mean_depth = np.mean(m_allowed)
                     std_depth = np.std(m_allowed)
                     bin_edges = np.linspace(0, 1.25, 50)
@@ -334,9 +336,8 @@ for d in data_dirs:
                     figh2 = localize.plot_bead_locations(imgs_now_wf, centers_temp, weights=m_ests[ic][:, it, iz, ia],
                                                          coords=(yy[0], xx[0]),
                                                          title="modulation depth versus position ic=%d = %s, iz=%d, it=%d, ia=%d\n"
-                                                               "m = %0.3f +/- %0.3f\nadjusted=%0.3f" %
-                                                               (ic, channels[ic], iz, it, ia, mean_depth, std_depth,
-                                                                mean_depth / mod_depth_bead_size_correction),
+                                                               "m = %0.3f(%.0f)" %
+                                                               (ic, channels[ic], iz, it, ia, mean_depth, std_depth * 1e3),
                                                          cbar_labels=["modulation depth"],
                                                          vlims_percentile=(0.001, 99.99), gamma=0.5, figsize=figsize)
 
@@ -351,9 +352,7 @@ for d in data_dirs:
                     # histogram of modulation depths
                     ax = plt.subplot(grid[ic, ia * nplots_per_angle])
                     ax.set_title("mean=%0.3f(%.0f)\npeak=%0.3f" %
-                                 (mean_depth / mod_depth_bead_size_correction,
-                                  std_depth * 1e3 / mod_depth_bead_size_correction,
-                                  bin_centers[np.argmax(ms_hist)]))
+                                 (mean_depth, std_depth * 1e3, bin_centers[np.argmax(ms_hist)]))
 
                     ax.plot(bin_centers, ms_hist)
 
