@@ -569,7 +569,8 @@ class SimImageSet:
             self.pspec_params_wf = fit_result['fit_params']
 
             with np.errstate(invalid="ignore", divide="ignore"):
-                ff = np.sqrt(self.fx[None, :]**2 + self.fy[:, None]**2)
+                ff = np.sqrt(np.expand_dims(self.fx, axis=0)**2 +
+                             np.expand_dims(self.fy, axis=1)**2)
                 sig = power_spectrum_fn([self.pspec_params_wf[0], self.pspec_params_wf[1], self.pspec_params_wf[2], 0], ff, 1)
 
             wf_otf = np.mean(self.otf, axis=0)
@@ -577,8 +578,6 @@ class SimImageSet:
             # upsample to make fully comparable to reconstructed image
             self.widefield_deconvolution_ft = tools.resample_bandlimited_ft(wf_decon_ft, (2, 2))
         elif self.combine_mode == "fairSIM":
-            # todo: what is most fair way to deconvolve here:?
-
             # wf_decon_ft = self.widefield_ft * get_wiener_filter(self.otf, 1/np.sqrt(self.wiener_parameter / self.nangles))
 
             self.widefield_deconvolution_ft = np.nansum(weights_decon[:, 0] * self.bands_shifted_ft[:, 0], axis=0) / \
@@ -1327,7 +1326,7 @@ class SimImageSet:
         for ii in range(self.nangles):
             fig = plt.figure(figsize=figsize)
             fig.suptitle('Magnitude of Fourier transforms, angle %d\nperiod=%0.3fnm at %0.3fdeg=%0.3frad, f=(%0.3f,%0.3f) 1/um\n'
-                         'mod=%0.3f, min p2nr=%0.3f, wiener param=%0.2f\n'
+                         'modulation contrast=%0.3f, min p2nr=%0.3f, $\eta$=%0.2f\n'
                          'phases (deg) =%0.2f, %0.2f, %0.2f, phase diffs (deg) =%0.2f, %0.2f, %0.2f' %
                          (ii, self.periods[ii] * 1e3, self.angles[ii] * 180 / np.pi, self.angles[ii],
                           self.frqs[ii, 0], self.frqs[ii, 1], self.mod_depths[ii], np.min(self.p2nr[ii]),
@@ -1343,6 +1342,7 @@ class SimImageSet:
                 # raw images at different phases
                 # ####################
                 ax = fig.add_subplot(grid[jj, 0])
+                ax.set_title("Raw data, phase %d" % jj)
 
                 to_plot = np.abs(self.imgs_ft[ii, jj])
                 to_plot[to_plot <= 0] = np.nan
@@ -1360,10 +1360,8 @@ class SimImageSet:
                 ax.set_xticks([])
                 ax.set_yticks([])
 
-                if jj == 0:
-                    ax.set_title("Raw data, phases")
                 if jj == (self.nphases - 1):
-                    ax.set_xlabel("$f_x")
+                    ax.set_xlabel("$f_x$")
                 ax.set_ylabel("$f_y$")
 
                 # ####################
@@ -1393,7 +1391,7 @@ class SimImageSet:
                     ax.set_title('m*O(f+fo)otf(f)')
                     ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
                 if jj == (self.nphases - 1):
-                    ax.set_xlabel("$f_x")
+                    ax.set_xlabel("$f_x$")
 
                 ax.set_xticks([])
                 ax.set_yticks([])
@@ -1415,7 +1413,7 @@ class SimImageSet:
                 # to keep same color scale, must correct for upsampled normalization change
                 im.set_clim(tuple([4 * c for c in clim]))
 
-                ax.scatter(0, 0, edgecolor='r', facecolor='none')
+                ax.scatter(0, 0, edgecolor='k', facecolor='none')
 
                 ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
 
@@ -1430,7 +1428,7 @@ class SimImageSet:
                     ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
                     ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
                 if jj == (self.nphases - 1):
-                    ax.set_xlabel("$f_x")
+                    ax.set_xlabel("$f_x$")
 
                 ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
                 ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -1455,7 +1453,7 @@ class SimImageSet:
                     ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
 
                 if jj == (self.nphases - 1):
-                    ax.set_xlabel("$f_x")
+                    ax.set_xlabel("$f_x$")
 
                 ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
                 ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -1482,7 +1480,7 @@ class SimImageSet:
                     ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
 
                 if jj == (self.nphases - 1):
-                    ax.set_xlabel("$f_x")
+                    ax.set_xlabel("$f_x$")
 
                 ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
                 ax.set_ylim([2 * self.fmax, -2 * self.fmax])
