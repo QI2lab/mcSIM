@@ -1149,10 +1149,12 @@ class SimImageSet:
         # create plot
         figh = plt.figure(figsize=figsize)
         grid = figh.add_gridspec(2, 4)
-        # todo: print more reconstruction information here
-        figh.suptitle("SIM reconstruction\n"
-                      "wiener parameter=%0.2f, phase estimation mode '%s'" %
-                      (self.wiener_parameter, self.phase_estimation_mode))
+        figh.suptitle("SIM reconstruction, NA=%0.2f, wavelength=%.0fnm\n"
+                      "wiener parameter=%0.2f, phase estimation mode '%s', frq estimation mode '%s'\n"
+                      "band combination mode '%s', band replacement using %0.2f of fmax" %
+                      (self.na, self.wavelength * 1e3,
+                       self.wiener_parameter, self.phase_estimation_mode, self.frq_estimation_mode,
+                       self.combine_mode, self.fmax_exclude_band0))
 
         # widefield, real space
         ax = figh.add_subplot(grid[0, 0])
