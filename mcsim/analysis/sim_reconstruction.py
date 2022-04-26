@@ -1150,7 +1150,9 @@ class SimImageSet:
         figh = plt.figure(figsize=figsize)
         grid = figh.add_gridspec(2, 4)
         # todo: print more reconstruction information here
-        figh.suptitle("SIM reconstruction, w=%0.2f, phase estimation with %s" % (self.wiener_parameter, self.phase_estimation_mode))
+        figh.suptitle("SIM reconstruction\n"
+                      "wiener parameter=%0.2f, phase estimation mode '%s'" %
+                      (self.wiener_parameter, self.phase_estimation_mode))
 
         # widefield, real space
         ax = figh.add_subplot(grid[0, 0])
@@ -1161,6 +1163,8 @@ class SimImageSet:
             vmax += 1e-12
         ax.imshow(self.widefield, vmin=vmin, vmax=vmax, cmap="bone")
         ax.set_title('widefield')
+        ax.set_xlabel('x-position (pix)')
+        ax.set_ylabel('y-position (pix)')
 
         # deconvolved, real space
         ax = figh.add_subplot(grid[0, 1])
@@ -1171,6 +1175,7 @@ class SimImageSet:
             vmax += 1e-12
         ax.imshow(self.widefield_deconvolution, vmin=vmin, vmax=vmax, cmap="bone")
         ax.set_title('widefield deconvolved')
+        ax.set_xlabel('x-position (pix)')
 
         # SIM, realspace
         ax = figh.add_subplot(grid[0, 2])
@@ -1180,6 +1185,7 @@ class SimImageSet:
             vmax += 1e-12
         ax.imshow(self.sim_sr, vmin=vmin, vmax=vmax, cmap="bone")
         ax.set_title('SR-SIM')
+        ax.set_xlabel('x-position (pix)')
 
         #
         ax = figh.add_subplot(grid[0, 3])
@@ -1189,40 +1195,45 @@ class SimImageSet:
             vmax += 1e-12
         ax.imshow(self.sim_os, vmin=vmin, vmax=vmax, cmap="bone")
         ax.set_title('OS-SIM')
+        ax.set_xlabel('x-position (pix)')
 
         # widefield Fourier space
         ax = figh.add_subplot(grid[1, 0])
         ax.imshow(np.abs(self.widefield_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_wf, cmap="bone")
 
-        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
-        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
+        ax.set_xlabel("$f_x (1/\mu m)$")
+        ax.set_ylabel("$f_y (1/\mu m)$")
 
         # deconvolution Fourier space
         ax = figh.add_subplot(grid[1, 1])
         ax.imshow(np.abs(self.widefield_deconvolution_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
 
-        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
-        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
+        ax.set_xlabel("$f_x (1/\mu m)$")
 
         # SIM fourier space
         ax = figh.add_subplot(grid[1 ,2])
         ax.imshow(np.abs(self.sim_sr_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
 
-        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
-        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
+        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
 
         # actual maximum frequency based on real SIM frequencies
         for ii in range(self.nangles):
-            ax.add_artist(Circle((0, 0), radius=self.fmax + 1/self.periods[ii], color='r', fill=0, ls='--'))
+            ax.add_artist(Circle((0, 0), radius=self.fmax + 1/self.periods[ii], color='g', fill=False, ls='--'))
 
         ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
         ax.set_ylim([2 * self.fmax, -2 * self.fmax])
+        ax.set_xlabel("$f_x (1/\mu m)$")
 
         return figh
 
@@ -1554,26 +1565,35 @@ class SimImageSet:
 
         otf_ideal = psf.circ_aperture_otf(ff, 0, self.na, self.wavelength)
 
+        # 1D plots
         ax = figh.add_subplot(1, 2, 1)
+        ax.set_title("1D OTF")
+        ax.set_xlabel("Frequency (1/um)")
+        ax.set_ylabel("OTF")
+        # plot real OTF's per angle
         for ii in range(self.nangles):
-            ax.plot(ff.ravel(), self.otf[ii].ravel())
-        ax.plot(ff.ravel(), otf_ideal.ravel())
+            ax.plot(ff.ravel(), self.otf[ii].ravel(), label="OTF, angle %d" % ii)
+        # plot ideal OTF
+        ax.plot(ff.ravel(), otf_ideal.ravel(), label="OTF ideal")
         ylim = ax.get_ylim()
 
         # plot SIM frequencies
         fs = np.linalg.norm(self.frqs, axis=1)
         for ii in range(self.nangles):
-            ax.plot([fs[ii], fs[ii]], ylim, 'k')
+            if ii == 0:
+                ax.plot([fs[ii], fs[ii]], ylim, 'k', label="SIM frqs")
+            else:
+                ax.plot([fs[ii], fs[ii]], ylim, 'k')
 
         ax.set_ylim(ylim)
+        ax.legend()
 
-        ax.set_xlabel("Frequency (1/um)")
-        ax.set_ylabel("OTF")
-        ax.legend(["OTF", 'Ideal OTF', 'SIM frqs'])
-
+        # 2D plot
         ax = figh.add_subplot(1, 2, 2)
         ax.set_title("Mean 2D OTF")
         ax.imshow(np.mean(self.otf, axis=0), extent=tools.get_extent(self.fy, self.fx), cmap="bone")
+        ax.set_xlabel("$f_x (1/\mu m)$")
+        ax.set_ylabel("$f_y (1/\mu m)$")
 
         return figh
 
@@ -2023,7 +2043,8 @@ def reconstruct_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, exc
         imgs = tifffile.transpose_axes(imgs, "CZTQYX", asaxes="TZQCYXS")
         tifffile.imwrite(fname, imgs.astype(np.float32), imagej=True, datetime=start_time,
                          resolution=(1 / pixel_size, 1 / pixel_size),
-                         metadata={"Info": "MCNR image reconstructed from %s" % (rpath),
+                         metadata={"Info": "Modulation-contrast to noise-ratio (MCNR) images for each angle,"
+                                           " reconstructed from %s" % (rpath),
                                    "Labels": ch_labels,
                                    "spacing": dz,
                                    "unit": 'um'})
@@ -2385,6 +2406,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     ax3 = figh.add_subplot(gspec[1, 0:6])
     ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0) = $"  " %0.3g and %0.2fdeg" %
                   (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
+    ax.set_xlabel('$f_x (1/\mu m)$')
+    ax.set_ylabel('$f_y (1/\mu m)$')
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
@@ -2405,6 +2428,7 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
         peak2_g = tools.get_peak_value(img2_ft, fxs, fys, frqs_guess, peak_pixels)
         ttl_str += "\nguess peak = %0.3g and %0.2fdeg" % (np.abs(peak2_g), np.angle(peak2_g) * 180 / np.pi)
     ax4.set_title(ttl_str)
+    ax.set_xlabel('$f_x (1/\mu m)$')
 
     im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2),
                      interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi, cmap="bone")
