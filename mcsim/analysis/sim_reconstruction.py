@@ -1349,10 +1349,10 @@ class SimImageSet:
 
                 im = ax.imshow(to_plot, norm=LogNorm(), extent=extent, cmap="bone")
 
-                ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
+                ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
+                ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
 
-                ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
+                ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
 
                 ax.set_xlim([-2*self.fmax, 2*self.fmax])
                 ax.set_ylim([2*self.fmax, -2*self.fmax])
@@ -1362,6 +1362,9 @@ class SimImageSet:
 
                 if jj == 0:
                     ax.set_title("Raw data, phases")
+                if jj == (self.nphases - 1):
+                    ax.set_xlabel("$f_x")
+                ax.set_ylabel("$f_y$")
 
                 # ####################
                 # separated components
@@ -1377,21 +1380,21 @@ class SimImageSet:
                     clim = (0, 1)
                 im.set_clim(clim)
 
-                ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
+                ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
 
                 if jj == 0:
                     ax.set_title('O(f)otf(f)')
-                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
+                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
+                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
                 elif jj == 1:
                     ax.set_title('m*O(f-fo)otf(f)')
-                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='r', facecolor='none')
+                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
                 elif jj == 2:
                     ax.set_title('m*O(f+fo)otf(f)')
-                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
+                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
+                if jj == (self.nphases - 1):
+                    ax.set_xlabel("$f_x")
 
-                # plt.setp(ax.get_xticklabels(), visible=False)
-                # plt.setp(ax.get_yticklabels(), visible=False)
                 ax.set_xticks([])
                 ax.set_yticks([])
 
@@ -1414,18 +1417,20 @@ class SimImageSet:
 
                 ax.scatter(0, 0, edgecolor='r', facecolor='none')
 
-                ax.add_artist(Circle((0, 0), radius=self.fmax, color='k', fill=0, ls='--'))
+                ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
 
                 if jj == 0:
                     ax.set_title('shifted component')
-                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
+                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
+                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
                 if jj == 1:
-                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                    ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
+                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
+                    ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
                 elif jj == 2:
-                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='r', facecolor='none')
-                    ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='k', fill=0, ls='--'))
+                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
+                    ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
+                if jj == (self.nphases - 1):
+                    ax.set_xlabel("$f_x")
 
                 ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
                 ax.set_ylim([2 * self.fmax, -2 * self.fmax])
@@ -1449,12 +1454,13 @@ class SimImageSet:
                 elif jj == 2:
                     ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
 
+                if jj == (self.nphases - 1):
+                    ax.set_xlabel("$f_x")
+
                 ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
                 ax.set_ylim([2 * self.fmax, -2 * self.fmax])
                 ax.set_xticklabels([])
                 ax.set_yticklabels([])
-                # plt.setp(ax.get_xticklabels(), visible=False)
-                # plt.setp(ax.get_yticklabels(), visible=False)
                 ax.set_xticks([])
                 ax.set_yticks([])
 
@@ -1474,11 +1480,13 @@ class SimImageSet:
                     ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
                 elif jj == 2:
                     ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
+
+                if jj == (self.nphases - 1):
+                    ax.set_xlabel("$f_x")
+
                 ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
                 ax.set_ylim([2 * self.fmax, -2 * self.fmax])
 
-                # plt.setp(ax.get_xticklabels(), visible=False)
-                # plt.setp(ax.get_yticklabels(), visible=False)
                 ax.set_xticklabels([])
                 ax.set_yticklabels([])
                 ax.set_xticks([])
@@ -2396,8 +2404,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
                                            edgecolor='k', fill=0))
 
     ax2.set_title(r"$C(f_o) = \sum_f g_1(f) \times g^*_2(f+f_o)$")
-    ax.set_xlabel('$f_x (1/\mu m)$')
-    ax.set_ylabel('$f_y (1/\mu m)$')
+    ax2.set_xlabel('$f_x (1/\mu m)$')
+    ax2.set_ylabel('$f_y (1/\mu m)$')
 
     cbar_ax = figh.add_subplot(gspec[0, 13])
     figh.colorbar(im2, cax=cbar_ax)
@@ -2408,8 +2416,8 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     ax3 = figh.add_subplot(gspec[1, 0:6])
     ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0) = $"  " %0.3g and %0.2fdeg" %
                   (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
-    ax.set_xlabel('$f_x (1/\mu m)$')
-    ax.set_ylabel('$f_y (1/\mu m)$')
+    ax3.set_xlabel('$f_x (1/\mu m)$')
+    ax3.set_ylabel('$f_y (1/\mu m)$')
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
