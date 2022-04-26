@@ -25,6 +25,8 @@ channel_map["blue"]["sim"]["picture_indices"]
 
 import numpy as np
 import argparse
+import datetime
+import json
 from mcsim.analysis import dmd_patterns
 from mcsim.expt_ctrl import dlp6500
 
@@ -42,7 +44,8 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                         #            "bit_indices": np.array([7, 18, 23, 4, 9, 14, 19, 0, 5, 10, 15], dtype=int)},
                        "default": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13], dtype=int),
                                     "bit_indices": np.array([7, 18, 23, 4, 7, 12, 17, 22, 3, 6, 11], dtype=int)},
-                       "n=1_f=0%": {"picture_indices": np.array([1], dtype=int), "bit_indices": np.array([7], dtype=int)},
+                       "n=1_f=0%": {"picture_indices": np.array([1], dtype=int),
+                                    "bit_indices": np.array([7], dtype=int)},
                        # r = 5
                        # "n=7_f=97%": {"picture_indices": np.array([1, 13, 14, 14, 14, 14, 14], dtype=int),
                        #              "bit_indices": np.array([7, 20, 4, 5, 13, 21, 22], dtype=int)},
@@ -51,12 +54,16 @@ channel_map = {"off": {"default": {"picture_indices": np.array([1]), "bit_indice
                        # "n=6_f=84%": {"picture_indices": np.array([1, 11, 12, 12, 13, 13], dtype=int),
                        #              "bit_indices": np.array([7, 18, 4, 14, 0, 10], dtype=int)},
                        # r = 10/15
+                       "n=11_f=84%/55%": {"picture_indices": np.array([1, 5, 5, 6, 6, 7, 11, 12, 12, 13, 13], dtype=int),
+                                          "bit_indices": np.array([7, 12, 22, 8, 18, 4, 23, 7, 17, 3, 11], dtype=int)},
                        "n=7_f=97%": {"picture_indices": np.array([1, 13, 14, 14, 14, 14, 14], dtype=int),
                                      "bit_indices": np.array([7, 16, 0, 1, 9, 17, 18], dtype=int)},
                        "n=11_f=84%": {"picture_indices": np.array([1, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13], dtype=int),
                                       "bit_indices": np.array([7, 18, 23, 4, 7, 12, 17, 22, 3, 6, 11], dtype=int)},
                        "n=6_f=84%": {"picture_indices": np.array([1, 11, 12, 12, 12, 13], dtype=int),
                                      "bit_indices": np.array([7, 18, 4, 12, 22, 6], dtype=int)},
+                       "n=3_f=84%": {"picture_indices": np.array([1, 11, 12], dtype=int),
+                                     "bit_indices": np.array([7, 18, 4], dtype=int)},
                        "n=11_f=55%": {"picture_indices": np.array([1, 5, 5, 5, 6, 6, 6, 6, 6, 7, 7], dtype=int),
                                     "bit_indices": np.array([7, 12, 17, 22, 3, 8, 13, 18, 23, 4, 9], dtype=int)},
                        "n=6_f=55%": {"picture_indices": np.array([1, 5, 5, 6, 6, 7], dtype=int),
@@ -168,6 +175,23 @@ def validate_channel_map(cm):
     return True
 
 
+def save_config_file(fname, channel_map):
+    tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
+
+    with open(fname, "w") as f:
+        json.dump({"timestamp": tstamp, "channel_map": channel_map}, f, indent="\t")
+
+
+def load_config_file(fname):
+    with open(fname, "r") as f:
+        data = json.load(f)
+
+    tstamp = data["timestamp"]
+    channel_map = data["channel_map"]
+
+    return channel_map, tstamp
+
+
 # #######################
 # firmware patterns
 # #######################
@@ -247,8 +271,8 @@ def generate_firmware_patterns(generate_patterns=True):
     frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
 
     # rad = 5
-    # rad = 10
-    rad = 15
+    rad = 10
+    # rad = 15
     phase = 0
 
     # pupil info
@@ -578,6 +602,8 @@ if __name__ == "__main__":
     parser.add_argument("-b", "--blank", action="store_true",
                         help="set whether or not to insert OFF patterns between each SIM pattern to blank laser")
     parser.add_argument("-v", "--verbose", action="store_true", help="print more verbose DMD programming information")
+    parser.add_argument("--illumination_time", type=int, default = 105,
+                        help="illumination time in microseconds. Ignored if triggered is true")
     args = parser.parse_args()
 
     if args.verbose:
@@ -589,5 +615,5 @@ if __name__ == "__main__":
     dmd = dlp6500.dlp6500win(debug=args.verbose)
 
     pic_inds, bit_inds = program_dmd_seq(dmd, args.modes, args.channels, args.nrepeats, args.ndarkframes, args.blank,
-                                         args.pattern_indices, args.triggered, args.verbose)
+                                         args.pattern_indices, args.triggered, args.verbose, args.illumination_time)
 
