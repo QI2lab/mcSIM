@@ -307,6 +307,8 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     if light_vars_err is None:
         light_vars_err = np.zeros(light_vars.shape) * np.nan
 
+    # for comparison with read noise stats in electrons
+    std_es = np.sqrt(dark_vars) / gains
 
     # ############################################
     # parameter histograms
@@ -331,8 +333,6 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     bin_centers_vars = 0.5 * (bin_edges_vars[:-1] + bin_edges_vars[1:])
 
     # for comparison with read noise stats in electrons
-    std_es = np.sqrt(dark_vars) / gains
-
     sds_es_start = 0 #np.percentile(std_es, 0.1)
     sds_es_end = np.percentile(std_es, 99.5)
     bin_edges_stds_es = np.linspace(sds_es_start, sds_es_end, nbins + 1)
@@ -351,17 +351,17 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     ax1.plot(bin_centers, hgains)
     ax1.set_xlabel('gains (ADU/e)')
     ax1.set_ylabel('counts')
-    ax1.set_title('histogram of pixel gains, median=%0.2f' % (np.median(gains.ravel())))
+    ax1.set_title('histogram of pixel gains, median=%0.2f ADU/e' % (np.median(gains.ravel())))
 
     ax2 = figh1.add_subplot(grid[0, 1])
     ax2.plot(bin_centers_offs, hmeans)
     ax2.set_xlabel('offsets (ADU)')
-    ax2.set_title('dark mean, median=%0.2f' % (np.median(offsets.ravel())))
+    ax2.set_title('dark mean, median=%0.2f ADU' % (np.median(offsets.ravel())))
 
     ax3 = figh1.add_subplot(grid[1, 0])
     ax3.plot(bin_centers_vars, hvars)
     ax3.set_xlabel('variances (ADU^2)')
-    ax3.set_title('dark variances, median=%0.2f' % (np.median(dark_vars.ravel())))
+    ax3.set_title('dark variances, median=%0.2f ADU^2' % (np.median(dark_vars.ravel())))
 
     ax4 = figh1.add_subplot(grid[1, 1])
     ph1, = ax4.plot(bin_centers_stds_es, h_std_es)
@@ -386,29 +386,36 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     vmin = np.percentile(offsets, 2)
     vmax = np.percentile(offsets, 98)
     im1 = ax1.imshow(offsets, vmin=vmin, vmax=vmax)
-    ax1.set_title("offsets")
+    ax1.set_title("offsets (ADU)")
     figh2.colorbar(im1)
 
     ax2 = figh2.add_subplot(grid2[0, 1])
     vmin = np.percentile(dark_vars, 2)
     vmax = np.percentile(dark_vars, 98)
     im2 = ax2.imshow(dark_vars, vmin=vmin, vmax=vmax)
-    ax2.set_title("variances")
+    ax2.set_title("variances (ADU^2)")
     figh2.colorbar(im2)
 
     ax3 = figh2.add_subplot(grid2[1, 0])
     vmin = np.percentile(gains, 2)
     vmax = np.percentile(gains, 98)
     im3 = ax3.imshow(gains, vmin=vmin, vmax=vmax)
-    ax3.set_title("gains")
+    ax3.set_title("gains (ADU/e)")
     figh2.colorbar(im3)
+
+    ax4 = figh2.add_subplot(grid2[1, 1])
+    im4 = ax4.imshow(std_es, vmin=0, vmax=np.percentile(std_es, 98))
+    ax4.set_title("read noise SD (e)")
+    figh2.colorbar(im4)
 
     # ############################################
     # example gain fits
     # ############################################
+    nrows = 4
+    ncols = 4
 
     # choose some random pixels to plot
-    ninds = 16
+    ninds = nrows * ncols
     xinds = np.random.randint(0, gains.shape[1], size=ninds)
     yinds = np.random.randint(0, gains.shape[0], size=ninds)
 
@@ -417,34 +424,46 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     yinds_small, xinds_small = np.unravel_index(sorted_inds[: ninds], gains.shape)
     yinds_large, xinds_large = np.unravel_index(sorted_inds[-ninds:], gains.shape)
 
-    # values after subtracting background
-    ms = light_means - offsets[None, :, :]
-    vs = light_vars - dark_vars[None, :, :]
-    minterp = np.linspace(0, ms.max(), 100)
+    # interpolated mean values
+    minterp = np.linspace(0, light_means.max(), 100)
+    var_vmin = 0
+    var_vmax = np.percentile(light_vars, 99.9)
+    mean_vmin = 0
+    mean_vmax = minterp[-1] * 1.2
 
+    # plot gain fits
     figs_pix_eg = [[]]*3
     figs_pix_eg_names = ["camera_gain_fitting_examples", "camera_gain_fitting_smallest_gains", "camera_gain_fitting_largest_gains"]
-
     for ll, (yis, xis, fn) in enumerate(zip([yinds, yinds_small, yinds_large], [xinds, xinds_small, xinds_large], figs_pix_eg_names)):
-        figs_pix_eg[ll] = plt.figure(figsize=figsize)
-        grid3 = plt.GridSpec(4, 4, hspace=0.5, wspace=0.3)
-        plt.suptitle(fn.replace("_", " "))
+        figh = plt.figure(figsize=figsize)
+        grid3 = figh.add_gridspec(nrows=nrows, ncols=ncols, hspace=0.5, wspace=0.3)
+        figh.suptitle(fn.replace("_", " "))
 
         for ii in range(ninds):
-            ax = plt.subplot(grid3[ii])
+            aa, bb = np.unravel_index(ii, (nrows, ncols))
+
+            # create subplot
+            ax = figh.add_subplot(grid3[aa, bb])
+            # grab pixel coordinates
             y = yis[ii]
             x = xis[ii]
-            # ax.errorbar(ms[:, y, x], vs[:, y, x], fmt='.', xerr=light_means_err[:, y, x], yerr=light_vars_err[:, y, x])
-            ax.plot([offsets[y, x], offsets[y, x]], [0, 1.2 * light_vars[:, y, x].max()], 'k')
-            ax.plot([0, (ms + offsets[y, x]).max()], [dark_vars[y, x], dark_vars[y, x]], 'k')
+
+            # plot dark frames
+            ax.plot(offsets[y, x], dark_vars[y, x], 'b.')
+            # plot light frames
             ax.errorbar(light_means[:, y, x], light_vars[:, y, x], fmt='.', xerr=light_means_err[:, y, x], yerr=light_vars_err[:, y, x])
+            # plot fit
             ax.plot(minterp + offsets[y, x], minterp * gains[y, x] + dark_vars[y, x])
+            ax.set_xlim([mean_vmin, mean_vmax])
+            ax.set_ylim([var_vmin, var_vmax])
 
             ax.set_title("(%d,%d), g=%0.2f, O=%0.2f, v=%0.2f" % (y, x, gains[y, x], offsets[y, x], dark_vars[y, x]))
-            if ii == 0:
+            if bb == 0:
                 ax.set_ylabel('variance (ADU^2)')
+            if aa == (ncols - 1):
                 ax.set_xlabel('mean (ADU)')
 
+        figs_pix_eg[ll] = figh
 
     fighs = [figh1, figh2] + figs_pix_eg
     fns = [fn1, fn2] + figs_pix_eg_names
