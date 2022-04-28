@@ -100,7 +100,7 @@ for kk in range(ncolors):
             # estimate frequencies based on affine_xform
             frqs_guess[ii, 0], frqs_guess[ii, 1], phases_guess[ii, jj] = \
                 affine.xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0], frqs_dmd[kk, ii, 1],
-                                                         phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], roi, xform)
+                                                 phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], roi, xform)
 
     # convert from 1/mirrors to 1/um
     frqs_guess = frqs_guess / pixel_size
@@ -111,7 +111,7 @@ for kk in range(ncolors):
                              frq_estimation_mode="band-correlation",
                              frq_guess=frqs_guess,
                              phases_guess=phases_guess,
-                             phase_estimation_mode="wicker-iterative",
+                             phase_estimation_mode="wicker-iterative", #,
                              combine_bands_mode="fairSIM",
                              fmax_exclude_band0=0.4,
                              normalize_histograms=True,
