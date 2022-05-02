@@ -10,15 +10,17 @@ implemented for a MicroManager dataset containing multiple z-positions, color ch
 import mcsim.analysis.analysis_tools as tools
 import mcsim.analysis.mm_io as mm_io
 import mcsim.analysis.psd as psd
-import mcsim.analysis.camera_noise as camera_noise
 # localize psf
 import localize_psf.fit as fit
-import localize_psf.fit_psf as psf
+import localize_psf.fit_psf
 import localize_psf.affine as affine
 import localize_psf.rois as rois
+import localize_psf.camera as camera_noise
 
 import pickle
+import json
 import os
+import pathlib
 from pathlib import Path
 import time
 import datetime
@@ -26,6 +28,8 @@ import copy
 import warnings
 import shutil
 import joblib
+import io
+from io import StringIO
 import numpy as np
 from scipy import fft
 import scipy.optimize
@@ -120,23 +124,19 @@ class SimImageSet:
         self.save_dir = Path(save_dir)
         self.save_suffix = save_suffix
         self.save_prefix = save_prefix
+        self.log = StringIO() # can save this stream to a file later if desired
 
         if self.save_dir is not None:
             if not self.save_dir.exists():
-                self.save_dir.mkdir()
-
-            log_fname = self.save_dir / f"{self.save_prefix:s}sim_log{self.save_suffix:s}.txt"
-            self.log_file = open(log_fname, 'w')
-        else:
-            self.log_file = None
+                self.save_dir.mkdir(parents=True)
 
         # #############################################
         # print current time
         # #############################################
-        now = datetime.datetime.now()
+        tstamp = datetime.datetime.now().strftime('%Y/%d/%m %H:%M:%S')
 
         self.print_log("####################################################################################")
-        self.print_log("%d/%02d/%02d %02d:%02d:%02d" % (now.year, now.month, now.day, now.hour, now.minute, now.second))
+        self.print_log(tstamp)
         self.print_log("####################################################################################")
 
         # #############################################
@@ -164,7 +164,7 @@ class SimImageSet:
             raise NotImplementedError("upsampling widefield not yet fully implemented")
 
         self.upsample_fact = 2
-        self.combine_mode = combine_bands_mode
+        self.combine_bands_mode = combine_bands_mode
         self.use_fixed_mod_depths = use_fixed_mod_depths
         self.phase_estimation_mode = phase_estimation_mode
         self.fmax_exclude_band0 = fmax_exclude_band0
@@ -176,6 +176,9 @@ class SimImageSet:
         else:
             self.frq_estimation_mode = frq_estimation_mode
 
+        self.frequency_units = '1/um'
+        self.spatial_units = 'um'
+
         # #############################################
         # images
         # #############################################
@@ -184,12 +187,20 @@ class SimImageSet:
         # hardcoded for 2D SIM
         self.nbands = 3
         self.band_inds = np.array([0, 1, -1], dtype=int)
-        
+
         # #############################################
-        # get basic parameters
+        # real space parameters
         # #############################################
         self.dx = physical_params['pixel_size']
         self.dy = physical_params['pixel_size']
+        self.x = tools.get_fft_pos(self.nx, self.dx, mode='symmetric')
+        self.y = tools.get_fft_pos(self.ny, self.dy, mode='symmetric')
+        self.x_us = tools.get_fft_pos(self.upsample_fact * self.nx, self.dx / self.upsample_fact, mode='symmetric')
+        self.y_us = tools.get_fft_pos(self.upsample_fact * self.ny, self.dy / self.upsample_fact, mode='symmetric')
+
+        # #############################################
+        # get basic parameters
+        # #############################################
         self.na = physical_params['na']
         self.wavelength = physical_params['wavelength']
 
@@ -220,9 +231,9 @@ class SimImageSet:
         self.fy_us = fft.fftshift(fft.fftfreq(self.upsample_fact * self.ny, self.dy / self.upsample_fact))
 
         if otf is None:
-            otf = psf.circ_aperture_otf(np.expand_dims(self.fx, axis=0),
-                                        np.expand_dims(self.fy, axis=1),
-                                        self.na, self.wavelength)
+            otf = localize_psf.fit_psf.circ_aperture_otf(np.expand_dims(self.fx, axis=0),
+                                                         np.expand_dims(self.fy, axis=1),
+                                                         self.na, self.wavelength)
 
         if np.any(otf < 0) or np.any(otf > 1):
             raise ValueError("OTF must be >= 0 and <= 1")
@@ -231,6 +242,9 @@ class SimImageSet:
         if otf.ndim == 2:
             otf = np.tile(otf, [self.nangles, 1, 1])
         self.otf = otf
+
+        if self.otf.shape[-2:] != self.imgs.shape[-2:]:
+            raise ValueError(f"OTF shape {self.otf.shape} and image shape {self.img.shape} are not compatible")
 
         # #############################################
         # remove background and convert from ADU to photons
@@ -294,16 +308,11 @@ class SimImageSet:
         # #############################################
         # get optically sectioned image
         # #############################################
-        tstart = time.perf_counter()
-        self.sim_os = np.mean(sim_optical_section(self.imgs, axis=1), axis=0)
-        self.print_log("Computing SIM-OS image took %0.2fs" % (time.perf_counter() - tstart))
-
-    def __del__(self):
-        if self.log_file is not None:
-            try:
-                self.log_file.close()
-            except AttributeError:
-                pass
+        # tstart = time.perf_counter()
+        # os_imgs = [sim_optical_section(self.imgs[ii], phase_differences=self.phases[ii]) for ii in range(self.nangles)]
+        # self.sim_os = np.mean(np.stack(os_imgs, axis=0), axis=0)
+        # self.sim_os = np.mean(sim_optical_section(self.imgs, axis=1), axis=0)
+        # self.print_log("Computing SIM-OS image took %0.2fs" % (time.perf_counter() - tstart))
 
     def reconstruct(self):
         """
@@ -330,15 +339,15 @@ class SimImageSet:
             band1 = np.expand_dims(bands_unmixed_ft_temp[:, 1], axis=1)
             self.frqs = self.estimate_sim_frqs(band0, band1)
         else:
-            raise ValueError("frq_estimation_mode must be 'fixed', 'fourier-transform', or 'band-correlation'"
-                             " but was '%s'" % self.frq_estimation_mode)
+            raise ValueError(f"frq_estimation_mode must be 'fixed', 'fourier-transform', or 'band-correlation'"
+                             f" but was '{self.frq_estimation_mode:s}'")
 
         # for convenience also store periods and angles
         self.periods = 1 / np.sqrt(self.frqs[:, 0] ** 2 + self.frqs[:, 1] ** 2)
         self.angles = np.angle(self.frqs[:, 0] + 1j * self.frqs[:, 1])
 
-        self.print_log("estimating %d frequencies took %0.2fs using mode '%s'" %
-                       (self.nangles, time.perf_counter() - tstart, self.frq_estimation_mode))
+        self.print_log(f"estimating {self.nangles:d} frequencies using mode {self.frq_estimation_mode:s}"
+                       f" took {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # OTF value at frqs
@@ -372,9 +381,9 @@ class SimImageSet:
             # if p2nr is too low use guess values instead
             if np.min(p2nr[ii]) < self.min_p2nr and self.frqs_guess is not None:
                 self.frqs[ii] = self.frqs_guess[ii]
-                self.print_log("Angle %d, minimum SIM peak-to-noise ratio = %0.2f is less than the minimum value, %0.2f,"
-                               " so fit frequency will be replaced with guess"
-                               % (ii, np.min(p2nr[ii]), self.min_p2nr))
+                self.print_log(f"Angle {ii:d}, minimum SIM peak-to-noise ratio = {np.min(p2nr[ii]):.2f}"
+                               f" is less than the minimum value, {self.min_p2nr:.2f},"
+                               " so fit frequency will be replaced with guess")
 
                 for jj in range(self.nphases):
                     peak_val = tools.get_peak_value(self.imgs_ft[ii, jj], self.fx, self.fy, self.frqs[ii], peak_pixel_size=1)
@@ -386,7 +395,7 @@ class SimImageSet:
         self.p2nr = p2nr
         self.peak_phases = peak_phases
 
-        self.print_log("estimated peak-to-noise ratio in %0.2fs" % (time.perf_counter() - tstart))
+        self.print_log(f"estimated peak-to-noise ratio in {time.perf_counter() - tstart:.2f}s")
         
         # #############################################
         # estimate spatial-resolved MCNR
@@ -396,10 +405,13 @@ class SimImageSet:
         # note: this is the same as sim_os / sqrt(wf_angle) up to a factor
         tstart = time.perf_counter()
 
-        img_angle_ft = fft.fft(fft.ifftshift(self.imgs, axes=1), axis=1)
-        self.mcnr = 2 * np.abs(img_angle_ft[:, 1]) / np.sqrt(np.abs(img_angle_ft[:, 0]))
+        # img_angle_ft = fft.fft(fft.ifftshift(self.imgs, axes=1), axis=1)
+        # divide by nangles to remove ft normalization
+        img_angle_ft = fft.fft(fft.ifftshift(self.imgs, axes=1), axis=1) / self.nangles
+        # if I_j = Io * m * cos(2*pi*j), then want numerator to be 2*m. FT gives us m/2, so multiply by 4
+        self.mcnr = 4 * np.abs(img_angle_ft[:, 1]) / np.sqrt(np.abs(img_angle_ft[:, 0]))
 
-        self.print_log("estimated modulation-contrast-to-noise ratio in %0.2fs" % (time.perf_counter() - tstart))
+        self.print_log(f"estimated modulation-contrast-to-noise ratio in {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # estimate phases
@@ -408,8 +420,18 @@ class SimImageSet:
 
         self.phases, self.amps = self.estimate_sim_phases()
 
-        self.print_log("estimated %d phases in %0.2fs using mode '%s'" %
-                       (self.nangles * self.nphases, time.perf_counter() - tstart, self.phase_estimation_mode))
+        self.print_log(f"estimated {self.nangles * self.nphases:d} phases"
+                       f" using mode {self.phase_estimation_mode:s} "
+                       f"in {time.perf_counter() - tstart:.2f}")
+
+        # #############################################
+        # get optically sectioned image
+        # #############################################
+        tstart = time.perf_counter()
+        os_imgs = [sim_optical_section(self.imgs[ii], phase_differences=self.phases[ii]) for ii in range(self.nangles)]
+        self.sim_os = np.mean(np.stack(os_imgs, axis=0), axis=0)
+        # self.sim_os = np.mean(sim_optical_section(self.imgs, axis=1), axis=0)
+        self.print_log("Computing SIM-OS image took %0.2fs" % (time.perf_counter() - tstart))
 
         # #############################################
         # do band separation
@@ -418,7 +440,7 @@ class SimImageSet:
 
         self.bands_unmixed_ft = do_sim_band_separation(self.imgs_ft, self.phases, amps=self.amps)
 
-        self.print_log("separated bands in %0.2fs" % (time.perf_counter() - tstart))
+        self.print_log(f"separated bands in {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # estimate noise in each band
@@ -430,20 +452,18 @@ class SimImageSet:
             for jj in range(self.nbands):
                 self.noise_power_bands[ii, jj] = get_noise_power(self.bands_unmixed_ft[ii, jj], self.fx, self.fy, self.fmax)
 
-        self.print_log("estimated noise in %0.2fs" % (time.perf_counter() - tstart))
+        self.print_log(f"estimated noise in {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # shift bands
         # #############################################
         tstart = time.perf_counter()
-
         self.bands_shifted_ft = self.shift_bands()
-
-        self.print_log("shifted bands in %0.2fs" % (time.perf_counter() - tstart))
+        self.print_log(f"shifted bands in {time.perf_counter() - tstart:.2f}s")
 
         tstart = time.perf_counter()
         self.otf_shifted = self.shift_otf()
-        self.print_log("shifted otfs in %0.2fs" % (time.perf_counter() - tstart))
+        self.print_log(f"shifted otfs in {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # correct global phase and get modulation depths
@@ -466,7 +486,7 @@ class SimImageSet:
 
         for ii in range(self.nangles):
             if not np.any(mask[ii]):
-                raise ValueError("band overlap mask for angle %d was all False" % ii)
+                raise ValueError(f"band overlap mask for angle {ii:d} was all False")
 
         # corrected phases
         # can either think of these as (1) acting on phases such that phase -> phase - phase_correction
@@ -476,9 +496,7 @@ class SimImageSet:
                                                         self.otf_shifted[:, 0], self.otf_shifted[:, 1],
                                                         mask)
 
-        # todo: this should have a diagnostic plot...
-
-        if self.combine_mode == "openSIM":
+        if self.combine_bands_mode == "openSIM":
             # estimate power spectrum parameters
             fit_depths_pspectrum, self.power_spectrum_params, self.power_spectrum_masks = self.fit_power_spectra()
 
@@ -486,12 +504,12 @@ class SimImageSet:
             self.print_log("using fixed modulation depth")
             self.mod_depths = self.mod_depths_guess
         else:
-            if self.combine_mode == "openSIM":
+            if self.combine_bands_mode == "openSIM":
                 self.mod_depths = fit_depths_pspectrum[:, 1]
-            elif self.combine_mode == "fairSIM":
+            elif self.combine_bands_mode == "fairSIM":
                 self.mod_depths = mags
             else:
-                raise ValueError("combine_mode must be 'fairSIM' or 'openSIM' but was '%s'" % self.combine_mode)
+                raise ValueError(f"combine_mode must be 'fairSIM' or 'openSIM' but was '{self.combine_bands_mode:s}'")
 
         self.print_log("estimated global phases and mod depths in %0.2fs" % (time.perf_counter() - tstart))
 
@@ -500,13 +518,13 @@ class SimImageSet:
         # #############################################
         tstart = time.perf_counter()
 
-        if self.combine_mode == "openSIM":
+        if self.combine_bands_mode == "openSIM":
             if self.fmax_exclude_band0 > 0:
                 raise NotImplementedError("fmax_exlude_band0=0 is not implemented with combine_mode='openSIM'")
 
-            self.weights, self.weights_norm = self.get_weights_lal()
+            self.weights, self.weights_norm = self.get_weights_open_sim()
 
-        elif self.combine_mode == "fairSIM":
+        elif self.combine_bands_mode == "fairSIM":
             # following the approach of FairSIM: https://doi.org/10.1038/ncomms10980
             self.weights = self.otf_shifted.conj()
             weights_decon = np.array(self.weights, copy=True)
@@ -543,9 +561,9 @@ class SimImageSet:
             self.weights_norm = self.wiener_parameter**2 + np.nansum(np.abs(self.weights) ** 2, axis=(0, 1))
 
         else:
-            raise ValueError("combine_mode must be 'fairSIM' or 'openSIM' but was '%s'" % self.combine_mode)
+            raise ValueError(f"combine_mode must be 'fairSIM' or 'openSIM' but was '{self.combine_bands_mode:s}'")
 
-        self.print_log("computed band weights in %0.2fs" % (time.perf_counter() - tstart))
+        self.print_log(f"computed band weights in {time.perf_counter() - tstart:.2f}s")
 
         # combine bands
         tstart = time.perf_counter()
@@ -559,9 +577,13 @@ class SimImageSet:
                                              np.expand_dims(1 / self.mod_depths, axis=1)), axis=1)
 
         # put in modulation depth and global phase corrections
-        self.sim_sr_ft = np.nansum(self.bands_shifted_ft * self.weights *
-                                   np.expand_dims(phase_corr_mat, axis=(2, 3)) *
-                                   np.expand_dims(mod_depth_corr_mat, axis=(2, 3)), axis=(0, 1)) / self.weights_norm
+        # components array useful for diagnostic plots
+        self.sim_sr_ft_components = self.bands_shifted_ft * self.weights * \
+                                    np.expand_dims(phase_corr_mat, axis=(2, 3)) * \
+                                    np.expand_dims(mod_depth_corr_mat, axis=(2, 3)) / \
+                                    np.expand_dims(self.weights_norm, axis=(0, 1))
+        # final FT image
+        self.sim_sr_ft = np.nansum(self.sim_sr_ft_components, axis=(0, 1))
 
         # inverse FFT to get real-space reconstructed image
         apodization = np.expand_dims(scipy.signal.windows.tukey(self.sim_sr_ft.shape[1], alpha=0.1), axis=0) * \
@@ -573,15 +595,16 @@ class SimImageSet:
         if self.trim_negative_values:
             self.sim_sr[self.sim_sr < 0] = 0
 
-        self.print_log("combining bands using mode '%s' and Wiener parameter %0.3f took %0.2fs" %
-                       (self.combine_mode, self.wiener_parameter, time.perf_counter() - tstart))
+        self.print_log(f"combining bands using mode '{self.combine_bands_mode}'"
+                       f" and Wiener parameter {self.wiener_parameter:.3f}"
+                       f" took {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # widefield deconvolution
         # #############################################
         tstart = time.perf_counter()
 
-        if self.combine_mode == "openSIM":
+        if self.combine_bands_mode == "openSIM":
             # get signal to noise ratio
             wf_noise = get_noise_power(self.widefield_ft, self.fx, self.fy, self.fmax)
             fit_result, self.mask_wf = fit_power_spectrum(self.widefield_ft, np.mean(self.otf, axis=0),
@@ -600,7 +623,7 @@ class SimImageSet:
             wf_decon_ft = self.widefield_ft * get_wiener_filter(wf_otf, sig / wf_noise)
             # upsample to make fully comparable to reconstructed image
             self.widefield_deconvolution_ft = tools.resample_bandlimited_ft(wf_decon_ft, (2, 2))
-        elif self.combine_mode == "fairSIM":
+        elif self.combine_bands_mode == "fairSIM":
             # wf_decon_ft = self.widefield_ft * get_wiener_filter(self.otf, 1/np.sqrt(self.wiener_parameter / self.nangles))
 
             self.widefield_deconvolution_ft = np.nansum(weights_decon[:, 0] * self.bands_shifted_ft[:, 0], axis=0) / \
@@ -628,8 +651,8 @@ class SimImageSet:
         # BUT: can speed up somewhat if can load all Fourier transforms on GPU at once, and limit to only the
         # number of FFT's we need. Writing function so we can do this is a bit more complicated
 
-        x = tools.get_fft_pos(self.upsample_fact * self.nx, self.dx / self.upsample_fact, centered=False, mode='symmetric')
-        y = tools.get_fft_pos(self.upsample_fact * self.ny, self.dy / self.upsample_fact, centered=False, mode='symmetric')
+        # x = tools.get_fft_pos(self.upsample_fact * self.nx, self.dx / self.upsample_fact, centered=False, mode='symmetric')
+        # y = tools.get_fft_pos(self.upsample_fact * self.ny, self.dy / self.upsample_fact, centered=False, mode='symmetric')
 
         # store expanded bands
         expanded = np.zeros((self.nangles, 2, self.ny * self.upsample_fact, self.nx * self.upsample_fact), dtype=complex)
@@ -641,7 +664,8 @@ class SimImageSet:
             # don't need to loop over m*O(f + f_o)H(f), since it is conjugate of m*O(f - f_o)H(f)
 
             # shift factor for m*O(f - f_o)H(f)
-            exp_factor[ii] = np.exp(-1j * 2 * np.pi * (self.frqs[ii, 0] * x[None, :] + self.frqs[ii, 1] * y[:, None]))
+            exp_factor[ii] = np.exp(-1j * 2 * np.pi * (self.frqs[ii, 0] * np.expand_dims(fft.ifftshift(self.x_us), axis=0) +
+                                                       self.frqs[ii, 1] * np.expand_dims(fft.ifftshift(self.y_us), axis=1)))
             for jj, band_ind in enumerate([0, 1]):
                 # think expand->shift->deconvolve is better than deconvolve->expand->shift,
                 # because it avoids the fx=0 and fy=0 line artifacts
@@ -685,11 +709,11 @@ class SimImageSet:
 
         return otf_shifted
 
-    def get_weights_lal(self):
+    def get_weights_open_sim(self):
         """
         Combine bands O(f)otf(f), O(f-fo)otf(f), and O(f+fo)otf(f) to do SIM reconstruction.
 
-        Following the approach of https://doi.org/10.1109/jstqe.2016.2521542
+        Following the OpenSIM approach of https://doi.org/10.1109/jstqe.2016.2521542
 
         :return sim_sr_ft, bands_shifted_ft, weights, weight_norm, snr, snr_shifted:
         """
@@ -890,7 +914,7 @@ class SimImageSet:
         self.print_log("emission wavelength=%.0fnm and NA=%0.2f" % (self.wavelength * 1e3, self.na))
         self.print_log("'%s' frequency estimation mode" % self.frq_estimation_mode)
         self.print_log("'%s' phase estimation mode" % self.phase_estimation_mode)
-        self.print_log("'%s' band combination mode" % self.combine_mode)
+        self.print_log("'%s' band combination mode" % self.combine_bands_mode)
         self.print_log("excluded %0.2f from bands around centers" % self.fmax_exclude_band0)
         self.print_log("wiener parameter = %0.2f" % self.wiener_parameter)
 
@@ -977,16 +1001,12 @@ class SimImageSet:
         """
         Print result to stdout and to a log file.
 
-        :param string:
-        :param fid: file handle. If fid=None, then will be ignored
-        :param end:
-        :return:
+        :param string: string to print
+        :param kwargs: passed through to print()
         """
 
         print(string, **kwargs)
-
-        if self.log_file is not None:
-            print(string, **kwargs, file=self.log_file)
+        print(string, **kwargs, file=self.log)
 
     # plotting utility functions
     def plot_figs(self):
@@ -1015,17 +1035,15 @@ class SimImageSet:
         for fh, fn in zip(fighs, fig_names):
             if saving:
                 fh.savefig(self.save_dir / f"{self.save_prefix:s}{fn:s}{self.save_suffix:s}.png")
-                #fh.savefig(os.path.join(self.save_dir, "%s%s.png" % (fn, self.save_suffix)))
             if not self.interactive_plotting:
                 plt.close(fh)
 
-        if self.combine_mode == "openSIM":
+        if self.combine_bands_mode == "openSIM":
             # plot power spectrum fits
             fighs, fig_names = self.plot_power_spectrum_fits(figsize=self.figsize)
             for fh, fn in zip(fighs, fig_names):
                 if saving:
                     fh.savefig(self.save_dir / f"{self.save_prefix:s}{fn:s}{self.save_suffix:s}.png")
-                    # fh.savefig(os.path.join(self.save_dir, "%s%s.png" % (fn, self.save_suffix)))
                 if not self.interactive_plotting:
                     plt.close(fh)
 
@@ -1037,7 +1055,6 @@ class SimImageSet:
                                            ttl_str="Widefield power spectrum")
             if saving:
                 figh.savefig(self.save_dir / f"{self.save_prefix:s}power_spectrum_widefield{self.save_suffix:s}.png")
-                #figh.savefig(os.path.join(self.save_dir, "power_spectrum_widefield%s.png" % self.save_suffix))
             if not self.interactive_plotting:
                 plt.close(figh)
 
@@ -1046,7 +1063,6 @@ class SimImageSet:
         for fh, fn in zip(fighs, fig_names):
             if saving:
                 fh.savefig(self.save_dir / f"{self.save_prefix:s}{fn:s}{self.save_suffix:s}.png")
-                #fh.savefig(os.path.join(self.save_dir, "%s%s.png" % (fn, self.save_suffix)))
             if not self.interactive_plotting:
                 plt.close(fh)
 
@@ -1054,7 +1070,6 @@ class SimImageSet:
         fig = self.plot_reconstruction(figsize=self.figsize)
         if saving:
             fig.savefig(self.save_dir / f"{self.save_prefix:s}sim_reconstruction{self.save_suffix:s}.png", dpi=400)
-            #fig.savefig(os.path.join(self.save_dir, "sim_reconstruction%s.png" % self.save_suffix), dpi=400)
         if not self.interactive_plotting:
             plt.close(fig)
 
@@ -1062,7 +1077,6 @@ class SimImageSet:
         fig = self.plot_otf(figsize=self.figsize)
         if saving:
             fig.savefig(self.save_dir / f"{self.save_prefix:s}otf{self.save_suffix:s}.png")
-            # fig.savefig(os.path.join(self.save_dir, "otf%s.png" % self.save_suffix))
         if not self.interactive_plotting:
             plt.close(fig)
 
@@ -1081,10 +1095,10 @@ class SimImageSet:
         """
 
         # real space coordinate data
-        x = tools.get_fft_pos(self.nx, dt=self.dx)
-        y = tools.get_fft_pos(self.ny, dt=self.dy)
+        # x = tools.get_fft_pos(self.nx, dt=self.dx)
+        # y = tools.get_fft_pos(self.ny, dt=self.dy)
 
-        extent = tools.get_extent(y, x)
+        extent = tools.get_extent(self.y, self.x)
 
         # parameters for real space plot
         vmin = np.percentile(self.imgs.ravel(), 0.1)
@@ -1098,10 +1112,11 @@ class SimImageSet:
         # plot
         # ########################################
         figh = plt.figure(figsize=figsize)
-        figh.suptitle('SIM images, real space and mcnr')
+        figh.suptitle('SIM signal diagnostic')
 
         n_factor = 4 # colorbar will be 1/n_factor of images
-        grid = figh.add_gridspec(self.nangles, n_factor * (self.nphases + 2) + 1)
+        # 5 types of plots + 2 colorbars
+        grid = figh.add_gridspec(self.nangles, n_factor * (self.nphases + 2) + 3)
         
         mean_int = np.mean(self.imgs, axis=(2, 3))
         rel_int_phases = mean_int / np.expand_dims(np.max(mean_int, axis=1), axis=1)
@@ -1141,10 +1156,11 @@ class SimImageSet:
             bin_edges = np.linspace(0, np.percentile(self.imgs, 99), nbins + 1)
             bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
 
-            ax = figh.add_subplot(grid[ii, n_factor*self.nphases : n_factor*(self.nphases+1)])
+            ax = figh.add_subplot(grid[ii, n_factor*self.nphases + 2 : n_factor*(self.nphases+1) + 2])
             for jj in range(self.nphases):
                 histogram, _ = np.histogram(self.imgs[ii, jj].ravel(), bins=bin_edges)
                 ax.semilogy(bin_centers, histogram)
+                ax.set_xlim([0, bin_edges[-1]])
 
             ax.set_yticks([])
             if ii == 0:
@@ -1160,20 +1176,25 @@ class SimImageSet:
             # ########################################
             # spatially resolved mcnr
             # ########################################
-            ax = figh.add_subplot(grid[ii, n_factor*(self.nphases + 1) : n_factor*(self.nphases+2)])
+            ax = figh.add_subplot(grid[ii, n_factor*(self.nphases + 1) + 2 : n_factor*(self.nphases+2) + 2])
             if vmax_mcnr <= 0:
                 vmax_mcnr += 1e-12
 
-            im = ax.imshow(self.mcnr[ii], vmin=0, vmax=vmax_mcnr, cmap="bone")
+            im = ax.imshow(self.mcnr[ii], vmin=0, vmax=vmax_mcnr, cmap="inferno")
             ax.set_xticks([])
             ax.set_yticks([])
             if ii == 0:
                 ax.set_title("mcnr")
 
+        # colorbar for images
+        ax = figh.add_subplot(grid[:, n_factor*self.nphases])
+        norm = PowerNorm(vmin=vmin, vmax=vmax, gamma=1)
+        plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap="bone"), cax=ax)
+
         # colorbar for MCNR
-        ax = figh.add_subplot(grid[:, n_factor*(self.nphases + 2)])
+        ax = figh.add_subplot(grid[:, n_factor*(self.nphases + 2) + 2])
         norm = PowerNorm(vmin=0, vmax=vmax_mcnr, gamma=1)
-        plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap="bone"), cax=ax, label="MCNR")
+        plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap="inferno"), cax=ax, label="MCNR")
 
         return figh
 
@@ -1185,6 +1206,15 @@ class SimImageSet:
 
         extent_wf = tools.get_extent(self.fy, self.fx)
         extent_rec = tools.get_extent(self.fy_us, self.fx_us)
+
+        # x = tools.get_fft_pos(self.nx, dt=self.dx)
+        # y = tools.get_fft_pos(self.ny, dt=self.dy)
+        extent_wf_real = tools.get_extent(self.y, self.x)
+
+        # x_us = tools.get_fft_pos(self.upsample_fact * self.nx, dt=self.dx / self.upsample_fact)
+        # y_us = tools.get_fft_pos(self.upsample_fact * self.ny, dt=self.dy / self.upsample_fact)
+        extent_us_real = tools.get_extent(self.y_us, self.x_us)
+
 
         gamma = 0.1
         min_percentile = 0.1
@@ -1198,7 +1228,7 @@ class SimImageSet:
                       "band combination mode '%s', band replacement using %0.2f of fmax" %
                       (self.na, self.wavelength * 1e3,
                        self.wiener_parameter, self.phase_estimation_mode, self.frq_estimation_mode,
-                       self.combine_mode, self.fmax_exclude_band0))
+                       self.combine_bands_mode, self.fmax_exclude_band0))
 
         # widefield, real space
         ax = figh.add_subplot(grid[0, 0])
@@ -1207,10 +1237,10 @@ class SimImageSet:
         vmax = np.percentile(self.widefield.ravel(), max_percentile)
         if vmax <= vmin:
             vmax += 1e-12
-        ax.imshow(self.widefield, vmin=vmin, vmax=vmax, cmap="bone")
+        ax.imshow(self.widefield, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_wf_real)
         ax.set_title('widefield')
-        ax.set_xlabel('x-position (pix)')
-        ax.set_ylabel('y-position (pix)')
+        ax.set_xlabel('x-position ($\mu m$)')
+        ax.set_ylabel('y-position ($\mu m$)')
 
         # deconvolved, real space
         ax = figh.add_subplot(grid[0, 1])
@@ -1219,9 +1249,9 @@ class SimImageSet:
         vmax = np.percentile(self.widefield_deconvolution.ravel(), max_percentile)
         if vmax <= vmin:
             vmax += 1e-12
-        ax.imshow(self.widefield_deconvolution, vmin=vmin, vmax=vmax, cmap="bone")
+        ax.imshow(self.widefield_deconvolution, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_us_real)
         ax.set_title('widefield deconvolved')
-        ax.set_xlabel('x-position (pix)')
+        ax.set_xlabel('x-position ($\mu m$)')
 
         # SIM, realspace
         ax = figh.add_subplot(grid[0, 2])
@@ -1229,9 +1259,9 @@ class SimImageSet:
         vmax = np.percentile(self.sim_sr.ravel()[self.sim_sr.ravel() >= 0], max_percentile)
         if vmax <= vmin:
             vmax += 1e-12
-        ax.imshow(self.sim_sr, vmin=vmin, vmax=vmax, cmap="bone")
+        ax.imshow(self.sim_sr, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_us_real)
         ax.set_title('SR-SIM')
-        ax.set_xlabel('x-position (pix)')
+        ax.set_xlabel('x-position ($\mu m$)')
 
         #
         ax = figh.add_subplot(grid[0, 3])
@@ -1239,9 +1269,9 @@ class SimImageSet:
         vmax = np.percentile(self.sim_os.ravel(), max_percentile)
         if vmax <= vmin:
             vmax += 1e-12
-        ax.imshow(self.sim_os, vmin=vmin, vmax=vmax, cmap="bone")
+        ax.imshow(self.sim_os, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_wf_real)
         ax.set_title('OS-SIM')
-        ax.set_xlabel('x-position (pix)')
+        ax.set_xlabel('x-position ($\mu m$)')
 
         # widefield Fourier space
         ax = figh.add_subplot(grid[1, 0])
@@ -1363,9 +1393,12 @@ class SimImageSet:
         figs = []
         fig_names = []
 
-        # plot different stages of inversion
+        # ######################################
+        # plot different stages of inversion process as diagnostic
+        # ######################################
         extent = tools.get_extent(self.fy, self.fx)
         extent_upsampled = tools.get_extent(self.fy_us, self.fx_us)
+        extent_upsampled_real = tools.get_extent(self.y_us, self.x_us)
 
         # plot one image for each angle
         for ii in range(self.nangles):
@@ -1379,17 +1412,15 @@ class SimImageSet:
             p2_corr = np.mod(self.phases[ii, 2] - self.phase_corrections[ii], 2*np.pi)
 
             fig = plt.figure(figsize=figsize)
-            fig.suptitle('Separated bands diagnostic, angle %d\n'
-                         'period=%0.3fnm at %0.3fdeg=%0.3frad, f=(%0.3f,%0.3f) 1/um\n'
-                         'modulation contrast=%0.3f, min p2nr=%0.3f, $\eta$=%0.2f, global phase correction=%0.2fdeg\n'
-                         'phases (deg) =%0.2f, %0.2f, %0.2f, corrected phases (deg) = %0.2f, %0.2f, %0.2f, phase diffs (deg) =%0.2f, %0.2f, %0.2f' %
-                         (ii, self.periods[ii] * 1e3, self.angles[ii] * 180 / np.pi, self.angles[ii],
-                          self.frqs[ii, 0], self.frqs[ii, 1], self.mod_depths[ii], np.min(self.p2nr[ii]),
-                          self.wiener_parameter, self.phase_corrections[ii] * 180 / np.pi,
-                          p0 * 180 / np.pi, p1 * 180 / np.pi, p2 * 180 / np.pi,
-                          p0_corr * 180 / np.pi, p1_corr * 180 / np.pi, p2_corr * 180 / np.pi,
-                          0, dp1 * 180 / np.pi, dp2 * 180 / np.pi,)
-                         )
+            fig.suptitle(f'SIM bands Fourier space diagnostic, angle {ii:d}\n'
+                         f'period={self.periods[ii] * 1e3:.3f}nm at '
+                         f'{self.angles[ii] * 180 / np.pi:.2f}deg={self.angles[ii]:.3f}rad,'
+                         f' f=({self.frqs[ii, 0]:.3f},{self.frqs[ii, 1]:.3f}) 1/um\n'
+                         f'modulation contrast={self.mod_depths[ii]:.3f}, min p2nr={np.min(self.p2nr[ii]):.3f},'
+                         f' $\eta$={self.wiener_parameter:.2f},'
+                         f' global phase correction={self.phase_corrections[ii] * 180 / np.pi:.2f}deg\n'                         
+                         f' corrected phases (deg) = {p0_corr * 180 / np.pi:.2f}, {p1_corr * 180 / np.pi:.2f}, {p2_corr * 180 / np.pi:.2f};'
+                         f' phase diffs (deg) ={0:.2f}, {dp1 * 180/np.pi:.2f}, {dp2 * 180/np.pi:.2f}')
 
             n_factor = 5
             grid = fig.add_gridspec(self.nphases, 5 * n_factor + 2, wspace=3)
@@ -1549,12 +1580,55 @@ class SimImageSet:
                 ax.set_xticks([])
                 ax.set_yticks([])
 
-                # colobar
+                # colorbar
                 ax = fig.add_subplot(grid[jj, 5*n_factor + 1])
                 fig.colorbar(im2, cax=ax, format="%0.2g", ticks=[10, 1, 0.1, 1e-2, 1e-3, 1e-4, 1e-5])
 
             figs.append(fig)
-            fig_names.append('band_diagnostic_angle=%d' % ii)
+            fig_names.append(f"band_ft_diagnostic_angle={ii:d}")
+
+            # ######################################
+            # plot real space version of 0th and +/- 1st bands
+            # ######################################
+            figh = plt.figure(figsize=figsize)
+            figh.suptitle(f"SIM bands real space diagnostic, angle {ii:d}")
+
+            band0 = fft.fftshift(fft.ifft2(fft.ifftshift(self.sim_sr_ft_components[ii, 0]))).real
+            band1 = fft.fftshift(fft.ifft2(fft.ifftshift(self.sim_sr_ft_components[ii, 1] + self.sim_sr_ft_components[ii, 2]))).real
+
+            color0 = np.array([0, 1, 1]) * 0.75 # cyan
+            color1 = np.array([1, 0, 1]) * 0.75 # magenta
+
+            vmax0 = np.percentile(band0, 99.9)
+            vmin0 = 0
+
+            vmax1 = np.percentile(band1, 99.9)
+            vmin1 = np.percentile(band1, 5)
+
+            img0 = (np.expand_dims(band0, axis=-1) - vmin0) / (vmax0 - vmin0) * np.expand_dims(color0, axis=(0, 1))
+            img1 = (np.expand_dims(band1, axis=-1) - vmin1) / (vmax1 - vmin1) * np.expand_dims(color1, axis=(0, 1))
+
+            ax = figh.add_subplot(1, 3, 1)
+            ax.set_title("combined")
+
+            ax.imshow(img0 + img1, extent=extent_upsampled_real)
+            ax.set_xlabel("x-position ($\mu m$)")
+            ax.set_ylabel("y-position ($\mu m$)")
+
+            ax = figh.add_subplot(1, 3, 2)
+            ax.set_title("band 0")
+            ax.imshow(img0, extent=extent_upsampled_real)
+            ax.set_xlabel("x-position ($\mu m$)")
+            ax.set_ylabel("y-position ($\mu m$)")
+
+            ax = figh.add_subplot(1, 3, 3)
+            ax.set_title("band 1")
+            ax.imshow(img1, extent=extent_upsampled_real)
+            ax.set_xlabel("x-position ($\mu m$)")
+            ax.set_ylabel("y-position ($\mu m$)")
+
+            figs.append(figh)
+            fig_names.append(f"band_real_space_diagnostic_angle={ii:d}")
 
         return figs, fig_names
 
@@ -1572,17 +1646,17 @@ class SimImageSet:
             fig = plot_power_spectrum_fit(self.bands_unmixed_ft[ii, 0], self.otf[ii],
                                           {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
                                           self.power_spectrum_params[ii, 0], frq_sim=(0, 0), mask=self.power_spectrum_masks[ii, 0],
-                                          figsize=figsize, ttl_str="Unshifted component, angle %d" % ii)
+                                          figsize=figsize, ttl_str=f"Unshifted component, angle {ii:d}")
             debug_figs.append(fig)
-            debug_fig_names.append("power_spectrum_unshifted_component_angle=%d" % ii)
+            debug_fig_names.append(f"power_spectrum_unshifted_component_angle={ii:d}")
 
             fig = plot_power_spectrum_fit(self.bands_unmixed_ft[ii, 1], self.otf[ii],
                                           {'pixel_size': self.dx, 'wavelength': self.wavelength, 'na': self.na},
                                           self.power_spectrum_params[ii, 1], frq_sim=self.frqs[ii], mask=self.power_spectrum_masks[ii, 1],
-                                          figsize=figsize, ttl_str="Shifted component, angle %d" % ii)
+                                          figsize=figsize, ttl_str=f"Shifted component, angle {ii:d}")
 
             debug_figs.append(fig)
-            debug_fig_names.append("power_spectrum_shifted_component_angle=%d" % ii)
+            debug_fig_names.append(f"power_spectrum_shifted_component_angle={ii:d}")
 
         return debug_figs, debug_fig_names
 
@@ -1606,16 +1680,16 @@ class SimImageSet:
             if self.frq_estimation_mode == "fourier-transform":
                 figh = plot_correlation_fit(self.imgs_ft[ii, 0], self.imgs_ft[ii, 0], self.frqs[ii, :],
                                             self.dx, self.fmax, frqs_guess=frqs_guess[ii], figsize=figsize,
-                                            ttl_str="Correlation fit, angle %d" % ii)
+                                            ttl_str=f"Correlation fit, angle {ii:d}")
                 figs.append(figh)
-                fig_names.append("frq_fit_angle=%d_phase=%d" % (ii, 0))
+                fig_names.append(f"frq_fit_angle={ii:d}_phase={0:d}")
             else:
                 figh = plot_correlation_fit(self.bands_unmixed_ft[ii, 0],
                                             self.bands_unmixed_ft[ii, 1], self.frqs[ii, :],
                                             self.dx, self.fmax, frqs_guess=frqs_guess[ii], figsize=figsize,
-                                            ttl_str="Correlation fit, angle %d" % ii)
+                                            ttl_str=f"Correlation fit, angle {ii:d}, unmixing phases = {self.phases_guess[ii]}")
                 figs.append(figh)
-                fig_names.append("frq_fit_angle=%d" % ii)
+                fig_names.append(f"frq_fit_angle={ii:d}")
 
         return figs, fig_names
 
@@ -1627,14 +1701,14 @@ class SimImageSet:
         :return:
         """
         figh = plt.figure(figsize=figsize)
-        tstr = "OTF\nvalue at frqs="
+        tstr = "OTF diagnostic\nvalue at frqs="
         for ii in range(self.nangles):
-            tstr += " %0.3f," % self.otf_at_frqs[ii]
+            tstr += f" {self.otf_at_frqs[ii]:.3f},"
         figh.suptitle(tstr)
 
         ff = np.sqrt(np.expand_dims(self.fx, axis=0) ** 2 + np.expand_dims(self.fy, axis=1) ** 2)
 
-        otf_ideal = psf.circ_aperture_otf(ff, 0, self.na, self.wavelength)
+        otf_ideal = localize_psf.fit_psf.circ_aperture_otf(ff, 0, self.na, self.wavelength)
 
         # 1D plots
         ax = figh.add_subplot(1, 2, 1)
@@ -1643,9 +1717,10 @@ class SimImageSet:
         ax.set_ylabel("OTF")
         # plot real OTF's per angle
         for ii in range(self.nangles):
-            ax.plot(ff.ravel(), self.otf[ii].ravel(), label="OTF, angle %d" % ii)
+            ax.plot(ff.ravel(), self.otf[ii].ravel(), label=f"OTF, angle {ii:d}")
         # plot ideal OTF
         ax.plot(ff.ravel(), otf_ideal.ravel(), label="OTF ideal")
+        ax.set_xlim([0, 1.2 * self.fmax])
         ylim = ax.get_ylim()
 
         # plot SIM frequencies
@@ -1664,8 +1739,12 @@ class SimImageSet:
         ax = figh.add_subplot(1, 2, 2)
         ax.set_title("Mean 2D OTF")
         ax.imshow(np.mean(self.otf, axis=0), extent=tools.get_extent(self.fy, self.fx), cmap="bone")
+        ax.scatter(self.frqs[:, 0], self.frqs[:, 1], color='r', marker='o')
+        ax.scatter(-self.frqs[:, 0], -self.frqs[:, 1], color='r', marker='o')
         ax.set_xlabel("$f_x (1/\mu m)$")
         ax.set_ylabel("$f_y (1/\mu m)$")
+        ax.set_xlim([-self.fmax, self.fmax])
+        ax.set_ylim([-self.fmax, self.fmax])
 
         return figh
 
@@ -1696,25 +1775,21 @@ class SimImageSet:
                 dxy_wf = self.dx / self.upsample_fact
 
             fname = save_dir / f"{save_prefix:s}mcnr{save_suffix:s}.tif"
-            # fname = os.path.join(save_dir, "mcnr%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.mcnr.astype(np.float32), imagej=True,
                              resolution=(1/self.dx, 1/self.dx),
                              metadata={'Info': 'modulation-contrast to noise ratio', 'unit': 'um'}, **kwargs)
 
             fname = save_dir / f"{save_prefix:s}sim_os{save_suffix:s}.tif"
-            # fname = os.path.join(save_dir, "sim_os%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.sim_os.astype(np.float32), imagej=True,
                              resolution=(1 / dxy_wf, 1 / dxy_wf),
                              metadata={'Info': 'SIM optical-sectioning', 'unit': 'um'}, **kwargs)
 
             fname = save_dir / f"{save_prefix:s}widefield{save_suffix:s}.tif"
-            # fname = os.path.join(save_dir, "widefield%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.widefield.astype(np.float32), imagej=True,
                              resolution=(1 / dxy_wf, 1 / dxy_wf),
                              metadata={'Info': 'widefield', 'unit': 'um'}, **kwargs)
 
             fname = save_dir / f"{save_prefix:s}sim_sr{save_suffix:s}.tif"
-            # fname = os.path.join(save_dir, "sim_sr%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.sim_sr.astype(np.float32), imagej=True,
                              resolution=(1/(self.dx / self.upsample_fact), 1/(self.dx/ self.upsample_fact)),
                              metadata={'Info': 'SIM super-resolution', 'unit': 'um',
@@ -1722,12 +1797,11 @@ class SimImageSet:
             #{'Ranges': [[0.0, np.percentile(self.sim_sr, 99.9)]]}
 
             fname = save_dir / f"{save_prefix:s}deconvolved{save_suffix:s}.tif"
-            # fname = os.path.join(save_dir, "deconvolved%s.tif" % save_suffix)
             tifffile.imwrite(fname, self.widefield_deconvolution.astype(np.float32), imagej=True,
                              resolution=(1/(self.dx / self.upsample_fact), 1/(self.dx / self.upsample_fact)),
                              metadata={'Info': 'Wiener deconvolved', 'unit': 'um'}, **kwargs)
 
-            self.print_log("saving tiff files took %0.2fs" % (time.perf_counter() - tstart_save))
+            self.print_log(f"saving tiff files took {time.perf_counter() - tstart_save:.2f}s")
 
     def save_result(self, fname=None):
         """
@@ -1742,30 +1816,36 @@ class SimImageSet:
                               'widefield', 'widefield_ft', 'widefield_deconvolution', 'widefield_deconvolution_ft',
                               'bands_unmixed_ft', 'bands_shifted_ft',
                               'weights', 'weights_norm',
-                              'fx_us', 'fy_us', 'fx', 'fy',
-                              'mcnr', 'snr', 'otf_shifted', 'power_spectrum_masks',
-                              'log_file', 'mask_wf']
+                              'fx_us', 'fy_us', 'fx', 'fy', 'x', 'y', 'x_us', 'y_us',
+                              'mcnr', 'snr', 'otf', 'otf_shifted', 'power_spectrum_masks',
+                              'log_file', 'mask_wf', 'log']
         # get dictionary object with images removed
         results_dict = {}
         for k, v in vars(self).items():
             if k in fields_to_not_save or k[0] == '_':
                 continue
-            results_dict[k] = v
 
-        # add some useful info
-        results_dict['freq units'] = '1/um'
-        results_dict['period units'] = 'um'
+            if isinstance(v, np.ndarray):
+                if v.size > 1e3:
+                    continue
+                results_dict[k] = v.tolist()
+            elif isinstance(v, pathlib.Path):
+                results_dict[k] = str(v)
+            elif isinstance(v, io.IOBase):
+                results_dict[k] = v.getvalue()
+            else:
+                results_dict[k] = v
 
+        # get default file name
         if fname is None and self.save_dir is not None:
-            # fname = os.path.join(self.save_dir, "sim_reconstruction_params%s.pkl" % self.save_suffix)
-            fname = self.save_dir / f"{self.save_prefix:s}sim_reconstruction_params{self.save_suffix:s}.pkl"
+            fname = self.save_dir / f"{self.save_prefix:s}sim_reconstruction{self.save_suffix:s}.json"
 
-
+        # save results to json file
         if fname is not None:
-            with open(fname, 'wb') as f:
-                pickle.dump(results_dict, f)
+            with open(fname, "w") as f:
+                json.dump(results_dict, f, indent="\t")
 
-        self.print_log("saving results took %0.2fs" % (time.perf_counter() - tstart))
+        self.print_log(f"saving results took {time.perf_counter() - tstart:.2f}s")
 
         return results_dict
 
@@ -1868,7 +1948,7 @@ def reconstruct_mm_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, 
         otf_data = pickle.load(f)
     otf_p = otf_data['fit_params']
 
-    def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_p[0]) ** 2) * psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
+    def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_p[0]) ** 2) * localize_psf.fit_psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
 
     # ############################################
     # SIM images
@@ -1877,18 +1957,19 @@ def reconstruct_mm_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, 
     for rpath, roi in zip(data_dirs, crop_rois):
         folder_path, folder = os.path.split(rpath)
         print("# ################################################################################")
-        print("analyzing folder: %s" % folder)
-        print("located in: %s" % folder_path)
+        print(f"analyzing folder: {folder:s}")
+        print(f"located in: {folder_path:s}")
 
-        now = datetime.datetime.now()
-        tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
+        tstamp =  datetime.datetime.now().strftime('%Y_%d_%m_%H;%M;%S')
+        # now = datetime.datetime.now()
+        # tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
 
         # path to store processed results
         sim_save_dir = os.path.join(rpath, '%s_sim_reconstruction' % tstamp)
         save_dirs.append(sim_save_dir)
         if not os.path.exists(sim_save_dir):
             os.mkdir(sim_save_dir)
-        print("save directory: %s" % sim_save_dir)
+        print(f"save directory: {sim_save_dir:s}")
 
         individual_image_save_dir = os.path.join(sim_save_dir, "individual_images")
         if not os.path.exists(individual_image_save_dir):
@@ -2060,7 +2141,7 @@ def reconstruct_mm_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, 
                             img_set.plot_figs()
 
                         # save reconstruction summary data
-                        img_set.save_result(os.path.join(diagnostics_dir, "sim_reconstruction_params.pkl"))
+                        img_set.save_result(os.path.join(diagnostics_dir, "sim_reconstruction_params.json"))
                         img_set.save_imgs(individual_image_save_dir, start_time, "_%s" % file_identifier)
 
                         tend = time.perf_counter()
@@ -2165,10 +2246,10 @@ def sim_optical_section(imgs, axis=0, phase_differences=(0, 2*np.pi/3, 4*np.pi/3
     """
 
     if imgs.shape[axis] != 3:
-        raise ValueError("imgs must be of size 3 along axis %d" % axis)
+        raise ValueError(f"imgs must be of size 3 along axis {axis:d}")
 
     if len(phase_differences) != 3:
-        raise ValueError("phases must have length 3")
+        raise ValueError(f"phases must have length 3, but had length {len(phase_differences):d}")
 
     # compute inversion matrix
     p1, p2, p3 = phase_differences
@@ -2593,7 +2674,7 @@ def get_phase_realspace(img, sim_frq, dxy, phase_guess=0, origin="center"):
         x = tools.get_fft_pos(img.shape[1], dxy, centered=False, mode="positive")
         y = tools.get_fft_pos(img.shape[0], dxy, centered=False, mode="positive")
     else:
-        raise ValueError("'origin' must be 'center' or 'edge' but was '%s'" % origin)
+        raise ValueError(f"'origin' must be 'center' or 'edge' but was '{origin:s}'")
 
     xx, yy = np.meshgrid(x, y)
 
@@ -2658,12 +2739,12 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=No
     #     phases_naive[ii] = np.angle(tools.get_peak_value(imgs_ft[ii], fx, fy, sim_frq, peak_pixel_size=2))
 
     # compute cross correlations of data
-    nbands = 3
-    d_cc = np.zeros((nphases, nphases, nbands), dtype=complex)
-    # C_i(k) = S(k - i*p) * h(k)
-    # this is the order set by matrix M, i.e.
-    # [D1(k), ...] = M * [S(k) * h(k), S(k - i*p) * h(k), S(k + i*p) * h(k0]
     band_inds = [0, 1, -1]
+    nbands = len(band_inds)
+    d_cc = np.zeros((nphases, nphases, nbands), dtype=complex)
+    # Band_i(k) = Obj(k - i*p) * h(k)
+    # this is the order set by matrix M, i.e.
+    # [D1(k), ...] = M * [Obj(k) * h(k), Obj(k - i*p) * h(k), Obj(k + i*p) * h(k)]
     for ll, ml in enumerate(band_inds):
         # get shifted otf -> otf(f - l * fo)
         otf_shift, _ = tools.translate_pix(otf, -ml * sim_frq, dr=(dfx, dfy), axes=(1, 0), wrap=False)
@@ -2675,9 +2756,9 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=No
         for ii in range(nphases):  # [0, 1, 2] -> [0, 1, -1]
             for jj in range(nphases):
                 # shifted component C_j(f - l*fo)
-                cshift = tools.translate_ft(imgs_ft[jj], -ml * sim_frq, drs=(dxy, dxy))
+                band_shifted = tools.translate_ft(imgs_ft[jj], -ml * sim_frq, drs=(dxy, dxy))
                 # compute weighted cross correlation
-                d_cc[ii, jj, ll] = np.sum(imgs_ft[ii] * cshift.conj() * weight) / np.sum(weight)
+                d_cc[ii, jj, ll] = np.sum(imgs_ft[ii] * band_shifted.conj() * weight) / np.sum(weight)
 
                 # remove extra noise correlation expected from same images
                 if ml == 0 and ii == jj:
@@ -2689,7 +2770,7 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=No
 
                     figh =plt.figure(figsize=(16, 8))
                     grid = figh.add_gridspec(2, 3)
-                    figh.suptitle("(i, j, band) = (%d, %d, %d)" % (ii, jj, ml))
+                    figh.suptitle(f"(i, j, band) = ({ii:d}, {jj:d}, {ml:d})")
 
                     ax = figh.add_subplot(grid[0, 0])
                     ax.imshow(np.abs(imgs_ft[ii]), norm=PowerNorm(gamma=gamma), extent=tools.get_extent(fy, fx))
@@ -2698,14 +2779,14 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=No
                     ax.set_title("$D_i(k)$")
 
                     ax = figh.add_subplot(grid[0, 1])
-                    ax.imshow(np.abs(cshift), norm=PowerNorm(gamma=gamma), extent=tools.get_extent(fy, fx))
+                    ax.imshow(np.abs(band_shifted), norm=PowerNorm(gamma=gamma), extent=tools.get_extent(fy, fx))
                     ax.plot(sim_frq[0], sim_frq[1], 'r+')
                     ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
                     ax.set_title("$D_j(k-lp)$")
 
                     ax = figh.add_subplot(grid[0, 2])
-                    ax.imshow(np.abs(imgs_ft[ii] * cshift.conj()), norm=PowerNorm(gamma=gamma),
-                               extent=tools.get_extent(fy, fx))
+                    ax.imshow(np.abs(imgs_ft[ii] * band_shifted.conj()), norm=PowerNorm(gamma=gamma),
+                              extent=tools.get_extent(fy, fx))
                     ax.plot(sim_frq[0], sim_frq[1], 'r+')
                     ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
                     ax.set_title("$D^l_{ij} = D_i(k) x D_j^*(k-lp)$")
@@ -2789,7 +2870,8 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=No
             else:
                 init_params = ip_neg
         else:
-            init_params = np.concatenate((phases_guess, np.array([1, 1])))
+            #init_params = np.concatenate((phases_guess, np.array([1, 1])))
+            init_params = np.array([phases_guess[1] - phases_guess[0], phases_guess[2] - phases_guess[0], 1, 1])
 
         result = scipy.optimize.minimize(min_fn, init_params)
         phases = np.array([0, result.x[0], result.x[1]])
@@ -2802,7 +2884,7 @@ def get_phase_wicker_iterative(imgs_ft, otf, sim_frq, dxy, fmax, phases_guess=No
             else:
                 init_params = -ip
         else:
-            init_params = np.array([phases_guess[1], phases_guess[2]])
+            init_params = np.array([phases_guess[1] - phases_guess[0], phases_guess[2] - phases_guess[0]])
 
         result = scipy.optimize.minimize(min_fn, init_params)
         phases = np.array([0, result.x[0], result.x[1]])
@@ -3272,7 +3354,7 @@ def do_sim_band_separation(imgs_ft, phases, mod_depths=None, amps=None):
 
     # check parameters
     if nphases != 3:
-        raise NotImplementedError("only implemented for nphases=3, but nphases=%d" % nphases)
+        raise NotImplementedError(f"only implemented for nphases=3, but nphases={nphases:d}")
 
     bands_ft = np.zeros((nangles, nphases, ny, nx), dtype=complex) * np.nan
 
@@ -3375,23 +3457,30 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
     accurate as long as the photon number is large enough that the Poisson distribution is close to a normal distribution
     """
 
+    # ensure ground truth is 3D
+    if ground_truth.ndim == 2:
+        ground_truth = np.expand_dims(ground_truth, axis=0)
+    nz, ny, nx = ground_truth.shape
+
+    # check bin sizes
     if 'bin_size' in kwargs:
         nbin = kwargs['bin_size']
     else:
         nbin = 1
 
+    # check phases
     if isinstance(phases, (float, int)):
         phases = np.atleast_2d(np.array(phases))
 
+    # check mod depths
     if isinstance(mod_depths, (float, int)):
         mod_depths = np.atleast_1d(np.array(mod_depths))
 
+    # check frequencies
     frqs = np.atleast_2d(frqs)
-
 
     nangles = len(frqs)
     nphases = len(phases)
-    ny, nx = ground_truth.shape
 
     if otf is None and not coherent_projection:
         raise ValueError("If coherent_projection is false, OTF must be provided")
@@ -3403,14 +3492,15 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
         amps = np.ones((nangles, nphases))
 
     if otf is not None:
-        psf_mat, _ = psf.otf2psf(otf)
+        psf, _ = localize_psf.fit_psf.otf2psf(otf)
     else:
-        psf_mat = None
+        psf = None
 
     # get coordinates
     x = tools.get_fft_pos(nx, pix_size, centered=True, mode="symmetric")
     y = tools.get_fft_pos(ny, pix_size, centered=True, mode="symmetric")
-    xx, yy = np.meshgrid(x, y)
+    z = tools.get_fft_pos(nz, pix_size, centered=True, mode="symmetric")
+    zz, yy, xx = np.meshgrid(z, y, x, indexing="ij")
 
     nxb = nx / nbin
     nyb = ny / nbin
@@ -3454,20 +3544,21 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
         for jj in range(nphases):
             _, _, phases_unbinned[ii, jj] = affine.xform_sinusoid_params(frqs[ii, 0], frqs[ii, 1], phases[ii, jj], bin2non_xform)
 
-    sim_imgs = np.zeros((nangles, nphases, nyb, nxb))
+    # generate images
+    sim_imgs = np.zeros((nangles, nphases, nz, nyb, nxb))
     snrs = np.zeros(sim_imgs.shape)
     mcnrs = np.zeros(sim_imgs.shape)
     for ii in range(nangles):
         for jj in range(nphases):
-            pattern = amps[ii, jj] * (1 + mod_depths[ii] *
-                                      np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
+
+            pattern = amps[ii, jj] * (1 + mod_depths[ii] * np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
 
             if not coherent_projection:
-                pattern = psf.blur_img_otf(pattern, otf).real
+                pattern = localize_psf.fit_psf.blur_img_otf(pattern, otf).real
 
             sim_imgs[ii, jj], snrs[ii, jj] = camera_noise.simulated_img(ground_truth * pattern, gains, offsets,
-                                                                        readout_noise_sds, psf=psf_mat, **kwargs)
+                                                                        readout_noise_sds, psf=psf, **kwargs)
             # todo: compute mcnr
             mcnrs[ii, jj] = 0
 
-    return sim_imgs, snrs
+    return np.squeeze(sim_imgs), np.squeeze(snrs)

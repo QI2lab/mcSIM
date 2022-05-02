@@ -7,6 +7,8 @@ from numpy import fft
 import pickle
 import tifffile
 from pathlib import Path
+import matplotlib
+matplotlib.use("TkAgg")
 import mcsim.analysis.sim_reconstruction as sim
 import localize_psf.fit_psf as psf
 import localize_psf.affine as affine
@@ -28,7 +30,7 @@ imgs = tifffile.imread(Path("data", "argosim_line_pairs.tif")).reshape([ncolors,
 # ############################################
 # set ROI to reconstruction, [cy, cx]
 # ############################################
-roi = rois.get_centered_roi([791, 896], [850, 850])
+roi = rois.get_centered_roi([791, 896], [850, 851])
 nx_roi = roi[3] - roi[2]
 ny_roi = roi[1] - roi[0]
 
@@ -49,7 +51,7 @@ with open(otf_data_path, 'rb') as f:
     otf_data = pickle.load(f)
 otf_p = otf_data['fit_params']
 
-otf_fn = lambda f, fmax: 1 / (1 + (f / fmax * otf_p[0]) ** 2) * psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
+def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_p[0]) ** 2) * psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
 
 # ############################################
 # load affine transformations from DMD to camera
@@ -88,7 +90,8 @@ for kk in range(ncolors):
     fmax = 1 / (0.5 * emission_wavelengths[kk] / na)
     fx = fft.fftshift(fft.fftfreq(nx_roi, pixel_size))
     fy = fft.fftshift(fft.fftfreq(ny_roi, pixel_size))
-    ff = np.sqrt(fx[None, :] ** 2 + fy[:, None] ** 2)
+    ff = np.sqrt(np.expand_dims(fx, axis=0) ** 2 +
+                 np.expand_dims(fy, axis=1) ** 2)
     otf = otf_fn(ff, fmax)
     otf[ff >= fmax] = 0
 
@@ -114,13 +117,13 @@ for kk in range(ncolors):
                              phase_estimation_mode="wicker-iterative", #,
                              combine_bands_mode="fairSIM",
                              fmax_exclude_band0=0.4,
-                             normalize_histograms=True,
+                             normalize_histograms=False,
                              otf=otf,
                              wiener_parameter=0.1,
                              background=100, gain=2, min_p2nr=0.5,
                              save_dir="data/%s_sim_reconstruction_%.0fnm" % (tstamp, excitation_wavelengths[kk] * 1e3),
-                             interactive_plotting=False, figsize=(20, 13))
+                             interactive_plotting=False, figsize=(22.85, 10))
     imgset.reconstruct()
     imgset.plot_figs()
     imgset.save_imgs()
-    imgset.log_file.close()
+    imgset.save_result()
