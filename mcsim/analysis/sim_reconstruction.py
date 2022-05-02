@@ -1814,11 +1814,11 @@ class SimImageSet:
 
         fields_to_not_save = ['imgs', 'imgs_ft', 'sim_os', 'sim_sr', 'sim_sr_ft',
                               'widefield', 'widefield_ft', 'widefield_deconvolution', 'widefield_deconvolution_ft',
-                              'bands_unmixed_ft', 'bands_shifted_ft',
+                              'bands_unmixed_ft', 'bands_shifted_ft', 'sim_sr_ft_components',
                               'weights', 'weights_norm',
                               'fx_us', 'fy_us', 'fx', 'fy', 'x', 'y', 'x_us', 'y_us',
                               'mcnr', 'snr', 'otf', 'otf_shifted', 'power_spectrum_masks',
-                              'log_file', 'mask_wf', 'log']
+                              'log_file', 'mask_wf']
         # get dictionary object with images removed
         results_dict = {}
         for k, v in vars(self).items():
