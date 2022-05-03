@@ -487,7 +487,11 @@ class SimImageSet:
 
         for ii in range(self.nangles):
             if not np.any(mask[ii]):
-                raise ValueError(f"band overlap mask for angle {ii:d} was all False")
+                raise ValueError(f"band overlap mask for angle {ii:d} was all False. "
+                                 f"This may indicate the SIM frequency is incorrect. Check if the frequency "
+                                 f"fitting routine failed. Otherwise, reduce `otf_mask_threshold` "
+                                 f"which is currently {self.otf_mask_threshold:.3f} and/or reduce "
+                                 f"`fmax_exclude_band0` which is currently {self.fmax_exclude_band0:.3f}")
 
         # corrected phases
         # can either think of these as (1) acting on phases such that phase -> phase - phase_correction
