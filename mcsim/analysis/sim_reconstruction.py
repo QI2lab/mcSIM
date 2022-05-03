@@ -477,7 +477,8 @@ class SimImageSet:
         if self.fmax_exclude_band0 > 0:
             # correct other band weights at modulation frequencies
             for ii in range(self.nangles):
-                ff_us = np.sqrt(np.expand_dims(self.fx_us, axis=0) ** 2 + np.expand_dims(self.fy_us, axis=1) ** 2)
+                ff_us = np.sqrt(np.expand_dims(self.fx_us, axis=0) ** 2 +
+                                np.expand_dims(self.fy_us, axis=1) ** 2)
                 mask[ii][ff_us < self.fmax * self.fmax_exclude_band0] = False
 
                 ff_us = np.sqrt(np.expand_dims(self.fx_us + self.frqs[ii, 0], axis=0) ** 2 +
