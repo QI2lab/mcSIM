@@ -7,12 +7,11 @@ Given a function defined on object space, g(xo, yo), we can define a correspondi
 gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
 """
 
+import json
+from pathlib import Path
 import numpy as np
-import os
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-import pickle
-
 import localize_psf.affine as affine
 import localize_psf.rois as rois
 import localize_psf.fit as fit
@@ -253,7 +252,7 @@ def get_affine_xform(fps, succesful_fits, dmd_centers):
 
 
 def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
-                        affine_xform, options, figsize=(16, 12)):
+                        affine_xform, options, **kwargs):
     """
     Plot results of DMD affine transformation fitting using results of fit_pattern_peaks and get_affine_xform
 
@@ -265,7 +264,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     :param dmd_centers: ny x nx x 2, center positiosn on DMD
     :param affine_xform: affine transformation
     :param options: {'cam_pix', 'dmd_pix', 'dmd2cam_mag_expected', 'cam_mag'}
-
+    :param kwargs: passed through to figure
     :return fig: figure handle to summary figure
     """
     if "cam_mag" not in options.keys():
@@ -336,8 +335,9 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     vmax_img = vmin_img + np.max(amps[succesful_fits]) * 1.2
 
     # plot results
-    fig = plt.figure(figsize=figsize)
+    fig = plt.figure(**kwargs)
     grid = fig.add_gridspec(6, 4)
+    cmap = "inferno"
 
     # chi squareds
     ax = fig.add_subplot(grid[:2, 0])
@@ -345,7 +345,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     no_nans = chisqs.ravel()[np.logical_not(np.isnan(chisqs.ravel()))]
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    im = ax.imshow(chisqs, vmin=vmin, vmax=vmax, cmap="bone")
+    im = ax.imshow(chisqs, vmin=vmin, vmax=vmax, cmap=cmap)
     plt.colorbar(im)
 
     # position errors
@@ -354,7 +354,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
 
     no_nans = residual_dist_err.ravel()[np.logical_not(np.isnan(residual_dist_err.ravel()))]
     vmax = np.percentile(no_nans, 90)
-    im = ax.imshow(residual_dist_err, vmin=0, vmax=vmax, cmap="bone")
+    im = ax.imshow(residual_dist_err, vmin=0, vmax=vmax, cmap=cmap)
     plt.colorbar(im)
 
     # sigmas
@@ -363,10 +363,10 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     sigma_mean_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    im = ax.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax, cmap="bone")
+    im = ax.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax, cmap=cmap)
 
     sigma_m = sigma_mean_median * options["cam_pix"] / options["cam_mag"]
-    ax.set_title('$\sqrt{\sigma_x \sigma_y}$, median=%0.2f'
+    ax.set_title('$\sqrt{\sigma_x \sigma_y}$, median=%0.2f pix'
                  '\n$\sigma$=%0.1fnm, FWHM=%0.1fnm' %
                  (sigma_mean_median, sigma_m * 1e9, sigma_m * 2 * np.sqrt(2 * np.log(2)) * 1e9))
     plt.colorbar(im)
@@ -377,7 +377,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     amp_median = np.median(no_nans)
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
-    im = ax.imshow(amps, vmin=vmin, vmax=vmax, cmap="bone")
+    im = ax.imshow(amps, vmin=vmin, vmax=vmax, cmap=cmap)
     ax.set_title('amps median=%0.0f' % amp_median)
     plt.colorbar(im)
 
@@ -385,7 +385,7 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     ax = fig.add_subplot(grid[4:6, 0])
     no_nans = sigma_asymmetry_cam.ravel()[np.logical_not(np.isnan(sigma_asymmetry_cam.ravel()))]
     sigma_asym_median = np.median(no_nans)
-    im = ax.imshow(sigma_asymmetry_cam, vmin=0, vmax=1, cmap="bone")
+    im = ax.imshow(sigma_asymmetry_cam, vmin=0, vmax=1, cmap=cmap)
     ax.set_title('$\sigma$ asym median=%0.2f' % sigma_asym_median)
     plt.colorbar(im)
 
@@ -393,11 +393,11 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
     ax = fig.add_subplot(grid[4:6, 1])
     no_nans = angles.ravel()[np.logical_not(np.isnan(angles.ravel()))]
     median_angle = np.median(no_nans * 180 / np.pi)
-    im = ax.imshow(angles * 180 /np.pi, vmin=0, vmax=180, cmap="bone")
+    im = ax.imshow(angles * 180 /np.pi, vmin=0, vmax=180, cmap=cmap)
     ax.set_title('angle, median=%0.1f$^\deg$' % median_angle)
     plt.colorbar(im)
 
-    # raw image with fit poitns overlayed
+    # raw image with fit points overlayed
     ax = fig.add_subplot(grid[:3, 2:])
     ax.set_title('raw image and fits')
     im = ax.imshow(img, vmin=vmin_img, vmax=vmax_img)
@@ -432,7 +432,8 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
 
 # main function for estimating affine transform
 def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, options, roi_size=25,
-                   export_fname="affine_xform", plot=True, export_dir=None, **kwargs):
+                   export_fname="affine_xform", plot=True, export_dir=None,
+                   figsize=(16, 12), **kwargs):
     """
     Estimate affine transformation from DMD space to camera image space from an image.
 
@@ -459,22 +460,30 @@ def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, optio
     affine_xform = get_affine_xform(fps, succesful_fits, pattern_centers)
 
     # export data
-    data = {'affine_xform': affine_xform, 'pattern_centers': pattern_centers, 'fit_params': fps,
-            'fit_params_description': "[amp, cx, cy, sigma_x, sigma_y, theta, bg]", "chi_squareds": chisqs}
+    data = {'affine_xform': affine_xform.tolist(),
+            'pattern_centers': pattern_centers.tolist(),
+            'fit_params': fps.tolist(),
+            'fit_params_description': "[amp, cx, cy, sigma_x, sigma_y, theta, bg]",
+            "chi_squareds": chisqs.tolist()}
     data.update(options)
+
     if export_dir is not None:
-        fpath = os.path.join(export_dir, export_fname + ".pkl")
-        with open(fpath, 'wb') as f:
-            pickle.dump(data, f)
+        export_dir = Path(export_dir)
+        export_dir.mkdir(exist_ok=True)
+
+        fpath = Path(export_dir) / f"{export_fname:s}.json"
+        with open(fpath, "w") as f:
+            json.dump(data, f, indent="\t")
 
     # plot data
     if not plot:
         fig = None
     else:
-        fig = plot_affine_summary(img, mask, fps, chisqs, succesful_fits, pattern_centers, affine_xform, options)
+        fig = plot_affine_summary(img, mask, fps, chisqs, succesful_fits, pattern_centers, affine_xform,
+                                  options, figsize=figsize)
 
         if export_dir is not None:
-            fig_fpath = os.path.join(export_dir, export_fname + ".png")
+            fig_fpath = Path(export_dir) / f"{export_fname:s}.png"
             fig.savefig(fig_fpath)
 
         plt.show()
