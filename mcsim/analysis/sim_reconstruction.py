@@ -1965,7 +1965,7 @@ def reconstruct_mm_sim_dataset(data_dirs, pixel_size, na, emission_wavelengths, 
         print(f"analyzing folder: {folder:s}")
         print(f"located in: {folder_path:s}")
 
-        tstamp =  datetime.datetime.now().strftime('%Y_%d_%m_%H;%M;%S')
+        tstamp = datetime.datetime.now().strftime('%Y_%d_%m_%H;%M;%S')
         # now = datetime.datetime.now()
         # tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
 
