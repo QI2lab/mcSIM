@@ -48,7 +48,8 @@ class nidaq(daq):
     """
 
     def __init__(self, dev_name: str = "Dev1", digital_lines: str = "port0/line0:15", analog_lines: list = ["ao0", "ao1", "ao2"],
-                 digital_line_names: dict = None, analog_line_names: dict = None, presets: dict=None):
+                 digital_line_names: dict = None, analog_line_names: dict = None, presets: dict = None,
+                 config_file: str = None):
         """
 
         @param dev_name: device names, typically of the form `Devk` for k an integer
@@ -57,14 +58,25 @@ class nidaq(daq):
         @param digital_line_names: dictionary where keys give the name of the lines and values give the line index.
         It is not necessary for every line to have a name
         @param analog_line_names:
+        @param presets: dictionary of presets
+        @param config_file: alternative method of provided digital_line_names, analog_line_names, and presets.
+        If config_file is supplied, these other keyword arguments should not be supplied
         """
+
+        if config_file is not None and (digital_line_names is not None or analog_line_names is not None or presets is not None):
+            raise ValueError("config_file and either digital_line_names, analog_line_names, or presets"
+                             " were both provided. If config_file is provided, do not also provide this other info")
+
+        if config_file is not None:
+            digital_line_names, analog_line_names, presets, _ = load_config_file(config_file)
+
 
         self.dev_name = dev_name
 
         # digital lines
         self.digital_lines = f"/{dev_name}/{digital_lines}" # todo: get rid of in favor of digital_lines_addresses
-        self.n_digital_lines = 16
-        self.digital_lines_addresses = [f"/{dev_name:s}/port0/line{ii:d}" for ii in range(16)]
+        self.n_digital_lines = 16 # todo: want to detect not hard code
+        self.digital_lines_addresses = [f"/{dev_name:s}/port0/line{ii:d}" for ii in range(self.n_digital_lines)]
         self.digital_line_names = digital_line_names
         self.last_known_digital_val = np.zeros(self.n_digital_lines, dtype=np.uint8)
         self.do_re = ".*Dev(\d+).*port(\d+).*line(\d+)"
