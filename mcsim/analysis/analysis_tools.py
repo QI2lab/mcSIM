@@ -465,7 +465,7 @@ def get_peak_value(img, x, y, peak_coord, peak_pixel_size=1):
     for ii in range(xx_roi.shape[0]):
         for jj in range(xx_roi.shape[1]):
             weights[ii, jj] = pixel_overlap([py, px], [yy_roi[ii, jj], xx_roi[ii, jj]],
-                                                  [peak_pixel_size * dy, peak_pixel_size * dx], [dy, dx]) / (dx * dy)
+                                            [peak_pixel_size * dy, peak_pixel_size * dx], [dy, dx]) / (dx * dy)
 
     peak_value = np.average(img_roi, weights=weights)
 
@@ -484,20 +484,24 @@ def pixel_overlap(centers1, centers2, lens1, lens2=None):
     :return overlaps: overlap area of pixels
     """
 
-    if not isinstance(centers1, list):
-        centers1 = [centers1]
+    # if not isinstance(centers1, list):
+    #     centers1 = [centers1]
+    centers1 = np.atleast_1d(centers1).ravel()
 
-    if not isinstance(centers2, list):
-        centers2 = [centers2]
+    # if not isinstance(centers2, list):
+    #     centers2 = [centers2]
+    centers2 = np.atleast_1d(centers2).ravel()
 
-    if not isinstance(lens1, list):
-        lens1 = [lens1]
+    # if not isinstance(lens1, list):
+    #     lens1 = [lens1]
+    lens1 = np.atleast_1d(lens1).ravel()
 
     if lens2 is None:
         lens2 = lens1
 
-    if not isinstance(lens2, list):
-        lens2 = [lens2]
+    # if not isinstance(lens2, list):
+    #     lens2 = [lens2]
+    lens2 = np.atleast_1d(lens2).ravel()
 
     overlaps = []
     for c1, c2, l1, l2 in zip(centers1, centers2, lens1, lens2):
