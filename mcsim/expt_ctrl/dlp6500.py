@@ -15,10 +15,14 @@ This DMD control code was originally based on refactoring in https://github.com/
 The combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycrafter6500.
 """
 import pywinusb.hid as pyhid
+import sys
 import time
 import struct
 import numpy as np
 import copy
+import datetime
+import json
+import argparse
 
 
 ##############################################
@@ -404,14 +408,181 @@ def erle_bytes2len(byte_list):
 
 
 ##############################################
-# controlling dmd
+# firmware indexing helper functions
+##############################################
+def firmware_index_2pic_bit(firmware_indices):
+    """
+    convert from single firmware pattern index to picture and bit indices
+    @param firmware_indices:
+    @return:
+    """
+    pic_inds = firmware_indices // 24
+    bit_inds = firmware_indices - 24 * pic_inds
+
+    return pic_inds, bit_inds
+
+
+def pic_bit_ind_2firmware_ind(pic_inds, bit_inds):
+    """
+    Convert from picture and bit indices to single firmware pattern index
+    @param pic_inds:
+    @param bit_inds:
+    @return:
+    """
+    firmware_inds = pic_inds * 24 + bit_inds
+    return firmware_inds
+
+
+##############################################
+# firmware configuration
+##############################################
+def validate_channel_map(cm):
+    """
+    check that channel_map is of the correct format
+    @param cm:
+    @return success, message:
+    """
+    for ch in list(cm.keys()):
+        modes = list(cm[ch].keys())
+
+        if "default" not in modes:
+            return False, f"'default' not present in channel '{ch:s}'"
+
+        for m in modes:
+            keys = list(cm[ch][m].keys())
+
+            # check picture indices
+            if "picture_indices" not in keys:
+                return False, f"'picture_indices' not present in channel '{ch:s}', mode '{m:s}'"
+
+            pi = cm[ch][m]["picture_indices"]
+            if not isinstance(pi, (np.ndarray, list)):
+                return False, f"'picture_indices' wrong type for channel '{ch:s}', mode '{m:s}'"
+
+            if isinstance(pi, np.ndarray) and pi.ndim != 1:
+                return False, f"'picture_indices' array with wrong dimension, '{ch:s}', mode '{m:s}'"
+
+            # check bit indices
+            if "bit_indices" not in keys:
+                return False, f"'bit_indices' not present in channel '{ch:s}', mode '{m:s}'"
+
+            bi = cm[ch][m]["bit_indices"]
+            if not isinstance(bi, (np.ndarray, list)):
+                return False, f"'bit_indices' wrong type for channel '{ch:s}', mode '{m:s}'"
+
+            if isinstance(bi, np.ndarray) and bi.ndim != 1:
+                return False, f"'bit_indices' array with wrong dimension, '{ch:s}', mode '{m:s}'"
+
+    return True, "array validated"
+
+
+def save_config_file(fname, pattern_data, channel_map=None):
+    """
+    Save DMD firmware configuration file
+    @param fname:
+    @param pattern_data:
+    @param channel_map:
+    @return:
+    """
+    tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
+
+    # ensure no numpy arrays in pattern_data
+    pattern_data_list = copy.deepcopy(pattern_data)
+    for p in pattern_data_list:
+        for k, v in p.items():
+            if isinstance(v, np.ndarray):
+                p[k] = v.tolist()
+
+    # ensure no numpy arrays in channel map
+    channel_map_list = None
+    if channel_map is not None:
+        valid, error = validate_channel_map(channel_map)
+        if not valid:
+            raise ValueError(f"channel_map validation failed with error '{error:s}'")
+
+        # numpy arrays are not seriablizable ... so avoid these
+        channel_map_list = copy.deepcopy(channel_map)
+        for _, current_ch_dict in channel_map_list.items():
+            for mode in current_ch_dict.keys():
+                for k, v in current_ch_dict[mode].items():
+                    if isinstance(v, np.ndarray):
+                        current_ch_dict[mode][k] = v.tolist()
+
+    with open(fname, "w") as f:
+        json.dump({"timestamp": tstamp, "firmware_pattern_data": pattern_data_list,
+                   "channel_map": channel_map_list}, f, indent="\t")
+
+
+def load_config_file(fname):
+    """
+    Load DMD firmware configuration file
+    @param fname:
+    @return:
+    """
+    with open(fname, "r") as f:
+        data = json.load(f)
+
+    tstamp = data["timestamp"]
+    pattern_data = data["firmware_pattern_data"]
+    channel_map = data["channel_map"]
+
+    # convert entries to numpy arrays
+    for p in pattern_data:
+        for k, v in p.items():
+            if isinstance(v, list) and len(v) > 1:
+                p[k] = np.atleast_1d(v)
+
+    if channel_map is not None:
+        # validate channel map
+        valid, error = validate_channel_map(channel_map)
+        if not valid:
+            raise ValueError(f"channel_map validation failed with error '{error:s}'")
+
+        # convert entries to numpy arrays
+        for ch, presets in channel_map.items():
+            for mode_name, m in presets.items():
+                for k, v in m.items():
+                    if isinstance(v, list):
+                        m[k] = np.atleast_1d(v)
+
+    return pattern_data, channel_map, tstamp
+
+
+def get_preset_info(preset, pattern_data):
+    """
+    Get useful data from preset
+    @param preset:
+    @param pattern_data:
+    @return:
+    """
+    # indices of patterns
+    bi = preset["bit_indices"]
+    pi = preset["picture_indices"]
+    inds = pic_bit_ind_2firmware_ind(pi, bi)
+
+    # list of pattern data
+    pd = [pattern_data[ii] for ii in inds]
+
+    # single dictionary with all pattern data
+    pd_all = {}
+    for k in pd[0].keys():
+        pd_all[k] = [p[k] for p in pd]
+
+
+    return pd_all, pd, bi, pi, inds
+
+##############################################
+# dlp6500 DMD
 ##############################################
 class dlp6500:
     """
     Base class for communicating with DLP6500
     """
-    width = 1920
-    height = 1080
+    width = 1920 # pixels
+    height = 1080 # pixels
+    pitch = 7.56 # um
+    # todo: maybe add mirror geometry info too e.g. gamma_on, gamma_off, rotation information
+    # todo: but also maybe this requires too many assumptions about geometry that should not be made here
 
     # tried to match with the DLP6500 GUI names where possible
     command_dict = {'Read_Error_Code': 0x0100,
@@ -455,7 +626,8 @@ class dlp6500:
                       'pattern image memory address is out of range': 17,
                       'internal error': 255}
 
-    def __init__(self, vendor_id=0x0451, product_id=0xc900, debug=True):
+    def __init__(self, vendor_id=0x0451, product_id=0xc900, debug: bool = True, firmware_pattern_info: list = None,
+                 presets: dict = None, config_file=None):
         """
         Get instance of DLP LightCrafter evaluation module (DLP6500 or DLP9000). This is the base class which os
         dependent classes should inherit from. The derived classes only need to implement _get_device and
@@ -464,7 +636,22 @@ class dlp6500:
         :param vendor_id: vendor id, used to find DMD USB device
         :param product_id: product id, used to find DMD USB device
         :param bool debug: If True, will print output of commands.
+        :param firmware_pattern_info:
+        :param presets:
+        :param config_file: either provide config file or provide firmware_pattern_info and presets
         """
+
+        if config_file is not None and (firmware_pattern_info is not None or presets is not None):
+            raise ValueError("both config_file and either firmware_pattern_info or presets were provided. But"
+                             "only one of these should be provided.")
+
+        # load configuration file
+        if config_file is not None:
+            firmware_pattern_info, presets, _ = load_config_file(config_file)
+
+        # set firmware pattern info
+        self.firmware_pattern_info = firmware_pattern_info
+        self.presets = presets
 
         # USB packet length not including report_id_byte
         self.packet_length_bytes = 64
@@ -995,8 +1182,55 @@ class dlp6500:
 
         return self.send_command('w', False, self.command_dict["PAT_START_STOP"], data, sequence_byte=seq_byte)
 
+
     #######################################
-    # commands for working with patterns
+    # commands for working batch files in firmware
+    #######################################
+    def get_fwbatch_name(self, batch_index):
+        """
+        Return name of batch file stored on firmware at batch_index
+
+        :param batch_index:
+        :return:
+        """
+        buffer = self.send_command('r', True, self.command_dict["Get_Firmware_Batch_File_Name"], [batch_index])
+        resp = self.decode_response(buffer)
+
+        batch_name = ''
+        for ii, d in enumerate(resp['data']):
+            if d == 0:
+                break
+
+            batch_name += chr(d)
+
+        return batch_name
+
+
+    def execute_fwbatch(self, batch_index):
+        """
+        Execute batch file stored on firmware at index batch_index
+
+        :param batch_index:
+        :return:
+        """
+        return self.send_command('w', True, self.command_dict["Execute_Firmware_Batch_File"], [batch_index])
+
+
+    def set_fwbatch_delay(self, delay_ms):
+        """
+        Set delay between batch file commands
+        :param delay_ms:
+        :return:
+        """
+        raise NotImplementedError("this function not yet implemented. testing needed")
+
+        data = struct.unpack('BBBB', struct.pack('<I', delay_ms))
+        data = list(data[:3])
+        return self.send_command('w', True, self.command_dict["Set_Firmware_Batch_Command_Delay_Time"], data)
+
+
+    #######################################
+    # low-level commands for working with patterns and pattern sequences
     #######################################
     def pattern_display_lut_configuration(self, num_patterns, num_repeat=0):
         """
@@ -1017,6 +1251,7 @@ class dlp6500:
 
         # return self.send_command('w', False, 0x1A31, data=num_patterns_bytes + num_repeats_bytes)
         return self.send_command('w', True, self.command_dict["PAT_CONFIG"], data=num_patterns_bytes + num_repeats_bytes)
+
 
     def pattern_display_lut_definition(self, sequence_position_index, exposure_time_us=105, dark_time_us=0,
                                        wait_for_trigger=True, clear_pattern_after_trigger=False, bit_depth=1,
@@ -1096,6 +1331,7 @@ class dlp6500:
 
         return self.send_command('w', True, self.command_dict["MBOX_DATA"], data)
 
+
     def init_pattern_bmp_load(self, pattern_length, pattern_index):
         """
         Initialize pattern BMP load command.
@@ -1114,6 +1350,7 @@ class dlp6500:
 
         # return self.send_command('w', False, 0x1A2A, data=data)
         return self.send_command('w', True, self.command_dict["PATMEM_LOAD_INIT_MASTER"], data=data)
+
 
     def pattern_bmp_load(self, compressed_pattern, compression_mode):
         """
@@ -1172,6 +1409,7 @@ class dlp6500:
 
             data_index = data_index_next
             command_index += 1
+
 
     def upload_pattern_sequence(self, patterns, exp_times, dark_times, triggered=False,
                                 clear_pattern_after_trigger=True, bit_depth=1, num_repeats=0, compression_mode='erle',
@@ -1326,11 +1564,14 @@ class dlp6500:
 
         return stored_image_indices, stored_bit_indices
 
+
     def set_pattern_sequence(self, image_indices, bit_indices, exp_times, dark_times, triggered=False,
                              clear_pattern_after_trigger=True, bit_depth=1, num_repeats=0, mode='pre-stored'):
         """
         Setup pattern sequence from patterns previously stored in DMD memory, either in on-the-fly pattern mode,
-         or in pre-stored pattern mode
+        or in pre-stored pattern mode
+
+        In most cases, use program_dmd_seq() instead of calling this function directly
 
         :param list[int] image_indices:
         :param list[int] bit_indices:
@@ -1428,46 +1669,202 @@ class dlp6500:
         if triggered:
             self.start_stop_sequence('stop')
 
-    # batch files in firmware
-    def get_fwbatch_name(self, batch_index):
+
+    #######################################
+    # high-level commands for working with patterns and pattern sequences
+    # the primary difference from the low level functions is that the high-level functions recognize
+    # the concept of "channels" and "modes" describing families of DMD patterns. This information can be
+    # supplied at instantiation using the "presets" argument
+    #######################################
+    def get_dmd_sequence(self, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
+                         blank: list[bool], mode_pattern_indices=None):
         """
-        Return name of batch file stored on firmware at batch_index
+        Generate DMD patterns from a list of modes and channels
 
-        :param batch_index:
-        :return:
+        This function requires that self.presets exists. self.presets[channel][mode] are dictionaries with two keys,
+        "picture_indices" and "bit_indices"
+
+        @param modes:
+        @param channels:
+        @param nrepeats:
+        @param ndarkframes:
+        @param blank:
+        @param mode_pattern_indices:
+        @return picture_indices, bit_indices:
         """
-        buffer = self.send_command('r', True, self.command_dict["Get_Firmware_Batch_File_Name"], [batch_index])
-        resp = self.decode_response(buffer)
+        if self.presets is None:
+            raise ValueError("presets was None, but must be populated with channels and modes for this function to work")
 
-        batch_name = ''
-        for ii, d in enumerate(resp['data']):
-            if d == 0:
-                break
+        # check channel argument
+        if isinstance(channels, str):
+            channels = [channels]
 
-            batch_name += chr(d)
+        if not isinstance(channels, list):
+            raise ValueError()
 
-        return batch_name
+        nmodes = len(channels)
 
-    def execute_fwbatch(self, batch_index):
+        # check mode argument
+        if isinstance(modes, str):
+            modes = [modes]
+
+        if not isinstance(modes, list):
+            raise ValueError()
+
+        if len(modes) == 1 and nmodes > 1:
+            modes = modes * nmodes
+
+        if len(modes) != nmodes:
+            raise ValueError()
+
+        # check pattern indices argument
+        if mode_pattern_indices is None:
+            mode_pattern_indices = []
+            for c, m in zip(channels, modes):
+                npatterns = len(self.presets[c][m]["picture_indices"])
+                mode_pattern_indices.append(np.arange(npatterns, dtype=int))
+
+        if isinstance(mode_pattern_indices, int):
+            mode_pattern_indices = [mode_pattern_indices]
+
+        if not isinstance(mode_pattern_indices, list):
+            raise ValueError()
+
+        if len(mode_pattern_indices) == 1 and nmodes > 1:
+            mode_pattern_indices = mode_pattern_indices * nmodes
+
+        if len(mode_pattern_indices) != nmodes:
+            raise ValueError()
+
+        # check nrepeats correct type
+        if isinstance(nrepeats, int):
+            nrepeats = [nrepeats]
+
+        if not isinstance(nrepeats, list):
+            raise ValueError()
+
+        if nrepeats is None:
+            nrepeats = []
+            for _ in zip(channels, modes):
+                nrepeats.append(1)
+
+        if len(nrepeats) == 1 and nmodes > 1:
+            nrepeats = nrepeats * nmodes
+
+        if len(nrepeats) != nmodes:
+            raise ValueError()
+
+        # check blank argument
+        if isinstance(blank, bool):
+            blank = [blank]
+
+        if not isinstance(blank, list):
+            raise ValueError()
+
+        if len(blank) == 1 and nmodes > 1:
+            blank = blank * nmodes
+
+        if len(blank) != nmodes:
+            raise ValueError()
+
+        # processing
+        pic_inds = []
+        bit_inds = []
+        for c, m, ind, nreps in zip(channels, modes, mode_pattern_indices, nrepeats):
+            # need np.array(..., copy=True) to don't get references in arrays
+            pi = np.array(np.atleast_1d(self.presets[c][m]["picture_indices"]), copy=True)
+            bi = np.array(np.atleast_1d(self.presets[c][m]["bit_indices"]), copy=True)
+            # select indices
+            pi = pi[ind]
+            bi = bi[ind]
+            # repeats
+            pi = np.hstack([pi] * nreps)
+            bi = np.hstack([bi] * nreps)
+
+            pic_inds.append(pi)
+            bit_inds.append(bi)
+
+        # insert dark frames
+        if ndarkframes != 0:
+            for ii in range(nmodes):
+                ipic_off = self.presets[channels[ii]]["off"]["picture_indices"]
+                ibit_off = self.presets[channels[ii]]["off"]["bit_indices"]
+
+                pic_inds[ii] = np.concatenate((ipic_off * np.ones(ndarkframes, dtype=int), pic_inds[ii]),
+                                              axis=0).astype(int)
+                bit_inds[ii] = np.concatenate((ibit_off * np.ones(ndarkframes, dtype=int), bit_inds[ii]),
+                                              axis=0).astype(int)
+
+        # insert blanking frames
+        for ii in range(nmodes):
+            if blank[ii]:
+                npatterns = len(pic_inds[ii])
+                ipic_off = self.presets[channels[ii]]["off"]["picture_indices"]
+                ibit_off = self.presets[channels[ii]]["off"]["bit_indices"]
+
+                ipic_new = np.zeros((2 * npatterns), dtype=int)
+                ipic_new[::2] = pic_inds[ii]
+                ipic_new[1::2] = ipic_off
+
+                ibit_new = np.zeros((2 * npatterns), dtype=int)
+                ibit_new[::2] = bit_inds[ii]
+                ibit_new[1::2] = ibit_off
+
+                pic_inds[ii] = ipic_new
+                bit_inds[ii] = ibit_new
+
+        pic_inds = np.hstack(pic_inds)
+        bit_inds = np.hstack(bit_inds)
+
+        return pic_inds, bit_inds
+
+    def program_dmd_seq(self, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
+                        blank: list[bool], mode_pattern_indices: list[int], triggered: bool, verbose: bool = False,
+                        exp_time_us: int = 105):
         """
-        Execute batch file stored on firmware at index batch_index
+        convenience function for generating DMD pattern and programming DMD
 
-        :param batch_index:
-        :return:
+        @param dmd:
+        @param modes:
+        @param channels:
+        @param nrepeats:
+        @param ndarkframes:
+        @param blank:
+        @param mode_pattern_indices:
+        @param triggered:
+        @param verbose:
+        @return:
         """
-        return self.send_command('w', True, self.command_dict["Execute_Firmware_Batch_File"], [batch_index])
 
-    def set_fwbatch_delay(self, delay_ms):
-        """
-        Set delay between batch file commands
-        :param delay_ms:
-        :return:
-        """
-        raise NotImplementedError("this function not yet implemented. testing needed")
+        pic_inds, bit_inds = self.get_dmd_sequence(modes, channels, nrepeats, ndarkframes, blank, mode_pattern_indices)
+        # #########################################
+        # DMD commands
+        # #########################################
+        self.debug = verbose
 
-        data = struct.unpack('BBBB', struct.pack('<I', delay_ms))
-        data = list(data[:3])
-        return self.send_command('w', True, self.command_dict["Set_Firmware_Batch_Command_Delay_Time"], data)
+        self.start_stop_sequence('stop')
+
+        # check DMD trigger state
+        delay1_us, mode_trig1 = self.get_trigger_in1()
+        # print('trigger1 delay=%dus' % delay1_us)
+        # print('trigger1 mode=%d' % mode_trig1)
+
+        # dmd.set_trigger_in2('rising')
+        mode_trig2 = self.get_trigger_in2()
+        # print("trigger2 mode=%d" % mode_trig2)
+
+        self.set_pattern_sequence(pic_inds, bit_inds, exp_time_us, 0, triggered=triggered,
+                                  clear_pattern_after_trigger=False, bit_depth=1, num_repeats=0, mode='pre-stored')
+
+        if verbose:
+            # print pattern info
+            print("%d picture indices: " % len(pic_inds), end="")
+            print(pic_inds)
+            print("%d     bit indices: " % len(bit_inds), end="")
+            print(bit_inds)
+            print("finished programming DMD")
+
+        return pic_inds, bit_inds
 
 
 class dlp6500win(dlp6500):
@@ -1475,8 +1872,8 @@ class dlp6500win(dlp6500):
     Class for handling dlp6500 on windows os
     """
 
-    def __init__(self, vendor_id=0x0451, product_id=0xc900, debug=True):
-        super(dlp6500win, self).__init__(vendor_id=vendor_id, product_id=product_id, debug=debug)
+    def __init__(self, **kwargs):
+        super(dlp6500win, self).__init__(**kwargs)
 
     def __del__(self):
         self.dmd.close()
@@ -1548,10 +1945,10 @@ class dlp6500ix(dlp6500):
     Class for handling dlp6500 on linux os
     """
 
-    def __init__(self, vendor_id=0x0451, product_id=0xc900, debug=True):
+    def __init__(self, **kwargs):
         raise NotImplementedError("dlp6500ix has not been fully implemented. The functions _get_device() and"
                                   " _send_raw_packet() need to be implemented.")
-        super(dlp6500ix, self).__init__(vendor_id=vendor_id, product_id=product_id, debug=debug)
+        super(dlp6500ix, self).__init__(**kwargs)
 
     def __del__(self):
         pass
@@ -1565,8 +1962,8 @@ class dlp6500ix(dlp6500):
 
 class dlp6500dummy(dlp6500):
     """Dummy class, useful for testing command generation when no DMD is connected"""
-    def __init__(self, vendor_id=0, product_id=0, debug=True):
-        super(dlp6500dummy, self).__init__(vendor_id=vendor_id, product_id=product_id, debug=debug)
+    def __init__(self, **kwargs):
+        super(dlp6500dummy, self).__init__(**kwargs)
 
     def _get_device(self, vendor_id, product_id):
         pass
@@ -1576,3 +1973,85 @@ class dlp6500dummy(dlp6500):
 
     def read_error_description(self):
         return [['']]
+
+
+if __name__ == "__main__":
+    # #######################
+    # example command line parser
+    # #######################
+
+    fname = "dmd_config.json"
+    try:
+        pattern_data, presets, _ = load_config_file(fname)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"file `{fname:s}` was not found. For the command line parser to work, place "
+                                f"a file with this name in the same directory as dlp6500.py")
+
+    # #######################
+    # define arguments
+    # #######################
+
+    parser = argparse.ArgumentParser(description="Set DLP6500 DMD pattern sequence from the command line.")
+
+    # allowed channels
+    all_channels = list(presets.keys())
+    parser.add_argument("channels", type=str, nargs="+", choices=all_channels,
+                        help="supply the channels to be used in this acquisition as strings separated by spaces")
+
+    # allowed modes
+    modes = list(set([m for c in all_channels for m in list(presets[c].keys())]))
+    modes_help = "supply the modes to be used with each channel as strings separated by spaces." \
+                 "each channel supports its own list of modes.\n"
+    for c in all_channels:
+        modes_with_parenthesis = ["'%s'" % m for m in list(presets[c].keys())]
+        modes_help += ("channel '%s' supports: " % c) + ", ".join(modes_with_parenthesis) + ".\n"
+
+    parser.add_argument("-m", "--modes", type=str, nargs=1, choices=modes, default="default",
+                        help=modes_help)
+
+    # pattern indices
+    pattern_indices_help = "Among the patterns specified in the subset specified by `channels` and `modes`," \
+                           " only run these indices. For a given channel and mode, allowed indices range from 0 to npatterns - 1." \
+                           "This options is most commonly used when only a single channel and mode are provided.\n"
+    for c in list(presets.keys()):
+        for m in list(presets[c].keys()):
+            pattern_indices_help += "channel '%s` and mode '%s' npatterns = %d.\n" % (c, m, len(presets[c][m]["picture_indices"]))
+
+    parser.add_argument("-i", "--pattern_indices", type=int, help=pattern_indices_help)
+
+    parser.add_argument("-r", "--nrepeats", type=int, default=1,
+                        help="number of times to repeat the patterns specificed by `channels`, `modes`, and `pattern_indices`")
+
+    # other
+    parser.add_argument("-t", "--triggered", action="store_true",
+                        help="set DMD to wait for trigger before switching pattern")
+    parser.add_argument("-d", "--ndarkframes", type=int, default=0,
+                        help="set number of dark frames to be added before each color of SIM/widefield pattern")
+    parser.add_argument("-b", "--blank", action="store_true",
+                        help="set whether or not to insert OFF patterns between each SIM pattern to blank laser")
+    parser.add_argument("-v", "--verbose", action="store_true", help="print more verbose DMD programming information")
+    parser.add_argument("--illumination_time", type=int, default = 105,
+                        help="illumination time in microseconds. Ignored if triggered is true")
+    args = parser.parse_args()
+
+    if args.verbose:
+        print(args)
+
+    # #######################
+    # load DMD
+    # #######################
+    use_dummy = False
+
+    if use_dummy:
+        dmd = dlp6500dummy(firmware_pattern_info=pattern_data, presets=presets)
+    else:
+        # detect system
+        if sys.platform == "win32":
+            dmd = dlp6500win(firmware_pattern_info=pattern_data, presets=presets)
+        elif sys.platform == "linux":
+            dmd = dlp6500ix(firmware_pattern_info=pattern_data, presets=presets)
+        else:
+            raise NotImplementedError(f"platform was '{sys.platform:s}' but must be 'win32' or 'linux'")
+
+    pic_inds, bit_inds = dmd.program_dmd_seq(args.modes, args.channels, args.nrepeats, args.ndarkframes, args.blank,
+                                             args.pattern_indices, args.triggered, args.verbose, args.illumination_time)
