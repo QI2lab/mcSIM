@@ -71,10 +71,11 @@ on tools for working with affine transformations found
 Code for extracting optical transfer function from measurement of the strength of various Fourier peaks for a given SIM DMD pattern.
  
 ### [psd.py](mcsim/analysis/psd.py)
-Code for doing the periodic/smooth image decomposition, an alternative to apodization for the Fourier transform. This code is taken from https://github.com/jacobkimmel/ps_decomp (with permission), and included here for convenience.
+Code for doing the periodic/smooth image decomposition, an alternative to apodization for the Fourier transform.
+This code is taken from https://github.com/jacobkimmel/ps_decomp (with permission), and included here for convenience.
 
 ### [analysis_tools.py](mcsim/analysis/analysis_tools.py)
-Miscellaneous image processing tools
+Miscellaneous image processing tools, primarily for working with Fourier transforms
 
 ### [mm_io.py](mcsim/analysis/mm_io.py)
 Tools for IO of MicroManager style tif files and metadata.
@@ -91,35 +92,49 @@ Scripts illustrated examples of different DMD simulations and analysis are store
 data is located in [examples/data](examples/data)
   
 # Hardware control code
+Hardware control is based around [MicroManager2.0](https://micro-manager.org/). Currently we control the instrument
+using a fork of the [napari-micromanager](https://github.com/QI2lab/napari-micromanager) project which controls
+the MicroManager core using [pymmcore-plus](https://github.com/tlambert03/pymmcore-plus). Our fork of this project
+relies on MicroManager device drives to control cameras and stages, and on python code to control the DMD and DAQ.
+The "device adapters" for the DMD and DAQ are found below
 
 ### [expt_ctrl/dlp6500.py](mcsim/expt_ctrl/dlp6500.py)
 Code for controlling the DLP6500 DMD over USB on Windows. This code was initially based on the approaches 
 of [Lightcrafter6500DMDControl](https://github.com/mazurenko/Lightcrafter6500DMDControl) and
-[Pycrafter6500](https://github.com/csi-dcsc/Pycrafter6500).
+[Pycrafter6500](https://github.com/csi-dcsc/Pycrafter6500). Extension to other operating systems has not been
+implented but should be straightforward.
 
-### [expt_ctrl/set_dmd_sim.py](mcsim/expt_ctrl/set_dmd_pattern_firmware.py)
-This is the script used to define pattern sequences on the DMD using patterns which
-have been previously loaded onto the firmware using the [Texas Instruments DLP6500 and DLP9000
-GUI](https://www.ti.com/tool/DLPC900REF-SW). It is a command line interface to [dlp6500.py](expt_ctrl/dlp6500.py),
-and it is used by [run_sim_triggerscop.bsh](expt_ctrl/run_sim_triggerscop.bsh).
+This file also includes functions used to define pattern sequences on the DMD using patterns have either been 
+previously loaded onto the firmware using the [Texas Instruments DLP6500 and DLP9000
+GUI](https://www.ti.com/tool/DLPC900REF-SW) or which are loaded "on-the-fly". There is a low-level interface
+for running these patterns based directly on their index in the firmware. There is also a higher-level interface
+which supports defining "channels" and "modes" which can be saved in a json configuration file.
 
-### [expt_ctrl/run_sim_triggerscop.bsh](mcsim/expt_ctrl/run_sim_triggerscop.bsh)
-A [beanshell script](https://beanshell.github.io/) which can be run from [MicroManager 2.0 Gamma](https://micro-manager.org/wiki/Micro-Manager)
-to acquire SIM data using dlp6500.py to set the DMD patterns (assuming they have already been loaded into the 
-DMD firmware as described above). This script programs a [Triggerscope 3B](https://arc.austinblanco.com/), which then provides the analog and 
-digital voltages required to run the rest of the experiment. The camera free runs as the
-master clock, triggering the Triggerscope. We use a customized version of the Triggerscope firmware V601. 
+When run as a script, this file provides a command line interface to programming DMD pattern sequences. 
 
-This script supports collecting multidimensional data with the axis order xy-position/time/z-position/channel/SIM pattern.
-It also supports time-lapse imaging with arbitrary wait time.
+### [expt_ctrl/dmd_config.json](mcsim/expt_ctrl/dmd_config.json)
+Configuration file describing firmware patterns as well as "modes" and "channels" for the DMD. This file is used by
+dmd instances created with [dlp6500.py](mcsim/expt_ctrl/dlp6500.py)
 
-This code was initially developed with Micro-Manager 2.0.0-gamma1 20200514, MMCore Version 10.1.0,
-Device API version 69, Module API version 10. But for more recent development we are using
-Micro-Manager 2.0.0-gamma1 20210516, MMCore Version 10.1.1, Device API version 70, Module API version 10.
+### [expt_ctrl/daq.py](mcsim/expt_ctrl/daq.py)
+Code for controlling a national instruments DAQ through [PyDAQmx](https://pypi.org/project/PyDAQmx/)
 
-### [expt_ctrl/SIM.cfg](mcsim/expt_ctrl/SIM.cfg)
-[MicroManager configuration file](https://micro-manager.org/wiki/Micro-Manager_Configuration_Guide#Configuration_file_syntax)
-describing the equipment and settings used in the experiment.
+### [expt_ctrl/daq_config.json](mcsim/expt_ctrl/daq_config.json)
+DAQ configuration file describing "modes" and "channels" for the DAQ. This file is used by `nidaq` instances created
+with [daq.py](mcsim/expt_ctrl/daq.py)
+
+### [program_sim_odt.py](mcsim/expt_ctrl/program_sim_odt.py)
+This file is used to create DAQ sequences for SIM and ODT experiments
+
+### expt_ctrl/*.cfg
+[MicroManager configuration files](https://micro-manager.org/wiki/Micro-Manager_Configuration_Guide#Configuration_file_syntax)
+describing the equipment and settings used in the experiment. 
+
+### useful script files
+Example scripts which are useful for controlling various instruments during testing include
+[load_dmd_pattern.py](mcsim/expt_ctrl/load_dmd_pattern.py),
+[setup_optotune_mre2.py](mcsim/expt_ctrl/setup_optotune_mre2.py), and
+[set_dmd_odt_pattern.py](mcsim/expt_ctrl/set_dmd_odt_pattern.py)
 
 # Instrument design
 Mechanical drawings of some parts used in the setup are included in the [parts](parts) directory. For a more complete description of the setup and
