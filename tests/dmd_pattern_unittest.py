@@ -1,8 +1,10 @@
 import unittest
+import time
 import numpy as np
 import scipy.signal
 from scipy import fft
 from localize_psf import affine
+from localize_psf import rois
 import mcsim.analysis.dmd_patterns as dmd
 import mcsim.analysis.analysis_tools as tools
 
@@ -23,9 +25,10 @@ class TestPatterns(unittest.TestCase):
         ny = 1080
         nphases = 3
 
-        fx = tools.get_fft_frqs(nx)
-        fy = tools.get_fft_frqs(ny)
-        window = scipy.signal.windows.hann(nx)[None, :] * scipy.signal.windows.hann(ny)[:, None]
+        fx = fft.fftshift(fft.fftfreq(nx))
+        fy = fft.fftshift(fft.fftfreq(ny))
+        window = np.expand_dims(scipy.signal.windows.hann(nx), axis=0) * \
+                 np.expand_dims(scipy.signal.windows.hann(ny), axis=1)
 
         va = [-3, 11]
         vb = [3, 12]
@@ -38,7 +41,8 @@ class TestPatterns(unittest.TestCase):
             pattern, _ = dmd.get_sim_pattern([nx, ny], va, vb, nphases, jj)
             pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern * window)))
 
-            pattern_phase_est = np.mod(np.angle(tools.get_peak_value(pattern_ft, fx, fy, rvb, 2)), 2 * np.pi)
+            peak_val = tools.get_peak_value(pattern_ft, fx, fy, rvb, 2)
+            pattern_phase_est = np.mod(np.angle(peak_val), 2 * np.pi)
 
             # assert np.round(np.abs(pattern_phase_est - float(phase)), 3) == 0
             self.assertAlmostEqual(pattern_phase_est, float(phase), 3)
@@ -48,8 +52,8 @@ class TestPatterns(unittest.TestCase):
         Test determination of DMD pattern phase by comparing with FFT phase for dominant frequency component
         of given pattern.
 
-        This compares get_sim_phase() with directly producing a pattern via get_sim_pattern() and numerically determining
-        the phase.
+        This compares get_sim_phase() with directly producing a pattern via get_sim_pattern()
+        and numerically determining the phase.
 
         Unlike test_phase_vs_phase_index(), test many different lattice vectors, but only a single phase index
         :return:
@@ -70,16 +74,18 @@ class TestPatterns(unittest.TestCase):
 
         # generate all lattice vectors
         vas_x, vas_y = np.meshgrid(va_comps, va_comps)
-        vas = np.concatenate((vas_x.ravel()[:, None], vas_y.ravel()[:, None]), axis=1)
+        vas = np.stack((vas_x.ravel(), vas_y.ravel()), axis=1)
         vas = vas[np.linalg.norm(vas, axis=1) != 0]
 
         vbs_x, vbs_y = np.meshgrid(vb_comps, vb_comps)
-        vbs = np.concatenate((vbs_x.ravel()[:, None], vbs_y.ravel()[:, None]), axis=1)
+        vbs = np.stack((vbs_x.ravel(), vbs_y.ravel()), axis=1)
         vbs = vbs[np.linalg.norm(vbs, axis=1) != 0]
 
+        tstart = time.perf_counter()
         for ii in range(len(vas)):
             for jj in range(len(vbs)):
-                print("pattern %d/%d" % (len(vbs) * ii + jj + 1, len(vas) * len(vbs)))
+                print(f"pattern {len(vbs) * ii + jj + 1:d}/{len(vas) * len(vbs):d},"
+                      f" elapsed time = {time.perf_counter() - tstart:.2f}s")
 
                 vec_a = vas[ii]
                 vec_b = vbs[jj]
@@ -97,8 +103,8 @@ class TestPatterns(unittest.TestCase):
 
                 window = scipy.signal.windows.hann(nx)[None, :] * scipy.signal.windows.hann(ny)[:, None]
                 pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern * window)))
-                fx = tools.get_fft_frqs(nx, 1)
-                fy = tools.get_fft_frqs(ny, 1)
+                fx = fft.fftshift(fft.fftfreq(nx))
+                fy = fft.fftshift(fft.fftfreq(ny))
 
                 try:
                     phase_direct = np.angle(tools.get_peak_value(pattern_ft, fx, fy, recp_vb, peak_pixel_size=2))
@@ -146,18 +152,19 @@ class TestPatterns(unittest.TestCase):
             # get ft
             window = scipy.signal.windows.hann(nx)[None, :] * scipy.signal.windows.hann(ny)[:, None]
             pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern * window)))
-            fxs = tools.get_fft_frqs(nx)
+            fxs = fft.fftshift(fft.fftfreq(nx))
             dfx = fxs[1] - fxs[0]
-            fys = tools.get_fft_frqs(ny)
+            fys = fft.fftshift(fft.fftfreq(ny))
             dfy = fys[1] - fys[0]
 
             # get expected pattern components
-            efield, ns, ms, vecs = dmd.get_efield_fourier_components(unit_cell, xc, yc, vec_a, vec_b, nphases, phase_index, dmd_size, nmax=40)
+            efield, ns, ms, vecs = dmd.get_efield_fourier_components(unit_cell, xc, yc, vec_a, vec_b,
+                                                                     nphases, phase_index, dmd_size, nmax=40)
             # divide by size of DC component
             efield = efield / np.max(np.abs(efield))
 
             # get phase from fft
-            efield_img = np.zeros(efield.shape, dtype=np.complex)
+            efield_img = np.zeros(efield.shape, dtype=complex)
             for ii in range(len(ns)):
                 for jj in range(len(ms)):
                     if np.abs(vecs[ii, jj][0]) > 0.5 or np.abs(vecs[ii, jj][1]) > 0.5:
@@ -207,7 +214,9 @@ class TestPatterns(unittest.TestCase):
             # plt.imshow(np.abs(pattern_ft), extent=extent, norm=PowerNorm(gamma=0.1))
             #
             # assert np.round(np.nanmax(np.abs(efield_img - efield)), 12) == 0
-            self.assertAlmostEqual(np.nanmax(np.abs(efield_img - efield)), 0, 12)
+            # self.assertAlmostEqual(np.nanmax(np.abs(efield_img - efield)), 0, 12)
+            to_compare = np.logical_not(np.isnan(efield_img - efield))
+            np.testing.assert_allclose(efield_img[to_compare], efield[to_compare], atol=1e-12)
 
     def test_affine_phase_xform(self):
         """
@@ -217,15 +226,16 @@ class TestPatterns(unittest.TestCase):
         :return:
         """
 
-        # get pattern
-        dmd_size = [1920, 1080] #[nx, ny]
+        # ##############################
+        # define pattern
+        # ##############################
+        dmd_size = [1920, 1080]  # [nx, ny]
         nphases = 3
         phase_index = 0
         nmax = 40
-        # roi = tools.get_centered_roi([1024, 1024], [600, 800])
-        roi = tools.get_centered_roi([1024, 1024], [500, 500])
-        nx = roi[3] - roi[2]
-        ny = roi[1] - roi[0]
+        nx = 500
+        ny = 500
+        roi = rois.get_centered_roi([1024, 1024], [ny, nx])
 
         # vec_a = np.array([8, 17])
         # vec_b = np.array([3, -6])
@@ -235,27 +245,34 @@ class TestPatterns(unittest.TestCase):
         pattern, _ = dmd.get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index)
         unit_cell, xc, yc = dmd.get_sim_unit_cell(vec_a, vec_b, nphases)
 
-        # get affine matrix
+        # ##############################
+        # define affine matrix
+        # ##############################
         # affine_mat = affine.params2xform([2, 15 * np.pi/180, 15, 1.7, -13 * np.pi/180, 3])
         affine_mat = np.array([[-1.01788979e+00, -1.04522661e+00, 2.66353915e+03],
                                [9.92641451e-01, -9.58516962e-01, 7.83771959e+02],
                                [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]])
+
         # get affine matrix for our ROI
         affine_xform_roi = affine.xform_shift_center(affine_mat, cimg_new=(roi[2], roi[0]))
 
-        # get transformed phase from affine xform
+        # ###########################################
+        # estimate phases/intensity after affine transformation using model
+        ###########################################
         # transform pattern phase
         efields, ns, ms, vecs = dmd.get_efield_fourier_components(unit_cell, xc, yc, vec_a, vec_b, nphases, phase_index,
                                                                   dmd_size, nmax=nmax, origin="fft")
         efields = efields / np.max(np.abs(efields))
 
         vecs_xformed = np.zeros(vecs.shape)
-        vecs_xformed[..., 0], vecs_xformed[..., 1], phases = affine.xform_sinusoid_params_roi(vecs[..., 0], vecs[..., 1],
-                                                                                                      np.angle(efields), pattern.shape, roi,
-                                                                                                      affine_mat, input_origin="fft", output_origin="fft")
+        vecs_xformed[..., 0], vecs_xformed[..., 1], phases = \
+            affine.xform_sinusoid_params_roi(vecs[..., 0], vecs[..., 1], np.angle(efields), pattern.shape, roi,
+                                             affine_mat, input_origin="fft", output_origin="fft")
         efields_xformed = np.abs(efields) * np.exp(1j * phases)
 
-        # get pattern phase directly from fft
+        ###########################################
+        # estimate phases/intensity after affine transformation numerically
+        ###########################################
         # transform pattern to image space
         img_coords = np.meshgrid(range(nx), range(ny))
         # interpolation preserves phases but can distort Fourier components
@@ -263,12 +280,14 @@ class TestPatterns(unittest.TestCase):
         # taking nearest pixel does a better job with amplitudes, but can introduce fourier components that did not exist before
         # pattern_xform_nearest = affine.affine_xform_mat(pattern, affine_xform_roi, img_coords, mode="nearest")
 
-        window = scipy.signal.windows.hann(nx)[None, :] * scipy.signal.windows.hann(ny)[:, None]
-        pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xform * window)))
-        fx = tools.get_fft_frqs(nx, 1)
-        fy = tools.get_fft_frqs(ny, 1)
+        window = np.expand_dims(scipy.signal.windows.hann(nx), axis=0) * \
+                 np.expand_dims(scipy.signal.windows.hann(ny), axis=1)
 
-        efields_direct = np.zeros(efields_xformed.shape, dtype=np.complex)
+        pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xform * window)))
+        fx = fft.fftshift(fft.fftfreq(nx))
+        fy = fft.fftshift(fft.fftfreq(ny))
+
+        efields_direct = np.zeros(efields_xformed.shape, dtype=complex)
         for ii in range(efields.shape[0]):
             for jj in range(efields.shape[1]):
                 if np.abs(vecs_xformed[ii, jj][0]) > 0.5 or np.abs(vecs_xformed[ii, jj][1]) > 0.5:
@@ -276,20 +295,18 @@ class TestPatterns(unittest.TestCase):
                 else:
                     try:
                         efields_direct[ii, jj] = tools.get_peak_value(pattern_ft, fx, fy, vecs_xformed[ii, jj], peak_pixel_size=2)
-                    except:
+                    except ZeroDivisionError:
                         efields_direct[ii, jj] = np.nan
 
         efields_direct = efields_direct / np.nanmax(np.abs(efields_direct))
 
-        to_compare = np.abs(efields_xformed) > 0.05
-        # check phases
-        self.assertTrue(np.max(np.abs(np.angle(efields_xformed[to_compare]) - np.angle(efields_direct[to_compare]))) < 0.003)
-
-        # check amplitudes
-        self.assertTrue(np.nanmax(np.abs(efields_xformed[to_compare] - efields_direct[to_compare])) < 0.07)
-        # check relative amplitudes
-        self.assertTrue(np.nanmax(np.abs(efields_xformed[to_compare] - efields_direct[to_compare]) / np.abs(efields_xformed[to_compare])) < 0.25)
-
+        # compare results
+        to_compare = np.logical_and(np.abs(efields_xformed) > 0.05, np.logical_not(np.isnan(efields_direct)))
+        # test angles
+        np.testing.assert_allclose(np.angle(efields_xformed[to_compare]), np.angle(efields_direct[to_compare]), atol=0.003)
+        # test amplitudes
+        np.testing.assert_allclose(np.abs(efields_xformed[to_compare]), np.abs(efields_direct[to_compare]), atol=0.07)
+        np.testing.assert_allclose(np.abs(efields_xformed[to_compare]), np.abs(efields_direct[to_compare]), rtol=0.25)
 
 
 if __name__ == "__main__":

@@ -7,36 +7,37 @@ will display the matrix with i_y = 1 on top, so the pattern we really want is th
 dimension.
 """
 
-import os
 import time
+import json
+from pathlib import Path
+import copy
 import numpy as np
 from PIL import Image
 from scipy import fft
 import scipy.signal
-import pickle
-import copy
+import tifffile
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
+from matplotlib.patches import Circle
 import matplotlib.patches
-import tifffile
 #
 import mcsim.analysis.analysis_tools as tools
-import mcsim.analysis.mm_io as mm_io
 import mcsim.analysis.simulate_dmd as simulate_dmd
 import localize_psf.affine as affine
 
 
-def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
+def get_sim_pattern(dmd_size: list[int], vec_a, vec_b, nphases: int, phase_index: int):
     """
     Convenience function for generating SIM patterns from the tile_patterns() function.
 
-    :param list dmd_size: [nx, ny]
+    :param dmd_size: [nx, ny]
     :param list or np.array vec_a: [dxa, dya]
     :param list or np.array vec_b: [dxb, dyb]
-    :param int nphases: number of phase shifts required. This effects the filling of the pattern
-    :param int phase_index: integer in range(nphases)
-    :return np.array pattern: the desired pattern
-    :return np.array cell: single unit cell
+    :param nphases: number of phase shifts required. This effects the filling of the pattern
+    :param phase_index: integer in range(nphases)
+
+    :return pattern, cell: 'pattern' is an array giving the desired pattern and 'cell' is an array giving
+    a single unit cell of the pattern
     """
 
     # ensure both vec_b components are divisible by nphases
@@ -52,7 +53,8 @@ def get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index):
 
 
 # tool for manipulating unit cells
-def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell, do_cell_reduction=True):
+def tile_pattern(dmd_size: list[int], vec_a, vec_b, start_coord: list[int], cell, x_cell, y_cell,
+                 do_cell_reduction: bool = True):
     """
     Generate SIM patterns using lattice periodicity vectors vec_a = [dxa, dya] and vec_b = [dxb, 0],
     and duplicating roi_size single unit cell. See the supplemental material of
@@ -64,16 +66,17 @@ def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell, do_c
     params(x, y) = M[i_y, i_x], where M is the matrix representing the pattern. Matlab will display the matrix
     with i_y = 0 on top, so the pattern we really want is the matrix flipped along the first dimension.
 
-    :param list dmd_size: [nx, ny]
+    :param dmd_size: [nx, ny]
     :param list or np.array vec_a: [dxa, dya]
     :param list or np.array vec_b: [dxb, dyb]
-    :param list start_coord: [x, y]. Coordinate to position the start of a unit cell on the DMD.
+    :param start_coord: [x, y]. Coordinate to position the start of a unit cell on the DMD.
     This adjusts the phase of the resulting pattern. These coordinates are relative to the image corner
     :param np.array cell:
     :param np.array x_cell:
     :param np.array y_cell:
+    :param do_cell_reduction: whether or not to call get_minimal_cell() before tiling
 
-    :return np.array pattern:
+    :return pattern: np.array
     """
     vec_a = np.array(vec_a, copy=True)
     vec_b = np.array(vec_b, copy=True)
@@ -93,10 +96,10 @@ def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell, do_c
     # [[dxa, dxb], [dya, dyb]] * [[n], [m]] = [[cx], [cy]] - [[sx], [sy]]
     sx, sy = start_coord
     mat = np.linalg.inv(np.array([[vec_a[0], vec_b[0]], [vec_a[1], vec_b[1]]]))
-    n1, m1 = mat.dot(np.array([[pattern.shape[1] - sx], [pattern.shape[0] - sy]], dtype=np.float))
-    n2, m2 = mat.dot(np.array([[0. - sx], [pattern.shape[0] - sy]], dtype=np.float))
-    n3, m3 = mat.dot(np.array([[pattern.shape[1] - sx], [0. - sy]], dtype=np.float))
-    n4, m4 = mat.dot(np.array([[0. - sx], [0. - sy]], dtype=np.float))
+    n1, m1 = mat.dot(np.array([[pattern.shape[1] - sx], [pattern.shape[0] - sy]], dtype=float))
+    n2, m2 = mat.dot(np.array([[0. - sx], [pattern.shape[0] - sy]], dtype=float))
+    n3, m3 = mat.dot(np.array([[pattern.shape[1] - sx], [0. - sy]], dtype=float))
+    n4, m4 = mat.dot(np.array([[0. - sx], [0. - sy]], dtype=float))
 
     na_min = int(np.floor(np.min([n1, n2, n3, n4])))
     na_max = int(np.ceil(np.max([n1, n2, n3, n4])))
@@ -158,12 +161,12 @@ def tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x_cell, y_cell, do_c
                                     cell[ystart_cell:yend_cell, xstart_cell:xend_cell, None]), axis=2), axis=2)
 
     assert not np.any(np.isnan(pattern))
-    pattern = np.asarray(pattern, dtype=np.bool)
+    pattern = np.asarray(pattern, dtype=bool)
 
     return pattern
 
 
-def double_cell(cell, x, y, vec_a, vec_b, na=1, nb=0):
+def double_cell(cell, x, y, vec_a, vec_b, na: int = 1, nb: int = 0):
     """
     Create new unit cell by doubling the original one by a factor of na along vec_a and nb along vec_b
 
@@ -172,8 +175,8 @@ def double_cell(cell, x, y, vec_a, vec_b, na=1, nb=0):
     :param list or np.array y: y-coordinates of cell
     :param list or np.array vec_a: periodicity vector a
     :param list or np.array vec_b: periodicity vector b
-    :param int na: number of times to double unit cell along vec_a
-    :param int nb: number of times to double cell along vec_b
+    :param na: number of times to double unit cell along vec_a
+    :param nb: number of times to double cell along vec_b
 
     :return np.array big_cell: doubled cell
     :return np.array xs: x-coordinates of doubled cell
@@ -213,12 +216,13 @@ def double_cell(cell, x, y, vec_a, vec_b, na=1, nb=0):
             istart_x = int(xzero - np.min(xs) + np.min(x))
             istart_y = int(yzero - np.min(ys) + np.min(y))
 
-            big_cell[istart_y:istart_y+dyc, istart_x:istart_x+dxc][np.logical_not(np.isnan(cell))] = cell[np.logical_not(np.isnan(cell))]
+            big_cell[istart_y:istart_y+dyc, istart_x:istart_x+dxc][np.logical_not(np.isnan(cell))] = \
+                cell[np.logical_not(np.isnan(cell))]
 
     return big_cell, xs, ys
 
 
-def get_sim_unit_cell(vec_a, vec_b, nphases):
+def get_sim_unit_cell(vec_a, vec_b, nphases: int):
     """
     Get unit cell, which can be repeated to form SIM pattern.
 
@@ -290,8 +294,8 @@ def get_unit_cell(vec_a, vec_b):
                 raise ValueError("At least one component of vec_a or vec_b cannot be interpreted as an integer")
 
     # copy vector data, so don't affect inputs
-    vec_a = np.array(vec_a, copy=True, dtype=np.int)
-    vec_b = np.array(vec_b, copy=True, dtype=np.int)
+    vec_a = np.array(vec_a, copy=True, dtype=int)
+    vec_b = np.array(vec_b, copy=True, dtype=int)
 
     # check vectors are linearly independent
     if np.cross(vec_a, vec_b) == 0:
@@ -325,7 +329,7 @@ def get_unit_cell(vec_a, vec_b):
     cell_volume = np.abs(vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0])
 
     # generate cell
-    cell = np.array(test_in_cell([xx, yy], vec_a, vec_b), dtype=np.float)
+    cell = np.array(test_in_cell([xx, yy], vec_a, vec_b), dtype=float)
     cell[cell == False] = np.nan
     cell[cell == True] = 0
 
@@ -356,7 +360,7 @@ def test_in_cell(points, va, vb):
 
     x, y = points
 
-    def line(x, p1, p2): return ((p2[1] - p1[1]) * x + p1[1] * p2[0] - p1[0] * p2[1])/ (p2[0] - p1[0])
+    def line(x, p1, p2): return ((p2[1] - p1[1]) * x + p1[1] * p2[0] - p1[0] * p2[1]) / (p2[0] - p1[0])
 
     precision = 12
 
@@ -376,7 +380,6 @@ def test_in_cell(points, va, vb):
         eq_a2 = np.round(x, precision) == np.round(vb[0], precision)
 
     in_cell_a = np.logical_and(np.logical_or(gthan_a1 != gthan_a2, eq_a1), np.logical_not(eq_a2))
-
 
     # same strategy for vb
     if vb[0] != 0:
@@ -412,8 +415,8 @@ def reduce2cell(point, va, vb):
                 raise ValueError("at least one component of va or vb could nto be interpreted as an integer.")
 
     point = np.array(point, copy=True)
-    va = np.array(va, copy=True, dtype=np.int)
-    vb = np.array(vb, copy=True, dtype=np.int)
+    va = np.array(va, copy=True, dtype=int)
+    vb = np.array(vb, copy=True, dtype=int)
 
     ra, rb = get_reciprocal_vects(va, vb)
     # need to round to avoid problems with machine precision
@@ -422,7 +425,9 @@ def reduce2cell(point, va, vb):
     point_red = point - (na_out * va + nb_out * vb)
 
     if not test_in_cell(point_red, va, vb):
-        print("(%d, %d) not in cell, va=(%d, %d), vb=(%d, %d)" % (point_red[0], point_red[1], va[0], va[1], vb[0], vb[1]))
+        print(f"({point_red[0]:d}, {point_red[1]:d}) not in cell,"
+              f" va=({va[0]:d}, {va[1]:d}),"
+              f" vb=({vb[0]:d}, {vb[1]:d})")
 
     assert test_in_cell(point_red, va, vb)
 
@@ -475,9 +480,7 @@ def convert_cell(cell1, x1, y1, va1, vb1, va2, vb2):
     :param va2:
     :param vb2:
 
-    :return cell2:
-    :return x2:
-    :return y2:
+    :return cell2, x2, y2:
     """
     # todo: add check that va1/vb1 and va2/vb2 describe same lattice
     for vec in [va1, vb1, va2, vb2]:
@@ -505,14 +508,14 @@ def get_minimal_cell(cell, x, y, va, vb):
     :param y:
     :param va:
     :param vb:
-    :return:
+    :return cell_m, x_m, y_m, va_m, vb_m:
     """
     va_m, vb_m = reduce_basis(va, vb)
     cell_m, x_m, y_m = convert_cell(cell, x, y, va, vb, va_m, vb_m)
     return cell_m, x_m, y_m, va_m, vb_m
 
 
-def show_cell(v1, v2, cell, x, y):
+def show_cell(v1, v2, cell, x, y, **kwargs):
     """
     Plot unit cell and periodicity vectors
 
@@ -525,28 +528,34 @@ def show_cell(v1, v2, cell, x, y):
     :return figh: handle to resulting figure
     """
 
-    v1 = np.array(v1, copy=True)
-    v2 = np.array(v2, copy=True)
+    v1 = np.array(v1, copy=True).ravel()
+    v2 = np.array(v2, copy=True).ravel()
+
+    if not v1.dtype.kind in np.typecodes["AllInteger"] or \
+       not v2.dtype.kind in np.typecodes["AllInteger"]:
+       raise ValueError(f"v1 and v2 had data types '{v1.dtype}' and '{v2.dtype}', but both be type 'int'")
 
     # plot
-    extent = [x[0] - 0.5, x[-1] + 0.5, y[0] - 0.5, y[-1] + 0.5]
+    fig = plt.figure(**kwargs)
+    ax = fig.add_subplot(1, 1, 1)
+    ax.set_title(f"Unit cell,"
+                 f" $v_1$ = ({v1[0]:d}, {v1[1]:d}),"
+                 f" $v_2$ = ({v2[0]:d}, {v2[1]:d})")
 
-    fig = plt.figure()
-    plt.imshow(np.abs(cell), extent=extent, origin='lower')
-    ph, = plt.plot([0, v1[0]], [0, v1[1]], 'r')
-    ph1, = plt.plot([0, v2[0]], [0, v2[1]], 'g')
-    plt.plot([v2[0], v2[0] + v1[0]], [v2[1], v2[1] + v1[1]], 'r')
-    plt.plot([v1[0], v2[0] + v1[0]], [v1[1], v2[1] + v1[1]], 'g')
-    plt.legend([ph, ph1], ['$v_1$', '$v_2$'])
-    plt.xlabel('x')
-    plt.ylabel('y')
-    plt.title('Unit cell, $v_1$ = (%d, %d), $v_2$ = (%d, %d)' % (v1[0], v1[1], v2[0], v2[1]))
+    ax.imshow(np.abs(cell), origin='lower', extent=[x[0] - 0.5, x[-1] + 0.5, y[0] - 0.5, y[-1] + 0.5])
+    ax.plot([0, v1[0]], [0, v1[1]], 'r', label="$v_1$")
+    ax.plot([0, v2[0]], [0, v2[1]], 'g', label="$v_2$")
+    ax.plot([v2[0], v2[0] + v1[0]], [v2[1], v2[1] + v1[1]], 'r')
+    ax.plot([v1[0], v2[0] + v1[0]], [v1[1], v2[1] + v1[1]], 'g')
+    ax.legend()
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
 
     return fig
 
 
 # determine parameters of SIM patterns
-def get_reciprocal_vects(vec_a, vec_b, mode='frequency'):
+def get_reciprocal_vects(vec_a, vec_b, mode: str = 'frequency'):
     """
     Compute the reciprocal vectors for (real-space) lattice vectors vec_a and vec_b.
     exp[ i 2*pi*ai * bj] = 1
@@ -561,7 +570,7 @@ def get_reciprocal_vects(vec_a, vec_b, mode='frequency'):
 
     :param list[int] or np.array vec_a:
     :param list[int] or np.array vec_b:
-    :param str mode: 'frequency' or 'angular-frequency'
+    :param mode: 'frequency' or 'angular-frequency'
 
     :return np.array reciprocal_vect1:
     :return np.array reciprocal_vect2:
@@ -574,17 +583,17 @@ def get_reciprocal_vects(vec_a, vec_b, mode='frequency'):
 
     # best to check this directly, as sometimes due to numerical issues np.linalg.inv() will not throw error
     if np.cross(vec_a_temp[:, 0], vec_b_temp[:, 0]) == 0:
-        raise ValueError('vec_a_temp and vec_b_temp are linearly dependent,'
-                        ' so their reciprocal vectors could not be computed.')
+        raise ValueError("vec_a_temp and vec_b_temp are linearly dependent, "
+                         "so their reciprocal vectors could not be computed.")
 
-    A_mat = np.concatenate([vec_a_temp.transpose(), vec_b_temp.transpose()], 0)
+    a_mat = np.concatenate([vec_a_temp.transpose(), vec_b_temp.transpose()], 0)
     try:
-        inv_a = np.linalg.inv(A_mat)
+        inv_a = np.linalg.inv(a_mat)
         reciprocal_vect1 = inv_a[:, 0][:, None]
         reciprocal_vect2 = inv_a[:, 1][:, None]
     except np.linalg.LinAlgError:
-        raise ValueError('vec_a_temp and vec_b_temp are linearly dependent,'
-                        ' so their reciprocal vectors could not be computed.')
+        raise ValueError("vec_a_temp and vec_b_temp are linearly dependent, "
+                         "so their reciprocal vectors could not be computed.")
 
     if mode == 'angular-frequency':
         reciprocal_vect1 = reciprocal_vect1 * (2 * np.pi)
@@ -605,8 +614,6 @@ def get_sim_angle(vec_a, vec_b):
 
     :return angle: angle in radians
     """
-    # uvec_perp_a = np.array([vec_a[1], -vec_a[0]]) / np.sqrt(vec_a[0] ** 2 + vec_a[1] ** 2)
-    # angle = np.angle(uvec_perp_a[0] + 1j * uvec_perp_a[1])
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
     angle = np.angle(recp_vb[0, 0] + 1j * recp_vb[1, 0])
 
@@ -624,9 +631,8 @@ def get_sim_period(vec_a, vec_b):
     :param list[int] or np.array vec_a: [vx, vy]
     :param list[int] or np.array vec_b: [vx, vy]
 
-    :return float period:
+    :return period:
     """
-    # vec perpendicular to vec_a is [vec_a[1], -vec_a[0]]
     uvec_perp_a = np.array([vec_a[1], -vec_a[0]]) / np.sqrt(vec_a[0]**2 + vec_a[1]**2)
 
     # get period
@@ -642,8 +648,7 @@ def get_sim_frqs(vec_a, vec_b):
     :param list[int] or np.array vec_a: [vx, vy]
     :param list[int] or np.array vec_b: [vx, vy]
 
-    :return float fx:
-    :return float fy:
+    :return fx, fy:
     """
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
     fx = recp_vb[0, 0]
@@ -652,7 +657,7 @@ def get_sim_frqs(vec_a, vec_b):
     return fx, fy
 
 
-def get_sim_phase(vec_a, vec_b, nphases, phase_index, pattern_size, origin='fft'):
+def get_sim_phase(vec_a, vec_b, nphases: int, phase_index: int, pattern_size: list[int], origin: str = 'fft'):
     """
     Get phase of dominant frequency component in the SIM pattern.
 
@@ -660,10 +665,10 @@ def get_sim_phase(vec_a, vec_b, nphases, phase_index, pattern_size, origin='fft'
 
     :param list[int] or np.array vec_a:
     :param list[int] or np.array vec_b:
-    :param int nphases: number of equal phase shifts for SIM pattern
-    :param int phase_index: 0, ..., nphases-1
-    :param list[int] pattern_size: [nx, ny]
-    :param str origin: origin to use for computing the phase. If 'fft', will assume the coordinates are the same
+    :param nphases: number of equal phase shifts for SIM pattern
+    :param phase_index: 0, ..., nphases-1
+    :param pattern_size: [nx, ny]
+    :param origin: origin to use for computing the phase. If 'fft', will assume the coordinates are the same
     as used in an FFT (i.e. before performing an ifftshift, with the 0 near the center). If 'corner', will
     suppose the origin is at pattern[0, 0].
 
@@ -739,8 +744,9 @@ def get_lattice_dft(unit_cell, x, y, vec_a, vec_b):
     return ldft, f1, f2, fvecs
 
 
-def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, na, nb,
-                                  nphases=3, phase_index=0, origin='fft', dmd_size=None):
+def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, na: int, nb: int,
+                                  nphases: int = 3, phase_index: int = 0,
+                                  origin: str = 'fft', dmd_size=None):
     """
     Get fourier component at f = n * recp_vec_a + m * recp_vec_b.
 
@@ -751,12 +757,12 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, na, nb,
     :param list[int] or np.array y: y-coordinates of unit cell
     :param list[int] or np.array vec_a:
     :param list[int] or np.array vec_b:
-    :param int na: integer multiples of recp_vec_a
-    :param int nb: integer multiples of recp_vec_b
-    :param int nphases: only relevant for calculating phase
-    :param int phase_index: only relevant for calculating phase
-    :param list[int] or np.array origin: "corner" or "fft". Specifies where the origin of the
-    :param list[int] dmd_size: [nx, ny], only required if origin is "fft"
+    :param na: integer multiples of recp_vec_a
+    :param nb: integer multiples of recp_vec_b
+    :param nphases: only relevant for calculating phase
+    :param phase_index: only relevant for calculating phase
+    :param origin: "corner" or "fft". Specifies where the origin of the
+    :param dmd_size: [nx, ny], only required if origin is "fft"
 
     :return complex fcomponent: fourier component of pattern at frq_vector
     :return np.array frq_vector: recp_vec_a * n + recp_vec_b * m
@@ -789,14 +795,15 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, na, nb,
         phase = phase + 2 * np.pi * center_coord.dot(frq_vector)
 
     else:
-        raise ValueError("origin must be 'corner' or 'fft', but was '%s'" % origin)
+        raise ValueError(f"origin must be 'corner' or 'fft', but was '{origin:s}'")
 
     fcomponent = np.abs(fcomponent) * np.exp(1j * phase)
 
     return fcomponent, frq_vector
 
-def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_index, dmd_size,
-                                  nmax=20, origin="fft", otf=None):
+
+def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases: int, phase_index: int, dmd_size: list[int],
+                                  nmax: int = 20, origin: str = "fft", otf=None):
     """
     Generate many Fourier components of pattern
 
@@ -828,7 +835,7 @@ def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_
     ms = np.arange(-nmax, nmax + 1)
     ninds = 2 * nmax + 1
     vecs = np.zeros((ninds, ninds, 2))
-    efield_fc = np.zeros((ninds, ninds), dtype=np.complex)
+    efield_fc = np.zeros((ninds, ninds), dtype=complex)
 
     # calculate half of values, as can get other half with E(-f) = E^*(f)
     for ii in range(nmax, len(ns)):
@@ -843,7 +850,8 @@ def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_
                 vecs[ii, jj] = v[:, 0]
             else:
                 efield_fc[ii, jj], v = get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, ns[ii], ms[jj],
-                                                                     nphases, phase_index, origin=origin, dmd_size=dmd_size)
+                                                                     nphases, phase_index, origin=origin,
+                                                                     dmd_size=dmd_size)
                 vecs[ii, jj] = v[:, 0]
 
     # E(-f) = E^*(f)
@@ -859,6 +867,7 @@ def get_efield_fourier_components(unit_cell, x, y, vec_a, vec_b, nphases, phase_
 
     return efield_fc, ns, ms, vecs
 
+
 def get_int_fc(efield_fc):
     """
     Generate intensity fourier components from efield fourier components
@@ -870,16 +879,20 @@ def get_int_fc(efield_fc):
     """
     ny, nx = efield_fc.shape
     if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
+        # TODO: the flip operation only works for taking f-> -f only works assuming that array size is odd, with f=0 at the center
         raise ValueError("not implemented for even sized arrays")
 
+    # I(f) = autocorrelation[E(f)] = convolution[E(f), E^*(-f)]
     intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
 
     return intensity_fc
 
+
 # other fourier component function
-def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
-                                     nphases, phase_index, dmd_size, nmax=20, origin="fft",
-                                     include_blaze_correction=True, dmd_params=None):
+def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax: float,
+                                     nphases: int, phase_index: int, dmd_size: list[int], nmax: int = 20,
+                                     origin: str = "fft", include_blaze_correction: bool = True,
+                                     dmd_params: dict = None):
     """
     Utility function for computing many electric field and intensity components of the Fourier pattern, including the
     effect of the Blaze angle and system numerical aperture
@@ -899,15 +912,15 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     :param list[int] or np.array y: y-coordinates of unit cell
     :param list[int] or np.array vec_a:
     :param list[int] or np.array vec_b:
-    :param float fmax: maximum pass frequency for electric field in 1/mirrors. i.e. fmax = NA/lambda without the factor
+    :param fmax: maximum pass frequency for electric field in 1/mirrors. i.e. fmax = NA/lambda without the factor
     of 2 that appears for the intensity. Note that fmax <= 1, which is the maximum frequency supported by the DMD.
-    :param int nphases:
-    :param int phase_index:
-    :param list[int] dmd_size: [nx, ny]
-    :param int nmax:
-    :param str origin: origin used to compute pattern phases "fft" or ""
-    :param bool include_blaze_correction: if True, include blaze corrections
-    :param dict dmd_params: dictionary {'wavelength', 'dx', 'dy', 'wx', 'wy', 'theta_ins': [tx_in, ty_in],
+    :param nphases:
+    :param phase_index:
+    :param dmd_size: [nx, ny]
+    :param nmax:
+    :param origin: origin used to compute pattern phases "fft" or ""
+    :param include_blaze_correction: if True, include blaze corrections
+    :param dmd_params: dictionary {'wavelength', 'dx', 'dy', 'wx', 'wy', 'theta_ins': [tx_in, ty_in],
      'theta_outs': [tx_out, ty_out]}
 
     :return np.array intensity_fc: fourier components of intensity (band limited)
@@ -941,7 +954,7 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     ns = np.arange(-nmax, nmax + 1)
     ms = np.arange(-nmax, nmax + 1)
     vecs = np.zeros((len(ns), len(ms), 2))
-    efield_fc = np.zeros((len(ns), len(ms)), dtype=np.complex)
+    efield_fc = np.zeros((len(ns), len(ms)), dtype=complex)
     blaze_envelope = np.zeros(efield_fc.shape)
 
     # todo: calculating at f and -f is redundant
@@ -961,31 +974,6 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
                 blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, bma)
 
                 efield_fc[ii, jj] = efield_fc[ii, jj] * blaze_envelope[ii, jj]
-    # for ii, n in enumerate(ns):
-    #     for m in range(nmax + 1):
-    #         jj = nmax + m
-    #
-    #         efield_fc[ii, jj], v = get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, n, m,
-    #                                                              nphases, phase_index, origin=origin, dmd_size=dmd_size)
-    #         vecs[ii, jj] = v[:, 0]
-    #
-    #         # also negative of this frequency
-    #         iin = np.abs(nmax - n)
-    #         jjn = nmax - m
-    #         efield_fc[iin, jjn] = np.conj(efield_fc[ii, jj])
-    #         vecs[iin, jjn] = -vecs[ii, jj]
-    #
-    #         if include_blaze_correction:
-    #             # wavelength * frq = theta in Fraunhofer approximation
-    #             blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, tin_x, tin_y,
-    #                                                                  tout_x + wavelength * vecs[ii, jj][0] / dx,
-    #                                                                  tout_y + wavelength * vecs[ii, jj][1] / dy)
-    #             efield_fc[ii, jj] = efield_fc[ii, jj] * blaze_envelope[ii, jj]
-    #
-    #             blaze_envelope[iin, jjn] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, tin_x, tin_y,
-    #                                                                    tout_x + wavelength * vecs[iin, jjn][0] / dx,
-    #                                                                    tout_y + wavelength * vecs[iin, jjn][1] / dy)
-    #             efield_fc[iin, jjn] = efield_fc[iin, jjn] * blaze_envelope[iin, jjn]
 
 
     # divide by volume of unit cell (i.e. maximum possible Fourier component)
@@ -999,9 +987,7 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     # enforce maximum allowable frequency from imaging system
     efield_fc = efield_fc * (frqs <= fmax)
 
-    # intensity fourier components from autocorrelation
-    # intensity_fc = scipy.signal.fftconvolve(efield_fc, efield_fc, mode='same')
-    # I(f) = convolution(E(f), E^*(-f))
+    # I(f) = autocorrelation[E(f)] = convolution[E(f), E^*(-f)]
     # note: the flip operation only for taking f-> -f only works assuming that array size is odd, with f=0 at the center
     intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
     # enforce maximum allowable frequency (should only be machine precision errors)
@@ -1011,9 +997,10 @@ def get_intensity_fourier_components(unit_cell, x, y, vec_a, vec_b, fmax,
     return intensity_fc, efield_fc, ns, ms, vecs
 
 
-def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, vec_b, fmax, nmax=20,
+def get_intensity_fourier_components_xform(pattern, affine_xform, roi: list[int], vec_a, vec_b,
+                                           fmax: float, nmax: int = 20,
                                            cam_size=(2048, 2048),
-                                           include_blaze_correction=True, dmd_params=None):
+                                           include_blaze_correction: bool = True, dmd_params: dict = None):
     """
     Utility function for computing many electric field and intensity components of the Fourier pattern, including the
     effect of the Blaze angle and system numerical aperture. To correct for ROI effects, extract from affine transformed
@@ -1078,7 +1065,7 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
     vecs = np.zeros((len(ns), len(ms), 2))
     vecs_xformed = np.zeros(vecs.shape)
 
-    efield_fc_xformed = np.zeros((len(ns), len(ms)), dtype=np.complex)
+    efield_fc_xformed = np.zeros((len(ns), len(ms)), dtype=complex)
     blaze_envelope = np.zeros(efield_fc_xformed.shape)
 
     # todo: calculating @ freq and -freq is redundant
@@ -1089,8 +1076,9 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
                 affine.xform_sinusoid_params(vecs[ii, jj, 0], vecs[ii, jj, 1], 0, affine_xform)
 
             try:
-                efield_fc_xformed[ii, jj] = tools.get_peak_value(pattern_xformed_ft, fxs, fys, vecs_xformed[ii, jj], peak_pixel_size=2)
-            except:
+                efield_fc_xformed[ii, jj] = tools.get_peak_value(pattern_xformed_ft, fxs, fys,
+                                                                 vecs_xformed[ii, jj], peak_pixel_size=2)
+            except:  # todo: what exception is this supposed to catch?
                 efield_fc_xformed[ii, jj] = 0
 
             if include_blaze_correction:
@@ -1117,178 +1105,180 @@ def get_intensity_fourier_components_xform(pattern, affine_xform, roi, vec_a, ve
 
     # intensity fourier components from autocorrelation
     # intensity_fc_xformed = scipy.signal.fftconvolve(efield_fc_xformed, efield_fc_xformed, mode='same')
-    intensity_fc_xformed = scipy.signal.fftconvolve(efield_fc_xformed, np.flip(efield_fc_xformed, axis=(0, 1)).conj(), mode='same')
+    intensity_fc_xformed = scipy.signal.fftconvolve(efield_fc_xformed,
+                                                    np.flip(efield_fc_xformed, axis=(0, 1)).conj(),
+                                                    mode='same')
     intensity_fc_xformed = intensity_fc_xformed * (frqs <= 1)
     intensity_fc_xformed = intensity_fc_xformed * (frqs <= 2*fmax)
 
     return intensity_fc_xformed, efield_fc_xformed, ns, ms, vecs, vecs_xformed
 
 
-def show_fourier_components(vec_a, vec_b, fmax, int_fc, efield_fc, ns, ms, vecs, plot_log=True, figsize=(20, 10)):
+def show_fourier_components(vec_a, vec_b, fmax: float, int_fc, efield_fc, ns, ms, vecs,
+                            plot_lims: tuple[float] = (1e-4, 1), gamma: float = 0.1,
+                            figsize=(20, 10), **kwargs):
     """
     Display strength of fourier components for a given pattern. Display function for data generated with
     ``get_bandlimited_fourier_components()''. See that function for more information about parameters
 
     :param list[int] or np.array vec_a:
     :param list[int] or np.array vec_b:
-    :param float fmax: maximum frequency for electric field
+    :param fmax: maximum frequency for electric field
     :param np.array int_fc:
     :param np.array efield_fc:
     :param np.array ns:
     :param np.array ms:
     :param np.array vecs:
-    :param bool plot_log:
+    :param plot_lims: limits in plots
+    :param gamma: gamma to use in power law normalization of plots
+    :param figsize:
+    :param kwargs: passed through to figure
 
     :return figh: handle to figure
     """
-    if plot_log:
-        plot_scale = lambda f: np.log10(f)
-    else:
-        plot_scale = lambda f: f
 
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
     recp_va_reduced, recp_vb_reduced = reduce_recp_basis(vec_a, vec_b)
 
-    figh = plt.figure(figsize=figsize)
-    grid = plt.GridSpec(2, 6, wspace=0.4)
-    plt.suptitle('Pattern fourier weights versus position and reciprocal lattice vector\n va=(%d, %d); vb=(%d, %d),'
-                 ' max efield frq=1/%0.2f 1/mirrors' %
-                 (vec_a[0], vec_a[1], vec_b[0], vec_b[1], 1/fmax))
+    # norm to use when plotting
+    ft_norm = PowerNorm(vmin=plot_lims[0], vmax=plot_lims[1], gamma=gamma)
 
-    lims = [1e-4, 1]
-    msize = 2
+    # ################################
+    # plot results
+    # ################################
 
-    # fourier components fo electric field
-    ax = plt.subplot(grid[0, :2])
+    figh = plt.figure(figsize=figsize, **kwargs)
+    grid = figh.add_gridspec(2, 6, wspace=0.4)
+    figh.suptitle(f"Pattern fourier weights versus position and reciprocal lattice vector\n"
+                  f" va=({vec_a[0]:d}, {vec_a[1]:d});"
+                  f" vb=({vec_b[0]:d}, {vec_b[1]}),"
+                  f" max efield frq=1/{1/fmax:.2f} 1/mirrors")
+
+    marker_size = 2
+
+    # ################################
+    # electric fields
+    # ################################
+    # fourier components scatter plot
+    ax = figh.add_subplot(grid[0, :2])
     ax.set_facecolor((0., 0., 0.))
     ax.axis('equal')
 
-    plt.scatter(vecs[:, :, 0].ravel(), vecs[:, :, 1].ravel(),
-                s=msize, c=plot_scale(np.abs(efield_fc)).ravel(),
-                norm=matplotlib.colors.Normalize(vmin=plot_scale(lims[0])), vmax=plot_scale(lims[1]))
+    im = ax.scatter(vecs[:, :, 0].ravel(), vecs[:, :, 1].ravel(),
+                    s=marker_size,
+                    c=np.abs(efield_fc).ravel(), norm=ft_norm)
 
-    plt.scatter([recp_va[0], recp_vb[0]], [recp_va[1], recp_vb[1]], edgecolor='r', facecolor='none')
-    plt.scatter([recp_va_reduced[0], recp_vb_reduced[0]], [recp_va_reduced[1], recp_vb_reduced[1]], edgecolor="m", facecolor="none")
+    ax.scatter([recp_va[0], recp_vb[0]], [recp_va[1], recp_vb[1]], edgecolor='r', facecolor='none')
+    ax.scatter([recp_va_reduced[0], recp_vb_reduced[0]], [recp_va_reduced[1], recp_vb_reduced[1]],
+               edgecolor="m", facecolor="none")
+    ax.add_artist(Circle((0, 0), radius=fmax, color='r', fill=0, ls='-'))
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax, color='r', fill=0, ls='-')
-    ax.add_artist(circ)
+    ax.set_xlim([-fmax, fmax])
+    ax.set_ylim([-fmax, fmax])
+    cb = plt.colorbar(im)
 
-    plt.xlim([-fmax, fmax])
-    plt.ylim([-fmax, fmax])
-    cb = plt.colorbar()
-    plt.clim(plot_scale(lims))
+    ax.set_xlabel('$f_x$ (1/mirror)')
+    ax.set_ylabel('$f_y$ (1/mirror)')
+    cb.set_label('|FT(f)|')
+    ax.set_title('efield versus freq')
 
-    plt.xlabel('x-frequency (1/mirror)')
-    plt.ylabel('y-frequency (1/mirror)')
-    if plot_log:
-        cb.set_label('log10(fourier weight)')
-    else:
-        cb.set_label('fourier weight')
-    plt.title('efield fourier weights')
+    # fourier components image
+    ax = figh.add_subplot(grid[0, 2:4])
+    im = ax.imshow(np.abs(efield_fc), extent=[ns[0] - 0.5, ns[-1] + 0.5, ms[-1] + 0.5, ms[0] - 0.5],
+                   norm=ft_norm)
+    ax.set_xlabel("$n_1 v_1$ ($n_1$)")
+    ax.set_ylabel("$n_2 v_2$ ($n_2$)")
+    cb = plt.colorbar(im)
+    cb.set_label('|FT(f)|')
+    ax.set_title('efield versus recp vect')
 
-    extent = [ns[0] - 0.5, ns[-1] + 0.5, ms[-1] + 0.5, ms[0] - 0.5]
-
-    plt.subplot(grid[0, 2:4])
-    plt.imshow(plot_scale(np.abs(efield_fc)), extent=extent)
-    plt.xlabel('recp vec as')
-    plt.ylabel('recp vec bs')
-    cb = plt.colorbar()
-    if plot_log:
-        cb.set_label('log10(fourier weight)')
-    else:
-        cb.set_label('fourier weight')
-    plt.clim(plot_scale(lims))
-
-    # intensity, real space
-    ax = plt.subplot(grid[1, :2])
+    # ################################
+    # intensity
+    # ################################
+    ax = figh.add_subplot(grid[1, :2])
     ax.set_facecolor((0., 0., 0.))
     ax.axis('equal')
 
-    plt.scatter(vecs[:, :, 0].ravel(), vecs[:, :, 1].ravel(),
-                s=msize, c=plot_scale(np.abs(int_fc).ravel()),
-                norm=matplotlib.colors.Normalize(vmin=plot_scale(lims[0])), vmax=plot_scale(lims[1]))
-    plt.scatter([recp_va[0], recp_vb[0]], [recp_va[1], recp_vb[1]], edgecolor='r', facecolor='none')
-    plt.scatter([recp_va_reduced[0], recp_vb_reduced[0]], [recp_va_reduced[1], recp_vb_reduced[1]], edgecolor="m", facecolor="none")
+    im = ax.scatter(vecs[:, :, 0].ravel(), vecs[:, :, 1].ravel(), s=marker_size,
+                    c=np.abs(int_fc).ravel(), norm=ft_norm)
+    ax.scatter([recp_va[0], recp_vb[0]], [recp_va[1], recp_vb[1]], edgecolor='r', facecolor='none')
+    ax.scatter([recp_va_reduced[0], recp_vb_reduced[0]], [recp_va_reduced[1], recp_vb_reduced[1]],
+               edgecolor="m", facecolor="none")
 
-    circ = matplotlib.patches.Circle((0, 0), radius=(2*fmax), color='r', fill=0, ls='-')
-    ax.add_artist(circ)
+    ax.add_artist(Circle((0, 0), radius=(2*fmax), color='r', fill=0, ls='-'))
+    ax.add_artist(Circle((0, 0), radius=fmax, color='r', fill=0, ls='-'))
 
-    circ2 = matplotlib.patches.Circle((0, 0), radius=fmax, color='r', fill=0, ls='-')
-    ax.add_artist(circ2)
+    cb = plt.colorbar(im)
+    ax.set_xlim([-2*fmax, 2*fmax])
+    ax.set_ylim([-2*fmax, 2*fmax])
 
-    cb = plt.colorbar()
-    plt.clim(plot_scale(lims))
-    plt.xlim([-2*fmax, 2*fmax])
-    plt.ylim([-2*fmax, 2*fmax])
+    ax.set_xlabel('$f_x$ (1/mirror)')
+    ax.set_ylabel('$f_y$ (1/mirror)')
+    cb.set_label('|FT(f)|')
+    ax.set_title('intensity versus freq')
 
-    plt.xlabel('x-frequency (1/mirror)')
-    plt.ylabel('y-frequency (1/mirror)')
-    if plot_log:
-        cb.set_label('log10(fourier weight)')
-    else:
-        cb.set_label('fourier weight')
-    plt.title('intensity fourier weights')
+    # intensity image
+    ax = figh.add_subplot(grid[1, 2:4])
+    im = ax.imshow(np.abs(int_fc), extent=[ns[0] - 0.5, ns[-1] + 0.5, ms[-1] + 0.5, ms[0] - 0.5],
+                   norm=ft_norm)
+    cb = plt.colorbar(im)
+    ax.set_xlabel('recp vec as')
+    ax.set_ylabel('recp vec bs')
+    cb.set_label('|FT(f)|')
+    ax.set_title('intensity versus recp vect')
 
-    plt.subplot(grid[1, 2:4])
-    plt.imshow(plot_scale(np.abs(int_fc)), extent=extent)
-    cb = plt.colorbar()
-    plt.clim(plot_scale(lims))
-
-    plt.xlabel('recp vec as')
-    plt.ylabel('recp vec bs')
-    if plot_log:
-        cb.set_label('log10(fourier weight)')
-    else:
-        cb.set_label('fourier weight')
-
+    # ################################
+    # 1D plots
+    # ################################
     # efield and intensity 1D
-    ax = plt.subplot(grid[0, 4:])
-    plt.title("Fourier component amp vs frq")
-    plt.xlabel("Frequency (1/mirrors)")
+    ax = figh.add_subplot(grid[0, 4:])
+    ax.set_title("|FT| vs frq")
+    ax.set_xlabel("$f$ (1/mirrors)")
 
     # only plot one of +/- f, and only plot if above certain threshold
     vec_mag = np.linalg.norm(vecs, axis=-1)
     nmax1 = int(np.round(0.5 * (int_fc.shape[0] - 1)))
     nmax2 = int(np.round(0.5 * (int_fc.shape[1] - 1)))
-    to_use = np.ones(int_fc.shape, dtype=np.int)
+    to_use = np.ones(int_fc.shape, dtype=int)
     xx, yy = np.meshgrid(range(-nmax2, nmax2 + 1), range(-nmax1, nmax1 + 1))
     to_use[xx > yy] = 0
     to_use[np.logical_and(xx == yy, yy < 0)] = 0
 
-    to_plot_int = np.logical_and(to_use, np.abs(int_fc) >= lims[0])
+    to_plot_int = np.logical_and(to_use, np.abs(int_fc) >= plot_lims[0])
     to_plot_e = np.logical_and(to_plot_int, vec_mag <= fmax)
 
-    ylim = [1e-4, 1.2]
-    plt.plot([fmax, fmax], ylim, 'k')
-    plt.plot([2*fmax, 2*fmax], ylim, 'k')
+    ylim = [plot_lims[0], plot_lims[1] * 1.2]
+    ax.plot([fmax, fmax], ylim, 'k')
+    ax.plot([2*fmax, 2*fmax], ylim, 'k')
 
-    ph1, = plt.plot(vec_mag[to_plot_int], np.abs(int_fc[to_plot_int]), '.')
-    ph2, = plt.plot(vec_mag[to_plot_e], np.abs(efield_fc[to_plot_e]), 'x')
-    plt.yscale("log")
+    ax.plot(vec_mag[to_plot_int], np.abs(int_fc[to_plot_int]), '.', label="I")
+    ax.plot(vec_mag[to_plot_e], np.abs(efield_fc[to_plot_e]), 'x', label="E")
+    ax.set_yscale("log")
 
-    plt.ylim(ylim)
-    plt.xlim([-0.1 * 2 * fmax, 2.2 * fmax])
+    ax.set_ylim(ylim)
+    ax.set_xlim([-0.1 * 2 * fmax, 2.2 * fmax])
 
-    plt.legend([ph1, ph2], ["I", "E"])
+    ax.legend()
 
     # E/I phases 1D
-    ax = plt.subplot(grid[1, 4:])
-    plt.title("Fourier component phase vs frq")
-    plt.xlabel("Frequency (1/mirrors)")
+    ax = figh.add_subplot(grid[1, 4:])
+    ax.set_title("Fourier component phase vs frq")
+    ax.set_xlabel("Frequency (1/mirrors)")
 
     ylim = [-np.pi - 0.2, np.pi + 0.2]
-    plt.plot([fmax, fmax], ylim, 'k')
-    plt.plot([2 * fmax, 2 * fmax], ylim, 'k')
+    ax.plot([fmax, fmax], ylim, 'k')
+    ax.plot([2 * fmax, 2 * fmax], ylim, 'k')
 
-    ph1, = plt.plot(vec_mag[to_plot_int], np.angle(int_fc[to_plot_int]), '.')
-    ph2, = plt.plot(vec_mag[to_plot_e], np.angle(efield_fc[to_plot_e]), 'x')
+    ax.plot(vec_mag[to_plot_int], np.angle(int_fc[to_plot_int]), '.', label="I")
+    ax.plot(vec_mag[to_plot_e], np.angle(efield_fc[to_plot_e]), 'x', label="E")
 
-    plt.ylim(ylim)
-    plt.xlim([-0.1 * 2 * fmax, 2.2 * fmax])
+    ax.set_ylim(ylim)
+    ax.set_xlim([-0.1 * 2 * fmax, 2.2 * fmax])
 
-    plt.legend([ph1, ph2], ["I", "E"])
+    ax.legend()
 
     return figh
+
 
 # Lagrange-Gauss basis reduction
 def reduce_basis(va, vb):
@@ -1311,7 +1301,7 @@ def reduce_basis(va, vb):
     Bb = np.linalg.norm(vb)**2
 
     swapped = -1
-    while (Bb < Ba):
+    while Bb < Ba:
         va, vb = vb, va
         swapped *= -1
 
@@ -1357,7 +1347,7 @@ def get_closest_lattice_vec(point, va, vb):
     :return float diff:
     """
     point = np.array(point, copy=True)
-    point = point.reshape([2,])
+    point = point.reshape([2, ])
 
     # get reduced lattice basis vectors
     var, vbr = reduce_basis(va, vb)
@@ -1414,10 +1404,10 @@ def get_closest_recip_vec(recp_point, va, vb):
     recp_point = recp_point.reshape([2, ])
 
     va = np.array(va, copy=True)
-    va = va.reshape([2,])
+    va = va.reshape([2, ])
 
     vb = np.array(vb, copy=True)
-    vb = vb.reshape([2,])
+    vb = vb.reshape([2, ])
 
     det = va[0] * vb[1] - va[1] * vb[0]
 
@@ -1431,14 +1421,14 @@ def get_closest_recip_vec(recp_point, va, vb):
 
 
 # working with grayscale patterns
-def binarize(pattern_gray, mode="floyd-steinberg"):
+def binarize(pattern_gray, mode: str = "floyd-steinberg"):
     """
     Binarize a gray scale pattern
 
     :param np.array pattern_gray: gray scale pattern, with values in the range [0, 1]
     :param str mode: "floyd-steinberg" to specify the Floyd-Steinberg error diffusion algorithm, "jjn" to use
-    the error diffusion algorithm of Jarvis, Judis, and Ninke https:doi.org/10.1016/S0146-664X(76)80003-2, "random" to use
-    a random dither, or "round" to round to the nearest value
+    the error diffusion algorithm of Jarvis, Judis, and Ninke https:doi.org/10.1016/S0146-664X(76)80003-2,
+     "random" to use a random dither, or "round" to round to the nearest value
 
     :return np.array pattern_binary: binary approximation of pattern_gray
     """
@@ -1453,7 +1443,7 @@ def binarize(pattern_gray, mode="floyd-steinberg"):
     if mode == "floyd-steinberg":
         # error diffusion Kernel =
         # 1/16 * [[_ # 7], [3, 5, 1]]
-        pattern_bin = np.zeros(pattern_gray.shape, dtype=np.bool)
+        pattern_bin = np.zeros(pattern_gray.shape, dtype=bool)
 
         for ii in range(ny):
             for jj in range(nx):
@@ -1472,7 +1462,7 @@ def binarize(pattern_gray, mode="floyd-steinberg"):
     elif mode == "jjn":
         # error diffusion Kernel =
         # 1/48 * [[_, _, #, 7, 5], [3, 5, 7, 5, 3], [1, 3, 5, 3, 1]]
-        pattern_bin = np.zeros(pattern_gray.shape, dtype=np.bool)
+        pattern_bin = np.zeros(pattern_gray.shape, dtype=bool)
 
         for ii in range(ny):
             for jj in range(nx):
@@ -1515,9 +1505,9 @@ def binarize(pattern_gray, mode="floyd-steinberg"):
                     pattern_gray[ii + 2, jj + 2] += err * 1/48
 
     elif mode == "random":
-        pattern_bin = np.asarray(np.random.binomial(1, pattern_gray), dtype=np.bool)
+        pattern_bin = np.asarray(np.random.binomial(1, pattern_gray), dtype=bool)
     elif mode == "round":
-        pattern_bin = np.asarray(np.round(pattern_gray), dtype=np.bool)
+        pattern_bin = np.asarray(np.round(pattern_gray), dtype=bool)
     else:
         raise ValueError("mode must be 'floyd-steinberg', 'random', or 'round' but was '%s'" % mode)
 
@@ -1559,16 +1549,17 @@ def min_angle_diff(angle1, angle2, mode='normal'):
 
 
 # generate single pattern
-def find_closest_pattern(period, angle, nphases=1, avec_max_size=40, bvec_max_size=40):
+def find_closest_pattern(period: float, angle: float, nphases: int = 1,
+                         avec_max_size: int = 40, bvec_max_size: int = 40):
     """
     Find pattern vectors for pattern with an approximate period and angle that also satisfies the perfect phase
     shift condition
 
-    :param float period:
-    :param float angle:
-    :param int nphases:
-    :param int avec_max_size:
-    :param int bvec_max_size:
+    :param period:
+    :param angle:
+    :param nphases:
+    :param avec_max_size:
+    :param bvec_max_size:
 
     :return avec:
     :return bvec:
@@ -1576,7 +1567,8 @@ def find_closest_pattern(period, angle, nphases=1, avec_max_size=40, bvec_max_si
     :return angle_real:
     """
 
-    angles_proposed, bvecs_proposed = find_allowed_angles(period, nphases, bvec_max_size, restrict_to_coordinate_axes=False)
+    angles_proposed, bvecs_proposed = find_allowed_angles(period, nphases, bvec_max_size,
+                                                          restrict_to_coordinate_axes=False)
     ia = np.argmin(np.abs(angle - angles_proposed))
     a = angles_proposed[ia]
     bvec = bvecs_proposed[ia]
@@ -1592,10 +1584,11 @@ def find_closest_pattern(period, angle, nphases=1, avec_max_size=40, bvec_max_si
 
 
 # tools for finding nearest SIM pattern set
-def find_closest_multicolor_set(period, nangles, nphases, wavelengths=None,
-                                bvec_max_size=40, avec_max_size=40, atol=np.pi/180, ptol_relative=0.1,
-                                angle_sep_tol=5*np.pi/180, max_solutions_to_search=20,
-                                pitch=7560, minimize_leakage=True):
+def find_closest_multicolor_set(period: float, nangles: int, nphases: int, wavelengths: list[float] = None,
+                                bvec_max_size: int = 40, avec_max_size: int = 40,
+                                atol: float = np.pi/180, ptol_relative: float = 0.1,
+                                angle_sep_tol: float = 5*np.pi/180, max_solutions_to_search: int = 20,
+                                pitch: float = 7560., minimize_leakage: bool = True):
     """
     Generate set of SIM patterns for multiple colors with period close to specified value and maximizing distance
      between angles. The patterns are determined such that the diffracted orders will pass through the same positions
@@ -1774,7 +1767,7 @@ def find_closest_multicolor_set(period, nangles, nphases, wavelengths=None,
     return np.array(vec_as), np.array(vec_bs)
 
 
-def find_allowed_angles(period, nphases, nmax, restrict_to_coordinate_axes=False):
+def find_allowed_angles(period: float, nphases: int, nmax: int, restrict_to_coordinate_axes: bool = False):
     """
      Given a DMD pattern with fixed period of absolute value P, get allowed pattern angles in the range [0, pi] for
      which the pattern allows perfect phase shifting for nphases.
@@ -1784,10 +1777,10 @@ def find_allowed_angles(period, nphases, nmax, restrict_to_coordinate_axes=False
      For theta in [0, pi] we can take x=cos(theta), and sin(theta) = sqrt(1-x^2). We get a quadratic equation in x,
      x^2 * (dxb**2/dyb**2 + 1) - x * (2*P*dxb/dyb**2) + (P**2/dxb**2 - 1) = 0
 
-    :param float period:
-    :param int nphases:
-    :param int nmax:
-    :param bool restrict_to_coordinate_axes: deprecated...used to allow running old behavior when adding functionatlity
+    :param period:
+    :param nphases:
+    :param nmax:
+    :param restrict_to_coordinate_axes: deprecated...used to allow running old behavior when adding functionatlity
     :return:
     """
 
@@ -1798,10 +1791,10 @@ def find_allowed_angles(period, nphases, nmax, restrict_to_coordinate_axes=False
         dyb = np.concatenate((np.zeros(ns.shape), ns))
     else:
         # with two vector components, can no longer restrict all to be positive
-        dxs = np.arange(nphases, nmax, nphases, dtype=np.float)
+        dxs = np.arange(nphases, nmax, nphases, dtype=float)
         dxs = np.concatenate((np.flip(-dxs), np.array([0]), dxs), axis=0)
 
-        dys = np.arange(0, nmax, nphases, dtype=np.float)
+        dys = np.arange(0, nmax, nphases, dtype=float)
 
         dxb, dyb = np.meshgrid(dxs, dys)
     # exclude vb = [0, 0]
@@ -1833,7 +1826,8 @@ def find_allowed_angles(period, nphases, nmax, restrict_to_coordinate_axes=False
         x4[np.abs(dxb * x4 + dyb * np.sqrt(1 - x4 ** 2) + period) > 1e-7] = np.nan
 
         # get final angles and vectors
-        angles = np.concatenate((np.arccos(x1).ravel(), np.arccos(x2).ravel(), np.arccos(x3).ravel(), np.arccos(x4).ravel()))
+        angles = np.concatenate((np.arccos(x1).ravel(), np.arccos(x2).ravel(),
+                                 np.arccos(x3).ravel(), np.arccos(x4).ravel()))
 
     # exclude nans
     vbs = 4 * [[int(dx), int(dy)] for dx, dy in zip(dxb.ravel(), dyb.ravel())]
@@ -1851,12 +1845,12 @@ def find_allowed_angles(period, nphases, nmax, restrict_to_coordinate_axes=False
     return angles, vbs
 
 
-def find_rational_approx_angle(angle, nmax):
+def find_rational_approx_angle(angle: float, nmax: int):
     """
     Find closest allowed a-vector for a given angle and maximum number of mirrors
 
-    :param float angle: desired angle in radians
-    :param int nmax: maximum size of the x- and y-components of the a-vector, in mirrors.
+    :param angle: desired angle in radians
+    :param nmax: maximum size of the x- and y-components of the a-vector, in mirrors.
 
     :return xshift:
     :return yshift:
@@ -1950,7 +1944,7 @@ def find_rational_approx_angle(angle, nmax):
     return xshift, yshift, vecs
 
 
-def find_allowed_periods(angle, nphases, nmax):
+def find_allowed_periods(angle: float, nphases: int, nmax: int):
     """
     Given a DMD pattern with fixed angle, get allowed pattern periods which allow perfect phase shifting for nphases
 
@@ -1963,9 +1957,9 @@ def find_allowed_periods(angle, nphases, nmax):
     period = dyb * -dxa/|vec_a = dyb * sin(theta)
     P = np.sin(theta) * l*nphases
 
-    :param float angle:
-    :param int nphases:
-    :param int nmax:
+    :param angle:
+    :param nphases:
+    :param nmax:
 
     :return list[float] periods:
     :return list[int] ls:
@@ -1977,7 +1971,7 @@ def find_allowed_periods(angle, nphases, nmax):
     p2 = np.sin(angle) * ls * nphases
 
     # store data about angles
-    is_xlike = np.concatenate((np.ones((p1.size)), np.zeros((p2.size))), axis=0)
+    is_xlike = np.concatenate((np.ones(p1.size), np.zeros(p2.size)), axis=0)
     ls_all = np.concatenate((ls, ls), axis=0)
     periods = np.concatenate((p1, p2), axis=0)
 
@@ -1989,7 +1983,8 @@ def find_allowed_periods(angle, nphases, nmax):
     return np.asarray(periods), np.asarray(ls_all), np.asarray(is_xlike)
 
 
-def find_nearest_leakage_peaks(vec_as, vec_bs, nphases=3, minimum_relative_peak_size=1e-3, wavelength=1, pitch=7560):
+def find_nearest_leakage_peaks(vec_as, vec_bs, nphases: int = 3, minimum_relative_peak_size: float = 1e-3,
+                               wavelength: float = 1., pitch: float = 7560.):
     """
     Find minimum distance between main pattern frequency and leakage frequencies from other patterns in the set
 
@@ -2065,22 +2060,22 @@ def find_nearest_leakage_peaks(vec_as, vec_bs, nphases=3, minimum_relative_peak_
 
 
 # functions for obtaining and exporting results
-def vects2pattern_data(dmd_size, vec_as, vec_bs, nphases=3, wavelength=None, invert=False,
-                       pitch=7560, generate_patterns=True):
+def vects2pattern_data(dmd_size: list[int], vec_as, vec_bs, nphases: int = 3, wavelength: float = None,
+                       invert: bool = False, pitch: float = 7560, generate_patterns: bool = True):
     """
     Generate pattern and useful data (angles, phases, frequencies, reciprocal vectors, ...) from the lattice
     vectors for a given pattern set.
 
-    :param list[int] dmd_size: [nx, ny]
+    :param dmd_size: [nx, ny]
     :param np.array vec_as: NumPy array, size nangles x nphases x 2
     :param np.array vec_bs:
-    :param int nphases:
-    :param float wavelength: wavelength in nm
-    :param bool invert: whether or not pattern is "inverted", i.e. if the roll of "OFF" and "ON" should be flipped
-    :param float pitch:
-    :param bool generate_patterns:
+    :param nphases:
+    :param wavelength: wavelength in nm
+    :param invert: whether or not pattern is "inverted", i.e. if the roll of "OFF" and "ON" should be flipped
+    :param pitch: DMD micromirror pitch
+    :param generate_patterns:
 
-    :return:
+    :return patterns, vec_as, vec_bs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle:
     """
 
     vec_as = np.array(vec_as, copy=True)
@@ -2097,8 +2092,8 @@ def vects2pattern_data(dmd_size, vec_as, vec_bs, nphases=3, wavelength=None, inv
     patterns = np.zeros((nangles, nphases, ny, nx))
     phases = np.zeros((nangles, nphases))
 
-    angles = np.zeros((nangles))
-    periods = np.zeros((nangles))
+    angles = np.zeros(nangles)
+    periods = np.zeros(nangles)
     frqs = np.zeros((nangles, 2))
     recp_vects_a = np.zeros((nangles, 2))
     recp_vects_b = np.zeros((nangles, 2))
@@ -2129,15 +2124,19 @@ def vects2pattern_data(dmd_size, vec_as, vec_bs, nphases=3, wavelength=None, inv
 
     return patterns, vec_as, vec_bs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle
 
-def plot_sim_pattern_sets(patterns, vas, vbs, wavelength=None, pitch=7560):
+
+def plot_sim_pattern_sets(patterns, vas, vbs, wavelength: float = None, pitch: float = 7560.,
+                          figsize=(16, 12), **kwargs):
     """
-    Plot pattern set to inspect results
+    Plot all angles/phases in pattern set, as well as their Fourier transforms
 
     :param patterns:
     :param vas:
     :param vbs:
     :param wavelength:
-    :param float pitch:
+    :param pitch:
+    :param figsize:
+    :param kwargs: passed through to figure
 
     :return figh: handle to resulting figure
     """
@@ -2145,48 +2144,58 @@ def plot_sim_pattern_sets(patterns, vas, vbs, wavelength=None, pitch=7560):
     nangles, nphases, ny, nx = patterns.shape
 
     _, vas, vbs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle = \
-        vects2pattern_data([nx, ny], vas, vbs, nphases=nphases, wavelength=wavelength, generate_patterns=False, pitch=pitch)
+        vects2pattern_data([nx, ny], vas, vbs, nphases=nphases, wavelength=wavelength,
+                           generate_patterns=False, pitch=pitch)
 
     # display summary of patterns
-    nrows = nphases + 1
-    ncols = nangles
-    fig = plt.figure(figsize=(16, 12))
+    figh = plt.figure(figsize=figsize, **kwargs)
+    grid = figh.add_gridspec(nrows=nphases + 1, ncols=nangles)
 
+    if wavelength is not None:
+        figh.suptitle(f"sim pattern diagnostic, wavelength = {wavelength:.0f}nm,"
+                     f" min leakage angle={min_leakage_angle * 180/np.pi:.3f}deg")
+    else:
+        figh.suptitle(f"sim pattern diagnostic, min leakage angle = {min_leakage_angle:.3f}")
+
+    # ###############################
+    # real space patterns
+    # ###############################
     for ii in range(nangles):
         for jj in range(nphases):
-            ax = plt.subplot(nrows, ncols, ncols * jj + ii + 1)
+            ax = figh.add_subplot(grid[jj, ii])
             # cut_size = int(np.max(np.abs(vas)) * np.ceil(period / np.max(np.abs(vbs))))
             cut_size = int(np.max([np.max(np.abs(vas)), np.max(np.abs(vbs))]))
 
-            plt.imshow(patterns[ii, jj, :cut_size, :cut_size])
-            plt.ylabel('phase=%0.2fdeg' % (phases[ii, jj] * 180 / np.pi))
+            ax.imshow(patterns[ii, jj, :cut_size, :cut_size], cmap="bone")
+            ax.set_ylabel(f"phase={phases[ii, jj] * 180 / np.pi:.2f}deg")
             if jj == 0:
-                plt.title("angle=%0.2fdeg, p=%0.2f\na = [%d, %d], b=[%d, %d]" %
-                          (angles[ii] * 180 / np.pi, periods[ii], vas[ii, 0],
-                           vas[ii, 1], vbs[ii, 0], vbs[ii, 1]))
+                ax.set_title(f"angle={angles[ii] * 180 / np.pi:.2f}deg,"
+                             f" p={periods[ii]:.2f}\n"
+                             f"a = [{vas[ii, 0]:d}, {vas[ii, 1]:d}],"
+                             f" b=[{vbs[ii, 0]:d}, {vbs[ii, 1]:d}]")
             else:
-                plt.setp(ax.get_xticklabels(), visible=False)
-                plt.setp(ax.get_yticklabels(), visible=False)
+                ax.set_xticklabels([])
+                ax.set_yticklabels([])
 
-    # display FT
-    # get period info
+    # ###############################
+    # Fourier transforms
+    # ###############################
     fx = fft.fftshift(fft.fftfreq(nx, 1))
     dfx = fx[1] - fx[0]
     fy = fft.fftshift(fft.fftfreq(ny, 1))
     dfy = fy[1] - fy[0]
     df_min = np.min([fx[1] - fx[0], fy[1] - fy[0]])
-    extent = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx, fy[-1] + 0.5 * dfy, fy[0] - 0.5 * dfy]
+    extent = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx,
+              fy[-1] + 0.5 * dfy, fy[0] - 0.5 * dfy]
 
     for ii in range(nangles):
-        ax = plt.subplot(nrows, ncols, ncols * nphases + ii + 1)
-
-        window_x = scipy.signal.windows.hann(nx)[None, :]
-        window_y = scipy.signal.windows.hann(ny)[:, None]
+        ax = figh.add_subplot(grid[nphases, ii])
         # 2D window from broadcasting
-        window = window_x * window_y
+        apodization = np.expand_dims(scipy.signal.windows.hann(nx), axis=0) * \
+                 np.expand_dims(scipy.signal.windows.hann(ny), axis=1)
 
-        ft = fft.fftshift(fft.fft2(fft.ifftshift(window * patterns[ii, 0])))
-        plt.imshow(np.abs(ft) / np.abs(ft).max(), norm=PowerNorm(gamma=0.1), extent=extent)
+        ft = fft.fftshift(fft.fft2(fft.ifftshift(patterns[ii, 0] * apodization)))
+        ax.imshow(np.abs(ft) / np.abs(ft).max(), norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
 
         # dominant frequencies of underlying patterns
         for rr in range(nangles):
@@ -2194,88 +2203,79 @@ def plot_sim_pattern_sets(patterns, vas, vbs, wavelength=None, pitch=7560):
                 color = 'r'
             else:
                 color = 'm'
-            circ = matplotlib.patches.Circle((frqs[rr, 0], frqs[rr, 1]), radius=5 * df_min,
-                                             color=color, fill=0, ls='-')
-            ax.add_artist(circ)
+            ax.add_artist(Circle((frqs[rr, 0], frqs[rr, 1]), radius=5 * df_min, color=color, fill=0, ls='-'))
+            ax.add_artist(Circle((-frqs[rr, 0], -frqs[rr, 1]), radius=5 * df_min, color=color, fill=0, ls='-'))
 
-            circ2 = matplotlib.patches.Circle((-frqs[rr, 0], -frqs[rr, 1]), radius=5 * df_min,
-                                              color=color, fill=0, ls='-')
-            ax.add_artist(circ2)
+        ax.set_ylabel('ft')
 
-        plt.ylabel('ft')
-
-    if wavelength is not None:
-        plt.suptitle('sim pattern diagnostic, wavelength = %.0fnm, min leakage angle=%0.3fdeg'
-                     % (wavelength, min_leakage_angle * 180/np.pi))
-    else:
-        plt.suptitle('sim pattern diagnostic, min leakage angle = %0.3f' % min_leakage_angle)
-
-    return fig
+    return figh
 
 
-def export_pattern_set(dmd_size, vec_as, vec_bs, nphases=3, invert=False, pitch=7560, wavelength=1,
-                       save_dir='sim_patterns', plot_results=False):
+def export_pattern_set(dmd_size: list[int], vec_as, vec_bs, nphases: int = 3, invert: bool = False,
+                       pitch: float = 7560., wavelength: float = 1.,
+                       save_dir='sim_patterns', plot_results: bool = False):
     """
     Export a single set of SIM patterns, i.e. single wavelength, single period
 
-    :param list[int] dmd_size: [nx, ny]
+    :param dmd_size: [nx, ny]
     :param np.array vec_as: nangles x nphases x 2
     :param np.array vec_bs:
-    :param int nphases:
-    :param bool invert:
-    :param float pitch:
-    :param float wavelength:
-    :param str save_dir:
-    :param bool plot_results:
+    :param nphases:
+    :param invert:
+    :param pitch:
+    :param wavelength:
+    :param save_dir:
+    :param plot_results:
 
-    :return patterns:
-    :return data:
-    :return figh:
+    :return patterns, data, figh:
     """
-
-    if not os.path.exists(save_dir):
-        os.mkdir(save_dir)
+    save_dir = Path(save_dir)
+    save_dir.mkdir(exist_ok=True)
 
     patterns, vec_as, vec_bs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle = \
         vects2pattern_data(dmd_size, vec_as, vec_bs, nphases=nphases, wavelength=None, invert=invert, pitch=pitch)
 
-    nangles, _, _, _ = patterns.shape
+    nangles, _, ny, nx = patterns.shape
 
-    # save data in pickle format
-    fname = "sim_patterns_period=%.2f_nangles=%d.pkl" % (np.mean(periods), nangles)
-    fpath = os.path.join(save_dir, fname)
-    data = {'vec_as': vec_as, 'vec_bs': vec_bs, 'frqs': frqs, 'angles': angles,
-            'periods': periods, 'phases': phases, 'nx': dmd_size[0], 'ny': dmd_size[1],
-            'recp_vects_a': recp_vects_a, 'recp_vects_b': recp_vects_b,
-            'min_leakage_angle': min_leakage_angle, 'dmd_pitch': pitch, 'wavelength': wavelength}
+    # save data
+    data = {'vec_as': vec_as.tolist(),
+            'vec_bs': vec_bs.tolist(),
+            'frqs': frqs.tolist(),
+            'angles': angles.tolist(),
+            'periods': periods.tolist(),
+            'phases': phases.tolist(),
+            'nx': int(dmd_size[0]),
+            'ny': int(dmd_size[1]),
+            'recp_vects_a': recp_vects_a.tolist(),
+            'recp_vects_b': recp_vects_b.tolist(),
+            'min_leakage_angle': float(min_leakage_angle),
+            'dmd_pitch': float(pitch),
+            'wavelength': float(wavelength)}
 
-    with open(fpath, 'wb') as f:
-        pickle.dump(data, f)
+    fpath = save_dir / f"sim_patterns_period={np.mean(periods):.2f}_nangles={nangles:d}.json"
+    with open(fpath, 'w') as f:
+        json.dump(data, f, indent="\t")
 
     # save patterns to separate PNG files
     for ii in range(nangles):
         for jj in range(nphases):
             ind = ii * nphases + jj
             # save file
-            fname = '%02d_period=%0.2f_angle=%0.1fdeg_phase=%0.2f' % \
-                    (ind, periods[ii], angles[ii] * 180 / np.pi, phases[ii, jj])
-            fpath = os.path.join(save_dir, fname) + ".png"
-
             # need to convert so not float to save as PNG
             im = Image.fromarray(patterns[ii, jj].astype('bool'))
-            im.save(fpath)
-            print('saved %s' % fpath)
+            im.save(save_dir / f"{ind:02d}_period={periods[ii]:.2f}_angle={angles[ii] * 180/np.pi:.1f}deg_phase={phases[ii, jj]:.2f}.png")
 
     # save patterns in tif stack
-    im_list = [Image.fromarray(patterns[ii, jj].astype('bool')) for ii in range(nangles) for jj in range(nphases)]
-    fname = "sim_patterns_period=%.2f_nangles=%d_nphases=%d.tif" % (np.mean(periods), nangles, nphases)
-    fpath = os.path.join(save_dir, fname)
-    im_list[0].save(fpath, save_all=True, append_images=im_list[1:])
-    print('saved %s' % fpath)
+    fpath = save_dir / f"sim_patterns_period={np.mean(periods):.2f}_nangles={nangles:d}_nphases={nphases:d}.tif"
+    tifffile.imwrite(fpath,
+                     tifffile.transpose_axes(patterns.astype(np.uint8).reshape((nangles * nphases, ny, nx)), "CYX", asaxes="TZQCYXS"),
+                     imagej=True)
+    # im_list = [Image.fromarray(patterns[ii, jj].astype('bool')) for ii in range(nangles) for jj in range(nphases)]
+    # im_list[0].save(fpath, save_all=True, append_images=im_list[1:])
 
     if plot_results:
         figh = plot_sim_pattern_sets(patterns, vec_as, vec_bs, wavelength)
-        figh.savefig(os.path.join(save_dir, "period=%0.2f_pattern_summary.png" % np.mean(periods)))
+        figh.savefig(save_dir / f"period={np.mean(periods):.2f}_pattern_summary.png")
     else:
         figh = None
 
@@ -2283,8 +2283,9 @@ def export_pattern_set(dmd_size, vec_as, vec_bs, nphases=3, invert=False, pitch=
 
 
 # main function for generating SIM patterns at several frequencies and wavelengths
-def export_all_pattern_sets(dmd_size, periods, nangles=3, nphases=3, wavelengths=None, invert=False,
-                            pitch=7560, save_dir='sim_patterns', plot_results=True, **kwargs):
+def export_all_pattern_sets(dmd_size: list[int], periods: list[float], nangles: int = 3, nphases: int = 3,
+                            wavelengths: list[float]=None, invert: list[bool] = False, pitch: float = 7560.,
+                            save_dir='sim_patterns', plot_results: bool = True, **kwargs):
     """
     Generate SIM pattern sets and save results
 
@@ -2317,8 +2318,8 @@ def export_all_pattern_sets(dmd_size, periods, nangles=3, nphases=3, wavelengths
     if not isinstance(periods, list):
         periods = [periods]
 
-    if not os.path.exists(save_dir):
-        os.mkdir(save_dir)
+    save_dir = Path(save_dir)
+    save_dir.mkdir(exist_ok=True)
 
     data_all = []
 
@@ -2327,11 +2328,11 @@ def export_all_pattern_sets(dmd_size, periods, nangles=3, nphases=3, wavelengths
         data_period = []
 
         # directory to save results
-        sub_dir = 'period=%.1f_nangles=%d' % (period, nangles)
-        fpath = os.path.join(save_dir, sub_dir)
-        pattern_save_dir = mm_io.get_unique_name(fpath, mode='dir')
-        if not os.path.exists(pattern_save_dir):
-            os.mkdir(pattern_save_dir)
+        sub_dir = f"period={period:.1f}_nangles={nangles:d}"
+        pattern_save_dir = Path(save_dir, sub_dir)
+        # pattern_save_dir = mm_io.get_unique_name(fpath, mode='dir')
+        if not pattern_save_dir.exists():
+            pattern_save_dir.mkdir()
 
         vec_as, vec_bs = find_closest_multicolor_set(period, nangles, nphases, wavelengths=wavelengths, **kwargs)
 
@@ -2340,7 +2341,7 @@ def export_all_pattern_sets(dmd_size, periods, nangles=3, nphases=3, wavelengths
             if nwavelengths == 1:
                 wavlen_savedir = pattern_save_dir
             else:
-                wavlen_savedir = os.path.join(pattern_save_dir, 'wavelength=%dnm' % wavelengths[kk])
+                wavlen_savedir = pattern_save_dir / f"wavelength={wavelengths[kk]:d}nm"
 
             patterns, data, figh = export_pattern_set(dmd_size, vec_as[kk], vec_bs[kk], nphases=nphases,
                                                       wavelength=wavelengths[kk],
@@ -2354,7 +2355,7 @@ def export_all_pattern_sets(dmd_size, periods, nangles=3, nphases=3, wavelengths
 
 
 # export calibration patterns
-def aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, centers, radius=20, phase_indices=0):
+def aberration_map_pattern(dmd_size: list[int], vec_a, vec_b, nphases: int, centers, radius=20, phase_indices: int = 0):
     """
     Generate patterns to calibrate DMD aberrations using the approach of https://doi.org/10.1364/OE.24.013881
 
@@ -2365,16 +2366,15 @@ def aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, centers, radius=20, 
     :param vec_a:
     :param vec_b:
     :param nphases: number of phase shifts allowed
-    :param cref: (cx, cy)
-    :param csample: (cx, cy)
+    :param centers:
     :param radius: radius, must be an integer
-    :param phase_index:
+    :param phase_indices:
     :return:
     """
     if not isinstance(radius, int):
         raise ValueError("radius must be an integer")
 
-    centers = np.array(centers, dtype=np.int)
+    centers = np.array(centers, dtype=int)
     if centers.ndim == 1:
         centers = np.expand_dims(centers, axis=0)
 
@@ -2403,13 +2403,13 @@ def aberration_map_pattern(dmd_size, vec_a, vec_b, nphases, centers, radius=20, 
 
     return pattern
 
-def checkerboard(dmd_size, n_on, n_off=None):
+def checkerboard(dmd_size: list[int], n_on: int, n_off: int = None):
     """
     Create checkerboard pattern
 
-    :param list[int] dmd_size: [nx, ny]
-    :param int n_on:
-    :param int n_off:
+    :param dmd_size: [nx, ny]
+    :param n_on:
+    :param n_off:
 
     :return np.array pattern:
     """
@@ -2434,17 +2434,17 @@ def checkerboard(dmd_size, n_on, n_off=None):
     return mask
 
 
-def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4, 5, 10, 25, 50, 100, 200, 300)):
+def export_calibration_patterns(dmd_size: list[int], save_dir='', circle_radii=(1, 2, 3, 4, 5, 10, 25, 50, 100, 200, 300)):
     """
     Produce calibration patterns for the DMD, which are all on, all off, center-circles of several sizes,
     and checkerboard patterns of several sizes
-    :param list[int] dmd_size: [nx, ny]
-    :param str save_dir:
+    :param dmd_size: [nx, ny]
+    :param save_dir:
+    :param circle_radii
     :return:
     """
-
-    if not os.path.exists(save_dir):
-        os.mkdir(save_dir)
+    save_dir = Path(save_dir)
+    save_dir.mkdir(exist_ok=True)
 
     nx = dmd_size[0]
     ny = dmd_size[1]
@@ -2452,12 +2452,12 @@ def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4,
     # all mirrors on
     all_on = np.ones((ny, nx))
     im = Image.fromarray(all_on.astype('bool'))
-    im.save(os.path.join(save_dir, "on.png"))
+    im.save(save_dir / "on.png")
 
     # all mirror off
     all_off = np.zeros((ny, nx))
     im = Image.fromarray(all_off.astype('bool'))
-    im.save(os.path.join(save_dir, "off.png"))
+    im.save(save_dir / "off.png")
 
     # circles of different radii centered in the middle of DMD
     xx, yy = np.meshgrid(range(nx), range(ny))
@@ -2469,10 +2469,10 @@ def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4,
         mask[rr <= r] = 1
 
         im = Image.fromarray(mask.astype('bool'))
-        im.save(os.path.join(save_dir, "circle_on_r=%d.png" % r))
+        im.save(save_dir / f"circle_on_r={r:d}.png")
 
         im = Image.fromarray((1 - mask).astype('bool'))
-        im.save(os.path.join(save_dir, "circle_off_r=%d.png" % r))
+        im.save(save_dir / f"circle_off_r={r:d}.png")
 
     # checkerboard patterns with different spacing
     periods = np.concatenate((np.arange(2, 12, 1), np.arange(12, 30, 2), np.arange(30, 200, 10)))
@@ -2481,7 +2481,7 @@ def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4,
         mask = checkerboard(dmd_size, on_pix)
 
         im = Image.fromarray(mask.astype('bool'))
-        im.save(os.path.join(save_dir, "checkerboard_period=%d.png" % p))
+        im.save(save_dir / f"checkerboard_period={p:d}.png")
 
     # patterns with variable spacing
     periods = range(2, 20, 2)
@@ -2509,28 +2509,29 @@ def export_calibration_patterns(dmd_size, save_dir='', circle_radii=(1, 2, 3, 4,
     mask = mask[0:ny, 0:nx]
 
     im = Image.fromarray(mask.astype('bool'))
-    im.save(os.path.join(save_dir, "variable_pattern_periods=%d_to_%d.png" % (periods[0], periods[-1])))
+    im.save(save_dir / f"variable_pattern_periods={periods[0]:d}_to_{periods[-1]:d}.png")
 
     # pattern with three corners
     corner_size = 300
-    corner_pattern = np.zeros((ny, nx), dtype=np.bool)
+    corner_pattern = np.zeros((ny, nx), dtype=bool)
     corner_pattern[:corner_size, :corner_size] = 1
     corner_pattern[:corner_size, -corner_size:] = 1
     corner_pattern[-corner_size:, :corner_size] = 1
 
     im = Image.fromarray(corner_pattern)
-    im.save(os.path.join(save_dir, "three_corners_%d_on.png") % corner_size)
+    im.save(f"three_corners_{corner_size:d}.png")
 
 
-def get_affine_fit_pattern(dmd_size, radii=(1, 1.5, 2), corner_size=4, point_spacing=61, mark_sep=15):
+def get_affine_fit_pattern(dmd_size: list[int], radii: tuple[float] = (1., 1.5, 2.), corner_size: int = 4,
+                           point_spacing: int = 61, mark_sep: int = 15):
     """
     Create DMD patterns of a sparse 2D grid of points all with the same radius. This is useful for determining the
     affine transformation between the DMD and the camera
 
-    :param list[int] dmd_size: [nx, ny]
-    :param tuple[float] or list[float] radii: list of radii of spots for affine patterns.
+    :param dmd_size: [nx, ny]
+    :param radii: list of radii of spots for affine patterns.
      If more than one, more than one pattern will be generated.
-    :param int corner_size: size of blcosk indicating corners
+    :param corner_size: size of blcosk indicating corners
     :param point_spacing: spacing between points
     :param mark_sep: separation between inversion/flip markers near center
 
@@ -2612,24 +2613,26 @@ def get_affine_fit_pattern(dmd_size, radii=(1, 1.5, 2), corner_size=4, point_spa
     return patterns, radii, centers
 
 
-def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, nphases=3,
-                        avec_max_size=40, bvec_max_size=40, save_dir=None):
+def export_otf_test_set(dmd_size: list[int], pmin: float = 4.5, pmax: float = 50,
+                        nperiods: int = 20, nangles: int = 12, nphases: int = 3,
+                        avec_max_size: float = 40, bvec_max_size: float = 40,
+                        phase_index: int = 0,
+                        save_dir=None):
     """
     Export many patterns at different angles/frequencies to test OTF
 
-    :param list[int] dmd_size: [nx, ny]
-    :param float pmin:
-    :param float pmax:
-    :param float nperiods:
-    :param int nangles:
-    :param int nphases: used to determine the filling fraction of the patterns that are generated
-    :param int avec_max_size:
-    :param int bvec_max_size:
+    :param dmd_size: [nx, ny]
+    :param pmin:
+    :param pmax:
+    :param nperiods:
+    :param nangles:
+    :param nphases: used to determine the filling fraction of the patterns that are generated
+    :param avec_max_size:
+    :param bvec_max_size:
+    :param phase_index:
     :param str save_dir:
 
-    :return np.array patterns:
-    :return np.array vec_as:
-    :return np.array vec_bs:
+    :return patterns, vec_as, vec_bs:
     """
 
     nx, ny = dmd_size
@@ -2641,74 +2644,92 @@ def export_otf_test_set(dmd_size, pmin=4.5, pmax=50, nperiods=20, nangles=12, np
 
     angles = np.arange(nangles) * np.pi / nangles
 
-    patterns = np.zeros((nperiods, nangles, ny, nx), dtype=np.bool)
+    patterns = np.zeros((nperiods, nangles, ny, nx), dtype=bool)
     real_angles = np.zeros((nperiods, nangles))
     real_frqs = np.zeros((nperiods, nangles, 2))
     real_periods = np.zeros((nperiods, nangles))
     real_phases = np.zeros((nperiods, nangles))
-    vec_as = [[[''] for _ in range(nangles)] for _ in range(nperiods)]
-    vec_bs = [[[''] for _ in range(nangles)] for _ in range(nperiods)]
+    vec_as = np.zeros((nperiods, nangles, 2), dtype=int)
+    vec_bs = np.zeros((nperiods, nangles, 2), dtype=int)
+    # vec_as = [[[''] for _ in range(nangles)] for _ in range(nperiods)]
+    # vec_bs = [[[''] for _ in range(nangles)] for _ in range(nperiods)]
 
-    phase_index = 0
+    # find nearest patterns
+    tstart = time.perf_counter()
     for ii, p in enumerate(periods):
         for jj, a in enumerate(angles):
-            tstart = time.process_time()
+            tstart_pattern = time.perf_counter()
 
-            vec_as[ii][jj], vec_bs[ii][jj], real_periods[ii, jj], real_angles[ii, jj] = \
+            vec_as[ii, jj], vec_bs[ii, jj], real_periods[ii, jj], real_angles[ii, jj] = \
                 find_closest_pattern(p, a, nphases=nphases, avec_max_size=avec_max_size, bvec_max_size=bvec_max_size)
 
-            patterns[ii, jj], _ = get_sim_pattern(dmd_size, vec_as[ii][jj], vec_bs[ii][jj], nphases, phase_index)
-            real_phases[ii, jj] = get_sim_phase(vec_as[ii][jj], vec_bs[ii][jj], nphases,
+            patterns[ii, jj], _ = get_sim_pattern(dmd_size, vec_as[ii, jj], vec_bs[ii, jj], nphases, phase_index)
+            real_phases[ii, jj] = get_sim_phase(vec_as[ii, jj], vec_bs[ii, jj], nphases,
                                                 phase_index, dmd_size, origin='fft')
 
-            tend = time.process_time()
-            print("generated pattern %d/%d in %s" % (ii * len(angles) + jj + 1, len(periods) * len(angles), tend-tstart))
+            tnow = time.perf_counter()
+            print(f"generated pattern {ii * len(angles) + jj + 1:d}/{len(periods) * len(angles):d}"
+                  f" in {tnow - tstart_pattern:.2f}s,"
+                  f"elapsed time {tnow - tstart:.2f}s",
+                  end="\r")
+    print("")
 
     pattern_on = np.ones((ny, nx), dtype=np.uint8)
     pattern_off = np.zeros((ny, nx), dtype=np.uint8)
 
     # export results
     if save_dir is not None:
-        save_dir = mm_io.get_unique_name(save_dir, mode='dir')
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
+        # save_dir = mm_io.get_unique_name(save_dir, mode='dir')
+        save_dir = Path(save_dir)
+        if not save_dir.exists():
+            save_dir.mkdir(parents=True)
 
         # save pattern info
-        fpath = os.path.join(save_dir, 'pattern_data.pkl')
-        data = {'vec_as': vec_as, 'vec_bs': vec_bs, 'angles': real_angles,
-                'periods': real_periods, 'frequencies': real_frqs,
-                'phases': real_phases, 'nphases': nphases, 'phase_index': phase_index,
+        fpath = save_dir / "pattern_data.json"
+        data = {'vec_as': vec_as.tolist(),
+                'vec_bs': vec_bs.tolist(),
+                'angles': real_angles.tolist(),
+                'periods': real_periods.tolist(),
+                'frequencies': real_frqs.tolist(),
+                'phases': real_phases.tolist(),
+                'nphases': nphases,
+                'phase_index': phase_index,
                 'units': 'um', 'notes': 'total number of patterns should be nphases*nangles + 2.'
                                         ' The last two patterns are all ON and all OFF respectively.'}
 
-        with open(fpath, 'wb') as f:
-            pickle.dump(data, f)
+        # with open(fpath, 'wb') as f:
+        #     pickle.dump(data, f)
+        with open(fpath, "w") as f:
+            json.dump(data, f, indent="\t")
 
         # save patterns as set of pngs
         for ii in range(nperiods):
             for jj in range(nangles):
                 ind = ii * nangles + jj
-                fpath = os.path.join(save_dir, "%03d_pattern_period=%0.3f_angle=%0.2fdeg" % (ind, real_periods[ii, jj], real_angles[ii, jj] * 180/np.pi)) + ".png"
+                fpath = save_dir / f"{ind:03d}_pattern_period={real_periods[ii, jj]:.3f}_angle={real_angles[ii, jj] * 180/np.pi:.2f}deg.png"
 
                 # need to convert so not float to save as PNG
                 im = Image.fromarray(patterns[ii, jj].astype('bool'))
                 im.save(fpath)
 
         # save all on
-        fpath = os.path.join(save_dir, "%03d_pattern_all_on" % (nperiods * nangles)) + ".png"
+        fpath = save_dir / f"{nperiods * nangles:03d}_pattern_all_on.png"
         im = Image.fromarray(pattern_on.astype('bool'))
         im.save(fpath)
 
         # save all off
-        fpath = os.path.join(save_dir, "%03d_pattern_all_off" % (nperiods * nangles + 1)) + ".png"
+        fpath = save_dir / f"{nperiods * nangles + 1:03d}_pattern_all_off.png"
         im = Image.fromarray(pattern_off.astype('bool'))
         im.save(fpath)
 
         # save patterns as tif
-        fpath = os.path.join(save_dir, "otf_patterns.tif")
+        fpath = save_dir / "otf_patterns.tif"
         patterns_reshaped = np.reshape(patterns, [patterns.shape[0] * patterns.shape[1],
                                                   patterns.shape[2], patterns.shape[3]])
-        patterns_reshaped = np.concatenate((patterns_reshaped, pattern_on[None, :, :], pattern_off[None, :, :]), axis=0)
+        patterns_reshaped = np.concatenate((patterns_reshaped,
+                                            np.expand_dims(pattern_on, axis=0),
+                                            np.expand_dims(pattern_off, axis=0)),
+                                           axis=0)
         tifffile.imwrite(fpath, patterns_reshaped.astype(np.uint16))
 
     return patterns, vec_as, vec_bs, real_angles, real_periods
