@@ -1,8 +1,10 @@
 """
-Look at phase curvature of hologram
+Fitt phase curvature of hologram
 """
 import numpy as np
 from numpy import fft
+import matplotlib
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from skimage.restoration import unwrap_phase
 import tifffile
@@ -14,7 +16,9 @@ import localize_psf.fit as fit
 # fname = r"F:\2021_11_23\23_odt_align\23_odt_align_MMStack_Pos0.ome.tif"
 # fname = r"F:\2021_11_23\24_odt_align\24_odt_align_MMStack_Pos0.ome.tif"
 # fname = r"F:\2021_12_07\13_odt_focus_test\13_odt_focus_test_MMStack_Pos0.ome.tif"
-fname = Path(r"E:\2022_02_25\05_hologram.tif")
+# fname = Path(r"E:\2022_02_25\05_hologram.tif")
+fname = Path(r"G:\2022_05_27\01_hologram.tif")
+
 img = tifffile.imread(fname)
 if img.ndim == 3:
     img = img[0]
@@ -53,7 +57,7 @@ guess_ind_1d = np.argmax(np.abs(img_ft) * (fyfy <= 0) * (ff_perp > fmax_int))
 guess_ind = np.unravel_index(guess_ind_1d, img_ft.shape)
 
 frq_guess = np.array([fxfx[guess_ind], fyfy[guess_ind]])
-frq_fit, mask, _ = sim.fit_modulation_frq(img_ft, img_ft, dxy, fmax=np.inf, frq_guess=frq_guess, roi_pix_size=50)
+frq_fit, mask, _ = sim.fit_modulation_frq(img_ft, img_ft, dxy, frq_guess=frq_guess, roi_pix_size=50)
 # sim.plot_correlation_fit(img_ft, img_ft, frq_fit, dxy, frqs_guess=frq_guess)
 
 # shifted field
