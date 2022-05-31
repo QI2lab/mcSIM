@@ -1,5 +1,5 @@
 {
-	"timestamp": "2022_05_03_17;24;04",
+	"timestamp": "2022_05_27_17;41;08",
 	"firmware_pattern_data": [
 		{
 			"type": "sim",
@@ -737,7 +737,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.0,
 			"pupil_angle": 0.0,
 			"picture_index": 1,
@@ -754,7 +754,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 0.0,
 			"picture_index": 1,
@@ -771,7 +771,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 0.12566370614359174,
 			"picture_index": 1,
@@ -788,7 +788,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 0.25132741228718347,
 			"picture_index": 1,
@@ -805,7 +805,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 0.37699111843077515,
 			"picture_index": 1,
@@ -822,7 +822,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 0.5026548245743669,
 			"picture_index": 1,
@@ -839,7 +839,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 0.6283185307179586,
 			"picture_index": 1,
@@ -856,7 +856,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 0.7539822368615503,
 			"picture_index": 1,
@@ -873,7 +873,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 0.8796459430051421,
 			"picture_index": 1,
@@ -890,7 +890,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 1.0053096491487339,
 			"picture_index": 1,
@@ -907,7 +907,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 1.1309733552923256,
 			"picture_index": 1,
@@ -924,7 +924,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 1.2566370614359172,
 			"picture_index": 1,
@@ -941,7 +941,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 1.382300767579509,
 			"picture_index": 1,
@@ -958,7 +958,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 1.5079644737231006,
 			"picture_index": 1,
@@ -975,7 +975,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 1.6336281798666925,
 			"picture_index": 1,
@@ -992,7 +992,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 1.7592918860102842,
 			"picture_index": 1,
@@ -1009,7 +1009,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 1.8849555921538756,
 			"picture_index": 1,
@@ -1026,7 +1026,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 2.0106192982974678,
 			"picture_index": 2,
@@ -1043,7 +1043,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 2.1362830044410597,
 			"picture_index": 2,
@@ -1060,7 +1060,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 2.261946710584651,
 			"picture_index": 2,
@@ -1077,7 +1077,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 2.3876104167282426,
 			"picture_index": 2,
@@ -1094,7 +1094,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 2.5132741228718345,
 			"picture_index": 2,
@@ -1111,7 +1111,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 2.6389378290154264,
 			"picture_index": 2,
@@ -1128,7 +1128,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 2.764601535159018,
 			"picture_index": 2,
@@ -1145,7 +1145,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 2.8902652413026093,
 			"picture_index": 2,
@@ -1162,7 +1162,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 3.015928947446201,
 			"picture_index": 2,
@@ -1179,7 +1179,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 3.141592653589793,
 			"picture_index": 2,
@@ -1196,7 +1196,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 3.267256359733385,
 			"picture_index": 2,
@@ -1213,7 +1213,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 3.3929200658769765,
 			"picture_index": 2,
@@ -1230,7 +1230,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 3.5185837720205684,
 			"picture_index": 2,
@@ -1247,7 +1247,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 3.6442474781641603,
 			"picture_index": 2,
@@ -1264,7 +1264,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 3.7699111843077513,
 			"picture_index": 2,
@@ -1281,7 +1281,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 3.895574890451343,
 			"picture_index": 2,
@@ -1298,7 +1298,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 4.0212385965949355,
 			"picture_index": 2,
@@ -1315,7 +1315,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 4.1469023027385274,
 			"picture_index": 2,
@@ -1332,7 +1332,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 4.272566008882119,
 			"picture_index": 2,
@@ -1349,7 +1349,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 4.39822971502571,
 			"picture_index": 2,
@@ -1366,7 +1366,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 4.523893421169302,
 			"picture_index": 2,
@@ -1383,7 +1383,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 4.649557127312894,
 			"picture_index": 2,
@@ -1400,7 +1400,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 4.775220833456485,
 			"picture_index": 2,
@@ -1417,7 +1417,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 4.900884539600077,
 			"picture_index": 2,
@@ -1434,7 +1434,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 5.026548245743669,
 			"picture_index": 3,
@@ -1451,7 +1451,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 5.15221195188726,
 			"picture_index": 3,
@@ -1468,7 +1468,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 5.277875658030853,
 			"picture_index": 3,
@@ -1485,7 +1485,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 5.403539364174444,
 			"picture_index": 3,
@@ -1502,7 +1502,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 5.529203070318036,
 			"picture_index": 3,
@@ -1519,7 +1519,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 5.654866776461628,
 			"picture_index": 3,
@@ -1536,7 +1536,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 5.780530482605219,
 			"picture_index": 3,
@@ -1553,7 +1553,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 5.906194188748811,
 			"picture_index": 3,
@@ -1570,7 +1570,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 6.031857894892402,
 			"picture_index": 3,
@@ -1587,7 +1587,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.25,
 			"pupil_angle": 6.157521601035994,
 			"picture_index": 3,
@@ -1604,7 +1604,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 0.0,
 			"picture_index": 3,
@@ -1621,7 +1621,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 0.12566370614359174,
 			"picture_index": 3,
@@ -1638,7 +1638,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 0.25132741228718347,
 			"picture_index": 3,
@@ -1655,7 +1655,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 0.37699111843077515,
 			"picture_index": 3,
@@ -1672,7 +1672,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 0.5026548245743669,
 			"picture_index": 3,
@@ -1689,7 +1689,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 0.6283185307179586,
 			"picture_index": 3,
@@ -1706,7 +1706,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 0.7539822368615503,
 			"picture_index": 3,
@@ -1723,7 +1723,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 0.8796459430051421,
 			"picture_index": 3,
@@ -1740,7 +1740,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 1.0053096491487339,
 			"picture_index": 3,
@@ -1757,7 +1757,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 1.1309733552923256,
 			"picture_index": 3,
@@ -1774,7 +1774,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 1.2566370614359172,
 			"picture_index": 3,
@@ -1791,7 +1791,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 1.382300767579509,
 			"picture_index": 3,
@@ -1808,7 +1808,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 1.5079644737231006,
 			"picture_index": 3,
@@ -1825,7 +1825,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 1.6336281798666925,
 			"picture_index": 3,
@@ -1842,7 +1842,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 1.7592918860102842,
 			"picture_index": 4,
@@ -1859,7 +1859,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 1.8849555921538756,
 			"picture_index": 4,
@@ -1876,7 +1876,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 2.0106192982974678,
 			"picture_index": 4,
@@ -1893,7 +1893,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 2.1362830044410597,
 			"picture_index": 4,
@@ -1910,7 +1910,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 2.261946710584651,
 			"picture_index": 4,
@@ -1927,7 +1927,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 2.3876104167282426,
 			"picture_index": 4,
@@ -1944,7 +1944,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 2.5132741228718345,
 			"picture_index": 4,
@@ -1961,7 +1961,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 2.6389378290154264,
 			"picture_index": 4,
@@ -1978,7 +1978,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 2.764601535159018,
 			"picture_index": 4,
@@ -1995,7 +1995,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 2.8902652413026093,
 			"picture_index": 4,
@@ -2012,7 +2012,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 3.015928947446201,
 			"picture_index": 4,
@@ -2029,7 +2029,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 3.141592653589793,
 			"picture_index": 4,
@@ -2046,7 +2046,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 3.267256359733385,
 			"picture_index": 4,
@@ -2063,7 +2063,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 3.3929200658769765,
 			"picture_index": 4,
@@ -2080,7 +2080,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 3.5185837720205684,
 			"picture_index": 4,
@@ -2097,7 +2097,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 3.6442474781641603,
 			"picture_index": 4,
@@ -2114,7 +2114,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 3.7699111843077513,
 			"picture_index": 4,
@@ -2131,7 +2131,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 3.895574890451343,
 			"picture_index": 4,
@@ -2148,7 +2148,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 4.0212385965949355,
 			"picture_index": 4,
@@ -2165,7 +2165,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 4.1469023027385274,
 			"picture_index": 4,
@@ -2182,7 +2182,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 4.272566008882119,
 			"picture_index": 4,
@@ -2199,7 +2199,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 4.39822971502571,
 			"picture_index": 4,
@@ -2216,7 +2216,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 4.523893421169302,
 			"picture_index": 4,
@@ -2233,7 +2233,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 4.649557127312894,
 			"picture_index": 4,
@@ -2250,7 +2250,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 4.775220833456485,
 			"picture_index": 5,
@@ -2267,7 +2267,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 4.900884539600077,
 			"picture_index": 5,
@@ -2284,7 +2284,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 5.026548245743669,
 			"picture_index": 5,
@@ -2301,7 +2301,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 5.15221195188726,
 			"picture_index": 5,
@@ -2318,7 +2318,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 5.277875658030853,
 			"picture_index": 5,
@@ -2335,7 +2335,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 5.403539364174444,
 			"picture_index": 5,
@@ -2352,7 +2352,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 5.529203070318036,
 			"picture_index": 5,
@@ -2369,7 +2369,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 5.654866776461628,
 			"picture_index": 5,
@@ -2386,7 +2386,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 5.780530482605219,
 			"picture_index": 5,
@@ -2403,7 +2403,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 5.906194188748811,
 			"picture_index": 5,
@@ -2420,7 +2420,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 6.031857894892402,
 			"picture_index": 5,
@@ -2437,7 +2437,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.45,
 			"pupil_angle": 6.157521601035994,
 			"picture_index": 5,
@@ -2454,7 +2454,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 0.0,
 			"picture_index": 5,
@@ -2471,7 +2471,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 0.12566370614359174,
 			"picture_index": 5,
@@ -2488,7 +2488,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 0.25132741228718347,
 			"picture_index": 5,
@@ -2505,7 +2505,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 0.37699111843077515,
 			"picture_index": 5,
@@ -2522,7 +2522,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 0.5026548245743669,
 			"picture_index": 5,
@@ -2539,7 +2539,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 0.6283185307179586,
 			"picture_index": 5,
@@ -2556,7 +2556,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 0.7539822368615503,
 			"picture_index": 5,
@@ -2573,7 +2573,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 0.8796459430051421,
 			"picture_index": 5,
@@ -2590,7 +2590,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 1.0053096491487339,
 			"picture_index": 5,
@@ -2607,7 +2607,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 1.1309733552923256,
 			"picture_index": 5,
@@ -2624,7 +2624,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 1.2566370614359172,
 			"picture_index": 5,
@@ -2641,7 +2641,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 1.382300767579509,
 			"picture_index": 5,
@@ -2658,7 +2658,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 1.5079644737231006,
 			"picture_index": 6,
@@ -2675,7 +2675,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 1.6336281798666925,
 			"picture_index": 6,
@@ -2692,7 +2692,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 1.7592918860102842,
 			"picture_index": 6,
@@ -2709,7 +2709,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 1.8849555921538756,
 			"picture_index": 6,
@@ -2726,7 +2726,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 2.0106192982974678,
 			"picture_index": 6,
@@ -2743,7 +2743,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 2.1362830044410597,
 			"picture_index": 6,
@@ -2760,7 +2760,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 2.261946710584651,
 			"picture_index": 6,
@@ -2777,7 +2777,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 2.3876104167282426,
 			"picture_index": 6,
@@ -2794,7 +2794,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 2.5132741228718345,
 			"picture_index": 6,
@@ -2811,7 +2811,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 2.6389378290154264,
 			"picture_index": 6,
@@ -2828,7 +2828,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 2.764601535159018,
 			"picture_index": 6,
@@ -2845,7 +2845,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 2.8902652413026093,
 			"picture_index": 6,
@@ -2862,7 +2862,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 3.015928947446201,
 			"picture_index": 6,
@@ -2879,7 +2879,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 3.141592653589793,
 			"picture_index": 6,
@@ -2896,7 +2896,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 3.267256359733385,
 			"picture_index": 6,
@@ -2913,7 +2913,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 3.3929200658769765,
 			"picture_index": 6,
@@ -2930,7 +2930,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 3.5185837720205684,
 			"picture_index": 6,
@@ -2947,7 +2947,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 3.6442474781641603,
 			"picture_index": 6,
@@ -2964,7 +2964,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 3.7699111843077513,
 			"picture_index": 6,
@@ -2981,7 +2981,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 3.895574890451343,
 			"picture_index": 6,
@@ -2998,7 +2998,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 4.0212385965949355,
 			"picture_index": 6,
@@ -3015,7 +3015,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 4.1469023027385274,
 			"picture_index": 6,
@@ -3032,7 +3032,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 4.272566008882119,
 			"picture_index": 6,
@@ -3049,7 +3049,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 4.39822971502571,
 			"picture_index": 6,
@@ -3066,7 +3066,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 4.523893421169302,
 			"picture_index": 7,
@@ -3083,7 +3083,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 4.649557127312894,
 			"picture_index": 7,
@@ -3100,7 +3100,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 4.775220833456485,
 			"picture_index": 7,
@@ -3117,7 +3117,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 4.900884539600077,
 			"picture_index": 7,
@@ -3134,7 +3134,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 5.026548245743669,
 			"picture_index": 7,
@@ -3151,7 +3151,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 5.15221195188726,
 			"picture_index": 7,
@@ -3168,7 +3168,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 5.277875658030853,
 			"picture_index": 7,
@@ -3185,7 +3185,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 5.403539364174444,
 			"picture_index": 7,
@@ -3202,7 +3202,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 5.529203070318036,
 			"picture_index": 7,
@@ -3219,7 +3219,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 5.654866776461628,
 			"picture_index": 7,
@@ -3236,7 +3236,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 5.780530482605219,
 			"picture_index": 7,
@@ -3253,7 +3253,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 5.906194188748811,
 			"picture_index": 7,
@@ -3270,7 +3270,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 6.031857894892402,
 			"picture_index": 7,
@@ -3287,7 +3287,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.55,
 			"pupil_angle": 6.157521601035994,
 			"picture_index": 7,
@@ -3304,7 +3304,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 0.0,
 			"picture_index": 7,
@@ -3321,7 +3321,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 0.12566370614359174,
 			"picture_index": 7,
@@ -3338,7 +3338,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 0.25132741228718347,
 			"picture_index": 7,
@@ -3355,7 +3355,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 0.37699111843077515,
 			"picture_index": 7,
@@ -3372,7 +3372,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 0.5026548245743669,
 			"picture_index": 7,
@@ -3389,7 +3389,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 0.6283185307179586,
 			"picture_index": 7,
@@ -3406,7 +3406,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 0.7539822368615503,
 			"picture_index": 7,
@@ -3423,7 +3423,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 0.8796459430051421,
 			"picture_index": 7,
@@ -3440,7 +3440,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 1.0053096491487339,
 			"picture_index": 7,
@@ -3457,7 +3457,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 1.1309733552923256,
 			"picture_index": 7,
@@ -3474,7 +3474,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 1.2566370614359172,
 			"picture_index": 8,
@@ -3491,7 +3491,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 1.382300767579509,
 			"picture_index": 8,
@@ -3508,7 +3508,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 1.5079644737231006,
 			"picture_index": 8,
@@ -3525,7 +3525,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 1.6336281798666925,
 			"picture_index": 8,
@@ -3542,7 +3542,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 1.7592918860102842,
 			"picture_index": 8,
@@ -3559,7 +3559,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 1.8849555921538756,
 			"picture_index": 8,
@@ -3576,7 +3576,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 2.0106192982974678,
 			"picture_index": 8,
@@ -3593,7 +3593,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 2.1362830044410597,
 			"picture_index": 8,
@@ -3610,7 +3610,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 2.261946710584651,
 			"picture_index": 8,
@@ -3627,7 +3627,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 2.3876104167282426,
 			"picture_index": 8,
@@ -3644,7 +3644,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 2.5132741228718345,
 			"picture_index": 8,
@@ -3661,7 +3661,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 2.6389378290154264,
 			"picture_index": 8,
@@ -3678,7 +3678,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 2.764601535159018,
 			"picture_index": 8,
@@ -3695,7 +3695,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 2.8902652413026093,
 			"picture_index": 8,
@@ -3712,7 +3712,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 3.015928947446201,
 			"picture_index": 8,
@@ -3729,7 +3729,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 3.141592653589793,
 			"picture_index": 8,
@@ -3746,7 +3746,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 3.267256359733385,
 			"picture_index": 8,
@@ -3763,7 +3763,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 3.3929200658769765,
 			"picture_index": 8,
@@ -3780,7 +3780,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 3.5185837720205684,
 			"picture_index": 8,
@@ -3797,7 +3797,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 3.6442474781641603,
 			"picture_index": 8,
@@ -3814,7 +3814,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 3.7699111843077513,
 			"picture_index": 8,
@@ -3831,7 +3831,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 3.895574890451343,
 			"picture_index": 8,
@@ -3848,7 +3848,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 4.0212385965949355,
 			"picture_index": 8,
@@ -3865,7 +3865,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 4.1469023027385274,
 			"picture_index": 8,
@@ -3882,7 +3882,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 4.272566008882119,
 			"picture_index": 9,
@@ -3899,7 +3899,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 4.39822971502571,
 			"picture_index": 9,
@@ -3916,7 +3916,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 4.523893421169302,
 			"picture_index": 9,
@@ -3933,7 +3933,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 4.649557127312894,
 			"picture_index": 9,
@@ -3950,7 +3950,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 4.775220833456485,
 			"picture_index": 9,
@@ -3967,7 +3967,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 4.900884539600077,
 			"picture_index": 9,
@@ -3984,7 +3984,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 5.026548245743669,
 			"picture_index": 9,
@@ -4001,7 +4001,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 5.15221195188726,
 			"picture_index": 9,
@@ -4018,7 +4018,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 5.277875658030853,
 			"picture_index": 9,
@@ -4035,7 +4035,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 5.403539364174444,
 			"picture_index": 9,
@@ -4052,7 +4052,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 5.529203070318036,
 			"picture_index": 9,
@@ -4069,7 +4069,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 5.654866776461628,
 			"picture_index": 9,
@@ -4086,7 +4086,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 5.780530482605219,
 			"picture_index": 9,
@@ -4103,7 +4103,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 5.906194188748811,
 			"picture_index": 9,
@@ -4120,7 +4120,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 6.031857894892402,
 			"picture_index": 9,
@@ -4137,7 +4137,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.65,
 			"pupil_angle": 6.157521601035994,
 			"picture_index": 9,
@@ -4154,7 +4154,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 0.0,
 			"picture_index": 9,
@@ -4171,7 +4171,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 0.12566370614359174,
 			"picture_index": 9,
@@ -4188,7 +4188,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 0.25132741228718347,
 			"picture_index": 9,
@@ -4205,7 +4205,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 0.37699111843077515,
 			"picture_index": 9,
@@ -4222,7 +4222,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 0.5026548245743669,
 			"picture_index": 9,
@@ -4239,7 +4239,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 0.6283185307179586,
 			"picture_index": 9,
@@ -4256,7 +4256,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 0.7539822368615503,
 			"picture_index": 9,
@@ -4273,7 +4273,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 0.8796459430051421,
 			"picture_index": 9,
@@ -4290,7 +4290,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 1.0053096491487339,
 			"picture_index": 10,
@@ -4307,7 +4307,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 1.1309733552923256,
 			"picture_index": 10,
@@ -4324,7 +4324,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 1.2566370614359172,
 			"picture_index": 10,
@@ -4341,7 +4341,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 1.382300767579509,
 			"picture_index": 10,
@@ -4358,7 +4358,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 1.5079644737231006,
 			"picture_index": 10,
@@ -4375,7 +4375,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 1.6336281798666925,
 			"picture_index": 10,
@@ -4392,7 +4392,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 1.7592918860102842,
 			"picture_index": 10,
@@ -4409,7 +4409,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 1.8849555921538756,
 			"picture_index": 10,
@@ -4426,7 +4426,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 2.0106192982974678,
 			"picture_index": 10,
@@ -4443,7 +4443,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 2.1362830044410597,
 			"picture_index": 10,
@@ -4460,7 +4460,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 2.261946710584651,
 			"picture_index": 10,
@@ -4477,7 +4477,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 2.3876104167282426,
 			"picture_index": 10,
@@ -4494,7 +4494,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 2.5132741228718345,
 			"picture_index": 10,
@@ -4511,7 +4511,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 2.6389378290154264,
 			"picture_index": 10,
@@ -4528,7 +4528,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 2.764601535159018,
 			"picture_index": 10,
@@ -4545,7 +4545,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 2.8902652413026093,
 			"picture_index": 10,
@@ -4562,7 +4562,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 3.015928947446201,
 			"picture_index": 10,
@@ -4579,7 +4579,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 3.141592653589793,
 			"picture_index": 10,
@@ -4596,7 +4596,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 3.267256359733385,
 			"picture_index": 10,
@@ -4613,7 +4613,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 3.3929200658769765,
 			"picture_index": 10,
@@ -4630,7 +4630,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 3.5185837720205684,
 			"picture_index": 10,
@@ -4647,7 +4647,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 3.6442474781641603,
 			"picture_index": 10,
@@ -4664,7 +4664,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 3.7699111843077513,
 			"picture_index": 10,
@@ -4681,7 +4681,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 3.895574890451343,
 			"picture_index": 10,
@@ -4698,7 +4698,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 4.0212385965949355,
 			"picture_index": 11,
@@ -4715,7 +4715,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 4.1469023027385274,
 			"picture_index": 11,
@@ -4732,7 +4732,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 4.272566008882119,
 			"picture_index": 11,
@@ -4749,7 +4749,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 4.39822971502571,
 			"picture_index": 11,
@@ -4766,7 +4766,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 4.523893421169302,
 			"picture_index": 11,
@@ -4783,7 +4783,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 4.649557127312894,
 			"picture_index": 11,
@@ -4800,7 +4800,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 4.775220833456485,
 			"picture_index": 11,
@@ -4817,7 +4817,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 4.900884539600077,
 			"picture_index": 11,
@@ -4834,7 +4834,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 5.026548245743669,
 			"picture_index": 11,
@@ -4851,7 +4851,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 5.15221195188726,
 			"picture_index": 11,
@@ -4868,7 +4868,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 5.277875658030853,
 			"picture_index": 11,
@@ -4885,7 +4885,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 5.403539364174444,
 			"picture_index": 11,
@@ -4902,7 +4902,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 5.529203070318036,
 			"picture_index": 11,
@@ -4919,7 +4919,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 5.654866776461628,
 			"picture_index": 11,
@@ -4936,7 +4936,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 5.780530482605219,
 			"picture_index": 11,
@@ -4953,7 +4953,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 5.906194188748811,
 			"picture_index": 11,
@@ -4970,7 +4970,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 6.031857894892402,
 			"picture_index": 11,
@@ -4987,7 +4987,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.75,
 			"pupil_angle": 6.157521601035994,
 			"picture_index": 11,
@@ -5004,7 +5004,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 0.0,
 			"picture_index": 11,
@@ -5021,7 +5021,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 0.12566370614359174,
 			"picture_index": 11,
@@ -5038,7 +5038,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 0.25132741228718347,
 			"picture_index": 11,
@@ -5055,7 +5055,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 0.37699111843077515,
 			"picture_index": 11,
@@ -5072,7 +5072,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 0.5026548245743669,
 			"picture_index": 11,
@@ -5089,7 +5089,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 0.6283185307179586,
 			"picture_index": 11,
@@ -5106,7 +5106,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 0.7539822368615503,
 			"picture_index": 12,
@@ -5123,7 +5123,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 0.8796459430051421,
 			"picture_index": 12,
@@ -5140,7 +5140,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 1.0053096491487339,
 			"picture_index": 12,
@@ -5157,7 +5157,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 1.1309733552923256,
 			"picture_index": 12,
@@ -5174,7 +5174,7 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 1.2566370614359172,
 			"picture_index": 12,
@@ -5191,12 +5191,46 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 1.382300767579509,
 			"picture_index": 12,
 			"bit_index": 5,
 			"combined_index": 293
+		},
+		{
+			"type": "odt",
+			"xoffset": 33.48827708230055,
+			"yoffset": 532.2809218284116,
+			"angle": -0.7853981633974483,
+			"frequency": [
+				-0.25000000000000006,
+				0.25000000000000006
+			],
+			"phase": 0,
+			"radius": 5,
+			"pupil_frequency_fraction": 0.84,
+			"pupil_angle": 1.5079644737231006,
+			"picture_index": 12,
+			"bit_index": 6,
+			"combined_index": 294
+		},
+		{
+			"type": "odt",
+			"xoffset": -33.48827708230048,
+			"yoffset": 532.2809218284116,
+			"angle": -0.7853981633974483,
+			"frequency": [
+				-0.25000000000000006,
+				0.25000000000000006
+			],
+			"phase": 0,
+			"radius": 5,
+			"pupil_frequency_fraction": 0.84,
+			"pupil_angle": 1.6336281798666925,
+			"picture_index": 12,
+			"bit_index": 7,
+			"combined_index": 295
 		},
 		{
 			"type": "odt",
@@ -5208,12 +5242,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 1.7592918860102842,
 			"picture_index": 12,
-			"bit_index": 6,
-			"combined_index": 294
+			"bit_index": 8,
+			"combined_index": 296
 		},
 		{
 			"type": "odt",
@@ -5225,12 +5259,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 1.8849555921538756,
 			"picture_index": 12,
-			"bit_index": 7,
-			"combined_index": 295
+			"bit_index": 9,
+			"combined_index": 297
 		},
 		{
 			"type": "odt",
@@ -5242,12 +5276,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 2.0106192982974678,
 			"picture_index": 12,
-			"bit_index": 8,
-			"combined_index": 296
+			"bit_index": 10,
+			"combined_index": 298
 		},
 		{
 			"type": "odt",
@@ -5259,12 +5293,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 2.1362830044410597,
 			"picture_index": 12,
-			"bit_index": 9,
-			"combined_index": 297
+			"bit_index": 11,
+			"combined_index": 299
 		},
 		{
 			"type": "odt",
@@ -5276,12 +5310,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 2.261946710584651,
 			"picture_index": 12,
-			"bit_index": 10,
-			"combined_index": 298
+			"bit_index": 12,
+			"combined_index": 300
 		},
 		{
 			"type": "odt",
@@ -5293,12 +5327,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 2.3876104167282426,
 			"picture_index": 12,
-			"bit_index": 11,
-			"combined_index": 299
+			"bit_index": 13,
+			"combined_index": 301
 		},
 		{
 			"type": "odt",
@@ -5310,12 +5344,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 2.5132741228718345,
 			"picture_index": 12,
-			"bit_index": 12,
-			"combined_index": 300
+			"bit_index": 14,
+			"combined_index": 302
 		},
 		{
 			"type": "odt",
@@ -5327,12 +5361,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 2.6389378290154264,
 			"picture_index": 12,
-			"bit_index": 13,
-			"combined_index": 301
+			"bit_index": 15,
+			"combined_index": 303
 		},
 		{
 			"type": "odt",
@@ -5344,12 +5378,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 2.764601535159018,
 			"picture_index": 12,
-			"bit_index": 14,
-			"combined_index": 302
+			"bit_index": 16,
+			"combined_index": 304
 		},
 		{
 			"type": "odt",
@@ -5361,12 +5395,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 2.8902652413026093,
 			"picture_index": 12,
-			"bit_index": 15,
-			"combined_index": 303
+			"bit_index": 17,
+			"combined_index": 305
 		},
 		{
 			"type": "odt",
@@ -5378,12 +5412,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 3.015928947446201,
 			"picture_index": 12,
-			"bit_index": 16,
-			"combined_index": 304
+			"bit_index": 18,
+			"combined_index": 306
 		},
 		{
 			"type": "odt",
@@ -5395,12 +5429,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 3.141592653589793,
 			"picture_index": 12,
-			"bit_index": 17,
-			"combined_index": 305
+			"bit_index": 19,
+			"combined_index": 307
 		},
 		{
 			"type": "odt",
@@ -5412,12 +5446,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 3.267256359733385,
 			"picture_index": 12,
-			"bit_index": 18,
-			"combined_index": 306
+			"bit_index": 20,
+			"combined_index": 308
 		},
 		{
 			"type": "odt",
@@ -5429,12 +5463,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 3.3929200658769765,
 			"picture_index": 12,
-			"bit_index": 19,
-			"combined_index": 307
+			"bit_index": 21,
+			"combined_index": 309
 		},
 		{
 			"type": "odt",
@@ -5446,12 +5480,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 3.5185837720205684,
 			"picture_index": 12,
-			"bit_index": 20,
-			"combined_index": 308
+			"bit_index": 22,
+			"combined_index": 310
 		},
 		{
 			"type": "odt",
@@ -5463,12 +5497,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 3.6442474781641603,
 			"picture_index": 12,
-			"bit_index": 21,
-			"combined_index": 309
+			"bit_index": 23,
+			"combined_index": 311
 		},
 		{
 			"type": "odt",
@@ -5480,12 +5514,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 3.7699111843077513,
-			"picture_index": 12,
-			"bit_index": 22,
-			"combined_index": 310
+			"picture_index": 13,
+			"bit_index": 0,
+			"combined_index": 312
 		},
 		{
 			"type": "odt",
@@ -5497,12 +5531,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 3.895574890451343,
-			"picture_index": 12,
-			"bit_index": 23,
-			"combined_index": 311
+			"picture_index": 13,
+			"bit_index": 1,
+			"combined_index": 313
 		},
 		{
 			"type": "odt",
@@ -5514,12 +5548,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 4.0212385965949355,
 			"picture_index": 13,
-			"bit_index": 0,
-			"combined_index": 312
+			"bit_index": 2,
+			"combined_index": 314
 		},
 		{
 			"type": "odt",
@@ -5531,12 +5565,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 4.1469023027385274,
 			"picture_index": 13,
-			"bit_index": 1,
-			"combined_index": 313
+			"bit_index": 3,
+			"combined_index": 315
 		},
 		{
 			"type": "odt",
@@ -5548,12 +5582,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 4.272566008882119,
 			"picture_index": 13,
-			"bit_index": 2,
-			"combined_index": 314
+			"bit_index": 4,
+			"combined_index": 316
 		},
 		{
 			"type": "odt",
@@ -5565,12 +5599,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 4.39822971502571,
 			"picture_index": 13,
-			"bit_index": 3,
-			"combined_index": 315
+			"bit_index": 5,
+			"combined_index": 317
 		},
 		{
 			"type": "odt",
@@ -5582,12 +5616,46 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 4.523893421169302,
 			"picture_index": 13,
-			"bit_index": 4,
-			"combined_index": 316
+			"bit_index": 6,
+			"combined_index": 318
+		},
+		{
+			"type": "odt",
+			"xoffset": -33.48827708230038,
+			"yoffset": -532.2809218284116,
+			"angle": -0.7853981633974483,
+			"frequency": [
+				-0.25000000000000006,
+				0.25000000000000006
+			],
+			"phase": 0,
+			"radius": 5,
+			"pupil_frequency_fraction": 0.84,
+			"pupil_angle": 4.649557127312894,
+			"picture_index": 13,
+			"bit_index": 7,
+			"combined_index": 319
+		},
+		{
+			"type": "odt",
+			"xoffset": 33.48827708230018,
+			"yoffset": -532.2809218284116,
+			"angle": -0.7853981633974483,
+			"frequency": [
+				-0.25000000000000006,
+				0.25000000000000006
+			],
+			"phase": 0,
+			"radius": 5,
+			"pupil_frequency_fraction": 0.84,
+			"pupil_angle": 4.775220833456485,
+			"picture_index": 13,
+			"bit_index": 8,
+			"combined_index": 320
 		},
 		{
 			"type": "odt",
@@ -5599,12 +5667,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 4.900884539600077,
 			"picture_index": 13,
-			"bit_index": 5,
-			"combined_index": 317
+			"bit_index": 9,
+			"combined_index": 321
 		},
 		{
 			"type": "odt",
@@ -5616,12 +5684,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 5.026548245743669,
 			"picture_index": 13,
-			"bit_index": 6,
-			"combined_index": 318
+			"bit_index": 10,
+			"combined_index": 322
 		},
 		{
 			"type": "odt",
@@ -5633,12 +5701,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 5.15221195188726,
 			"picture_index": 13,
-			"bit_index": 7,
-			"combined_index": 319
+			"bit_index": 11,
+			"combined_index": 323
 		},
 		{
 			"type": "odt",
@@ -5650,12 +5718,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 5.277875658030853,
 			"picture_index": 13,
-			"bit_index": 8,
-			"combined_index": 320
+			"bit_index": 12,
+			"combined_index": 324
 		},
 		{
 			"type": "odt",
@@ -5667,12 +5735,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 5.403539364174444,
 			"picture_index": 13,
-			"bit_index": 9,
-			"combined_index": 321
+			"bit_index": 13,
+			"combined_index": 325
 		},
 		{
 			"type": "odt",
@@ -5684,12 +5752,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 5.529203070318036,
 			"picture_index": 13,
-			"bit_index": 10,
-			"combined_index": 322
+			"bit_index": 14,
+			"combined_index": 326
 		},
 		{
 			"type": "odt",
@@ -5701,12 +5769,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 5.654866776461628,
 			"picture_index": 13,
-			"bit_index": 11,
-			"combined_index": 323
+			"bit_index": 15,
+			"combined_index": 327
 		},
 		{
 			"type": "odt",
@@ -5718,12 +5786,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 5.780530482605219,
 			"picture_index": 13,
-			"bit_index": 12,
-			"combined_index": 324
+			"bit_index": 16,
+			"combined_index": 328
 		},
 		{
 			"type": "odt",
@@ -5735,12 +5803,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 5.906194188748811,
 			"picture_index": 13,
-			"bit_index": 13,
-			"combined_index": 325
+			"bit_index": 17,
+			"combined_index": 329
 		},
 		{
 			"type": "odt",
@@ -5752,12 +5820,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 6.031857894892402,
 			"picture_index": 13,
-			"bit_index": 14,
-			"combined_index": 326
+			"bit_index": 18,
+			"combined_index": 330
 		},
 		{
 			"type": "odt",
@@ -5769,12 +5837,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.84,
 			"pupil_angle": 6.157521601035994,
 			"picture_index": 13,
-			"bit_index": 15,
-			"combined_index": 327
+			"bit_index": 19,
+			"combined_index": 331
 		},
 		{
 			"type": "odt",
@@ -5786,12 +5854,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 0.0,
 			"picture_index": 13,
-			"bit_index": 16,
-			"combined_index": 328
+			"bit_index": 20,
+			"combined_index": 332
 		},
 		{
 			"type": "odt",
@@ -5803,12 +5871,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 0.12566370614359174,
 			"picture_index": 13,
-			"bit_index": 17,
-			"combined_index": 329
+			"bit_index": 21,
+			"combined_index": 333
 		},
 		{
 			"type": "odt",
@@ -5820,12 +5888,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 0.25132741228718347,
 			"picture_index": 13,
-			"bit_index": 18,
-			"combined_index": 330
+			"bit_index": 22,
+			"combined_index": 334
 		},
 		{
 			"type": "odt",
@@ -5837,12 +5905,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 0.37699111843077515,
 			"picture_index": 13,
-			"bit_index": 19,
-			"combined_index": 331
+			"bit_index": 23,
+			"combined_index": 335
 		},
 		{
 			"type": "odt",
@@ -5854,12 +5922,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 0.5026548245743669,
-			"picture_index": 13,
-			"bit_index": 20,
-			"combined_index": 332
+			"picture_index": 14,
+			"bit_index": 0,
+			"combined_index": 336
 		},
 		{
 			"type": "odt",
@@ -5871,12 +5939,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 0.6283185307179586,
-			"picture_index": 13,
-			"bit_index": 21,
-			"combined_index": 333
+			"picture_index": 14,
+			"bit_index": 1,
+			"combined_index": 337
 		},
 		{
 			"type": "odt",
@@ -5888,12 +5956,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 0.7539822368615503,
-			"picture_index": 13,
-			"bit_index": 22,
-			"combined_index": 334
+			"picture_index": 14,
+			"bit_index": 2,
+			"combined_index": 338
 		},
 		{
 			"type": "odt",
@@ -5905,12 +5973,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 0.8796459430051421,
-			"picture_index": 13,
-			"bit_index": 23,
-			"combined_index": 335
+			"picture_index": 14,
+			"bit_index": 3,
+			"combined_index": 339
 		},
 		{
 			"type": "odt",
@@ -5922,12 +5990,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 1.0053096491487339,
 			"picture_index": 14,
-			"bit_index": 0,
-			"combined_index": 336
+			"bit_index": 4,
+			"combined_index": 340
 		},
 		{
 			"type": "odt",
@@ -5939,12 +6007,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 2.1362830044410597,
 			"picture_index": 14,
-			"bit_index": 1,
-			"combined_index": 337
+			"bit_index": 5,
+			"combined_index": 341
 		},
 		{
 			"type": "odt",
@@ -5956,12 +6024,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 2.261946710584651,
 			"picture_index": 14,
-			"bit_index": 2,
-			"combined_index": 338
+			"bit_index": 6,
+			"combined_index": 342
 		},
 		{
 			"type": "odt",
@@ -5973,12 +6041,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 2.3876104167282426,
 			"picture_index": 14,
-			"bit_index": 3,
-			"combined_index": 339
+			"bit_index": 7,
+			"combined_index": 343
 		},
 		{
 			"type": "odt",
@@ -5990,12 +6058,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 2.5132741228718345,
 			"picture_index": 14,
-			"bit_index": 4,
-			"combined_index": 340
+			"bit_index": 8,
+			"combined_index": 344
 		},
 		{
 			"type": "odt",
@@ -6007,12 +6075,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 2.6389378290154264,
 			"picture_index": 14,
-			"bit_index": 5,
-			"combined_index": 341
+			"bit_index": 9,
+			"combined_index": 345
 		},
 		{
 			"type": "odt",
@@ -6024,12 +6092,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 2.764601535159018,
 			"picture_index": 14,
-			"bit_index": 6,
-			"combined_index": 342
+			"bit_index": 10,
+			"combined_index": 346
 		},
 		{
 			"type": "odt",
@@ -6041,12 +6109,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 2.8902652413026093,
 			"picture_index": 14,
-			"bit_index": 7,
-			"combined_index": 343
+			"bit_index": 11,
+			"combined_index": 347
 		},
 		{
 			"type": "odt",
@@ -6058,12 +6126,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 3.015928947446201,
 			"picture_index": 14,
-			"bit_index": 8,
-			"combined_index": 344
+			"bit_index": 12,
+			"combined_index": 348
 		},
 		{
 			"type": "odt",
@@ -6075,12 +6143,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 3.141592653589793,
 			"picture_index": 14,
-			"bit_index": 9,
-			"combined_index": 345
+			"bit_index": 13,
+			"combined_index": 349
 		},
 		{
 			"type": "odt",
@@ -6092,12 +6160,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 3.267256359733385,
 			"picture_index": 14,
-			"bit_index": 10,
-			"combined_index": 346
+			"bit_index": 14,
+			"combined_index": 350
 		},
 		{
 			"type": "odt",
@@ -6109,12 +6177,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 3.3929200658769765,
 			"picture_index": 14,
-			"bit_index": 11,
-			"combined_index": 347
+			"bit_index": 15,
+			"combined_index": 351
 		},
 		{
 			"type": "odt",
@@ -6126,12 +6194,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 3.5185837720205684,
 			"picture_index": 14,
-			"bit_index": 12,
-			"combined_index": 348
+			"bit_index": 16,
+			"combined_index": 352
 		},
 		{
 			"type": "odt",
@@ -6143,12 +6211,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 3.6442474781641603,
 			"picture_index": 14,
-			"bit_index": 13,
-			"combined_index": 349
+			"bit_index": 17,
+			"combined_index": 353
 		},
 		{
 			"type": "odt",
@@ -6160,12 +6228,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 3.7699111843077513,
 			"picture_index": 14,
-			"bit_index": 14,
-			"combined_index": 350
+			"bit_index": 18,
+			"combined_index": 354
 		},
 		{
 			"type": "odt",
@@ -6177,12 +6245,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 3.895574890451343,
 			"picture_index": 14,
-			"bit_index": 15,
-			"combined_index": 351
+			"bit_index": 19,
+			"combined_index": 355
 		},
 		{
 			"type": "odt",
@@ -6194,12 +6262,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 4.0212385965949355,
 			"picture_index": 14,
-			"bit_index": 16,
-			"combined_index": 352
+			"bit_index": 20,
+			"combined_index": 356
 		},
 		{
 			"type": "odt",
@@ -6211,12 +6279,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 4.1469023027385274,
 			"picture_index": 14,
-			"bit_index": 17,
-			"combined_index": 353
+			"bit_index": 21,
+			"combined_index": 357
 		},
 		{
 			"type": "odt",
@@ -6228,12 +6296,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 5.277875658030853,
 			"picture_index": 14,
-			"bit_index": 18,
-			"combined_index": 354
+			"bit_index": 22,
+			"combined_index": 358
 		},
 		{
 			"type": "odt",
@@ -6245,12 +6313,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 5.403539364174444,
 			"picture_index": 14,
-			"bit_index": 19,
-			"combined_index": 355
+			"bit_index": 23,
+			"combined_index": 359
 		},
 		{
 			"type": "odt",
@@ -6262,12 +6330,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 5.529203070318036,
-			"picture_index": 14,
-			"bit_index": 20,
-			"combined_index": 356
+			"picture_index": 15,
+			"bit_index": 0,
+			"combined_index": 360
 		},
 		{
 			"type": "odt",
@@ -6279,12 +6347,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 5.654866776461628,
-			"picture_index": 14,
-			"bit_index": 21,
-			"combined_index": 357
+			"picture_index": 15,
+			"bit_index": 1,
+			"combined_index": 361
 		},
 		{
 			"type": "odt",
@@ -6296,12 +6364,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 5.780530482605219,
-			"picture_index": 14,
-			"bit_index": 22,
-			"combined_index": 358
+			"picture_index": 15,
+			"bit_index": 2,
+			"combined_index": 362
 		},
 		{
 			"type": "odt",
@@ -6313,12 +6381,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 5.906194188748811,
-			"picture_index": 14,
-			"bit_index": 23,
-			"combined_index": 359
+			"picture_index": 15,
+			"bit_index": 3,
+			"combined_index": 363
 		},
 		{
 			"type": "odt",
@@ -6330,12 +6398,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 6.031857894892402,
 			"picture_index": 15,
-			"bit_index": 0,
-			"combined_index": 360
+			"bit_index": 4,
+			"combined_index": 364
 		},
 		{
 			"type": "odt",
@@ -6347,12 +6415,12 @@
 				0.25000000000000006
 			],
 			"phase": 0,
-			"radius": 10,
+			"radius": 5,
 			"pupil_frequency_fraction": 0.95,
 			"pupil_angle": 6.157521601035994,
 			"picture_index": 15,
-			"bit_index": 1,
-			"combined_index": 361
+			"bit_index": 5,
+			"combined_index": 365
 		}
 	],
 	"channel_map": {
@@ -6740,7 +6808,7 @@
 					12,
 					12,
 					12,
-					12,
+					13,
 					13,
 					13,
 					13
@@ -6750,13 +6818,13 @@
 					18,
 					23,
 					4,
-					7,
-					12,
-					17,
-					22,
-					3,
-					6,
-					11
+					9,
+					14,
+					19,
+					0,
+					5,
+					10,
+					15
 				]
 			},
 			"n=1_f=0": {
@@ -6779,12 +6847,12 @@
 				],
 				"bit_indices": [
 					7,
-					16,
-					0,
-					1,
-					9,
-					17,
-					18
+					20,
+					4,
+					5,
+					13,
+					21,
+					22
 				]
 			},
 			"n=11_f=0.84": {
@@ -6796,7 +6864,7 @@
 					12,
 					12,
 					12,
-					12,
+					13,
 					13,
 					13,
 					13
@@ -6806,13 +6874,13 @@
 					18,
 					23,
 					4,
-					7,
-					12,
-					17,
-					22,
-					3,
-					6,
-					11
+					9,
+					14,
+					19,
+					0,
+					5,
+					10,
+					15
 				]
 			},
 			"n=6_f=0.84": {
@@ -6821,16 +6889,16 @@
 					11,
 					12,
 					12,
-					12,
+					13,
 					13
 				],
 				"bit_indices": [
 					7,
 					18,
 					4,
-					12,
-					22,
-					6
+					14,
+					0,
+					10
 				]
 			},
 			"n=11_f=0.55": {
@@ -7211,6 +7279,10 @@
 					14,
 					14,
 					15,
+					15,
+					15,
+					15,
+					15,
 					15
 				],
 				"bit_indices": [
@@ -7544,7 +7616,11 @@
 					22,
 					23,
 					0,
-					1
+					1,
+					2,
+					3,
+					4,
+					5
 				]
 			},
 			"off": {

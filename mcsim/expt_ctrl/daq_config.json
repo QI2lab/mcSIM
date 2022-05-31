@@ -1,5 +1,5 @@
 {
-	"timestamp": "2022_04_21_14;28;47",
+	"timestamp": "2022_05_30_16;53;43",
 	"analog_map": {
 		"vc_mirror_x": 0,
 		"vc_mirror_y": 1,
@@ -72,8 +72,8 @@
 		},
 		"red": {
 			"digital": {
-				"odt_cam": 0,
 				"odt_shutter": 0,
+				"odt_laser": 0,
 				"sim_shutter": 1,
 				"blue_laser": 0,
 				"green_laser": 0,
