@@ -1689,7 +1689,7 @@ class dlp6500:
         @param nrepeats:
         @param ndarkframes:
         @param blank:
-        @param mode_pattern_indices:
+        @param mode_pattern_indices: select subset of mode patterns to use
         @return picture_indices, bit_indices:
         """
         if self.presets is None:
@@ -1820,7 +1820,7 @@ class dlp6500:
 
     def program_dmd_seq(self, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
                         blank: list[bool], mode_pattern_indices: list[int], triggered: bool, verbose: bool = False,
-                        exp_time_us: int = 105):
+                        exp_time_us: int = 105, clear_pattern_after_trigger: bool = False):
         """
         convenience function for generating DMD pattern and programming DMD
 
@@ -1854,7 +1854,8 @@ class dlp6500:
         # print("trigger2 mode=%d" % mode_trig2)
 
         self.set_pattern_sequence(pic_inds, bit_inds, exp_time_us, 0, triggered=triggered,
-                                  clear_pattern_after_trigger=False, bit_depth=1, num_repeats=0, mode='pre-stored')
+                                  clear_pattern_after_trigger=clear_pattern_after_trigger,
+                                  bit_depth=1, num_repeats=0, mode='pre-stored')
 
         if verbose:
             # print pattern info
