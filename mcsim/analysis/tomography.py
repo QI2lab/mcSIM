@@ -255,7 +255,7 @@ def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.nda
     ff_perp = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
     # compute efield
-    efield_ft = tools.translate_ft(img_ft, frq_ref, drs=(dxy, dxy), use_gpu=use_gpu)
+    efield_ft = tools.translate_ft(img_ft, frq_ref[..., 0], frq_ref[..., 1], drs=(dxy, dxy), use_gpu=use_gpu)
     efield_ft[..., ff_perp > fmax_int / 2] = 0
 
     return efield_ft
@@ -453,7 +453,7 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     # one reconstruction per image
     # spot_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
     spot_ft = np.zeros((nz_sp, ny_sp, nx_sp), dtype=complex)
-    num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=int)
+    num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=np.int8)
     for ii in range(nimgs):
         # check we don't have duplicate indices ... otherwise need to do something else ...
         cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
@@ -766,7 +766,7 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
     # if img_efield is None:
     #     img_efield = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_ft)))
     data_stack = np.stack((img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft), axis=0)
-    shifted_ft = tools.translate_ft(data_stack, beam_frq[:2], drs=(dxy, dxy), use_gpu=use_gpu)
+    shifted_ft = tools.translate_ft(data_stack, beam_frq[0], beam_frq[1], drs=(dxy, dxy), use_gpu=use_gpu)
     shifted_ft[..., out_of_band] = 0
     shifted = fft.fftshift(fft.ifft2(fft.ifftshift(shifted_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 

@@ -6,7 +6,7 @@ specific modules.
 import numpy as np
 import scipy.sparse as sp
 from scipy import fft
-
+import localize_psf.rois as rois
 # _cupy_available = False
 _cupy_available = True
 try:
@@ -14,7 +14,6 @@ try:
 except ImportError:
     _cupy_available = False
 
-import localize_psf.rois as rois
 
 # image processing
 def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
@@ -38,7 +37,6 @@ def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
     # there are many possible approaches for doing azimuthal averaging. Naive way: for each mask az_avg = np.mean(img[mask])
     # also can do using scipy.ndimage.mean(img, labels=masks, index=np.arange(0, n_bins). scipy approach is slightly slower
     # than np.bincount. Naive approach ~ factor of 2 slower.
-
 
     if weights is None:
         weights = np.ones(img.shape)
@@ -186,7 +184,7 @@ def bin(img, bin_size, mode='sum'):
     Probably this pattern generalizes to higher dimensions!
 
     :param img: image to be binned
-    :param nbin: [ny_bin, nx_bin] where these must evenly divide the size of the image
+    :param bin_size: [ny_bin, nx_bin] where these must evenly divide the size of the image
     :param mode: either 'sum' or 'mean'
     :return:
     """
@@ -594,7 +592,7 @@ def get_linecut(img, start_coord, end_coord, width):
     xstart, ystart = start_coord
     xend, yend = end_coord
 
-    angle = np.arctan( (yend - ystart) / (xend - xstart))
+    angle = np.arctan((yend - ystart) / (xend - xstart))
 
     xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
     xrot = (xx - xstart) * np.cos(angle) + (yy - ystart) * np.sin(angle)
@@ -666,7 +664,7 @@ def map_intervals(vals, from_intervals, to_intervals):
 
     vals_out = []
     for v, i1, i2 in zip(vals, from_intervals, to_intervals):
-        vals_out.append( (v - i1[0]) * (i2[1] - i2[0]) / (i1[1] - i1[0])  + i2[0])
+        vals_out.append((v - i1[0]) * (i2[1] - i2[0]) / (i1[1] - i1[0])  + i2[0])
 
     return vals_out
 
@@ -843,7 +841,8 @@ def translate_pix(img, shifts, dr=(1, 1), axes=(-2, -1), wrap=True, pad_val=0):
                 if s >= 0:
                     slices = tuple([slice(0, img.shape[ii]) if ii != axis else slice(0, s) for ii in range(img.ndim)])
                 else:
-                    slices = tuple([slice(0, img.shape[ii]) if ii != axis else slice(s + img.shape[axis], img.shape[axis]) for ii in range(img.ndim)])
+                    slices = tuple([slice(0, img.shape[ii]) if ii != axis else
+                                    slice(s + img.shape[axis], img.shape[axis]) for ii in range(img.ndim)])
 
                 img[slices] = pad_val
 
@@ -889,7 +888,7 @@ def translate_im(img, shift, dx=1, dy=None, use_gpu=_cupy_available):
     return img_shifted
 
 
-def translate_ft(img_ft: np.ndarray, shift_frq: np.ndarray, drs: list[float, float] = None,
+def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[float, float] = None,
                  use_gpu: bool = _cupy_available) -> np.ndarray:
     """
     Given img_ft(f), return the translated function
@@ -903,9 +902,10 @@ def translate_ft(img_ft: np.ndarray, shift_frq: np.ndarray, drs: list[float, flo
 
     :param img_ft: array representing the fourier transform of an image with frequency origin centered as if using fftshift.
     Shape n1 x n2 x ... x n_{-2} x n_{-1}. Shifting is done along the last two axes.
-    :param shift_frq: array of shift frequencies with size n_{-m} x ... x n_{-3} x 2 where fx = shift_frq[..., 0] and
-    fy = shift_frq[..., 1]
-    Images along dimensions -m, ..., -3 are shifted in parallel
+    :param fx: array of x-shift frequencies
+    fx and fy should either be broadcastable to the same szie as img_ft, or they should be of size
+    n_{-m} x ... x n_{-3} x 2 where images along dimensions -m, ..., -3 are shifted in parallel
+    :param fy:
     :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
     :param use_gpu: perform Fourier transforms on GPU
 
@@ -914,16 +914,48 @@ def translate_ft(img_ft: np.ndarray, shift_frq: np.ndarray, drs: list[float, flo
 
     if img_ft.ndim < 2:
         raise ValueError("img_ft must be at least 2D")
-    shift_frq = np.array(shift_frq)
 
-    ndim_extra_frq = shift_frq.ndim - 1
-    if shift_frq.shape[:-1] != img_ft.shape[-2 - ndim_extra_frq:-2]:
-        raise ValueError("img_ft and shift_frq have incompatible shapes " +
-                         shift_frq.ndim * "%d, " % shift_frq.shape +
-                         " and " +
-                         img_ft.ndim * "%d, " % img_ft.shape)
+    ndims = img_ft.ndim
+    ny, nx = img_ft.shape[-2:]
 
-    if np.all(shift_frq == 0):
+    # ensure shift_frq shape can be broadcast with img_ft
+    # shift_frq = np.array(shift_frq, copy=True)
+    # fx = shift_frq[..., 0]
+    # fy = shift_frq[..., 1]
+    fx = np.array(fx, copy=True)
+    fy = np.array(fy, copy=True)
+
+    if fx.shape != fy.shape:
+        raise ValueError(f"fx and fy must have same shape, but had shapes {fx.shape} and {fy.shape}")
+
+    # check if shapes are broadcastable
+    shapes_broadcastable = True
+    try:
+        _ = np.broadcast(fx, img_ft)
+    except ValueError:
+        shapes_broadcastable = False
+
+    # shapes_broadcastable = True
+    # if fx.ndim != img_ft.ndim:
+    #     shapes_broadcastable = False
+    #
+    # for ii in range(fx.ndim):
+    #     if not (fx.shape[ii] == img_ft.shape[ii] or fx.shape[ii] == 1):
+    #         shapes_broadcastable = False
+
+    if not shapes_broadcastable:
+
+        ndim_extra_frq = fx.ndim
+        if fx.shape != img_ft.shape[-2 - ndim_extra_frq:-2]:
+            raise ValueError(f"fx and shift_frq have incompatible shapes {fx.shape} and {img_ft.shape}")
+
+        # exponential phase ramp. Should be broadcastable to shape of img_ft
+        axis_expand_frq = list(range(ndims - fx.ndim)) + [-2, -1]
+        fx = np.expand_dims(fx, axis=axis_expand_frq)
+        fy = np.expand_dims(fy, axis=axis_expand_frq)
+
+    # do translations
+    if np.all(fx == 0) and np.all(fy == 0):
         return np.array(img_ft, copy=True)
     else:
         # 1. shift frequencies in img_ft so zero frequency is in corner using ifftshift
@@ -934,23 +966,21 @@ def translate_ft(img_ft: np.ndarray, shift_frq: np.ndarray, drs: list[float, flo
             drs = (1, 1)
         dy, dx = drs
 
-        ndims = img_ft.ndim
-        ny, nx = img_ft.shape[-2:]
         # must use symmetric frequency representation to do shifting correctly!
         # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
         # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
         # we do not apply an fftshift, so we don't have to apply an intermediate shift in our FFTs later
         # x = get_fft_pos(nx, dx, centered=False, mode='symmetric')
         # y = get_fft_pos(ny, dy, centered=False, mode='symmetric')
-        x = fft.fftfreq(nx) * nx * dx
-        y = fft.fftfreq(ny) * ny * dy
-
-        # exponential phase ramp. Should be broadcastable to shape of img_ft
         axis_expand_x = list(range(ndims - 2 + 1))
+        x = np.expand_dims(fft.fftfreq(nx) * nx * dx, axis=axis_expand_x)
+
         axis_expand_y = list(range(ndims - 2)) + [-1]
-        axis_expand_frq = list(range(ndims - shift_frq.ndim - 1)) + [-2, -1]
-        exp_factor = np.exp(-1j * 2 * np.pi * (np.expand_dims(shift_frq[..., 0], axis=axis_expand_frq) * np.expand_dims(x, axis=axis_expand_x) +
-                                               np.expand_dims(shift_frq[..., 1], axis=axis_expand_frq) * np.expand_dims(y, axis=axis_expand_y)))
+        y = np.expand_dims(fft.fftfreq(ny) * ny * dy, axis=axis_expand_y)
+
+        # exp_factor = np.exp(-1j * 2 * np.pi * (np.expand_dims(shift_frq[..., 0], axis=axis_expand_frq) * x +
+        #                                        np.expand_dims(shift_frq[..., 1], axis=axis_expand_frq) * y))
+        exp_factor = np.exp(-1j * 2 * np.pi * (fx * x + fy * y))
 
         if not use_gpu:
             # ifft2(ifftshift(img_ft)) = ifftshift(img)

@@ -19,22 +19,34 @@ class TestSIM(unittest.TestCase):
         :return:
         """
         # set parameters
-        options = {'pixel_size': 0.065, 'wavelength': 0.5, 'na': 1.3}
-        fmax = 1 / (0.5 * options["wavelength"] / options["na"])
-        nx = 512
+        #options = {'pixel_size': 0.065, 'wavelength': 0.5, 'na': 1.3}
+        dxy = 0.065
+        wavelength = 0.5
+        na = 1.3
+        fmax = 1 / (0.5 * wavelength / na)
+        nxy = 512
+
+        # set frequency we will try to find
         f = 1 / 0.25
         angle = 30 * np.pi / 180
         frqs = [f * np.cos(angle), f * np.sin(angle)]
         phi = 0.2377747474
 
-        # create sample image
-        x = options['pixel_size'] * np.arange(nx)
+        # create sample image and pixel grid
+        x = dxy * np.arange(nxy)
         y = x
         xx, yy = np.meshgrid(x, y)
         m = 1 + 0.5 * np.cos(2 * np.pi * (frqs[0] * xx + frqs[1] * yy) + phi)
 
+        # Fourier transform and frequency grid
         mft = fft.fftshift(fft.fft2(fft.ifftshift(m)))
-        frq_extracted, mask, _ = sim.fit_modulation_frq(mft, mft, options["pixel_size"], fmax, exclude_res=0.6)
+        fx = fft.fftshift(np.fft.fftfreq(nxy, dxy))
+        fy = fft.fftshift(np.fft.fftfreq(nxy, dxy))
+        ff = np.sqrt(np.expand_dims(fx, axis=0)**2 + np.expand_dims(fy, axis=1)**2)
+
+        # do fitting
+        mask = ff > 0.6 * fmax
+        frq_extracted, mask, _ = sim.fit_modulation_frq(mft, mft, dxy, mask)
 
         self.assertAlmostEqual(np.abs(frq_extracted[0]), np.abs(frqs[0]), places=5)
         self.assertAlmostEqual(np.abs(frq_extracted[1]), np.abs(frqs[1]), places=5)
@@ -71,7 +83,7 @@ class TestSIM(unittest.TestCase):
 
         phase_guess_center = sim.get_phase_realspace(m_center, frqs, dx, phase_guess=0, origin="center")
 
-        self.assertAlmostEqual(phi, float(phase_guess_center), places=5)
+        self.assertAlmostEqual(phi, float(phase_guess_center), places=4)
 
     def test_get_phase_ft(self):
         """
@@ -111,23 +123,23 @@ class TestSIM(unittest.TestCase):
         nbins = [1, 2, 3, 4, 5, 6, 4, 5]
         nxs = [600, 600, 600, 600, 600, 600, 500, 625]
 
-        dx = 0.59
+        dxy = 0.59
         for nbin, nx in zip(nbins, nxs):
 
             freq = np.array([1 / 25.6346, 1 / 25.77772])
             phi = 0.23626
-            gt, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)), freq, phi, 1, 1, 0, 0, dx, photon_shot_noise=False,
+            gt, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)), freq, phi, 1, 1, 0, 0, dxy, photon_shot_noise=False,
                                                bin_size=nbin)
-            gt = gt[0, 0]
+            #gt = gt[0, 0]
             gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(gt)))
 
             # test phase
-            phases_fit = sim.get_phase_realspace(gt, freq, nbin * dx, origin="center")
+            phases_fit = sim.get_phase_realspace(gt, freq, nbin * dxy, origin="center")
             self.assertAlmostEqual(phi, float(phases_fit), places=3)
 
             # test frequency
             frq_guess = freq + np.random.uniform(-0.005, 0.005, 2)
-            frqs_fit, _, result = sim.fit_modulation_frq(gt_ft, gt_ft, nbin * dx, frq_guess=frq_guess)
+            frqs_fit, _, result = sim.fit_modulation_frq(gt_ft, gt_ft, nbin * dxy, frq_guess=frq_guess)
             np.testing.assert_allclose(frqs_fit, freq, atol=1e-5)
 
 
@@ -174,8 +186,8 @@ class TestSIM(unittest.TestCase):
         gt_ft_shifted = np.zeros((nangles, nphases, ny, nx), dtype=complex)
         for ii in range(nangles):
             gt_ft_shifted[ii, 0] = fft.fftshift(fft.fft2(fft.ifftshift(gt)))
-            gt_ft_shifted[ii, 1] = tools.translate_ft(gt_ft_shifted[ii, 0], -frqs[ii], drs=(dx, dx))
-            gt_ft_shifted[ii, 2] = tools.translate_ft(gt_ft_shifted[ii, 0], frqs[ii], drs=(dx, dx))
+            gt_ft_shifted[ii, 1] = tools.translate_ft(gt_ft_shifted[ii, 0], -frqs[ii, 0], -frqs[ii, 1], drs=(dx, dx))
+            gt_ft_shifted[ii, 2] = tools.translate_ft(gt_ft_shifted[ii, 0], frqs[ii, 0], frqs[ii, 1], drs=(dx, dx))
 
         sim_fs_ft = np.zeros(gt_ft_shifted.shape, dtype=complex)
         for ii in range(nangles):
@@ -251,45 +263,6 @@ class TestSIM(unittest.TestCase):
         max_err = np.max([np.max(np.abs(jac[ii] - jac_est[ii])) for ii in range(len(params))])
         self.assertAlmostEqual(max_err, 0, places=6)
 
-    @unittest.skip("decided get_test_pattern() function does not belong. But should generate ")
-    def test_test_patterns(self):
-        """
-        Generate SIM test patterns with no noise or OTF blurring, and verify that these can be reconstructed.
-        :return:
-        """
-        gt = sim.get_test_pattern([600, 600])
-        otf = np.ones(gt.shape)
-        frqs = np.array([[0.21216974, 3.97739458],
-                         [-3.17673383, 1.97618225],
-                         [3.24054346, 1.8939568]])
-        phases = np.zeros((3, 3))
-        phases[:, 0] = 0
-        phases[:, 1] = 2 * np.pi / 3
-        phases[:, 2] = 4 * np.pi / 3
-        mod_depths = np.array([[0.9, 0.8, 0.87],
-                               [1, 0.98, 0.88],
-                               [0.89, 0.912, 0.836]])
-        amps = np.array([[1, 0.7, 1.1],
-                         [1, 1.16, 0.79],
-                         [1, 0.83, 1.2]])
-
-        max_photons = 1
-        sim_imgs, _ = sim.get_simulated_sim_imgs(gt, frqs, phases, mod_depths, max_photons,
-                                              1, 0, 0, 0.065, amps, otf=otf, photon_shot_noise=False)
-        nangles, nphases, ny, nx = sim_imgs.shape
-
-        imgs_ft = np.zeros(sim_imgs.shape, dtype=complex)
-        for ii in range(nangles):
-            for jj in range(nphases):
-                imgs_ft[ii, jj] = fft.fftshift(fft.fft2(fft.ifftshift(sim_imgs[ii, jj])))
-
-        separated_components = sim.do_sim_band_separation(imgs_ft, phases, mod_depths, amps)
-
-        gt_per_angle = np.zeros((nangles, ny, nx))
-        for ii in range(nangles):
-            gt_per_angle[ii] = fft.fftshift(fft.ifft2(fft.ifftshift(separated_components[ii, 0]))).real
-
-            np.testing.assert_allclose(gt, gt_per_angle[ii], atol=1e-14)
 
 if __name__ == "__main__":
     unittest.main()

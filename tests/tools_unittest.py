@@ -119,19 +119,19 @@ class TestTools(unittest.TestCase):
 
         # x-shifting
         for n in range(1, 20):
-            img_ft_shifted = tools.translate_ft(img_ft, [n * df, 0], drs=(dx, dx))
+            img_ft_shifted = tools.translate_ft(img_ft, n * df, 0, drs=(dx, dx))
             max_err = np.abs(img_ft_shifted[:, :-n] - img_ft[:, n:]).max()
             self.assertTrue(max_err < 1e-7)
 
         # y-shifting
         for n in range(1, 20):
-            img_ft_shifted = tools.translate_ft(img_ft, [0, n * df], drs=(dx, dx))
+            img_ft_shifted = tools.translate_ft(img_ft, 0, n * df, drs=(dx, dx))
             max_err = np.abs(img_ft_shifted[:-n, :] - img_ft[n:, :]).max()
             self.assertTrue(max_err < 1e-7)
 
         # x+y shifting
         for n in range(1, 20):
-            img_ft_shifted = tools.translate_ft(img_ft, [n * df, n * df], drs=(dx, dx))
+            img_ft_shifted = tools.translate_ft(img_ft, n * df, n * df, drs=(dx, dx))
             max_err = np.abs(img_ft_shifted[:-n, :-n] - img_ft[n:, n:]).max()
             self.assertTrue(max_err < 1e-7)
 
@@ -141,7 +141,7 @@ class TestTools(unittest.TestCase):
 
         dt = 0.46436
         for n in [2, 3, 4, 3634, 581]:
-            frqs_np = numpy.fft.fftfreq(n, dt)
+            frqs_np = np.fft.fftfreq(n, dt)
 
             # positive and negative frequencies, with f=0 at edge
             frqs_e = tools.get_fft_frqs(n, dt, centered=False, mode="symmetric")
@@ -149,7 +149,7 @@ class TestTools(unittest.TestCase):
 
             # positive and negative frequencies, with f=0 at center
             frqs_c = tools.get_fft_frqs(n, dt, centered=True, mode="symmetric")
-            self.assertAlmostEqual(np.abs(np.max(numpy.fft.fftshift(frqs_np) - frqs_c)), 0, places=14)
+            self.assertAlmostEqual(np.abs(np.max(np.fft.fftshift(frqs_np) - frqs_c)), 0, places=14)
 
             # positive frequencies with f=0 at edge
             frqs_e_pos = tools.get_fft_frqs(n, dt, centered=False, mode="positive")
