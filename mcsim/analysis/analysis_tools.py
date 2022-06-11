@@ -43,7 +43,7 @@ def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
 
     n_bins = len(bin_edges) - 1
     # build masks. initialize with integer value that does not conflict with any of our bins
-    masks = np.ones((img.shape[0], img.shape[1]), dtype=np.int) * n_bins
+    masks = np.ones((img.shape[0], img.shape[1]), dtype=int) * n_bins
     for ii in range(n_bins):
         # create mask
         bmin = bin_edges[ii]
@@ -381,7 +381,7 @@ def resample_bandlimited_ft(img_ft, mag=(2, 2)):
     ind_start = [(m * n) // 2 - n // 2 for n, m in zip(img_ft.shape, mag)]
 
     slice_obj = tuple([slice(istart, istart + n, 1) for istart, n in zip(ind_start, img_ft.shape)])
-    img_ft_exp = np.zeros([n * m for n, m in zip(img_ft.shape, mag)], dtype=np.complex)
+    img_ft_exp = np.zeros([n * m for n, m in zip(img_ft.shape, mag)], dtype=complex)
     img_ft_exp[slice_obj] = img_ft
 
     # if initial array was even it had an unpaired negative frequency, but its pair is present in the larger array
@@ -1029,7 +1029,7 @@ def rfft2fft(img_rft):
 
     nx = img_rft.shape[0]
     
-    img_fft = np.zeros((nx, nx), dtype=np.complex)
+    img_fft = np.zeros((nx, nx), dtype=complex)
     img_fft[: img_rft.shape[0], : img_rft.shape[1]] = img_rft
     img_fft = fft.fftshift(img_fft)
     test = conj_transpose_fft(img_fft)
