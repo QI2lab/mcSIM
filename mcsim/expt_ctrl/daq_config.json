@@ -1,5 +1,5 @@
 {
-	"timestamp": "2022_05_30_16;53;43",
+	"timestamp": "2022_06_10_16;32;11",
 	"analog_map": {
 		"vc_mirror_x": 0,
 		"vc_mirror_y": 1,
@@ -7,17 +7,17 @@
 		"z_stage_monitor": 3
 	},
 	"digital_map": {
-		"odt_cam": 0,
+		"odt_cam_sync": 0,
+		"odt_cam_enable": 10,
 		"odt_shutter": 9,
 		"odt_laser": 2,
-		"sim_cam": 5,
+		"sim_cam_sync": 5,
 		"sim_shutter": 6,
 		"blue_laser": 8,
 		"green_laser": 7,
 		"red_laser": 1,
 		"dmd_enable": 4,
 		"dmd_advance": 3,
-		"odt_cam_master_trig": 10,
 		"signal_monitor": 11,
 		"analog_trigger": 12,
 		"camera_trigger_monitor": 14
@@ -25,17 +25,17 @@
 	"presets": {
 		"off": {
 			"digital": {
-				"odt_cam": 0,
+				"odt_cam_sync": 0,
 				"odt_shutter": 0,
 				"odt_laser": 0,
-				"sim_cam": 0,
+				"sim_cam_sync": 0,
 				"sim_shutter": 0,
 				"blue_laser": 0,
 				"green_laser": 0,
 				"red_laser": 0,
 				"dmd_enable": 0,
 				"dmd_advance": 0,
-				"odt_cam_master_trig": 0,
+				"odt_cam_enable": 0,
 				"signal_monitor": 0,
 				"analog_trigger": 0,
 				"camera_trigger_monitor": 0

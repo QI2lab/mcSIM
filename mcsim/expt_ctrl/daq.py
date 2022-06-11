@@ -651,7 +651,7 @@ if __name__ == "__main__":
                   "red_laser": 1,
                   "dmd_enable": 4,
                   "dmd_advance": 3,
-                  "odt_cam_master_trig": 10,
+                  "odt_cam_enable": 10,
                   "signal_monitor": 11,
                   "analog_trigger": 12
                   }
@@ -710,4 +710,4 @@ if __name__ == "__main__":
                        "analog": {}}
                }
 
-    save_config_file("daq_config.json", daq_do_map, daq_ao_map, presets)
+    save_config_file("daq_config_example.json", daq_do_map, daq_ao_map, presets)

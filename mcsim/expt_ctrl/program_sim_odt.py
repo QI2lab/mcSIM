@@ -12,7 +12,8 @@ def get_sim_odt_sequence(daq_do_map, daq_ao_map, presets, channels, odt_exposure
                          odt_stabilize_t=0., min_odt_frame_time=8e-3,
                          sim_readout_time=10e-3, sim_stabilize_t=200e-3, shutter_delay_time=50e-3,
                          z_voltages=None,
-                         use_dmd_as_odt_shutter=False, n_digital_ch=16, n_analog_ch=4):
+                         use_dmd_as_odt_shutter=False, n_digital_ch=16, n_analog_ch=4,
+                         cameras=None):
     """
     Create DAQ program for SIM/ODT experiment
 
@@ -36,25 +37,45 @@ def get_sim_odt_sequence(daq_do_map, daq_ao_map, presets, channels, odt_exposure
     if z_voltages is None:
         z_voltages = [0]
 
+    nsteps_interval = int(np.ceil(interval / dt))
+    if interval != 0:
+        raise NotImplementedError("Interval not implemented for non-zero value")
+    # todo: can easily implement interval if no z-stack, but otherwise difficult since don't have a way
+    # to stop the daq after a certain number of repeats
+
+    if cameras is None:
+        cameras = ["sim"] * len(channels)
+
+    if len(cameras) != len(channels):
+        raise ValueError(f"Length of cameras and length of channels must be equal, but they were {len(cameras):d} and {len(channels):d}")
+
     # programs for each channel
     digital_pgms = []
     analog_pgms = []
-    for ch in channels:
+    info = ""
+    for ch, cam in zip(channels, cameras):
         if ch == "odt":
-            d, a = get_odt_sequence(daq_do_map, daq_ao_map, presets[ch], odt_exposure_time, n_odt_patterns,
+            d, a, i = get_odt_sequence(daq_do_map, daq_ao_map, presets[ch], odt_exposure_time, n_odt_patterns,
                                     dt=dt, interval=0, nrepeats=n_odt_per_sim, n_trig_width=n_trig_width,
                                     dmd_delay=dmd_delay, stabilize_t=odt_stabilize_t, min_frame_time=min_odt_frame_time,
                                     shutter_delay_time=shutter_delay_time, n_digital_ch=n_digital_ch,
                                     n_analog_ch=n_analog_ch, use_dmd_as_shutter=use_dmd_as_odt_shutter)
+
+            info += i
+            digital_pgms.append(d)
+            analog_pgms.append(a)
         else:
-            d, a = get_sim_sequence(daq_do_map, daq_ao_map, presets[ch], sim_exposure_time, n_sim_patterns,
+            d, a, i = get_sim_sequence(daq_do_map, daq_ao_map, presets[ch], sim_exposure_time, n_sim_patterns,
                                     dt=dt, interval=0, nrepeats=1, n_trig_width=n_trig_width, dmd_delay=dmd_delay,
                                     stabilize_t=sim_stabilize_t, min_frame_time=0, cam_readout_time=sim_readout_time,
                                     shutter_delay_time=shutter_delay_time, n_digital_ch=n_digital_ch, n_analog_ch=n_analog_ch,
-                                    use_dmd_as_shutter=True)
+                                    use_dmd_as_shutter=True, camera=cam)
 
-        digital_pgms.append(d)
-        analog_pgms.append(a)
+            info += i
+            digital_pgms.append(d)
+            analog_pgms.append(a)
+
+
 
     # for z-stack, digital pgm are just repeated. We don't need to do anything at all
     digital_pgm_full = np.vstack(digital_pgms)
@@ -80,6 +101,19 @@ def get_sim_odt_sequence(daq_do_map, daq_ao_map, presets, channels, odt_exposure
     #         f"number of sim pics ({n_sim_patterns:d}) did not match"
     #         f" DAQ program {np.sum(digital_pgm_full[:, daq_do_map['sim_cam']]) // n_trig_width:d}")
 
+    # check program and number of pictures match
+    # if np.sum(digital_program[:, daq_do_map["odt_cam"]]) // n_trig_width != nodt_pics // ntimes // nz:
+    #     raise ValueError("number of odt pics (%d) did not match DAQ program (%d)" %
+    #                      (nodt_pics, np.sum(digital_program[:, daq_do_map["odt_cam"]]) // n_trig_width))
+
+    # if np.sum(digital_program[:, daq_do_map["sim_cam"]]) // n_trig_width != nsim_pics // ntimes // nz:
+    #     raise ValueError(f"number of sim pics ({nsim_pics:d}) did not match DAQ program "
+    #                      f"{np.sum(digital_program[:, daq_do_map['sim_cam']]) // n_trig_width:d}")
+    #
+    # if np.sum(digital_program[:, daq_do_map["analog_trigger"]]) != len(channels):
+    #     raise ValueError(f"number of analog triggers, {np.sum(digital_program[:, daq_do_map['analog_trigger']]):d},"
+    #                      f" did not match {len(channels) * nz:d}")
+
     # get correct voltage for each step
     analog_pgms_per_z = []
     for v in z_voltages:
@@ -91,13 +125,11 @@ def get_sim_odt_sequence(daq_do_map, daq_ao_map, presets, channels, odt_exposure
     analog_pgm_full[:, daq_ao_map["z_stage_monitor"]] = analog_pgm_full[:, daq_ao_map["z_stage"]]
 
     # print information
-    print("channels are:", end="")
-    print(" ".join(channels))
+    info += "channels are:" + " ".join(channels) + "\n"
+    info += f"full digital program = {digital_pgm_full.shape[0] * dt * 1e3: 0.3f}ms = {digital_pgm_full.shape[0]:d} clock cycles\n"
+    info += f"full analog program = {analog_pgm_full.shape[0]} steps"
 
-    print(f"full digital program = {digital_pgm_full.shape[0] * dt * 1e3: 0.3f}ms = {digital_pgm_full.shape[0]:d} clock cycles")
-    print(f"full analog program = {analog_pgm_full.shape[0]} steps")
-
-    return digital_pgm_full, analog_pgm_full
+    return digital_pgm_full, analog_pgm_full, info
 
 
 def get_odt_sequence(daq_do_map, daq_ao_map, preset,
@@ -109,8 +141,11 @@ def get_odt_sequence(daq_do_map, daq_ao_map, preset,
     """
     Get DAQ ODT sequence
 
-    @param daq_do_map:
-    @param daq_ao_map:
+    al times in seconds
+
+    @param daq_do_map: dictionary with named lines as keys and line numbers as values. Must include lines
+
+    @param daq_ao_map: dictionary
     @param preset:
     @param exposure_time:
     @param npatterns:
@@ -125,27 +160,25 @@ def get_odt_sequence(daq_do_map, daq_ao_map, preset,
     @param n_digital_ch:
     @param n_analog_ch:
     @param use_dmd_as_shutter:
-    @return:
+    @return: do_odt, ao_odt
     """
 
+    info = ""
+
+    # #########################
+    # calculate number of clock cycles for different pieces of sequence
+    # #########################
     # number of steps for dmd pre-trigger
     n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
-
     # delay between frames
-    nsteps_delay = int(np.ceil(interval / dt))
-    if interval != 0:
-        raise NotImplementedError("non-zero interval between adjacent frames not yet implemented")
-
+    nsteps_interval = int(np.ceil(interval / dt))
     # minimum frame time
     nsteps_min_frame = int(np.ceil(min_frame_time / dt))
 
     if nsteps_min_frame == 1 and use_dmd_as_shutter:
         raise ValueError("nsteps_min_frame must be > 1 if use_dmd_as_odt_shutter=True")
 
-    # #########################
-    # create ODT program
-    # #########################
-    # calculate number of clock steps for different pieces ...
+    # exposure time and frame time
     nsteps_exposure = int(np.ceil(exposure_time / dt))
     nsteps_frame = np.max([nsteps_exposure, nsteps_min_frame])
 
@@ -153,23 +186,22 @@ def get_odt_sequence(daq_do_map, daq_ao_map, preset,
     n_odt_stabilize = int(np.ceil(stabilize_t / dt))
     if n_odt_stabilize < n_dmd_pre_trigger:
         n_odt_stabilize = n_dmd_pre_trigger
-        print("n_odt_stabilize was less than n_dmd_pre_trigger. Increased it to %d steps" % n_odt_stabilize)
+        info += f"n_odt_stabilize was less than n_dmd_pre_trigger. Increased it to {n_odt_stabilize:d} steps\n"
 
     # shutter delay
     n_odt_shutter_delay = int(np.ceil(shutter_delay_time / dt))
     if n_odt_stabilize - n_odt_shutter_delay < 0:
         n_odt_shutter_delay = 0
 
-    # if n_odt_stabilize < n_dmd_pre_trigger:
-    #     raise ValueError("number of stabilization steps must be greater than n_dmd_pre_trigger")
+    # active steps
+    nsteps_active = nsteps_frame * npatterns * nrepeats + n_odt_stabilize
+    # steps including delay interval
+    nsteps = np.max([nsteps_active, nsteps_interval])
 
-    nsteps_odt = nsteps_frame * npatterns * nrepeats + n_odt_stabilize
-    do_odt = np.zeros((nsteps_odt, n_digital_ch), dtype=np.uint8)
-
-    print("odt stabilize time = %0.3fms = %d clock cycles" % (stabilize_t * 1e3, n_odt_stabilize))
-    print("odt exposure time = %0.3fms = %d clock cycles" % (exposure_time * 1e3, nsteps_exposure))
-    print("odt one frame = %0.3fms = %d clock cycles" % (nsteps_frame * dt * 1e3, nsteps_frame))
-    print("odt one sequence of %d volumes = %0.3fms = %d clock cycles" % (nrepeats, nsteps_odt * dt * 1e3, nsteps_odt))
+    # #########################
+    # create sequence
+    # #########################
+    do_odt = np.zeros((nsteps, n_digital_ch), dtype=np.uint8)
 
     # trigger analog lines to start
     do_odt[0, daq_do_map["analog_trigger"]] = 1
@@ -180,37 +212,39 @@ def get_odt_sequence(daq_do_map, daq_ao_map, preset,
     # DMD enable trigger always on
     do_odt[:, daq_do_map["dmd_enable"]] = 1
     # master trigger
-    do_odt[:, daq_do_map["odt_cam_master_trig"]] = 1 # photron/phantom camera
+    do_odt[:, daq_do_map["odt_cam_enable"]] = 1 # photron/phantom camera
 
 
     # set camera trigger, which starts after delay time for DMD to display pattern
-    do_odt[n_odt_stabilize::nsteps_frame, daq_do_map["odt_cam"]] = 1
+    do_odt[n_odt_stabilize:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
     # for debugging, make trigger pulse longer to see on scope
     for ii in range(n_trig_width):
-        do_odt[n_odt_stabilize + ii::nsteps_frame, daq_do_map["odt_cam"]] = 1
+        do_odt[n_odt_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
 
     # DMD advance trigger
-    do_odt[n_odt_stabilize - n_dmd_pre_trigger:-nsteps_frame:nsteps_frame, daq_do_map["dmd_advance"]] = 1
+    do_odt[n_odt_stabilize - n_dmd_pre_trigger:nsteps_active-nsteps_frame:nsteps_frame, daq_do_map["dmd_advance"]] = 1
 
     # ending point is -nsteps_odt_frame to avoid having extra trigger at the end which is really the pretrigger for the next frame
     if use_dmd_as_shutter:
         # extra advance trigger to "turn off" DMD and end exposure
-        do_odt[n_odt_stabilize - n_dmd_pre_trigger + nsteps_exposure::nsteps_frame, daq_do_map["dmd_advance"]] = 1
-
-    # invert camera trigger line
-    #do_odt[:, daq_do_map["odt_cam"]] = 1 - do_odt[:, daq_do_map["odt_cam"]]
+        do_odt[n_odt_stabilize - n_dmd_pre_trigger + nsteps_exposure:nsteps_active:nsteps_frame, daq_do_map["dmd_advance"]] = 1
 
     # monitor lines
     do_odt[:, daq_do_map["signal_monitor"]] = do_odt[:, daq_do_map["dmd_advance"]]
-    do_odt[:, daq_do_map["camera_trigger_monitor"]] = do_odt[:, daq_do_map["odt_cam"]]
-    # do_odt[:, daq_do_map["camera_trigger_monitor"]] = do_odt[:, daq_do_map["odt_cam_master_trig"]]
+    do_odt[:, daq_do_map["camera_trigger_monitor"]] = do_odt[:, daq_do_map["odt_cam_sync"]]
 
-    # set analog channels
+    # set analog channels to match given preset
     ao_odt = np.zeros((1, n_analog_ch))
     for k in preset["analog"].keys():
         ao_odt[:, daq_ao_map[k]] = preset["analog"][k]
 
-    return do_odt, ao_odt
+    # useful information to print
+    info += f"odt stabilize time = {stabilize_t * 1e3:.3f}ms = {n_odt_stabilize:d} clock cycles\n"
+    info += "odt exposure time = %0.3fms = %d clock cycles\n" % (exposure_time * 1e3, nsteps_exposure)
+    info += "odt one frame = %0.3fms = %d clock cycles\n" % (nsteps_frame * dt * 1e3, nsteps_frame)
+    info += "odt one sequence of %d volumes = %0.3fms = %d clock cycles\n" % (nrepeats, nsteps_active * dt * 1e3, nsteps_active)
+
+    return do_odt, ao_odt, info
 
 
 def get_sim_sequence(daq_do_map, daq_ao_map, preset,
@@ -218,7 +252,31 @@ def get_sim_sequence(daq_do_map, daq_ao_map, preset,
                      nrepeats=1, n_trig_width=1, dmd_delay=105e-6,
                      stabilize_t=200e-3, min_frame_time=0, cam_readout_time=10e-3,
                      shutter_delay_time=50e-3, n_digital_ch=16, n_analog_ch=4,
-                     use_dmd_as_shutter=True):
+                     use_dmd_as_shutter=True, camera="sim"):
+    """
+
+    @param daq_do_map:
+    @param daq_ao_map:
+    @param preset:
+    @param exposure_time:
+    @param npatterns:
+    @param dt:
+    @param interval:
+    @param nrepeats:
+    @param n_trig_width:
+    @param dmd_delay:
+    @param stabilize_t:
+    @param min_frame_time:
+    @param cam_readout_time:
+    @param shutter_delay_time:
+    @param n_digital_ch:
+    @param n_analog_ch:
+    @param use_dmd_as_shutter:
+    @param camera: "sim" or "odt" or "both"
+    @return:
+    """
+
+    info = ""
 
     if nrepeats != 1:
         raise NotImplementedError()
@@ -227,7 +285,7 @@ def get_sim_sequence(daq_do_map, daq_ao_map, preset,
         raise NotImplementedError()
 
     # delay between frames
-    nsteps_delay = int(np.ceil(interval / dt))
+    nsteps_interval = int(np.ceil(interval / dt))
     if interval != 0:
         raise NotImplementedError("non-zero interval between adjacent frames not yet implemented")
 
@@ -270,9 +328,33 @@ def get_sim_sequence(daq_do_map, daq_ao_map, preset,
     # ######################################
     # trigger camera
     # ######################################
-    do_sim_channel[:, daq_do_map["sim_cam"]] = 0
-    for ii in range(n_trig_width):
-        do_sim_channel[n_sim_stabilize + ii::nsteps_sim_frame, daq_do_map["sim_cam"]] = 1
+    if camera == "sim":
+        do_sim_channel[:, daq_do_map["sim_cam_sync"]] = 0
+        for ii in range(n_trig_width):
+            do_sim_channel[n_sim_stabilize + ii::nsteps_sim_frame, daq_do_map["sim_cam_sync"]] = 1
+
+        do_sim_channel[:, daq_do_map["camera_trigger_monitor"]] = do_sim_channel[:, daq_do_map["sim_cam_sync"]]
+
+    elif camera == "odt":
+        do_sim_channel[:, daq_do_map["odt_cam_sync"]] = 0
+        for ii in range(n_trig_width):
+            do_sim_channel[n_sim_stabilize + ii::nsteps_sim_frame, daq_do_map["odt_cam_sync"]] = 1
+
+        do_sim_channel[:, daq_do_map["camera_trigger_monitor"]] = do_sim_channel[:, daq_do_map["odt_cam_sync"]]
+    elif camera == "both":
+        do_sim_channel[:, daq_do_map["sim_cam_sync"]] = 0
+        for ii in range(n_trig_width):
+            do_sim_channel[n_sim_stabilize + ii::nsteps_sim_frame, daq_do_map["sim_cam_sync"]] = 1
+
+        do_sim_channel[:, daq_do_map["odt_cam_sync"]] = 0
+        for ii in range(n_trig_width):
+            do_sim_channel[n_sim_stabilize + ii::nsteps_sim_frame, daq_do_map["odt_cam_sync"]] = 1
+
+        do_sim_channel[:, daq_do_map["camera_trigger_monitor"]] = do_sim_channel[:, daq_do_map["sim_cam_sync"]]
+
+    else:
+        raise ValueError(f"camera must be `sim`, `odt`, or `both`, but was `{camera:s}`")
+
 
     # ######################################
     # DMD always enabled
@@ -296,7 +378,7 @@ def get_sim_sequence(daq_do_map, daq_ao_map, preset,
     # monitor lines
     # ######################################
     do_sim_channel[:, daq_do_map["signal_monitor"]] = do_sim_channel[:, daq_do_map["dmd_advance"]]
-    do_sim_channel[:, daq_do_map["camera_trigger_monitor"]] = do_sim_channel[:, daq_do_map["sim_cam"]]
+
 
     # ######################################
     # analog channels
@@ -305,11 +387,17 @@ def get_sim_sequence(daq_do_map, daq_ao_map, preset,
     for k in preset["analog"].keys():
         ao_sim_channel[:, daq_ao_map[k]] = preset["analog"][k]
 
-    print("sim channel stabilize time = %0.3fms = %d clock cycles" % (n_sim_stabilize * dt * 1e3, n_sim_stabilize))
-    print("sim exposure time = %0.3fms = %d clock cycles" % (nsteps_sim_exposure * dt * 1e3, nsteps_sim_exposure))
-    print("sim one frame = %0.3fms = %d clock cycles" % (nsteps_sim_frame * dt * 1e3, nsteps_sim_frame))
-    print("sim one channel= %0.3fms = %d clock cycles" % (nsteps_sim_channel * dt * 1e3, nsteps_sim_channel))
+    info += "sim channel stabilize time = %0.3fms = %d clock cycles\n" % (n_sim_stabilize * dt * 1e3, n_sim_stabilize)
+    info += "sim exposure time = %0.3fms = %d clock cycles\n" % (nsteps_sim_exposure * dt * 1e3, nsteps_sim_exposure)
+    info += "sim one frame = %0.3fms = %d clock cycles\n" % (nsteps_sim_frame * dt * 1e3, nsteps_sim_frame)
+    info += "sim one channel= %0.3fms = %d clock cycles\n" % (nsteps_sim_channel * dt * 1e3, nsteps_sim_channel)
 
-    return do_sim_channel, ao_sim_channel
+    return do_sim_channel, ao_sim_channel, info
 
 
+def get_generic_sequence(daq_do_map, daq_ao_map, preset,
+                         exposure_time, npatterns, dt=105e-6, dmd_delay=105e-6, interval=0,
+                         n_trig_width=1, min_frame_time=0, cam_readout_time=0,
+                         use_dmd_as_shutter=True):
+    # todo: ...
+    pass

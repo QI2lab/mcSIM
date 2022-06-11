@@ -1,0 +1,27 @@
+{
+	"xform": [
+		[
+			0.42638727328967857,
+			0.41678508817713866,
+			174.3053498627222
+		],
+		[
+			-0.416949781466465,
+			0.4265588188899712,
+			945.7864303288452
+		],
+		[
+			0.0,
+			0.0,
+			1.0
+		]
+	],
+	"units": "pixels",
+	"transform_direction": "SIM to ODT",
+	"processing_time_stamp": "2022_06_10_10;07;34",
+	"file_name": [
+		"G:\\2022_06_07\\02_hamamatsu_1um_beads_affine_cal.tif",
+		"G:\\2022_06_07\\01_pvcam_1um_beads_affine_cal.tif"
+	],
+	"data_time_stamp": ""
+}

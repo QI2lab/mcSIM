@@ -50,7 +50,8 @@
 			1.0
 		]
 	],
-	"processing_time_stamp": "2022_05_04_15;07;47",
+	"transform_direction": "dmd to camera",
+	"processing_time_stamp": "2022_06_10_09;46;51",
 	"file_name": "D:\\2021_04_13\\affine_cal\\affine_cal_MMStack.ome.tif",
 	"data_time_stamp": "2021_04_13;12;49;02"
 }
