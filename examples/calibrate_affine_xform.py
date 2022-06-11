@@ -61,11 +61,12 @@ for nc in range(len(channel_labels)):
     affine_summary[channel_labels[nc]] = affine_xform_data["affine_xform"]
 
 # save summary results
+affine_summary["transform_direction"] = "dmd to camera"
 affine_summary["processing_time_stamp"] = time_stamp
 affine_summary["data_time_stamp"] = ""
 affine_summary["file_name"] = str(img_fname)
 
-fname_summary = save_dir / "affine_transformations.json"
+fname_summary = save_dir / "dmd_affine_transformations.json"
 with open(fname_summary, "w") as f:
     json.dump(affine_summary, f, indent="\t")
 
