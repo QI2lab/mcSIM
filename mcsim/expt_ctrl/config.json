@@ -1,0 +1,113 @@
+{
+	"time_stamp": "2022_06_12_12;12;25",
+	"camera_settings_1": {
+		"dxy": 0.065,
+		"magnification": 100,
+		"na_excitation": 1.3,
+		"na_detection": 1.3,
+		"ni": 1.5,
+		"otf_calibration": {
+			"fit_params": [
+				2.446021509201081
+			],
+			"fmax": 3.8235294117647056,
+			"na": 1.3,
+			"wavelength": 0.68,
+			"model": "1 / (1 + (f / fmax * fit_params[0]) ** 2) * circ_aperture_otf(f, 0, na, 2 * na / fmax)",
+			"processing_time_stamp": "2020_05_19;00;00;00",
+			"file_name": "",
+			"data_time_stamp": "2020_05_19;00;00;00"
+		},
+		"dmd_affine_transforms": {
+			"blue": [
+				[
+					-0.9911149452156005,
+					-0.9814845244656207,
+					2555.0969397592057
+				],
+				[
+					-0.9142284260365764,
+					0.9212896657108716,
+					1356.431322027189
+				],
+				[
+					0.0,
+					0.0,
+					1.0
+				]
+			],
+			"red": [
+				[
+					-0.9921926507631796,
+					-0.9814456623263657,
+					2556.271779905179
+				],
+				[
+					-0.9143118422332878,
+					0.9214927232217005,
+					1356.5451129181865
+				],
+				[
+					0.0,
+					0.0,
+					1.0
+				]
+			],
+			"green": [
+				[
+					-0.9914095125592167,
+					-0.9815817024088562,
+					2555.7114429101052
+				],
+				[
+					-0.9141348830139717,
+					0.9214099511158977,
+					1356.2034133398222
+				],
+				[
+					0.0,
+					0.0,
+					1.0
+				]
+			],
+			"transform_direction": "dmd to camera",
+			"processing_time_stamp": "2022_06_10_09;46;51",
+			"file_name": "D:\\2021_04_13\\affine_cal\\affine_cal_MMStack.ome.tif",
+			"data_time_stamp": "2021_04_13;12;49;02"
+		}
+	},
+	"camera_settings_2": {
+		"dxy": 0.10833333333333334,
+		"magnification": 60,
+		"na_excitation": 1.3,
+		"na_detection": 1,
+		"ni": 1.333
+	},
+	"camera_affine_transforms": {
+		"xform": [
+			[
+				0.42638727328967857,
+				0.41678508817713866,
+				174.3053498627222
+			],
+			[
+				-0.416949781466465,
+				0.4265588188899712,
+				945.7864303288452
+			],
+			[
+				0.0,
+				0.0,
+				1.0
+			]
+		],
+		"units": "pixels",
+		"transform_direction": "SIM to ODT",
+		"processing_time_stamp": "2022_06_10_10;07;34",
+		"file_name": [
+			"G:\\2022_06_07\\02_hamamatsu_1um_beads_affine_cal.tif",
+			"G:\\2022_06_07\\01_pvcam_1um_beads_affine_cal.tif"
+		],
+		"data_time_stamp": ""
+	}
+}
