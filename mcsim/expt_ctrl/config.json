@@ -1,5 +1,4 @@
 {
-	"time_stamp": "2022_06_12_12;12;25",
 	"camera_settings_1": {
 		"dxy": 0.065,
 		"magnification": 100,
@@ -109,5 +108,19 @@
 			"G:\\2022_06_07\\01_pvcam_1um_beads_affine_cal.tif"
 		],
 		"data_time_stamp": ""
+	},
+	"timestamp": "2022_06_12_16;40;01",
+	"sim_odt_program_defaults": {
+		"sx": 801,
+		"cx": 1024,
+		"sy": 511,
+		"cy": 1024,
+		"odt_exposure_ms": 3.0,
+		"sim_exposure_ms": 100.0,
+		"odt_frametime_ms": 8.7,
+		"daq_dt_us": 26,
+		"sim_warmup_time_ms": 200.0,
+		"odt_warmup_time_ms": 1000.0,
+		"shutter_delay_ms": 50
 	}
 }
