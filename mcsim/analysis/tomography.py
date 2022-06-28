@@ -297,7 +297,7 @@ def get_reconstruction_sampling(ni, na_det, beam_frqs, wavelength, dxy, img_size
 
 
 def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
-                   dxy_sampling_factor=1, mode="born", use_interpolation=True):
+                   dxy_sampling_factor=1, mode="born", use_interpolation=False):
     """
 
     @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used
@@ -309,9 +309,11 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     @param z_fov: z-field of view
     @param reg: regularization factor
     @param dz_sampling_factor: fraction of Nyquist sampling factor to use
+    @param dxy_sampling_factor:
     @param mode: "born" or "rytov"
     @return sp_ft, sp_ft_imgs, coords, fcoords:
     """
+
     nimgs, ny, nx = efield_fts.shape[-3:]
 
     # ##################################
@@ -467,7 +469,6 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
         # assuming at most one point for each ...
         inds_angle = (zind[ii][to_use_ind[ii]], yind[ii][to_use_ind[ii]], xind[ii][to_use_ind[ii]])
         # since using DFT's instead of FT's have to adjust the normalization. Recall that FT ~ DFT * dr1 * ... * drn
-        # spot_ft_imgs[ii][inds_angle] = f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
         spot_ft[inds_angle] += f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
         num_pts[ii][inds_angle] = 1
 
@@ -475,9 +476,6 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     num_pts_all = np.sum(num_pts, axis=0)
     no_data = num_pts_all == 0
     is_data = np.logical_not(no_data)
-
-    # spot_ft = np.nansum(spot_ft_imgs, axis=0) / (num_pts_all + reg)
-    # spot_ft[no_data] = np.nan
 
     spot_ft[is_data] = spot_ft[is_data] / (num_pts_all[is_data] + reg)
     spot_ft[no_data] = np.nan
@@ -728,8 +726,9 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
 
 # plotting functions
 def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
-                         beam_frq, frq_ref, fmax_int, fcoords, dxy,
-                         title="", use_gpu=False):
+                         beam_frq, frq_ref, fmax_int, dxy,
+                         title="", use_gpu=False, figsize=(18, 10), gamma=0.1,
+                         **kwargs):
     """
     Plot diagnostic of ODT image and background image
     
@@ -747,24 +746,26 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
     @return figh:
     """
 
+    ny, nx = img_efield_ft.shape
+    x = (np.arange(nx) - nx // 2) * dxy
+    y = (np.arange(ny) - ny // 2) * dxy
+    extent_xy = [x[0] - 0.5 * dxy, x[-1] + 0.5 * dxy,
+                 y[-1] + 0.5 * dxy, y[0] - 0.5 * dxy]
+
     # frequency info
-    fy, fx = fcoords
+    # fy, fx = fcoords
+    fx = fft.fftshift(fft.fftfreq(nx, dxy))
+    fy = fft.fftshift(fft.fftfreq(ny, dxy))
     fxfx, fyfy = np.meshgrid(fx, fy)
     dfy = fy[1] - fy[0]
     dfx = fx[1] - fx[0]
-    extent_fxfy = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx, fy[0] - 0.5 * dfy, fy[-1] + 0.5 * dfy]
-
-    # intensity
-    # if img_int_ft is None:
-    #     img_int_ft = fft.fftshift(fft.ifft2(fft.ifftshift(img_int, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    extent_fxfy = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx,
+                   fy[-1] + 0.5 * dfy, fy[0] - 0.5 * dfy]
 
     # efield band limits
-    # out_of_band = np.sqrt(fxfx**2 + fyfy**2) > (0.5 * fmax_int)
     out_of_band = np.sqrt((beam_frq[0] + fxfx) ** 2 + (beam_frq[1] + fyfy) ** 2) > (0.5 * fmax_int)
 
     # electric field
-    # if img_efield is None:
-    #     img_efield = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_ft)))
     data_stack = np.stack((img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft), axis=0)
     shifted_ft = tools.translate_ft(data_stack, beam_frq[0], beam_frq[1], drs=(dxy, dxy), use_gpu=use_gpu)
     shifted_ft[..., out_of_band] = 0
@@ -777,51 +778,11 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
     img_efield_shift_scatt_ft = shifted_ft[2]
     img_efield_shift_scatt = shifted[2]
 
-
-    # img_efield_shift_ft = tools.translate_ft(img_efield_ft, beam_frq[:2], drs=(dxy, dxy), use_gpu=use_gpu)
-    # img_efield_shift_ft[out_of_band] = 0
-    # img_efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-    #
-    # # background electric field
-    # # if img_efield_bg is None:
-    # #     img_efield_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_bg_ft)))
-    # img_efield_shift_bg_ft = tools.translate_ft(img_efield_bg_ft, beam_frq[:2], drs=(dxy, dxy), use_gpu=use_gpu)
-    # img_efield_shift_bg_ft[out_of_band] = 0
-    # img_efield_shift_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_bg_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-    #
-    # # scattered electric field
-    # # if img_efield_scatt_ft is None:
-    # #     img_efield_scatt_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_efield_scattered, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-    # img_efield_shift_scatt_ft = tools.translate_ft(img_efield_scatt_ft, beam_frq[:2], drs=(dxy, dxy), use_gpu=use_gpu)
-    # img_efield_shift_scatt_ft[out_of_band] = 0
-    # img_efield_shift_scatt = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_shift_scatt_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-
-    figh = plt.figure(figsize=(18, 10))
+    # plot
+    figh = plt.figure(figsize=figsize, **kwargs)
     figh.suptitle(title)
-    grid = figh.add_gridspec(3, 3, hspace=0.5)
-
-    # first column: intensity
-    # ax = plt.subplot(grid[0, 0])
-    # ax.imshow(np.abs(img_int), cmap="bone", vmin=np.percentile(img_int.ravel(), 1), vmax=np.percentile(img_int.ravel(), 99.9))
-    # ax.set_title("$|I(r)|$")
-    # ax.set_xticks([])
-    # ax.set_yticks([])
-
-    # ax = plt.subplot(grid[2, 0])
-    # ax.imshow(np.abs(img_int_ft), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
-    # ax.plot(frq_ref[0], frq_ref[1], 'rx')
-    # ax.add_artist(Circle((0, 0), fmax_int, facecolor="none", edgecolor='r'))
-    # ax.add_artist(Circle(frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
-    # ax.add_artist(Circle(-frq_ref, fmax_int / 2, facecolor="none", edgecolor='r'))
-    # ax.add_artist(Circle(beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
-    # ax.add_artist(Circle(-beam_frq[:2], fmax_int / 2, facecolor="none", edgecolor='r'))
-    # ax.set_xlabel("$f_x$ (1 / $\mu m$)")
-    # ax.set_ylabel("$f_y$ (1 / $\mu m$)")
-    # ax.set_title("$|I(f)|$")
-    # fmax = np.max([fmax_int, np.linalg.norm(beam_frq[:2]) + fmax_int / 2])
-    # ax.set_xlim([-fmax, fmax])
-    # ax.set_ylim([-fmax, fmax])
+    grid = figh.add_gridspec(ncols=9, width_ratios=[8, 1, 1] * 3,
+                             nrows=3, hspace=0.5, wspace=0.5)
 
 
     labels = ["E_{shifted}", "E_{bg,shifted}", "E_{scatt,shifted}"]
@@ -839,29 +800,34 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
              [-fmax_int, fmax_int]]
     plot_pts = [np.array([0, 0]), np.array([0, 0]), np.array([0, 0])]
     for ii, label in enumerate(labels):
-        #d = labels[ii]
 
-        ax1 = figh.add_subplot(grid[0, ii])
-        ax1.imshow(np.abs(fields_r[ii]), cmap="bone", vmin=vmin_r[ii], vmax=vmax_r[ii])
+        ax1 = figh.add_subplot(grid[0, 3*ii])
+        im = ax1.imshow(np.abs(fields_r[ii]), cmap="bone", vmin=vmin_r[ii], vmax=vmax_r[ii], extent=extent_xy)
         ax1.set_title("$|%s(r)|$" % label)
-        ax1.set_xticks([])
-        ax1.set_yticks([])
+        ax1.set_xlabel("x-position ($\mu m$)")
+        ax1.set_ylabel("y-position ($\mu m$)")
 
-        ax2 = figh.add_subplot(grid[1, ii])
-        ax2.imshow(np.angle(fields_r[ii]), cmap="RdBu", vmin=-np.pi, vmax=np.pi)
+        ax4 = figh.add_subplot(grid[0, 3*ii + 1])
+        plt.colorbar(im, cax=ax4)
+
+        ax2 = figh.add_subplot(grid[1, 3*ii])
+        im = ax2.imshow(np.angle(fields_r[ii]), cmap="RdBu", vmin=-np.pi, vmax=np.pi, extent=extent_xy)
         ax2.set_title("$ang[%s(r)]$" % label)
         ax2.set_xticks([])
         ax2.set_yticks([])
+        if ii == (len(labels) - 1):
+            ax4 = figh.add_subplot(grid[1, 3 * ii + 1])
+            plt.colorbar(im, cax=ax4)
 
-        ax3 = figh.add_subplot(grid[2, ii])
-        ax3.imshow(np.abs(fields_ft[ii]), norm=PowerNorm(gamma=0.1), cmap="bone", extent=extent_fxfy, origin="lower")
+
+        ax3 = figh.add_subplot(grid[2, 3 * ii])
+        im = ax3.imshow(np.abs(fields_ft[ii]), norm=PowerNorm(gamma=gamma), cmap="bone", extent=extent_fxfy)
         ax3.plot(plot_pts[ii][0], plot_pts[ii][1], 'r.', fillstyle="none")
         ax3.set_xlabel("$f_x$ (1 / $\mu m$)")
         ax3.set_ylabel("$f_y$ (1 / $\mu m$)")
-        ax3.set_yticks([])
         ax3.set_title("$|%s(f)|$" % label)
         ax3.set_xlim(flims[ii])
-        ax3.set_ylim(flims[ii])
+        ax3.set_ylim(np.flip(flims[ii]))
 
     return figh
 
