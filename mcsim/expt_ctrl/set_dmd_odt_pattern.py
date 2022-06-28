@@ -3,6 +3,8 @@ Set a specific pattern to the DMD for testing
 This script is typically run manually and not called from other code
 """
 import numpy as np
+import matplotlib
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import mcsim.expt_ctrl.dlp6500 as dlp6500
 
@@ -31,7 +33,7 @@ xx, yy = np.meshgrid(range(nx), range(ny))
 # pattern parameters
 ang = -45 * np.pi/180
 frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
-rad = 50
+rad = 5
 phase = 0
 
 # base pattern
@@ -55,13 +57,13 @@ pupil_rad_mirrors = fl_detection * na_detection / mag_dmd2bfp / dm
 # ##################################
 # set patterns
 # ##################################
-one_pattern = False
+one_pattern = True
 if one_pattern:
     # (y, x)
     # offset = np.array([0, 0])
 
     phi = -149 * np.pi/180
-    fraction = 0.97
+    fraction = 0.0
     offset = np.array([np.cos(phi) * pupil_rad_mirrors * fraction, np.sin(phi) * pupil_rad_mirrors * fraction])
 
     # centered pattern
