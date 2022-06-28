@@ -193,10 +193,14 @@ class SimImageSet:
         # #############################################
         self.dx = physical_params['pixel_size']
         self.dy = physical_params['pixel_size']
-        self.x = tools.get_fft_pos(self.nx, self.dx, mode='symmetric')
-        self.y = tools.get_fft_pos(self.ny, self.dy, mode='symmetric')
-        self.x_us = tools.get_fft_pos(self.upsample_fact * self.nx, self.dx / self.upsample_fact, mode='symmetric')
-        self.y_us = tools.get_fft_pos(self.upsample_fact * self.ny, self.dy / self.upsample_fact, mode='symmetric')
+        # self.x = tools.get_fft_pos(self.nx, self.dx, mode='symmetric')
+        # self.y = tools.get_fft_pos(self.ny, self.dy, mode='symmetric')
+        # self.x_us = tools.get_fft_pos(self.upsample_fact * self.nx, self.dx / self.upsample_fact, mode='symmetric')
+        # self.y_us = tools.get_fft_pos(self.upsample_fact * self.ny, self.dy / self.upsample_fact, mode='symmetric')
+        self.x = (np.arange(self.nx) - self.nx // 2) * self.dx
+        self.y = (np.arange(self.ny) - self.ny // 2) * self.dy
+        self.x_us = (np.arange(self.nx * self.upsample_fact) - (self.nx * self.upsample_fact) // 2) * (self.dx / self.upsample_fact)
+        self.y_us = (np.arange(self.ny * self.upsample_fact) - (self.ny * self.upsample_fact) // 2) * (self.dy / self.upsample_fact)
 
         # #############################################
         # get basic parameters
@@ -1099,10 +1103,6 @@ class SimImageSet:
         :return:
         """
 
-        # real space coordinate data
-        # x = tools.get_fft_pos(self.nx, dt=self.dx)
-        # y = tools.get_fft_pos(self.ny, dt=self.dy)
-
         extent = tools.get_extent(self.y, self.x)
 
         # parameters for real space plot
@@ -1203,7 +1203,7 @@ class SimImageSet:
 
         return figh
 
-    def plot_reconstruction(self, figsize=(20, 10)):
+    def plot_reconstruction(self, figsize=(20, 10), gamma=0.1):
         """
         Plot SIM image and compare with 'widefield' image
         :return:
@@ -1211,17 +1211,9 @@ class SimImageSet:
 
         extent_wf = tools.get_extent(self.fy, self.fx)
         extent_rec = tools.get_extent(self.fy_us, self.fx_us)
-
-        # x = tools.get_fft_pos(self.nx, dt=self.dx)
-        # y = tools.get_fft_pos(self.ny, dt=self.dy)
         extent_wf_real = tools.get_extent(self.y, self.x)
-
-        # x_us = tools.get_fft_pos(self.upsample_fact * self.nx, dt=self.dx / self.upsample_fact)
-        # y_us = tools.get_fft_pos(self.upsample_fact * self.ny, dt=self.dy / self.upsample_fact)
         extent_us_real = tools.get_extent(self.y_us, self.x_us)
 
-
-        gamma = 0.1
         min_percentile = 0.1
         max_percentile = 99.9
 
@@ -1685,14 +1677,14 @@ class SimImageSet:
             if self.frq_estimation_mode == "fourier-transform":
                 figh = plot_correlation_fit(self.imgs_ft[ii, 0], self.imgs_ft[ii, 0], self.frqs[ii, :],
                                             self.dx, self.fmax, frqs_guess=frqs_guess[ii], figsize=figsize,
-                                            ttl_str=f"Correlation fit, angle {ii:d}")
+                                            title=f"Correlation fit, angle {ii:d}")
                 figs.append(figh)
                 fig_names.append(f"frq_fit_angle={ii:d}_phase={0:d}")
             else:
                 figh = plot_correlation_fit(self.bands_unmixed_ft[ii, 0],
                                             self.bands_unmixed_ft[ii, 1], self.frqs[ii, :],
                                             self.dx, self.fmax, frqs_guess=frqs_guess[ii], figsize=figsize,
-                                            ttl_str=f"Correlation fit, angle {ii:d}, unmixing phases = {self.phases_guess[ii]}")
+                                            title=f"Correlation fit, angle {ii:d}, unmixing phases = {self.phases_guess[ii]}")
                 figs.append(figh)
                 fig_names.append(f"frq_fit_angle={ii:d}")
 
@@ -1810,7 +1802,7 @@ class SimImageSet:
 
     def save_result(self, fname=None):
         """
-        Save non-image fields in pickle format.
+        Save non-image fields in json format.
 
         :param fname: file path to save results
         :return results_dict: the dictionary that has been saved
@@ -2284,7 +2276,7 @@ def sim_optical_section(imgs, axis=0, phase_differences=(0, 2*np.pi/3, 4*np.pi/3
     return img_os
 
 
-def correct_modulation_for_bead_size(bead_radii, frqs):
+def correct_modulation_for_bead_size(bead_radii, frqs, phis=(0, 2 * np.pi / 3, 4 * np.pi / 3)):
     """
     Function for use when calibration SIM modulation depth using fluorescent beads. Assuming the beads are much smaller
     than the lattice spacing, then using the optical sectioning law of cosines type formula on the total fluorescent
@@ -2295,6 +2287,7 @@ def correct_modulation_for_bead_size(bead_radii, frqs):
 
     :param bead_radius: radius of the bead
     :param frq: frequency of the lattice
+    :param phis: phase steps of pattern
     :return mods: measure modulation depth for pattern with full contrast
     """
     # consider cosine in x-direction and spherical fluorescent object. Can divide in circles in the YZ plane, with radius
@@ -2314,7 +2307,7 @@ def correct_modulation_for_bead_size(bead_radii, frqs):
         u = 2 * np.pi * r * f
         return 1 + 3 / u**3 * (np.sin(u) - u * np.cos(u)) * np.cos(phi)
 
-    phis = np.array([0, 2 * np.pi / 3, 4 * np.pi / 3])
+    # phis = np.array([])
     vals = np.zeros(3)
     for ii in range(3):
         vals[ii] = full_int(bead_radii, frqs, phis[ii])
@@ -2463,68 +2456,80 @@ def fit_modulation_frq(ft1: np.ndarray, ft2: np.ndarray, dxy: float,
     return fit_frqs, mask, result
 
 
-def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None, roi_size=31,
-                         peak_pixels=2, figsize=(20, 10), ttl_str=""):
+def plot_correlation_fit(img1_ft: np.ndarray, img2_ft: np.ndarray, frqs, dxy: float,
+                         fmax=None, frqs_guess=None, roi_size: int = 31,
+                         peak_pixels: int = 2, figsize=(20, 10), title: str = "", gamma: float = 0.1, cmap="bone"):
     """
     Display SIM parameter fitting results visually, in a way that is easy to inspect.
 
     Use this to plot the results of SIM frequency determination after running get_sim_frq()
 
-    :param img_ft:
-    :param frqs: fit value of frequency
-    :param options:
+    :param img1_ft:
+    :param img2_ft
+    :param frqs: fit value of frequency [fx, fy]
+    :param dxy: pixel size in um
+    :param fmax: maximum frequency. Will display this using a circle
+    :param frqs_guess: guess frequencies [fx, fy]    
+    :param roi_size:
+    :param peak_pixels:    
     :param figsize:
-    :param frqs_guess: guess value of frequency
+    :param title:
+    :param gamma:
+    :param cmap: matplotlib colormap to use
     :return figh: handle to figure produced
     """
-    # normalize ...
-    # img1_ft = np.array(img1_ft, copy=True) / img1_ft.size
-    # img2_ft = np.array(img2_ft, copy=True) / img2_ft.size
-
-    # get physical parameters
-    dy = dx
-
     # get frequency data
-    fxs = fft.fftshift(fft.fftfreq(img1_ft.shape[1], dx))
-    fys = fft.fftshift(fft.fftfreq(img1_ft.shape[0], dy))
-    if fmax is None:
-        fmax = np.sqrt(np.max(fxs)**2 + np.max(fys)**2)
+    fxs = fft.fftshift(fft.fftfreq(img1_ft.shape[1], dxy))
+    dfx = fxs[1] - fxs[0]
+    fys = fft.fftshift(fft.fftfreq(img1_ft.shape[0], dxy))
+    dfy = fys[1] - fys[0]
+
+    extent = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
+              fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]
 
     # power spectrum / cross correlation
     # cc = np.abs(scipy.signal.fftconvolve(img1_ft, img2_ft.conj(), mode='same'))
     cc = np.abs(scipy.signal.correlate(img2_ft, img1_ft, mode='same'))
 
+    # compute peak values
     fx_sim, fy_sim = frqs
-    # useful info to print
-    period = 1 / np.sqrt(fx_sim ** 2 + fy_sim ** 2)
-    angle = np.angle(fx_sim + 1j * fy_sim)
-
     peak_cc = tools.get_peak_value(cc, fxs, fys, [fx_sim, fy_sim], peak_pixels)
     peak1_dc = tools.get_peak_value(img1_ft, fxs, fys, [0, 0], peak_pixels)
     peak2 = tools.get_peak_value(img2_ft, fxs, fys, [fx_sim, fy_sim], peak_pixels)
 
-    extent = tools.get_extent(fys, fxs)
-
     # create figure
     figh = plt.figure(figsize=figsize)
-    gspec = figh.add_gridspec(ncols=14, nrows=2, hspace=0.3)
+    gspec = figh.add_gridspec(ncols=4, width_ratios=[8, 1] * 2, wspace=0.5,
+                              nrows=2, hspace=0.3)
 
+    # #######################################
+    # build title
+    # #######################################
     str = ""
-    if ttl_str != "":
-        str += "%s\n" % ttl_str
-    # suptitle
-    str += '      fit: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g and %0.2fdeg' % \
-          (period * 1e3, 1/period, angle * 180 / np.pi, angle, fx_sim, fy_sim,
-           np.abs(peak_cc), np.angle(peak_cc) * 180/np.pi)
+    if title != "":
+        str += f"{title:s}\n"
+
+    # print info about fit frequency
+    period = 1 / np.sqrt(fx_sim ** 2 + fy_sim ** 2)
+    angle = np.angle(fx_sim + 1j * fy_sim)
+
+    str += f"      fit: period {period * 1e3:.1f}nm = 1/{1/period:.3f}um at" \
+           f" {angle * 180/np.pi:.2f}deg={angle:.3f}rad;" \
+           f" f=({fx_sim:.3f},{fy_sim:.3f}) 1/um," \
+           f" peak cc={np.abs(peak_cc):.3g} and {np.angle(peak_cc) * 180/np.pi:.2f}deg"
+
+    # print info about guess frequency
     if frqs_guess is not None:
         fx_g, fy_g = frqs_guess
         period_g = 1 / np.sqrt(fx_g ** 2 + fy_g ** 2)
         angle_g = np.angle(fx_g + 1j * fy_g)
         peak_cc_g = tools.get_peak_value(cc, fxs, fys, frqs_guess, peak_pixels)
 
-        str += '\nguess: period %0.1fnm = 1/%0.3fum at %.2fdeg=%0.3frad; f=(%0.3f,%0.3f) 1/um, peak cc=%0.3g and %0.2fdeg' % \
-               (period_g * 1e3, 1/period_g, angle_g * 180 / np.pi, angle_g, fx_g, fy_g,
-                np.abs(peak_cc_g), np.angle(peak_cc_g) * 180/np.pi)
+        str += f"\nguess: period {period_g * 1e3:.1f}nm = 1/{1/period_g:.3f}um" \
+               f" at {angle_g * 180/np.pi:.2f}deg={angle_g:.3f}rad;" \
+               f" f=({fx_g:.3f},{fy_g:.3f}) 1/um," \
+               f" peak cc={np.abs(peak_cc_g):.3g} and {np.angle(peak_cc_g) * 180/np.pi:.2f}deg"
+
     figh.suptitle(str)
 
     # #######################################
@@ -2536,39 +2541,40 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
 
     extent_roi = tools.get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
-    ax = figh.add_subplot(gspec[0, 0:6])
+    ax = figh.add_subplot(gspec[0, 0])
     ax.set_title("cross correlation, ROI")
-    im1 = ax.imshow(rois.cut_roi(roi, cc), interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi, cmap="bone")
-    ph1 = ax.scatter(frqs[0], frqs[1], color='r', marker='x')
+    im1 = ax.imshow(rois.cut_roi(roi, cc), interpolation=None, norm=PowerNorm(gamma=gamma), extent=extent_roi, cmap=cmap)
+    ax.scatter(frqs[0], frqs[1], color='r', marker='x', label="frq fit")
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
-            ph2 = ax.scatter(frqs_guess[0], frqs_guess[1], color='g', marker='x')
+            ax.scatter(frqs_guess[0], frqs_guess[1], color='g', marker='x', label="frq guess")
         else:
-            ph2 = ax.scatter(-frqs_guess[0], -frqs_guess[1], color='g', marker='x')
+            ax.scatter(-frqs_guess[0], -frqs_guess[1], color='g', marker='x', label="frq guess")
 
-    if frqs_guess is not None:
-        ax.legend([ph1, ph2], ['frq fit', 'frq guess'], loc="upper right")
-    else:
-        ax.legend([ph1], ['frq fit'], loc="upper right")
+    ax.legend(loc="upper right")
 
-    ax.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
+    if fmax is not None:
+        ax.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
+
     ax.set_xlabel('$f_x (1/\mu m)$')
     ax.set_ylabel('$f_y (1/\mu m)$')
 
-
-    cbar_ax = figh.add_subplot(gspec[0, 6])
+    # colorbar
+    cbar_ax = figh.add_subplot(gspec[0, 1])
     figh.colorbar(im1, cax=cbar_ax)
 
     # #######################################
     # full cross-correlation
     # #######################################
-    ax2 = figh.add_subplot(gspec[0, 7:13])
-    im2 = ax2.imshow(cc, interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
-    ax2.set_xlim([-fmax, fmax])
-    ax2.set_ylim([fmax, -fmax])
+    ax2 = figh.add_subplot(gspec[0, 2])
+    im2 = ax2.imshow(cc, interpolation=None, norm=PowerNorm(gamma=gamma), extent=extent, cmap=cmap)
 
-    # plot maximum frequency
-    ax2.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0))
+    if fmax is not None:
+        ax2.set_xlim([-fmax, fmax])
+        ax2.set_ylim([fmax, -fmax])
+
+        # plot maximum frequency
+        ax2.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0))
 
     ax2.add_artist(Rectangle((fxs[roi[2]], fys[roi[0]]), fxs[roi[3] - 1] - fxs[roi[2]], fys[roi[1] - 1] - fys[roi[0]],
                                            edgecolor='k', fill=0))
@@ -2577,13 +2583,14 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     ax2.set_xlabel('$f_x (1/\mu m)$')
     ax2.set_ylabel('$f_y (1/\mu m)$')
 
-    cbar_ax = figh.add_subplot(gspec[0, 13])
+    # colorbar
+    cbar_ax = figh.add_subplot(gspec[0, 3])
     figh.colorbar(im2, cax=cbar_ax)
 
     # #######################################
     # ft 1
     # #######################################
-    ax3 = figh.add_subplot(gspec[1, 0:6])
+    ax3 = figh.add_subplot(gspec[1, 0])
     ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0) = $"  " %0.3g and %0.2fdeg" %
                   (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
     ax3.set_xlabel('$f_x (1/\mu m)$')
@@ -2595,31 +2602,35 @@ def plot_correlation_fit(img1_ft, img2_ft, frqs, dx, fmax=None, frqs_guess=None,
     extent_roic = tools.get_extent(fys[roi_center[0]:roi_center[1]], fxs[roi_center[2]:roi_center[3]])
 
     im3 = ax3.imshow(rois.cut_roi(roi_center, np.abs(img1_ft)**2),
-                     interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roic, cmap="bone")
+                     interpolation=None, norm=PowerNorm(gamma=gamma), extent=extent_roic, cmap=cmap)
     ax3.scatter(0, 0, color='r', marker='x')
 
-    cbar_ax = figh.add_subplot(gspec[1, 6])
+    # colorbar
+    cbar_ax = figh.add_subplot(gspec[1, 1])
     figh.colorbar(im3, cax=cbar_ax)
 
+    # #######################################
     # ft 2
-    ax4 = figh.add_subplot(gspec[1, 7:13])
-    ttl_str = r"$|g_2(f)|^2$" + r"near $f_o$, $g_2(f_p) =$" + " %0.3g and %0.2fdeg" % (np.abs(peak2), np.angle(peak2) * 180 / np.pi)
+    # #######################################
+    ax4 = figh.add_subplot(gspec[1, 2])
+    title = r"$|g_2(f)|^2$" + r"near $f_o$, $g_2(f_p) =$" + " %0.3g and %0.2fdeg" % (np.abs(peak2), np.angle(peak2) * 180 / np.pi)
     if frqs_guess is not None:
         peak2_g = tools.get_peak_value(img2_ft, fxs, fys, frqs_guess, peak_pixels)
-        ttl_str += "\nguess peak = %0.3g and %0.2fdeg" % (np.abs(peak2_g), np.angle(peak2_g) * 180 / np.pi)
-    ax4.set_title(ttl_str)
+        title += "\nguess peak = %0.3g and %0.2fdeg" % (np.abs(peak2_g), np.angle(peak2_g) * 180 / np.pi)
+    ax4.set_title(title)
     ax4.set_xlabel('$f_x (1/\mu m)$')
 
-    im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2),
-                     interpolation=None, norm=PowerNorm(gamma=0.1), extent=extent_roi, cmap="bone")
-    ph1 = ax4.scatter(frqs[0], frqs[1], color='r', marker='x')
+    im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2), interpolation=None, norm=PowerNorm(gamma=gamma),
+                     extent=extent_roi, cmap=cmap)
+    ax4.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
-            ph2 = ax4.scatter(frqs_guess[0], frqs_guess[1], color='g', marker='x')
+            ax4.scatter(frqs_guess[0], frqs_guess[1], color='g', marker='x')
         else:
-            ph2 = ax4.scatter(-frqs_guess[0], -frqs_guess[1], color='g', marker='x')
+            ax4.scatter(-frqs_guess[0], -frqs_guess[1], color='g', marker='x')
 
-    cbar_ax = figh.add_subplot(gspec[1, 13])
+    # colorbar
+    cbar_ax = figh.add_subplot(gspec[1, 3])
     figh.colorbar(im4, cax=cbar_ax)
 
     return figh
@@ -2672,12 +2683,16 @@ def get_phase_realspace(img, sim_frq, dxy, phase_guess=0, origin="center"):
     if np.any(img < 0):
         raise ValueError('img must be strictly positive.')
 
+    ny, nx = img.shape
+
     if origin == "center":
-        x = tools.get_fft_pos(img.shape[1], dxy, centered=True, mode="symmetric")
-        y = tools.get_fft_pos(img.shape[0], dxy, centered=True, mode="symmetric")
+        # x = tools.get_fft_pos(nx, dxy, centered=True, mode="symmetric")
+        # y = tools.get_fft_pos(ny, dxy, centered=True, mode="symmetric")
+        x = (np.arange(nx) - nx // 2) * dxy
+        y = (np.arange(ny) - ny // 2) * dxy
     elif origin == "edge":
-        x = tools.get_fft_pos(img.shape[1], dxy, centered=False, mode="positive")
-        y = tools.get_fft_pos(img.shape[0], dxy, centered=False, mode="positive")
+        x = tools.get_fft_pos(nx, dxy, centered=False, mode="positive")
+        y = tools.get_fft_pos(ny, dxy, centered=False, mode="positive")
     else:
         raise ValueError(f"'origin' must be 'center' or 'edge' but was '{origin:s}'")
 

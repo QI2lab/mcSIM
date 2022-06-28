@@ -14,8 +14,7 @@ import localize_psf.fit_psf as psf
 import localize_psf.affine as affine
 import localize_psf.rois as rois
 
-now = datetime.datetime.now()
-tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
+tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 
 # ############################################
 # load image data, channel/angle/phase
