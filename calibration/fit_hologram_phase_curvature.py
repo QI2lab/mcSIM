@@ -8,6 +8,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from skimage.restoration import unwrap_phase
 import tifffile
+import zarr
 from pathlib import Path
 import mcsim.analysis.analysis_tools as tools
 import mcsim.analysis.sim_reconstruction as sim
@@ -17,11 +18,15 @@ import localize_psf.fit as fit
 # fname = r"F:\2021_11_23\24_odt_align\24_odt_align_MMStack_Pos0.ome.tif"
 # fname = r"F:\2021_12_07\13_odt_focus_test\13_odt_focus_test_MMStack_Pos0.ome.tif"
 # fname = Path(r"E:\2022_02_25\05_hologram.tif")
-fname = Path(r"G:\2022_05_30\01_r=5_hologram.tif")
+# fname = Path(r"G:\2022_05_30\01_r=5_hologram.tif")
+# img = tifffile.imread(fname)
+# if img.ndim == 3:
+#     img = img[0]
 
-img = tifffile.imread(fname)
-if img.ndim == 3:
-    img = img[0]
+fname = Path(r"G:\2022_06_26\26_phase_curvature_test\sim_odt.zarr")
+dat = zarr.open(fname, "r")
+img = np.array(dat.cam2.odt[0, 0, 0, 0, 0, 0])
+
 
 img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
 
@@ -97,22 +102,25 @@ figh.suptitle("object plane $R_x$ = %0.2fmm, $R_y$ = %0.2fmm\n"
              "image plane  $R_x$ = %0.3fm, $R_y$ = %0.3fm\n"
              "angle = %0.2fdeg" %
              (rx / 1e3, ry / 1e3, rx * dp**2 / dxy**2 / 1e6, ry * dp**2 / dxy**2 / 1e6, fp[-1] * 180/np.pi))
-grid = figh.add_gridspec(nrows=2, ncols=15 + 3)
+grid = figh.add_gridspec(nrows=2, ncols=9, width_ratios=[8, 1, 1]*3)
 
-ax = figh.add_subplot(grid[0, :5])
-ax.imshow(np.abs(efield_shift), vmin=0, cmap="bone", extent=extent_xy)
+ax = figh.add_subplot(grid[0, 0])
+im = ax.imshow(np.abs(efield_shift), vmin=0, cmap="bone", extent=extent_xy)
 ax.set_title("efield")
 ax.set_xticks([])
 ax.set_yticks([])
 
-ax = figh.add_subplot(grid[0, 6:11])
+ax = figh.add_subplot(grid[0, 1])
+figh.colorbar(im, cax=ax)
+
+ax = figh.add_subplot(grid[0, 3])
 im = ax.imshow(np.angle(efield_shift), vmin=-np.pi, vmax=np.pi, cmap="RdBu", extent=extent_xy)
 ax.plot(fp[2], fp[3], 'kx')
 ax.set_title("wrapped phase")
 ax.set_xticks([])
 ax.set_yticks([])
 
-ax = figh.add_subplot(grid[0, 11])
+ax = figh.add_subplot(grid[0, 4])
 figh.colorbar(im, cax=ax)
 
 
@@ -120,24 +128,24 @@ figh.colorbar(im, cax=ax)
 # vmax = np.percentile(phase_unwrapped, 99.95)
 vmin = -2*np.pi
 vmax = 2*np.pi
-ax = figh.add_subplot(grid[0, 12:17])
+ax = figh.add_subplot(grid[0, 6])
 im = ax.imshow(phase_unwrapped - fp[-2], cmap="RdBu", vmin=vmin, vmax=vmax, extent=extent_xy)
 ax.plot(fp[2], fp[3], 'kx')
 ax.set_title("unwrapped phase")
 ax.set_xticks([])
 ax.set_yticks([])
 
-ax = figh.add_subplot(grid[0, 17])
+ax = figh.add_subplot(grid[0, 7])
 figh.colorbar(im, cax=ax)
 
 
-ax = figh.add_subplot(grid[1, 6:11])
+ax = figh.add_subplot(grid[1, 0])
 ax.imshow(to_fit_pix, cmap="bone", extent=extent_xy)
 ax.set_title("fit mask")
 ax.set_xticks([])
 ax.set_yticks([])
 
-ax = figh.add_subplot(grid[1, 12:17])
+ax = figh.add_subplot(grid[1, 6])
 phase_fit_plot = fn(results["fit_params"], xx, yy)
 ax.plot(fp[2], fp[3], 'kx')
 phase_fit_plot[np.logical_not(to_fit_pix)] = np.nan
