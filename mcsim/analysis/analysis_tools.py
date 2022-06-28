@@ -7,7 +7,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy import fft
 import localize_psf.rois as rois
-# _cupy_available = False
+
 _cupy_available = True
 try:
     import cupy as cp
@@ -753,6 +753,7 @@ def get_fft_pos(length, dt=1, centered=True, mode='symmetric'):
 
     # symmetric, centered frequencies
     pos = np.arange(-np.ceil(0.5 * (length - 1)), np.floor(0.5 * (length - 1)) + 1)
+    # todo: note that this is the same np.arange(length) - length // 2
 
     if mode == 'symmetric':
         pass
@@ -915,13 +916,9 @@ def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[f
     if img_ft.ndim < 2:
         raise ValueError("img_ft must be at least 2D")
 
-    ndims = img_ft.ndim
+    n_extra_dims = img_ft.ndim - 2
     ny, nx = img_ft.shape[-2:]
 
-    # ensure shift_frq shape can be broadcast with img_ft
-    # shift_frq = np.array(shift_frq, copy=True)
-    # fx = shift_frq[..., 0]
-    # fy = shift_frq[..., 1]
     fx = np.array(fx, copy=True)
     fy = np.array(fy, copy=True)
 
@@ -935,22 +932,14 @@ def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[f
     except ValueError:
         shapes_broadcastable = False
 
-    # shapes_broadcastable = True
-    # if fx.ndim != img_ft.ndim:
-    #     shapes_broadcastable = False
-    #
-    # for ii in range(fx.ndim):
-    #     if not (fx.shape[ii] == img_ft.shape[ii] or fx.shape[ii] == 1):
-    #         shapes_broadcastable = False
-
+    # otherwise make shapes broadcastable if possible
     if not shapes_broadcastable:
-
         ndim_extra_frq = fx.ndim
         if fx.shape != img_ft.shape[-2 - ndim_extra_frq:-2]:
             raise ValueError(f"fx and shift_frq have incompatible shapes {fx.shape} and {img_ft.shape}")
 
         # exponential phase ramp. Should be broadcastable to shape of img_ft
-        axis_expand_frq = list(range(ndims - fx.ndim)) + [-2, -1]
+        axis_expand_frq = list(range(n_extra_dims - fx.ndim)) + [-2, -1]
         fx = np.expand_dims(fx, axis=axis_expand_frq)
         fy = np.expand_dims(fy, axis=axis_expand_frq)
 
@@ -970,16 +959,12 @@ def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[f
         # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
         # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
         # we do not apply an fftshift, so we don't have to apply an intermediate shift in our FFTs later
-        # x = get_fft_pos(nx, dx, centered=False, mode='symmetric')
-        # y = get_fft_pos(ny, dy, centered=False, mode='symmetric')
-        axis_expand_x = list(range(ndims - 2 + 1))
+        axis_expand_x = list(range(n_extra_dims + 1))
         x = np.expand_dims(fft.fftfreq(nx) * nx * dx, axis=axis_expand_x)
 
-        axis_expand_y = list(range(ndims - 2)) + [-1]
+        axis_expand_y = list(range(n_extra_dims)) + [-1]
         y = np.expand_dims(fft.fftfreq(ny) * ny * dy, axis=axis_expand_y)
 
-        # exp_factor = np.exp(-1j * 2 * np.pi * (np.expand_dims(shift_frq[..., 0], axis=axis_expand_frq) * x +
-        #                                        np.expand_dims(shift_frq[..., 1], axis=axis_expand_frq) * y))
         exp_factor = np.exp(-1j * 2 * np.pi * (fx * x + fy * y))
 
         if not use_gpu:
