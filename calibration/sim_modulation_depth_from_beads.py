@@ -8,10 +8,8 @@ may include color channels, time series, and z-scans. It does not handle differe
 """
 import datetime
 import numpy as np
-import os
 from pathlib import Path
 import time
-import pickle
 import matplotlib.pyplot as plt
 import matplotlib.colors
 import scipy.signal
@@ -27,77 +25,34 @@ import localize_psf.localize as localize
 tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
 # data files
-root_path = Path(r"G://2022_04_14")
-data_dirs = [root_path / "03_200nm_beads_sim_mod_depth",
-             root_path / "04_200nm_beads_sim_mod_depth"]
+data_dirs = [Path(r"G:\2022_07_07\07_sim_calibration_0.2um_beads")]
+
 # color channel information
 ignore_color = [False, False, False]
-min_fit_amp = [5000, 1000, 300]
+min_fit_amp = [100, 30, 100]
 bead_radii = 0.5 * np.array([0.2, 0.2, 0.2])
-nrois_to_plot = 0
+nrois_to_plot = 2
+
+# ignore_color = [False, False]
+# min_fit_amp = [1000, 100]
+# bead_radii = 0.5 * np.array([0.1, 0.1])
+# nrois_to_plot = 5
 
 # set parameters
-dxy = 0.065  # um
-figsize = (21, 9)
+figsize = (30, 9)
 save_results = True
 close_fig_after_saving = True
-nangles = 3
-nphases = 3
 # roi/filtering parameters in um
 roi_size = (0, 1.5, 1.5)  # (sz, sy, sx) in um
 filters_small_sigma = (0.1, 0.1, 0.1)  # (sz, sy, sx) in um
 filters_large_sigma = (5, 5, 5)  # (sz, sy, sx) in um
 min_boundary_distance = (1, 1)  # (dz, dxy) in um
-sigma_bounds = ((0, 0.05), (3, 3))
+sigma_bounds = ((0, 0.05), (3, 0.3))
 min_spot_sep = (0, 1) # (dz, dxy) in um
 
 # turn off interactive plotting
 plt.ioff()
 plt.switch_backend("agg")
-
-
-# ################################
-# load affine xform data
-# ################################
-affine_paths = ["2021-04-13_12;49;32_affine_xform_red_z=0.pkl",
-                "2021-04-13_12;49;32_affine_xform_blue_z=0.pkl",
-                "2021-04-13_12;49;32_affine_xform_green_z=0.pkl"]
-affine_paths = [root_path / d for d in affine_paths]
-affine_xforms = []
-for p in affine_paths:
-    with open(p, "rb") as f:
-        dat = pickle.load(f)
-    affine_xforms.append(dat["affine_xform"])
-
-# ################################
-# load pattern data
-# ################################
-# todo: load in correct order
-pattern_paths = [r"period=6.0_nangles=3\wavelength=635nm\sim_patterns_period=7.98_nangles=3.pkl",
-                 r"period=6.0_nangles=3\wavelength=473nm\sim_patterns_period=6.01_nangles=3.pkl",
-                 r"period=6.0_nangles=3\wavelength=532nm\sim_patterns_period=6.82_nangles=3.pkl"]
-
-
-pattern_paths = [root_path / d for d in pattern_paths]
-pattern_dat = []
-xformed_angles = []
-periods = []
-frqs = np.zeros((len(ignore_color), nangles, 2))
-phases = np.zeros((len(ignore_color), nangles, nphases))
-for ii, p in enumerate(pattern_paths):
-    with open(p, "rb") as f:
-        dat = pickle.load(f)
-
-    pattern_dat.append(dat)
-
-    fxt, fyt, phit = affine.xform_sinusoid_params(dat["frqs"][:, 0], dat["frqs"][:, 1],
-                                                  dat["phases"], affine_xforms[ii])
-    frqs[ii, ..., 0] = 2 * fxt / dxy
-    frqs[ii, ..., 1] = 2 * fyt / dxy
-    phases[ii] = 2 * phit
-
-    xformed_angles.append(np.angle(fxt + 1j * fyt))
-    periods.append(0.5 / np.sqrt(fxt**2 + fyt**2) * dxy)
 
 # ################################
 # loop over data dirs and estimate modulation depth
@@ -105,23 +60,39 @@ for ii, p in enumerate(pattern_paths):
 for d in data_dirs:
     file_path = list(d.glob("*.zarr"))[0]
     data = zarr.open(file_path, "r")
+    _, ntimes, nz, _, ncolors, npatterns, ny, nx = data.cam1.sim.shape
+    nphases = data.cam1.sim.attrs["nphases"][0]
+    nangles = data.cam1.sim.attrs["nangles"][0]
 
-    imgs = np.array(data.sim)
-    ntimes, nz, ncolors, npatterns, ny, nx = imgs.shape
+    dxy = data.cam1.attrs["dx_um"]
+
+    # load affine xforms
+    affine_xforms = [np.array(xform) for xform in data.cam1.attrs["affine_transformations"]]
+
+    # load pattern data
+    # periods = []
+    frqs = np.zeros((ncolors, nangles, 2))
+    phases = np.zeros((ncolors, nangles, nphases))
+    for ii in range(ncolors):
+        frqs_raw = np.array(data.cam1.sim.attrs["frqs"][ii])[::nphases]
+        phases_raw = np.array(data.cam1.sim.attrs["phases"][ii]).reshape((nangles, nphases))
+        fxt, fyt, phit = affine.xform_sinusoid_params(frqs_raw[:, 0], frqs_raw[:, 1],
+                                                      phases_raw, affine_xforms[ii])
+        frqs[ii, ..., 0] = 2 * fxt / dxy
+        frqs[ii, ..., 1] = 2 * fyt / dxy
+        phases[ii] = 2 * phit
+
+        # xformed_angles.append(np.angle(fxt + 1j * fyt))
+        # periods.append(0.5 / np.sqrt(fxt**2 + fyt**2) * dxy)
+    periods = 1 / np.linalg.norm(frqs, axis=-1)
+
+    # load images
+    imgs = np.array(data.cam1.sim[0, :, :, 0])
     imgs = imgs.reshape([ntimes, nz, ncolors, nangles, nphases, ny, nx])
     dz = data.attrs["dz_um"]
-    zs = data.attrs["z_position_um"]
-    exposure_t = data.sim.attrs["exposure_time_ms"]
-    channels = data.sim.attrs["channels"]
-
-    # metadata, dims, summary = mm_io.parse_mm_metadata(d)
-    #
-    # nxy = dims['position']
-    # ntimes = dims['time']
-    # ncolors = dims['channel']
-    # nz = dims['z']
-    # exposure_t = metadata["Exposure-ms"][0]
-    #     zs = np.unique(metadata["ZPositionUm"])
+    zs = np.array(data.attrs["z_position_um"])
+    exposure_t = data.cam1.attrs["exposure_time_ms"]
+    channels = data.cam1.attrs["channels"]
 
     iz_center = nz // 2
     # if len(zs) > 1:
@@ -133,6 +104,9 @@ for d in data_dirs:
     if save_results:
         save_dir = Path(d, f"{tstamp:s}_sim_modulation_depth")
         save_dir.mkdir(exist_ok=True)
+
+        roi_save_dir = save_dir / "roi_figures"
+        roi_save_dir.mkdir(exist_ok=True)
 
 
     # #################################################
@@ -177,8 +151,19 @@ for d in data_dirs:
         if not np.any(to_keep):
             raise ValueError("no beads found...")
 
-        rois[ic] = rois_temp[to_keep]
-        fps_start[ic] = fps_temp[to_keep]
+        # check which points are within DMD area
+        cpix = np.stack((fps_temp[:, 1] / dxy, fps_temp[:, 2] / dxy), axis=1)
+        cpix_dmd = affine.xform_points(cpix, np.linalg.inv(affine_xforms[ic]))
+        nx_dmd = data.dmd_data.attrs["dmd_nx"]
+        ny_dmd = data.dmd_data.attrs["dmd_ny"]
+
+        in_dmd_area = np.logical_and.reduce((cpix_dmd[:, 0] >= 0, cpix_dmd[:, 0] <= nx_dmd,
+                                             cpix_dmd[:, 1] >= 0, cpix_dmd[:, 1] <= ny_dmd))
+
+
+        # ROIs we will use going forward
+        rois[ic] = rois_temp[np.logical_and(to_keep, in_dmd_area)]
+        fps_start[ic] = fps_temp[np.logical_and(to_keep, in_dmd_area)]
 
         # define array to hold later fit results
         fps[ic] = np.zeros((len(rois[ic]), ntimes, nz, nangles, nphases, 7))
@@ -195,7 +180,8 @@ for d in data_dirs:
                                              legend_labels=["all fits", "reliable fits"],
                                              weights=[fps_temp[:, 4], fps_start[ic][:, 4]],
                                              cbar_labels=[r"$\sigma_{xy} (\mu m)$", r"$\sigma_{xy} (\mu m)$"],
-                                             vlims_percentile=(0.001, 99.99), gamma=0.5,
+                                             color_limits=[[sigma_bounds[0][1], sigma_bounds[1][1]]] * 2,
+                                             vlims_percentile=(1, 99.99), gamma=0.5,
                                              title="spot centers, channel %d = %s, threshold=%.0f" % (ic, channels[ic], min_fit_amp[ic]),
                                              figsize=figsize)
 
@@ -205,12 +191,12 @@ for d in data_dirs:
             plt.close(figh1)
 
         # plot fits if desired
-        for aaa in range(nrois_to_plot):
+        for aaa in range(np.min([nrois_to_plot, len(fps_start[ic])])):
             localize.plot_gauss_roi(fps_start[ic][aaa], rois[ic][aaa], np.expand_dims(img_middle_wf, axis=0),
                                     coords,
                                     #init_params=fps_start[ic][aaa],
-                                    prefix=f"reference_roi_ic={ic:d}_iz={iz_center:d}_it={0:d}_roi={aaa:d}_",
-                                    save_dir=save_dir)
+                                    prefix=f"reference_roi={aaa:d}_ic={ic:d}_iz={iz_center:d}_it={0:d}_",
+                                    save_dir=roi_save_dir)
 
         # #################################################
         # do fitting for all other z-slices/times/angles/phases using same ROI's with fixed centers
@@ -227,10 +213,6 @@ for d in data_dirs:
                               f" {ip+1:d}/{nphases:d} phases,"
                               f" t elapsed={time.perf_counter() - tstart:.2f}")
 
-                        # imgs = mm_io.read_mm_dataset(metadata, time_indices=it, z_indices=iz,
-                        #                              user_indices={"UserChannelIndex": ic,
-                        #                                            "UserSimIndex": sim_inds[ip]})
-
                         imgs_now = np.expand_dims(imgs[it, iz, ic, ia, ip], axis=0)
 
                         # get ROI's to fit spots
@@ -241,18 +223,19 @@ for d in data_dirs:
                         fixed_params = np.zeros((7), dtype=bool)
                         fixed_params[1:4] = True
                         fixed_params[-1] = True
+                        # fixed_params[1:-1] = True
 
                         # do fitting
                         # todo: fitting on gpu not working ... not sure if the problem is the fixed parameters or something else
                         fps[ic][:, it, iz, ia, ip, :], fit_states, chi_sqrs, niters, fit_t = \
                             localize.fit_gauss_rois(img_rois, coords_rois, fps_start[ic], fixed_params=fixed_params, use_gpu=False) #, use_gpu=False #, debug=True)
 
-                        for aaa in range(nrois_to_plot):
+                        for aaa in range(np.min([nrois_to_plot, len(fps_start[ic])])):
                             localize.plot_gauss_roi(fps[ic][aaa, it, iz, ia, ip], rois[ic][aaa], imgs_now,
                                                     coords,
                                                     init_params=fps_start[ic][aaa],
-                                                    prefix=f"roi_ic={ic:d}_iz={iz:d}_it={it:d}_ia={ia:d}_ip={ip:d}_roi={aaa:d}_",
-                                                    save_dir=save_dir)
+                                                    prefix=f"roi={aaa:d}_ic={ic:d}_iz={iz:d}_it={it:d}_ia={ia:d}_ip={ip:d}_",
+                                                    save_dir=roi_save_dir)
 
     # ####################################
     # compute modulation depth statistics
@@ -297,7 +280,7 @@ for d in data_dirs:
             figh.suptitle(f"{d}\nz={iz:d}, time={it:d}, exposure={exposure_t:.1f}ms")
 
             nplots_per_angle = 3
-            grid = figh.add_gridspec(ncolors, nplots_per_angle * nangles, wspace=0.1, hspace=0.5)
+            grid = figh.add_gridspec(ncolors, nplots_per_angle * nangles, wspace=0.3, hspace=0.5)
 
             for ic in range(ncolors):
                 if ignore_color[ic]:
@@ -339,7 +322,8 @@ for d in data_dirs:
                                                                "m = %0.3f(%.0f)" %
                                                                (ic, channels[ic], iz, it, ia, mean_depth, std_depth * 1e3),
                                                          cbar_labels=["modulation depth"],
-                                                         vlims_percentile=(0.001, 99.99), gamma=0.5, figsize=figsize)
+                                                         color_limits=[[0, 1]],
+                                                         vlims_percentile=(1, 99.99), gamma=0.5, figsize=figsize)
 
                     if save_results:
                         figh2.savefig(Path(save_dir, f"beads_ic={ic:d}_angle={ia:d}_time={it:d}_z={iz:d}.png"))
@@ -374,8 +358,8 @@ for d in data_dirs:
 
                     ax.set_xlim([-0.05, 1.15])
                     ax.set_ylim([-10, 2 * np.percentile(amp_temp, 90)])
-                    ax.set_yticks([])
-                    ax.set_yticklabels([])
+                    # ax.set_yticks([])
+                    # ax.set_yticklabels([])
 
                     # size versus amplitude
                     ax = plt.subplot(grid[ic, ia * nplots_per_angle + 2])
@@ -387,8 +371,8 @@ for d in data_dirs:
 
                     ax.set_xlim([-0.05, 1.15])
                     ax.set_ylim([-0.1, 2 * np.percentile(sigma_means_temp, 90)])
-                    ax.set_yticks([])
-                    ax.set_yticklabels([])
+                    # ax.set_yticks([])
+                    # ax.set_yticklabels([])
 
             if save_results:
                 figh.savefig(Path(save_dir, f"modulation_estimate_z={iz:d}_time={it:d}.png"))

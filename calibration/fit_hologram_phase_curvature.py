@@ -23,7 +23,8 @@ import localize_psf.fit as fit
 # if img.ndim == 3:
 #     img = img[0]
 
-fname = Path(r"G:\2022_06_26\26_phase_curvature_test\sim_odt.zarr")
+# fname = Path(r"G:\2022_06_26\26_phase_curvature_test\sim_odt.zarr")
+fname = Path(r"G:\2022_07_07\08_odt_phase_curvature\sim_odt.zarr")
 dat = zarr.open(fname, "r")
 img = np.array(dat.cam2.odt[0, 0, 0, 0, 0, 0])
 
