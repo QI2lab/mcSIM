@@ -132,25 +132,35 @@ def get_angles(frqs, no, wavelength):
     return theta, phi
 
 
-def get_global_phase_shifts(imgs, ref_imgs):
+def get_global_phase_shifts(imgs, ref_imgs, thresh=None):
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
     imgs * np.exp(1j * phase_shift) ~ img_ref
 
     @param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
-    @param ref_imgs: n_{-m} x ... x n_{-1} array
+    @param ref_imgs: n_{-m} x ... x n_{-2} x n_{-1} array
+    @param thresh: only consider points in images where both abs(imgs) and abs(ref_imgs) > thresh
     @return phase_shifts:
     """
+    # broadcast images and references images to same shapes
     imgs, ref_imgs = np.broadcast_arrays(imgs, ref_imgs)
 
+    ny, nx = imgs.shape[-2:]
+
+    # looper over all dimensions except the last two, which are the y and x dimensions respectively
     loop_shape = imgs.shape[:-2]
     phase_shifts = np.zeros(loop_shape + (1, 1))
     nfits = np.prod(loop_shape).astype(int)
     for ii in range(nfits):
-        # print("%d/%d" % (ii+1, nfits))
         ind = np.unravel_index(ii, loop_shape)
 
-        def fn(p): return np.abs(imgs[ind] * np.exp(1j * p[0]) - ref_imgs[ind]).ravel()
+        if thresh is None:
+            mask = np.ones(imgs[ind].shape, dtype=bool)
+        else:
+            mask = np.logical_and(np.abs(imgs[ind]) > thresh, np.abs(ref_imgs) > thresh)
+
+        # todo: could add a more sophisticated fitting function if seemed useful
+        def fn(p): return np.abs(imgs[ind] * np.exp(1j * p[0]) - ref_imgs[ind])[mask].ravel()
         # def jac(p): return [(1j * imgs[ind] * np.exp(1j * p[0])).ravel()]
         # s1 = np.mean(imgs[ii])
         # s2 = np.mean(ref_imgs[ii])
@@ -165,10 +175,10 @@ def get_global_phase_shifts(imgs, ref_imgs):
 def get_n(scattering_pot, no, wavelength):
     """
     convert from the scattering potential to the index of refraction
-    @param scattering_pot:
-    @param no:
-    @param wavelength:
-    @return:
+    @param scattering_pot: F(r) = - (2*np.pi / lambda)^2 * (n(r)^2 - no^2)
+    @param no: background index of refraction
+    @param wavelength: wavelength
+    @return n:
     """
     k = 2 * np.pi / wavelength
     n = np.sqrt(-scattering_pot / k ** 2 + no ** 2)
@@ -218,9 +228,10 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
     for ii in range(nloop):
         ind = np.unravel_index(ii, loop_shape)
 
-        # convert phase difference to interval [-np.pi, np.pi)
+        # convert phase difference from interval [0, 2*np.pi) to [-np.pi, np.pi)
         phase_diff = np.mod(np.angle(eimgs[ind]) - np.angle(eimgs_bg[ind]), 2 * np.pi)
-        phase_diff[phase_diff >= np.pi] = phase_diff[phase_diff >= np.pi] - 2 * np.pi
+        # phase_diff[phase_diff >= np.pi] = phase_diff[phase_diff >= np.pi] - 2 * np.pi
+        phase_diff[phase_diff >= np.pi] -= 2 * np.pi
 
         # get rytov phase change
         # psi_rytov[aa] = np.log(np.abs(eimg[aa]) / (np.abs(eimg_bg[aa]) + delta)) + 1j * unwrap_phase(phase_diff)
@@ -262,6 +273,20 @@ def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.nda
 
 
 def get_reconstruction_sampling(ni, na_det, beam_frqs, wavelength, dxy, img_size, z_fov, dz_sampling_factor, dxy_sampling_factor):
+    """
+    Get information about pixel grid sample is reconstruction on
+
+    @param ni:
+    @param na_det:
+    @param beam_frqs:
+    @param wavelength:
+    @param dxy:
+    @param img_size:
+    @param z_fov:
+    @param dz_sampling_factor:
+    @param dxy_sampling_factor:
+    @return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max):
+    """
     ny, nx = img_size
 
     # ##################################
@@ -299,6 +324,8 @@ def get_reconstruction_sampling(ni, na_det, beam_frqs, wavelength, dxy, img_size
 def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
                    dxy_sampling_factor=1, mode="born", use_interpolation=False):
     """
+    Given a set of holograms obtained using ODT, put the hologram information back in the correct locations in
+    Fourier space
 
     @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used
     @param beam_frqs: nimgs x 3, where each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2
@@ -408,7 +435,8 @@ def reconstruction(efield_fts, beam_frqs, ni, na_det, wavelength, dxy, z_fov=10,
     to_use_ind = np.logical_and.reduce((zind >= 0, zind < nz_sp,
                                         yind >= 0, yind < ny_sp,
                                         xind >= 0, xind < nx_sp,
-                                        np.logical_not(not_detectable)))
+                                        np.logical_not(not_detectable),
+                                        np.logical_not(np.isnan(efield_fts))))
 
     # convert nD indices to 1D indices so can easily check if points are unique
     cind = -np.ones(zind.shape, dtype=int)
@@ -594,7 +622,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
 
 
 # fit frequencies
-def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filter_size=0):
+def fit_ref_frq(img_ft, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filter_size=0, show_figure=False):
     """
     Determine the hologram reference frequency from a single imaged, based on the regions in the hologram beyond the
     maximum imaging frequency that have information. These are expected to be circles centered around the reference
@@ -612,11 +640,11 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
     @param fmax_int:
     @param search_rad_fraction:
     @param npercentiles:
-    @return results, circ_dbl_fn:
+    @return results, circ_dbl_fn, figh: results["fit_params"] = [cx, cy, radius]
     """
-    ny, nx = img.shape
+    ny, nx = img_ft.shape
     # fourier transforms
-    img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
+    # img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
     # filter image
     img_ft = gaussian_filter(img_ft, (filter_size, filter_size))
 
@@ -628,7 +656,8 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
     fxfx, fyfy = np.meshgrid(fxs, fys)
     ff_perp = np.sqrt(fxfx**2 + fyfy**2)
 
-    extent_fxy = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx, fys[0] - 0.5 * dfy, fys[-1] + 0.5 * dfy]
+    extent_fxy = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
+                  fys[0] - 0.5 * dfy, fys[-1] + 0.5 * dfy]
 
     # #########################
     # find threshold using expected volume of area above threshold
@@ -681,8 +710,7 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
     # #########################
     # plot
     # #########################
-    debug = False
-    if debug:
+    if show_figure:
         figh = plt.figure(figsize=(16, 8))
         grid = figh.add_gridspec(2, 3)
 
@@ -720,14 +748,16 @@ def fit_ref_frq(img, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filt
         ax.set_xlabel("percentile")
         ax.set_ylabel("threshold (counts)")
         ax.set_title('threshold = %.0f' % results_thresh["fit_params"][-1])
+    else:
+        figh = None
 
-    return results, circ_dbl_fn
+    return results, circ_dbl_fn, figh
 
 
 # plotting functions
 def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
                          beam_frq, frq_ref, fmax_int, dxy,
-                         title="", use_gpu=False, figsize=(18, 10), gamma=0.1,
+                         title="", figsize=(18, 10), gamma=0.1,
                          **kwargs):
     """
     Plot diagnostic of ODT image and background image
@@ -746,39 +776,44 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
     @return figh:
     """
 
+    # real-space coordinates
     ny, nx = img_efield_ft.shape
     x = (np.arange(nx) - nx // 2) * dxy
     y = (np.arange(ny) - ny // 2) * dxy
     extent_xy = [x[0] - 0.5 * dxy, x[-1] + 0.5 * dxy,
                  y[-1] + 0.5 * dxy, y[0] - 0.5 * dxy]
 
-    # frequency info
-    # fy, fx = fcoords
+    # frequency-space coordinates
     fx = fft.fftshift(fft.fftfreq(nx, dxy))
     fy = fft.fftshift(fft.fftfreq(ny, dxy))
-    fxfx, fyfy = np.meshgrid(fx, fy)
     dfy = fy[1] - fy[0]
     dfx = fx[1] - fx[0]
     extent_fxfy = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx,
                    fy[-1] + 0.5 * dfy, fy[0] - 0.5 * dfy]
 
-    # efield band limits
-    out_of_band = np.sqrt((beam_frq[0] + fxfx) ** 2 + (beam_frq[1] + fyfy) ** 2) > (0.5 * fmax_int)
+    # ##############################
+    # compute real-space electric field
+    # ##############################
+    img_efield_ft_no_nan = np.array(img_efield_ft, copy=True)
+    img_efield_ft_no_nan[np.isnan(img_efield_ft_no_nan)] = 0
 
-    # electric field
-    data_stack = np.stack((img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft), axis=0)
-    shifted_ft = tools.translate_ft(data_stack, beam_frq[0], beam_frq[1], drs=(dxy, dxy), use_gpu=use_gpu)
-    shifted_ft[..., out_of_band] = 0
-    shifted = fft.fftshift(fft.ifft2(fft.ifftshift(shifted_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    img_efield_bg_ft_no_nan = np.array(img_efield_bg_ft, copy=True)
+    img_efield_bg_ft_no_nan[np.isnan(img_efield_bg_ft_no_nan)] = 0
 
-    img_efield_shift_ft = shifted_ft[0]
-    img_efield_shift = shifted[0]
-    img_efield_shift_bg_ft = shifted_ft[1]
-    img_efield_shift_bg = shifted[1]
-    img_efield_shift_scatt_ft = shifted_ft[2]
-    img_efield_shift_scatt = shifted[2]
+    img_efield_scatt_ft_no_nan = np.array(img_efield_scatt_ft, copy=True)
+    img_efield_scatt_ft_no_nan[np.isnan(img_efield_scatt_ft_no_nan)] = 0
 
+    # remove carrier frequency so can easily see phase shifts
+    exp_fact = np.exp(-1j * 2*np.pi * (beam_frq[0] * np.expand_dims(x, axis=0) +
+                                       beam_frq[1] * np.expand_dims(y, axis=1)))
+
+    img_efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_ft_no_nan))) * exp_fact
+    img_efield_shift_bg = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_bg_ft_no_nan))) * exp_fact
+    img_efield_shift_scatt = fft.fftshift(fft.ifft2(fft.ifftshift(img_efield_scatt_ft_no_nan))) * exp_fact
+
+    # ##############################
     # plot
+    # ##############################
     figh = plt.figure(figsize=figsize, **kwargs)
     figh.suptitle(title)
     grid = figh.add_gridspec(ncols=9, width_ratios=[8, 1, 1] * 3,
@@ -793,12 +828,12 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
     vmax_scat = np.percentile(np.abs(img_efield_shift_scatt).ravel(), 99.9)
     vmin_r = [vmin_e, vmin_e, vmin_scat]
     vmax_r = [vmax_e, vmax_e, vmax_scat]
-    fields_ft = [img_efield_shift_ft, img_efield_shift_bg_ft, img_efield_shift_scatt_ft]
+    fields_ft = [img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft]
 
     flims = [[-fmax_int, fmax_int],
              [-fmax_int, fmax_int],
              [-fmax_int, fmax_int]]
-    plot_pts = [np.array([0, 0]), np.array([0, 0]), np.array([0, 0])]
+    plot_pts = [beam_frq[:2]] * 3
     for ii, label in enumerate(labels):
 
         ax1 = figh.add_subplot(grid[0, 3*ii])
@@ -825,7 +860,7 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
         ax3.plot(plot_pts[ii][0], plot_pts[ii][1], 'r.', fillstyle="none")
         ax3.set_xlabel("$f_x$ (1 / $\mu m$)")
         ax3.set_ylabel("$f_y$ (1 / $\mu m$)")
-        ax3.set_title("$|%s(f)|$" % label)
+        ax3.set_title("$|E(f)|$")
         ax3.set_xlim(flims[ii])
         ax3.set_ylim(np.flip(flims[ii]))
 
