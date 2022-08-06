@@ -1302,10 +1302,10 @@ def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1):
     v_gt = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft_gt)))
 
     # set display limits
-    vminr = 1.2 * np.min(v_gt.real)
+    vminr = np.min([1.2 * np.min(v_gt.real), -0.01])
     vmaxr = 0
-    vmini = -0.1
-    vmaxi = 0.1
+    vmini = np.min([1.2 * np.min(v_gt.imag), -0.1])
+    vmaxi = -vmini
     vmink = 0
     vmaxk = 1.2 * np.max(np.abs(v_ft_gt))
 
@@ -1461,8 +1461,8 @@ def compare_escatt(e, e_gt, beam_frqs, dxy, ttl="", figsize=(35, 20), gamma=0.1)
     x, y = np.meshgrid((np.arange(nx) - nx // 2) * dxy,
                        (np.arange(ny) - ny // 2) * dxy)
 
-    e_gt_ft = fft.fftshift(fft.ifft2(fft.fftshift(e_gt, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-    e_ft = fft.fftshift(fft.ifft2(fft.fftshift(e, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    e_gt_ft = fft.fftshift(fft.fft2(fft.fftshift(e_gt, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    e_ft = fft.fftshift(fft.fft2(fft.fftshift(e, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
     # display limits
     vmaxe = 1.2 * np.max(np.abs(e_gt))
@@ -1499,7 +1499,7 @@ def compare_escatt(e, e_gt, beam_frqs, dxy, ttl="", figsize=(35, 20), gamma=0.1)
             plt.colorbar(im, cax=ax)
 
         ax = figh.add_subplot(grid[2, ii])
-        im = ax.imshow(np.abs(e[ii] - e_gt[ii]), vmin=-vmaxe/10, vmax=vmaxe/10, cmap="PiYG")
+        im = ax.imshow(np.abs(e[ii] - e_gt[ii]), vmin=0, vmax=vmaxe, cmap="Greens")
         ax.set_xticks([])
         ax.set_yticks([])
         if ii == 0:
@@ -1559,7 +1559,7 @@ def compare_escatt(e, e_gt, beam_frqs, dxy, ttl="", figsize=(35, 20), gamma=0.1)
             plt.colorbar(im, cax=ax)
 
         ax = figh_ft.add_subplot(grid[2, ii])
-        im = ax.imshow(np.abs(e_ft[ii] - e_gt_ft[ii]), norm=PowerNorm(gamma=gamma, vmin=-vmaxek, vmax=vmaxek), cmap="PiYG")
+        im = ax.imshow(np.abs(e_ft[ii] - e_gt_ft[ii]), norm=PowerNorm(gamma=gamma, vmin=0, vmax=vmaxek), cmap="Greens")
         ax.set_xticks([])
         ax.set_yticks([])
         if ii == 0:
