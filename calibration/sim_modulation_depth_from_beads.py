@@ -137,14 +137,24 @@ for d in data_dirs:
         img_middle_wf = np.mean(imgs[0, nz//2, ic], axis=(0, 1))
 
         # identify beads in first image
-        coords, fps_temp, ips_temp, rois_temp,\
-        to_keep, conditions, condition_names, filter_settings,\
-        fit_states, chi_sqrs, niters, imgs_filtered = \
+        coords, fit_results, imgs_filtered = \
             localize.localize_beads(img_middle_wf, dxy, dz, min_fit_amp[ic], roi_size=roi_size,
                                     filter_sigma_small=filters_small_sigma, filter_sigma_large=filters_large_sigma,
                                     min_spot_sep=min_spot_sep,
                                     dist_boundary_min=min_boundary_distance, sigma_bounds=sigma_bounds,
                                     fit_amp_min=min_fit_amp[ic])
+
+        fps_temp = fit_results["fit_params"]
+        ips_temp = fit_results["init_params"]
+        rois_temp = fit_results["rois"]
+        to_keep = fit_results["to_keep"]
+        conditions = fit_results["conditions"]
+        condition_names = fit_results["condition_names"]
+        filter_settings = fit_results["filter_settings"]
+        fit_states = fit_results["fit_states"]
+        chi_sqrs = fit_results["chi_sqrs"]
+        niters = fit_results["niters"]
+
         z, y, x = coords
         zz, yy, xx = np.broadcast_arrays(*(z, y, x))
 
