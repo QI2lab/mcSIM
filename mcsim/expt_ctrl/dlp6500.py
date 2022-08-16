@@ -627,17 +627,20 @@ class dlp6500:
                       'internal error': 255}
 
     def __init__(self, vendor_id=0x0451, product_id=0xc900, debug: bool = True, firmware_pattern_info: list = None,
-                 presets: dict = None, config_file=None):
+                 presets: dict = None, config_file=None, initialize=True):
         """
         Get instance of DLP LightCrafter evaluation module (DLP6500 or DLP9000). This is the base class which os
         dependent classes should inherit from. The derived classes only need to implement _get_device and
         _send_raw_packet.
 
+        Note that DMD can be instantialized before being loaded. In this case, use constructor with initialize=False
+        and later call the initialize() method with the correct information.
+
         :param vendor_id: vendor id, used to find DMD USB device
         :param product_id: product id, used to find DMD USB device
         :param bool debug: If True, will print output of commands.
         :param firmware_pattern_info:
-        :param presets:
+        :param presets: dictionary of presets
         :param config_file: either provide config file or provide firmware_pattern_info and presets
         """
 
@@ -645,9 +648,15 @@ class dlp6500:
             raise ValueError("both config_file and either firmware_pattern_info or presets were provided. But"
                              "only one of these should be provided.")
 
-        # load configuration file
+            # load configuration file
         if config_file is not None:
             firmware_pattern_info, presets, _ = load_config_file(config_file)
+
+        if firmware_pattern_info is None:
+            firmware_pattern_info = []
+
+        if presets is None:
+            presets = {}
 
         # set firmware pattern info
         self.firmware_pattern_info = firmware_pattern_info
@@ -658,10 +667,21 @@ class dlp6500:
         self.debug = debug
 
         # find device
-        self._get_device(vendor_id, product_id)
+        self.vendor_id = vendor_id
+        self.product_id = product_id
+
+        self.initialized = initialize
+        if self.initialize:
+            self._get_device(vendor_id, product_id)
+
 
     def __del__(self):
         pass
+
+
+    def initialize(self, **kwargs):
+        self.__init__(initialize=True, **kwargs)
+
 
     # sending and receiving commands, operating system dependence
     def _get_device(self, vendor_id, product_id):
@@ -1877,7 +1897,10 @@ class dlp6500win(dlp6500):
         super(dlp6500win, self).__init__(**kwargs)
 
     def __del__(self):
-        self.dmd.close()
+        try:
+            self.dmd.close()
+        except AttributeError:
+            pass # this will fail if object destroyed before being initialized
 
     def _get_device(self, vendor_id, product_id):
         """
