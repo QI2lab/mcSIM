@@ -17,6 +17,8 @@ and the [BioRxiv preprint](https://doi.org/10.1101/2020.07.27.223941).
 The repository state at the time of publication is archived [here](https://doi.org/10.5281/zenodo.4773865), or available as
 a [release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0) on GitHub.
 
+For a tutorial on SIM reconstruction, see our [I2K 2022 talks](https://github.com/QI2lab/I2K2022-SIM).
+
 The best way to use this python package is to install it with pip
 ```
 git clone https://github.com/QI2lab/mcSIM.git
