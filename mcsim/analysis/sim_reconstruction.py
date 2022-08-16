@@ -3566,7 +3566,7 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
             _, _, phases_unbinned[ii, jj] = affine.xform_sinusoid_params(frqs[ii, 0], frqs[ii, 1], phases[ii, jj], bin2non_xform)
 
     # generate images
-    sim_imgs = np.zeros((nangles, nphases, nz, nyb, nxb))
+    sim_imgs = np.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
     snrs = np.zeros(sim_imgs.shape)
     mcnrs = np.zeros(sim_imgs.shape)
     for ii in range(nangles):
