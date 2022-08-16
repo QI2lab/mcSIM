@@ -2,7 +2,7 @@
 Set up Optotune MRE2 mirror using their python SDK. This file is called by MicroManager using the beanshell script
 MMStartup.bsh
 
-Installing Optotune SDK to your python environment:
+Installing Optotune SDK (MR-E-2_PythonSDK_1.2.3933) to your python environment:
 (1) The Optotune voice coil mirror SDK can be downloaded from their website https://www.optotune.com/downloads after
 registering
 (2) Since Optotune does not provide a setup.py file to pip install their package after downloading, we can make a
