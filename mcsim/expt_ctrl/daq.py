@@ -49,8 +49,9 @@ class nidaq(daq):
 
     def __init__(self, dev_name: str = "Dev1", digital_lines: str = "port0/line0:15", analog_lines: list = ["ao0", "ao1", "ao2"],
                  digital_line_names: dict = None, analog_line_names: dict = None, presets: dict = None,
-                 config_file: str = None):
+                 config_file: str = None, initialize=True):
         """
+        Initialize DAQ. Note that DAQ can be instantiated before the actual DAQ is present
 
         @param dev_name: device names, typically of the form `Devk` for k an integer
         @param digital_lines:
@@ -96,6 +97,13 @@ class nidaq(daq):
         self._task_ao = None
         self._task_di = None
 
+        # any code which requires device to already be present should go inside this block
+        self.initialized = initialize
+        if self.initialize:
+            pass
+
+    def initialize(self, **kwargs):
+        self.__init__(initialize=True, **kwargs)
 
     def reset(self):
         """
