@@ -1696,31 +1696,34 @@ class dlp6500:
     # the concept of "channels" and "modes" describing families of DMD patterns. This information can be
     # supplied at instantiation using the "presets" argument
     #######################################
-    def get_dmd_sequence(self, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
-                         blank: list[bool], mode_pattern_indices=None):
+    def get_dmd_sequence(self, modes: list[str], channels: list[str],
+                         nrepeats: list[int] = 1, noff_before: list[int] = 0, noff_after: list[int] = 0,
+                         blank: list[bool] = False, mode_pattern_indices: list[list[int]] = None):
         """
         Generate DMD patterns from a list of modes and channels
 
         This function requires that self.presets exists. self.presets[channel][mode] are dictionaries with two keys,
         "picture_indices" and "bit_indices"
 
-        @param modes:
-        @param channels:
-        @param nrepeats:
-        @param ndarkframes:
-        @param blank:
-        @param mode_pattern_indices: select subset of mode patterns to use
+        @param modes: modes, which refers to the keys in self.presets[channel]
+        @param channels: channels, which refer to the keys in self.presets
+        @param nrepeats: number of times to repeat patterns
+        @param noff_before: number of "off" patterns to prepend to the start of each mode
+        @param noff_after: number of "off" patternst to append to the end of each mode
+        @param blank: whether to add "off" patterns after each pattern in each mode
+        @param mode_pattern_indices: select subset of mode patterns to use. Each nested list contains the indices
+        of the patterns in self.presets[channel][mode] to use
         @return picture_indices, bit_indices:
         """
         if self.presets is None:
-            raise ValueError("presets was None, but must be populated with channels and modes for this function to work")
+            raise ValueError("self.presets was None, but must be a dictionary populated with channels and modes.")
 
         # check channel argument
         if isinstance(channels, str):
             channels = [channels]
 
         if not isinstance(channels, list):
-            raise ValueError()
+            raise ValueError(f"'channels' must be of type list, but was {type(channels)}")
 
         nmodes = len(channels)
 
@@ -1729,13 +1732,13 @@ class dlp6500:
             modes = [modes]
 
         if not isinstance(modes, list):
-            raise ValueError()
+            raise ValueError(f"'modes' must be of type list, but was {type(modes)}")
 
         if len(modes) == 1 and nmodes > 1:
             modes = modes * nmodes
 
         if len(modes) != nmodes:
-            raise ValueError()
+            raise ValueError(f"len(modes)={len(modes):d} and nmodes={nmodes:d}, but these must be equal")
 
         # check pattern indices argument
         if mode_pattern_indices is None:
@@ -1748,20 +1751,20 @@ class dlp6500:
             mode_pattern_indices = [mode_pattern_indices]
 
         if not isinstance(mode_pattern_indices, list):
-            raise ValueError()
+            raise ValueError(f"'mode_pattern_indices' must be of type list, but was {type(mode_pattern_indices)}")
 
         if len(mode_pattern_indices) == 1 and nmodes > 1:
             mode_pattern_indices = mode_pattern_indices * nmodes
 
         if len(mode_pattern_indices) != nmodes:
-            raise ValueError()
+            raise ValueError(f"len(mode_pattern_indices)={len(mode_pattern_indices):d} and nmodes={nmodes:d}, but these must be equal")
 
-        # check nrepeats correct type
+        # check nrepeats argument
         if isinstance(nrepeats, int):
             nrepeats = [nrepeats]
 
         if not isinstance(nrepeats, list):
-            raise ValueError()
+            raise ValueError(f"'nrepeats' must be of type list, but was {type(nrepeats)}")
 
         if nrepeats is None:
             nrepeats = []
@@ -1772,20 +1775,46 @@ class dlp6500:
             nrepeats = nrepeats * nmodes
 
         if len(nrepeats) != nmodes:
-            raise ValueError()
+            raise ValueError(f"nrepeats={nrepeats:d} and nmodes={nmodes:d}, but these must be equal")
+
+        # check noff_before argument
+        if isinstance(noff_before, int):
+            noff_before = [noff_before]
+
+        if not isinstance(noff_before, list):
+            raise ValueError(f"'noff_before' must be of type list, but was {type(noff_before)}")
+
+        if len(noff_before) == 1 and nmodes > 1:
+            noff_before = noff_before * nmodes
+
+        if len(noff_before) != nmodes:
+            raise ValueError(f"len(noff_before)={len(noff_before):d} and nmodes={nmodes:d}, but these must be equal")
+
+        # check noff_after argument
+        if isinstance(noff_after, int):
+            noff_after = [noff_after]
+
+        if not isinstance(noff_after, list):
+            raise ValueError(f"'noff_after' must be of type list, but was {type(noff_after)}")
+
+        if len(noff_after) == 1 and nmodes > 1:
+            noff_after = noff_after * nmodes
+
+        if len(noff_after) != nmodes:
+            raise ValueError(f"len(noff_after)={len(noff_after):d} and nmodes={nmodes:d}, but these must be equal")
 
         # check blank argument
         if isinstance(blank, bool):
             blank = [blank]
 
         if not isinstance(blank, list):
-            raise ValueError()
+            raise ValueError(f"'blank' must be of type list, but was {type(blank)}")
 
         if len(blank) == 1 and nmodes > 1:
             blank = blank * nmodes
 
         if len(blank) != nmodes:
-            raise ValueError()
+            raise ValueError(f"len(blank)={len(blank):d} and nmodes={nmodes:d}, but these must be equal")
 
         # processing
         pic_inds = []
@@ -1804,18 +1833,19 @@ class dlp6500:
             pic_inds.append(pi)
             bit_inds.append(bi)
 
-        # insert dark frames
-        if ndarkframes != 0:
-            for ii in range(nmodes):
-                ipic_off = self.presets[channels[ii]]["off"]["picture_indices"]
-                ibit_off = self.presets[channels[ii]]["off"]["bit_indices"]
+        # insert off patterns at the start or end of the sequence
+        for ii in range(nmodes):
+            if noff_before[ii] != 0 or noff_after[ii] != 0:
+                ipic_off_before = self.presets[channels[ii]]["off"]["picture_indices"] * np.ones(noff_before[ii], dtype=int)
+                ibit_off_before = self.presets[channels[ii]]["off"]["bit_indices"] * np.ones(noff_before[ii], dtype=int)
 
-                pic_inds[ii] = np.concatenate((ipic_off * np.ones(ndarkframes, dtype=int), pic_inds[ii]),
-                                              axis=0).astype(int)
-                bit_inds[ii] = np.concatenate((ibit_off * np.ones(ndarkframes, dtype=int), bit_inds[ii]),
-                                              axis=0).astype(int)
+                ipic_off_after = self.presets[channels[ii]]["off"]["picture_indices"] * np.ones(noff_after[ii], dtype=int)
+                ibit_off_after = self.presets[channels[ii]]["off"]["bit_indices"] * np.ones(noff_after[ii], dtype=int)
 
-        # insert blanking frames
+                pic_inds[ii] = np.concatenate((ipic_off_before, pic_inds[ii], ipic_off_after), axis=0).astype(int)
+                bit_inds[ii] = np.concatenate((ibit_off_before, bit_inds[ii], ibit_off_after), axis=0).astype(int)
+
+        # insert off patterns after each pattern to "blank"
         for ii in range(nmodes):
             if blank[ii]:
                 npatterns = len(pic_inds[ii])
@@ -1838,17 +1868,21 @@ class dlp6500:
 
         return pic_inds, bit_inds
 
-    def program_dmd_seq(self, modes: list[str], channels: list[str], nrepeats: list[int], ndarkframes: int,
-                        blank: list[bool], mode_pattern_indices: list[int], triggered: bool, verbose: bool = False,
-                        exp_time_us: int = 105, clear_pattern_after_trigger: bool = False):
+    def program_dmd_seq(self, modes: list[str], channels: list[str], nrepeats: list[int] = 1,
+                        noff_before: list[int] = 0, noff_after: list[int] = 0,
+                        blank: list[bool] = False,
+                        mode_pattern_indices: list[list[int]] = None,
+                        triggered: bool = False, exp_time_us: int = 105, clear_pattern_after_trigger: bool = False,
+                        verbose: bool = False):
         """
         convenience function for generating DMD pattern and programming DMD
 
+        @param noff_after:
         @param dmd:
         @param modes:
         @param channels:
         @param nrepeats:
-        @param ndarkframes:
+        @param noff_before:
         @param blank:
         @param mode_pattern_indices:
         @param triggered:
@@ -1856,33 +1890,23 @@ class dlp6500:
         @return:
         """
 
-        pic_inds, bit_inds = self.get_dmd_sequence(modes, channels, nrepeats, ndarkframes, blank, mode_pattern_indices)
-        # #########################################
-        # DMD commands
-        # #########################################
+        pic_inds, bit_inds = self.get_dmd_sequence(modes, channels, nrepeats=nrepeats,
+                                                   noff_before=noff_before, noff_after=noff_after,
+                                                   blank=blank, mode_pattern_indices=mode_pattern_indices)
+
         self.debug = verbose
-
         self.start_stop_sequence('stop')
-
         # check DMD trigger state
         delay1_us, mode_trig1 = self.get_trigger_in1()
-        # print('trigger1 delay=%dus' % delay1_us)
-        # print('trigger1 mode=%d' % mode_trig1)
-
-        # dmd.set_trigger_in2('rising')
         mode_trig2 = self.get_trigger_in2()
-        # print("trigger2 mode=%d" % mode_trig2)
 
         self.set_pattern_sequence(pic_inds, bit_inds, exp_time_us, 0, triggered=triggered,
                                   clear_pattern_after_trigger=clear_pattern_after_trigger,
                                   bit_depth=1, num_repeats=0, mode='pre-stored')
 
         if verbose:
-            # print pattern info
-            print("%d picture indices: " % len(pic_inds), end="")
-            print(pic_inds)
-            print("%d     bit indices: " % len(bit_inds), end="")
-            print(bit_inds)
+            print(f"{len(pic_inds):d} picture indices: {pic_inds}")
+            print(f"{len(bit_inds):d}     bit indices: {bit_inds}")
             print("finished programming DMD")
 
         return pic_inds, bit_inds
@@ -2049,10 +2073,12 @@ if __name__ == "__main__":
     # other
     parser.add_argument("-t", "--triggered", action="store_true",
                         help="set DMD to wait for trigger before switching pattern")
-    parser.add_argument("-d", "--ndarkframes", type=int, default=0,
-                        help="set number of dark frames to be added before each color of SIM/widefield pattern")
+    parser.add_argument("-d", "--noff_before", type=int, default=0,
+                        help="set number of off frames to be added before each channel/mode combination")
+    parser.add_argument("-d", "--noff_after", type=int, default=0,
+                        help="set number of off frames to be added after each channel/mode combination")
     parser.add_argument("-b", "--blank", action="store_true",
-                        help="set whether or not to insert OFF patterns between each SIM pattern to blank laser")
+                        help="set whether or not to insert off patterns after each pattern in each channel/mode combination to blank laser")
     parser.add_argument("-v", "--verbose", action="store_true", help="print more verbose DMD programming information")
     parser.add_argument("--illumination_time", type=int, default = 105,
                         help="illumination time in microseconds. Ignored if triggered is true")
@@ -2077,5 +2103,12 @@ if __name__ == "__main__":
         else:
             raise NotImplementedError(f"platform was '{sys.platform:s}' but must be 'win32' or 'linux'")
 
-    pic_inds, bit_inds = dmd.program_dmd_seq(args.modes, args.channels, args.nrepeats, args.ndarkframes, args.blank,
-                                             args.pattern_indices, args.triggered, args.verbose, args.illumination_time)
+    pic_inds, bit_inds = dmd.program_dmd_seq(args.modes, args.channels,
+                                             nrepeats=args.nrepeats,
+                                             noff_before=args.noff_before,
+                                             noff_after=args.noff_after,
+                                             blank=args.blank,
+                                             mode_pattern_indices=args.pattern_indices,
+                                             triggered=args.triggered,
+                                             exp_time_us=args.illumination_time,
+                                             verbose=args.verbose)
