@@ -308,10 +308,10 @@ def get_sim_sequence(daq_do_map, daq_ao_map, preset,
     nsteps_exposure = int(np.ceil(exposure_time / dt))
 
     if force_equal_subpatterns:
-        nsteps_exposure += nsteps_exposure % npatterns_frame
+        nsteps_exposure += nsteps_exposure % (npatterns_frame + 1)
 
     # sub-frame pattern time
-    nsteps_pattern_frame = int(np.floor(nsteps_exposure / npatterns_frame))
+    nsteps_pattern_frame = int(np.floor(nsteps_exposure / (npatterns_frame + 1)))
 
     # frame time
     nsteps_frame = nsteps_exposure + 2 * n_readout
