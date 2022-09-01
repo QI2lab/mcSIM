@@ -8,90 +8,88 @@ import dask
 import dask.array as da
 from dask.diagnostics import ProgressBar
 import matplotlib.pyplot as plt
-import mcsim.analysis.analysis_tools as tools
-import localize_psf.fit_psf as fit_psf
 
 # camera calibration
 def get_pixel_statistics(imgs, description="", moments=(1, 2), corr_dists=None):
     """
     Estimate camera readout noise from a set of images taken in zero light conditions
 
-    # warning: if OEM TIFF data should only pass in the first file
-
-    :param imgs: numpy or dask image array
+    :param imgs: numpy or dask image array. If you have a set of individual tiff files, such an array can be produced
+    with dask_image, e.g.
+    >>> imgs = dask_image.imread.imread("*.tif")
     :param moments list of moments to calculate: by default only the first and second moment. But if also compute the
      3rd and 4th can estimate the uncertainty in the variance
     :param corr_dists: list of correlator distances (along x, y, and t) to compute correlations
 
-    :return data: dictionary storing relevant data. Keys have the form "moment_n" for the nth moment and
+    :return data: dictionary storing data.
+    Keys have the form "moment_n" for the nth moment and
     "corr_r_dist=n" where r = x, y, or t and n is the correlation step size
     """
+
+    if corr_dists is not None and np.any([not isinstance(cd, int) for cd in corr_dists]):
+        raise ValueError(f"All corr_dists values must be integers, but were {corr_dists}")
+
 
     tstart = time.process_time()
 
     nimgs, ny, nx = imgs.shape
 
-    moment_arrays = []
-    for ii, m in enumerate(moments):
-        print("computing moment %d/%d" % (ii + 1, len(moments)))
-        with ProgressBar():
-            arr_temp, = dask.compute((imgs.astype(float)**m).mean(axis=0))
-            moment_arrays.append(arr_temp)
+    # compute moments
+    results_arrays = [(imgs.astype(float)**m).mean(axis=0) for m in moments]
+    results_names = [f"moment_{m:d}" for m in moments]
 
-    corrs_x = []
-    corrs_y = []
-    corrs_t = []
-    if corr_dists is not None:
+    # compute correlators
+    if corr_dists is None:
+        ncorrs = 0
+    else:
+        ncorrs = len(corr_dists)
+
         if isinstance(imgs, np.ndarray):
             roll_fn = np.roll
         else:
             roll_fn = da.roll
 
-        for ii, cd in enumerate(corr_dists):
-            print("computing correlators %d/%d" % (ii + 1, len(corr_dists)))
-            with ProgressBar():
-                cx_temp, = dask.compute((imgs.astype(float) *
-                                         roll_fn(imgs, cd, axis=2).astype(float)).mean(axis=0))
-                corrs_x.append(cx_temp)
+        for cd in corr_dists:
+            # todo: should I compute the connected correlators instead? i.e. <I(x) I(x+dx)> - <I(x)><I(x + dx)>
+            # for x- and y- correlations wrap arounds don't matter in the sense they don't obscure any information
+            results_arrays.append((imgs.astype(float) * roll_fn(imgs, cd, axis=2).astype(float)).mean(axis=0))
+            results_names.append(f"corr_x_dist={cd:d}")
 
-                cy_temp, = dask.compute((imgs.astype(float) *
-                                        roll_fn(imgs, cd, axis=1).astype(float)).mean(axis=0))
-                corrs_y.append(cy_temp)
+            results_arrays.append((imgs.astype(float) * roll_fn(imgs, cd, axis=1).astype(float)).mean(axis=0))
+            results_names.append(f"corr_y_dist={cd:d}")
 
-                ct_temp, = dask.compute((imgs.astype(float) *
-                                        roll_fn(imgs, cd, axis=0).astype(float)).mean(axis=0))
-                corrs_t.append(ct_temp)
+            # cut-off first cd-images which are correlations with "wrapped around" images
+            # todo: technically don't have the right averages for computing the connected correlator bc would want
+            # means of all images except the first/last
+            results_arrays.append((imgs.astype(float) * roll_fn(imgs, cd, axis=0).astype(float))[cd:].mean(axis=0))
+            results_names.append(f"corr_t_dist={cd:d}")
 
-    # calculate other useful statistics
-    # vars = mean_sqrs - means**2
-    # # variance of sample variance. See e.g. https://mathworld.wolfram.com/SampleVarianceDistribution.html
-    # mean_sqrs_central = mean_sqrs - means**2
-    # mean_fourth_central = mean_fourths - 4 * means * mean_cubes + 6 * means**2 * mean_sqrs -3 * means**4
-    # var_sample_var = (nimgs_prior - 1)**2 / nimgs_prior**3 * mean_fourth_central - \
-    #                  (nimgs_prior - 1) * (nimgs_prior - 3) * mean_sqrs_central**2 / nimgs_prior**3
+    # compute with dask if img is a dask array
+    if not isinstance(imgs, np.ndarray):
+        print(f"computing {len(moments):d} moments and {3*ncorrs:d} correlators")
+        with ProgressBar():
+            results_arrays = dask.compute(*results_arrays)
 
-    t_proc_time = time.perf_counter() - tstart
-
+    # store results in dictionary object
     data = {"nimgs": nimgs,
             "description": description,
-            "processing_time_s": t_proc_time}
+            "processing_time_s": time.perf_counter() - tstart}
 
-    for m, ma in zip(moments, moment_arrays):
-        data.update({"moment_%d" % m: ma})
+    for mn, ma in zip(results_names, results_arrays):
+        data.update({mn: ma})
 
-    # "means": means,
-    # "means_unc": np.sqrt(vars) / np.sqrt(nimgs_prior),
-    # "variances": vars,
-    # "variances_uncertainty": np.sqrt(var_sample_var),
-    # "mean_sqrs": mean_sqrs,
-    # "mean_cubes": mean_cubes,
-    # "mean_fourths": mean_fourths,
+    # calculate "uncertainty" in variance, if computed moments 1, 2, 3, and 4
+    # variance of sample variance. See e.g. https://mathworld.wolfram.com/SampleVarianceDistribution.html
+    if np.all([f"moment_{m:d}" in results_names for m in (1, 2, 3, 4)]):
+        moment2_central = data["moment_2"] - data["moment_1"]**2
+        moment4_central = data["moment_4"] \
+                          - 4 * data["moment_1"] * data["moment_3"] + \
+                          6 * data["moment_1"]**2 * data["moment_2"] \
+                          - 3 * data["moment_1"]**4
+        var_sample_var = (nimgs - 1)**2 / nimgs**3 * moment4_central - \
+                         (nimgs - 1) * (nimgs - 3) * moment2_central**2 / nimgs**3
 
-    if corr_dists is not None:
-        for ii, cd in enumerate(corr_dists):
-            data.update({"corr_x_dist=%d" % cd: corrs_x[ii],
-                         "corr_y_dist=%d" % cd: corrs_y[ii],
-                         "corr_t_dist=%d" % cd: corrs_t[ii]})
+        data.update({"variance of sample variance": var_sample_var})
 
     return data
 
@@ -106,13 +104,6 @@ def get_gain_map(dark_means, dark_vars, light_means, light_vars, max_mean=np.inf
     @param max_mean: ignore data points with means larger than this value (to avoid issues with saturation)
     @return gains, dark_means, dark_vars:
     """
-
-    # light_means = np.stack(light_means, axis=0)
-    # dark_means = np.stack(dark_means, axis=0)
-
-    # subtract background
-    # ms = light_means - np.expand_dims(dark_means, axis=0)
-    # vs = light_vars - np.expand_dims(dark_vars, axis=0)
 
     # minimize over g_ij \sum_k ( (nu_ij - v_ij) - g_ij * (Dk_ij - o_ij) )^2
     # recast this as min || A^t - B^t * g||^2
@@ -143,6 +134,7 @@ def plot_noise_stats(noise_data, nbins=600, figsize=(20, 10)):
        :return:
        """
 
+    # todo: deprecate
     offsets = noise_data['means']
     vars = noise_data['variances']
 
@@ -279,7 +271,6 @@ def plot_noise_stats(noise_data, nbins=600, figsize=(20, 10)):
     return fighs, fig_names
 
 
-#def plot_camera_noise_results(dark_data, light_data, gains, nbins=600, figsize=(20, 10)):
 def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains,
                               light_means_err=None, light_vars_err=None, nbins=600, figsize=(20, 10)):
     """
@@ -294,13 +285,6 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     :return:
     """
 
-    # offsets = dark_data['means']
-    # dark_vars = dark_data['variances']
-
-    # light_means = light_data["means"]
-    # light_means_err = light_data["means_unc"]
-    # light_vars = light_data["variances"]
-    # light_vars_err = light_data["variances_uncertainty"]
     if light_means_err is None:
         light_means_err = np.zeros(light_means.shape) * np.nan
 
