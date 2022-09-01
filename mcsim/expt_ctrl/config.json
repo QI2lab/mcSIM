@@ -109,7 +109,7 @@
 		],
 		"data_time_stamp": ""
 	},
-	"timestamp": "2022_06_12_16;40;01",
+	"timestamp": "2022_08_26_11;54;22",
 	"sim_odt_program_defaults": {
 		"sx": 801,
 		"cx": 1024,
@@ -117,10 +117,19 @@
 		"cy": 1024,
 		"odt_exposure_ms": 3.0,
 		"sim_exposure_ms": 100.0,
-		"odt_frametime_ms": 8.7,
+		"odt_frametime_ms": 3.1,
 		"daq_dt_us": 26,
 		"sim_warmup_time_ms": 200.0,
 		"odt_warmup_time_ms": 1000.0,
 		"shutter_delay_ms": 50
+	},
+	"camera_settings_phantom": {
+		"dxy": 0.1111111111111111,
+		"magnification": 180,
+		"na_excitation": 1.3,
+		"na_detection": 1.0,
+		"ni": 1.333,
+		"otf_calibration": null,
+		"dmd_affine_transforms": null
 	}
 }
