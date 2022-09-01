@@ -1090,7 +1090,7 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
 
 
 
-def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8)):
+def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(30, 8)):
     """
     Illustrate the region of frequency space which is obtained using the plane waves described by frqs
 
@@ -1117,23 +1117,27 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
 
 
     figh = plt.figure(figsize=figsize)
-    figh.suptitle("red = maximum extent of frequency info\n"
-                 "blue = maximum extent of centers")
-    grid = figh.add_gridspec(1, 2)
+    figh.suptitle("Frequency support diagnostic")
+    grid = figh.add_gridspec(nrows=1, ncols=4)
 
     # ########################
     # kx-kz plane
     # ########################
     ax = figh.add_subplot(grid[0, 0])
+    ax.set_title("$k_x-k_z$ projection")
     ax.axis("equal")
 
     # plot centers
-    ax.plot(-frqs_3d[:, 0], -frqs_3d[:, 2], 'k.')
+    ax.plot(-frqs_3d[:, 0], -frqs_3d[:, 2], 'k.', label="beam frqs")
 
     # plot arcs
     for ii in range(len(frqs_3d)):
+        if ii == 0:
+            kwargs = {"label": "frq support"}
+        else:
+            kwargs = {}
         ax.add_artist(Arc((-frqs_3d[ii, 0], -frqs_3d[ii, 2]), 2 * frq_norm, 2 * frq_norm, angle=90,
-                          theta1=-alpha_det * 180 / np.pi, theta2=alpha_det * 180 / np.pi, edgecolor="k"))
+                          theta1=-alpha_det * 180 / np.pi, theta2=alpha_det * 180 / np.pi, edgecolor="k", **kwargs))
 
     # draw arcs for the extremal angles
     fx_edge = na_excite / wavelength
@@ -1143,8 +1147,48 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
     ax.plot(fx_edge, -fz_edge, 'r.')
 
     ax.add_artist(Arc((-fx_edge, -fz_edge), 2 * frq_norm, 2 * frq_norm, angle=90,
-                      theta1=-alpha_det * 180 / np.pi, theta2=alpha_det * 180 / np.pi, edgecolor="r"))
+                      theta1=-alpha_det * 180 / np.pi, theta2=alpha_det * 180 / np.pi,
+                      edgecolor="r", label="extremal frequency data"))
     ax.add_artist(Arc((fx_edge, -fz_edge), 2 * frq_norm, 2 * frq_norm, angle=90,
+                      theta1=-alpha_det * 180 / np.pi, theta2=alpha_det * 180 / np.pi, edgecolor="r"))
+
+    # draw arc showing possibly positions of centers
+    ax.add_artist(Arc((0, 0), 2 * frq_norm, 2 * frq_norm, angle=-90,
+                      theta1=-alpha_exc * 180 / np.pi, theta2=alpha_exc * 180 / np.pi,
+                      edgecolor="b", label="allowed beam frqs"))
+
+    ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
+    ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
+    ax.set_xlabel("$f_x$ (1/$\mu m$)")
+    ax.set_ylabel("$f_z$ (1/$\mu m$)")
+
+    plt.legend()
+
+    # ########################
+    # ky-kz plane
+    # ########################
+    ax = figh.add_subplot(grid[0, 1])
+    ax.set_title("$k_y-k_z$ projection")
+    ax.axis("equal")
+
+    # plot centers
+    ax.plot(-frqs_3d[:, 1], -frqs_3d[:, 2], 'k.')
+
+    # plot arcs
+    for ii in range(len(frqs_3d)):
+        ax.add_artist(Arc((-frqs_3d[ii, 1], -frqs_3d[ii, 2]), 2 * frq_norm, 2 * frq_norm, angle=90,
+                          theta1=-alpha_det * 180 / np.pi, theta2=alpha_det * 180 / np.pi, edgecolor="k"))
+
+    # draw arcs for the extremal angles
+    fy_edge = na_excite / wavelength
+    fz_edge = np.sqrt((ni / wavelength)**2 - fy_edge**2)
+
+    ax.plot(-fy_edge, -fz_edge, 'r.')
+    ax.plot(fy_edge, -fz_edge, 'r.')
+
+    ax.add_artist(Arc((-fy_edge, -fz_edge), 2 * frq_norm, 2 * frq_norm, angle=90,
+                      theta1=-alpha_det * 180 / np.pi, theta2=alpha_det * 180 / np.pi, edgecolor="r"))
+    ax.add_artist(Arc((fy_edge, -fz_edge), 2 * frq_norm, 2 * frq_norm, angle=90,
                       theta1=-alpha_det * 180 / np.pi, theta2=alpha_det * 180 / np.pi, edgecolor="r"))
 
     # draw arc showing possibly positions of centers
@@ -1152,15 +1196,16 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
                       theta1=-alpha_exc * 180 / np.pi, theta2=alpha_exc * 180 / np.pi, edgecolor="b"))
 
 
+    ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
     ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_ylim([-2 * frq_norm, 2*frq_norm])
-    ax.set_xlabel("$f_x$ (1/$\mu m$)")
+    ax.set_xlabel("$f_y$ (1/$\mu m$)")
     ax.set_ylabel("$f_z$ (1/$\mu m$)")
 
     # ########################
     # kx-ky plane
     # ########################
-    ax = figh.add_subplot(grid[0, 1])
+    ax = figh.add_subplot(grid[0, 2])
+    ax.set_title("$k_x-k_y$ projection")
     ax.axis("equal")
 
     ax.plot(-frqs_3d[:, 0], -frqs_3d[:, 1], 'k.')
@@ -1171,11 +1216,52 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(16, 8
     ax.add_artist(Circle((0, 0), na_excite / wavelength, fill=False, color="b"))
     ax.add_artist(Circle((0, 0), (na_excite + na_detect) / wavelength, fill=False, color="r"))
 
-    size = 1.1 * (na_excite + na_detect) / wavelength
-    ax.set_xlim([-size, size])
-    ax.set_ylim([-size, size])
+
+    # size = 1.5 * (na_excite + na_detect) / wavelength
+    # ax.set_ylim([-size, size])
+    # ax.set_xlim([-size, size])
+    ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
+    ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
     ax.set_xlabel("$f_x$ (1/$\mu m$)")
     ax.set_ylabel("$f_y$ (1/$\mu m$)")
+
+    # ########################
+    # 3D
+    # ########################
+    ax = figh.add_subplot(grid[0, 3], projection="3d")
+    ax.set_title("3D projection")
+    # ax.axis("equal")
+
+    fx = fy = np.linspace(-na_detect / wavelength, na_detect / wavelength, 100)
+    fxfx, fyfy = np.meshgrid(fx, fy)
+    ff = np.sqrt(fxfx**2 + fyfy**2)
+    fmax = na_detect / wavelength
+
+    fxfx[ff > fmax] = np.nan
+    fyfy[ff > fmax] = np.nan
+    fzfz = np.sqrt((ni / wavelength)**2 - fxfx**2 - fyfy**2)
+
+    # pp, tt = np.meshgrid(np.linspace(0, 2*np.pi, 30), np.linspace(0, alpha_det, 30))
+    # pp = pp.ravel()
+    # tt = tt.ravel()
+
+    # kx0, ky0, kz0
+    # fxyz0 = np.stack((np.cos(pp) * np.sin(tt), np.sin(pp) * np.sin(tt), np.cos(tt)), axis=1) * ni / wavelength
+    fxyz0 = np.stack((fxfx, fyfy, fzfz), axis=-1)
+
+    # ax.plot(fxyz0[:, 0], fxyz0[:, 1], 'r', zs=fxyz0[:, 2] - ni/wavelength)
+    for ii in range(len(frqs_3d)):
+        # ax.plot(fxyz0[..., 0] - frqs_3d[ii, 0], fxyz0[..., 1] - frqs_3d[ii, 1], 'k', zs=fxyz0[..., 2] - frqs_3d[ii, 2], alpha=0.3)
+        ax.plot_surface(fxyz0[..., 0] - frqs_3d[ii, 0], fxyz0[..., 1] - frqs_3d[ii, 1], fxyz0[..., 2] - frqs_3d[ii, 2], alpha=0.3)
+
+
+    ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
+    ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
+    ax.set_zlim([-1, 1]) # todo: set based on na's
+
+    ax.set_xlabel("$f_x$ (1/$\mu m$)")
+    ax.set_ylabel("$f_y$ (1/$\mu m$)")
+    ax.set_zlabel("$f_z$ (1/$\mu m$)")
 
     return figh
 
@@ -1384,7 +1470,7 @@ def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1):
     # k-space
     figh_ft = plt.figure(figsize=figsize)
     figh_ft.suptitle(f"{ttl:s} k-space")
-    grid = figh_ft.add_gridspec(nrows=6, ncols=v.shape[0] + 1, width_ratios=[1] * v.shape[0] + [0.1])
+    grid = figh_ft.add_gridspec(nrows=5, ncols=v.shape[0] + 1, width_ratios=[1] * v.shape[0] + [0.1])
 
     for ii in range(v.shape[0]):
         ax = figh_ft.add_subplot(grid[0, ii])
