@@ -221,14 +221,6 @@ class nidaq(daq):
         if array.shape != (len(lines),):
             raise ValueError(f"array must have shape {len(lines):d}, but had shape {array.shape}")
 
-        # for ii, l in enumerate(lines):
-        #     task_do = daqmx.Task()
-        #     task_do.CreateDOChan(self.digital_lines_addresses[l], "", daqmx.DAQmx_Val_ChanForAllLines)
-        #     task_do.WriteDigitalLines(1, 1, 10.0, daqmx.DAQmx_Val_GroupByChannel,
-        #                               np.atleast_1d(array[ii]).astype(np.uint8), None, None)
-        #     task_do.StopTask()
-        #     task_do.ClearTask()
-
         addresses = [self.digital_lines_addresses[l] for l in lines]
         return self.set_digital_lines_by_address(array, addresses)
 
