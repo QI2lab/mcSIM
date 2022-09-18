@@ -1167,6 +1167,9 @@ class phantom_cam(camera):
     def getCameraDevice(self):
         return self.name
 
+    def setExposure(self):
+        pass
+
 if __name__ == "__main__":
     import matplotlib
     matplotlib.use("TkAgg")
