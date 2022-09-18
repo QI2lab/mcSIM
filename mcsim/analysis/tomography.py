@@ -2,18 +2,29 @@
 Tools for reconstructiong optical diffraction tomography (ODT) data
 """
 import time
+import datetime
+from pathlib import Path
 import numpy as np
 from numpy import fft
+import zarr
 import scipy.sparse as sp
 from scipy.ndimage import gaussian_filter
+from scipy.interpolate import interpn
+from scipy.signal.windows import tukey
+from skimage.restoration import unwrap_phase, denoise_tv_chambolle
+import dask
+import dask.array as da
+from dask.diagnostics import ProgressBar, ResourceProfiler, Profiler, visualize
+# plotting
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, Normalize
 from matplotlib.patches import Circle, Arc
 from matplotlib.cm import ScalarMappable
-from scipy.interpolate import interpn
-from skimage.restoration import unwrap_phase
+#
 import localize_psf.fit as fit
+import mcsim.analysis.sim_reconstruction as sim
 import mcsim.analysis.analysis_tools as tools
+from field_prop import prop_ft_medium
 
 _cupy_available = True
 try:
@@ -21,6 +32,753 @@ try:
 except ImportError:
     _cupy_available = False
 
+
+class tomography:
+    def __init__(self,
+                 imgs_raw,
+                 wavelength,
+                 no,
+                 na_detection,
+                 na_excitation,
+                 dxy,
+                 reference_frq_guess,
+                 hologram_frqs_guess=None,
+                 imgs_raw_bg=None,
+                 phase_offsets=None,
+                 axes_names=None):
+        """
+        Object to reconstruct optical diffraction tomography data
+
+        Philosophy: only add one of Fourier transform/real space representation of fields and etc. as class attributes.
+        Others should be recalculated if needed.
+
+        @param imgs_raw: n1 x n2 x ... x nm x npatterns x ny x nx. Data intensity images
+        @param wavelength: wavelength in um
+        @param no: background index of refraction
+        @param na_detection:
+        @param na_excitation:
+        @param dxy: pixel size in um
+        @param reference_frq_guess: [fx, fy] hologram reference frequency
+        @param hologram_frqs_guess: npatterns x 2 array of hologram frequency guesses
+        @param imgs_raw_bg: background intensity images
+        @param phase_offsets: phase shifts between images and corresponding background images
+        @param axes_names: names of first m + 1 axes
+        """
+
+        self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
+
+        # image dimensions
+        self.imgs_raw = imgs_raw
+        self.imgs_raw_bg = imgs_raw_bg
+        self.npatterns, self.ny, self.nx = imgs_raw.shape[-3:]
+        self.nextra_dims = imgs_raw.ndim - 3
+
+        if axes_names is None:
+            self.axes_names = [f"i{ii:d}" for ii in range(self.imgs_raw.ndim - 2)]
+        else:
+            self.axes_names = axes_names
+
+        # hologram frequency info
+        self.reference_frq = np.array(reference_frq_guess) # 2
+        self.hologram_frqs = np.array(hologram_frqs_guess) # npatterns x 2
+
+        # physical parameters
+        self.wavelength = wavelength
+        self.no = no
+        self.na_detection = na_detection
+        self.na_excitation = na_excitation
+        self.fmax = self.na_detection / self.wavelength
+
+        # phase shifts
+        self.phase_offsets = phase_offsets
+        self.phase_offsets_bg = None
+
+        # generate coordinates
+        self.dxy = dxy
+        self.x = (np.arange(self.nx) - self.nx // 2) * dxy
+        self.y = (np.arange(self.ny) - self.ny // 2) * dxy
+        self.fxs = fft.fftshift(fft.fftfreq(self.nx, self.dxy))
+        self.fys = fft.fftshift(fft.fftfreq(self.ny, self.dxy))
+        self.fxfx, self.fyfy = np.meshgrid(self.fxs, self.fys)
+        self.dfx = self.fxs[1] - self.fxs[0]
+        self.dfy = self.fys[1] - self.fys[0]
+
+        # pupil
+        self.pupil_mask = np.sqrt(self.fxfx**2 + self.fyfy**2) <= self.fmax  # where pupil allowed to be non-zero
+        self.pupil = self.pupil_mask.astype(complex) # value of pupil function
+
+        # settings
+        self.use_gpu = False
+        self.reconstruction_settings = {} # keys will differ depending on recon mode
+
+    def use_slice_as_background(self, axis, index):
+        raise NotImplementedError()
+        self.imgs_raw_bg = self.imgs_raw
+
+    def estimate_hologram_frqs(self, save_dir=None):
+        """
+        Estimate hologram frequencies form raw image
+        @param save_dir:
+        @return:
+        """
+        saving = save_dir is not None
+
+        if saving:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(exist_ok=True)
+
+        # ############################
+        # calibrate pattern frequencies
+        # ############################
+
+        # load one slice of background data to get frequency reference. Load the first slice along all dimensions
+        slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
+        imgs_frq_cal = np.squeeze(self.imgs_raw_bg[slices])
+
+        # frequency data associated with images
+        fxfx, fyfy = np.meshgrid(self.fxs, self.fys)
+
+        def get_hologram_frqs(img, ii):
+            img_ref_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
+
+            # define allowed search area
+            ff_diff_ref = np.abs((fxfx - self.reference_frq[0]) ** 2 + (fyfy - self.reference_frq[1]) ** 2)
+            allowed_search_mask = np.logical_and(ff_diff_ref < 1.25 * self.fmax,
+                                                 ff_diff_ref >= 0.5 * np.linalg.norm(self.hologram_frqs[ii] - self.reference_frq))
+
+            # fit frequency
+            frq_holo, _, _ = sim.fit_modulation_frq(img_ref_ft, img_ref_ft, self.dxy, mask=allowed_search_mask, roi_pix_size=50)
+
+            if saving:
+                figh = sim.plot_correlation_fit(img_ref_ft, img_ref_ft, frq_holo, self.dxy)
+                figh.savefig(Path(save_dir, f"{ii:d}_angle_correlation_diagnostic.png"))
+                plt.close(figh)
+
+            return frq_holo
+
+        # do frequency calibration
+        print(f"calibrating {self.npatterns:d} pattern frequencies")
+
+        # create list of tasks
+        results = []
+        for ii, im in enumerate(imgs_frq_cal):
+            results.append(dask.delayed(get_hologram_frqs)(im, ii))
+
+        with ProgressBar():
+            r = dask.compute(*results)
+        frqs_hologram = np.array(r)
+
+        # for hologram interference frequencies, use frequency closer to guess value
+        frq_dists_ref = np.linalg.norm(frqs_hologram - np.expand_dims(self.reference_frq, axis=0), axis=1)
+        frq_dists_neg_ref = np.linalg.norm(frqs_hologram + np.expand_dims(self.reference_frq, axis=0), axis=1)
+        frqs_hologram[frq_dists_neg_ref < frq_dists_ref] = -frqs_hologram[frq_dists_neg_ref < frq_dists_ref]
+
+        #return frqs_hologram
+        self.hologram_frqs = frqs_hologram
+
+    def estimate_reference_frq(self, save_dir=None):
+        """
+        Estimate hologram reference frequency by looking at residual speckle
+        @param save_dir:
+        @return:
+        """
+        saving = save_dir is not None
+
+        # load one slice of background data to get frequency reference. Load the first slice along all dimensions
+        slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
+        imgs_frq_cal = np.squeeze(self.imgs_raw_bg[slices])
+
+        imgs_frq_cal_ft = fft.fftshift(fft.fft2(fft.ifftshift(imgs_frq_cal, axes=(-1, -2)), axes=(-1, -2)),
+                                       axes=(-1, -2))
+        imgs_frq_cal_ft_abs_mean = np.mean(np.abs(imgs_frq_cal_ft), axis=0)
+
+        results, circ_dbl_fn, figh_ref_frq = fit_ref_frq(imgs_frq_cal_ft_abs_mean, self.dxy, 2*self.fmax, show_figure=saving)
+        frq_ref = results["fit_params"][:2]
+
+        # flip sign if necessary to ensure close to guess
+        if np.linalg.norm(frq_ref - self.reference_frq) > np.linalg.norm(frq_ref + self.reference_frq):
+            frq_ref = -frq_ref
+
+        if saving:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(exist_ok=True)
+
+            figh_ref_frq.savefig(Path(save_dir, "frequency_reference_diagnostic.png"))
+
+        self.reference_frq = frq_ref
+
+    def get_beam_frqs(self):
+        """
+
+        @return beam_frqs:
+        """
+
+        bxys = self.hologram_frqs - np.expand_dims(self.reference_frq, axis=0)
+        bzs = get_fz(bxys[:, 0], bxys[:, 1], self.no, self.wavelength)
+        # x, y, z
+        beam_frqs = np.concatenate((bxys, np.expand_dims(bzs, axis=1)), axis=1)
+
+        return beam_frqs
+
+    def unmix_holograms(self, mask=None, bg_average_axes=(0,), fit_phases=False, apodization=None):
+        """
+        Unmix and preprocess holograms
+        @param mask: area to be cut out of hologrms
+        @param bg_average_axes: axes to average along when producing background images
+        @param fit_phases: whether or not to fit phase differences between image and background holograms
+        @param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
+        @return:
+        """
+
+        if apodization is None:
+            apodization = np.expand_dims(np.expand_dims(tukey(self.nx, alpha=0.1), axis=0) *
+                                         np.expand_dims(tukey(self.ny, alpha=0.1), axis=1),
+                                         axis=tuple(range(self.nextra_dims + 1)))
+
+        # #########################
+        # unmix holograms
+        # #########################
+        holograms_ft_raw = da.map_blocks(unmix_hologram, self.imgs_raw, self.dxy, 2*self.fmax, self.reference_frq,
+                                         self.use_gpu, apodization=apodization, dtype=complex)
+
+        if mask is None:
+            holograms_ft = holograms_ft_raw
+        else:
+            holograms_ft = da.map_blocks(cut_mask, holograms_ft_raw, mask, dtype=complex)
+
+        # #########################
+        # background holograms
+        # #########################
+        if self.imgs_raw_bg is None:
+            holograms_ft_bg = self.holograms_ft
+        else:
+            holograms_ft_raw_bg = da.map_blocks(unmix_hologram, self.imgs_raw_bg, self.dxy, 2*self.fmax, self.reference_frq,
+                                                self.use_gpu, apodization=apodization, dtype=complex)
+
+            if mask is None:
+                holograms_ft_bg = holograms_ft_raw_bg
+            else:
+                holograms_ft_bg = da.map_blocks(cut_mask, holograms_ft_raw_bg, mask, dtype=complex)
+
+        # #########################
+        # determine background phases
+        # #########################
+        if fit_phases:
+            # optionally determine background phase offsets
+            with ProgressBar():
+                # take one slice from all axes which will be averaged. Otherwise, must keep the dimensions
+                slices = tuple([slice(0, 1) if a in bg_average_axes else slice(None) for a in range(self.nextra_dims)] +
+                               [slice(None)] * 3)
+
+                hologram_ft_ref = holograms_ft_bg[slices]
+
+                phase_offsets_bg = da.map_blocks(get_global_phase_shifts, holograms_ft_bg, hologram_ft_ref, dtype=float,
+                                                 chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
+        else:
+            phase_offsets_bg = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
+
+        self.phase_offsets_bg = phase_offsets_bg
+        self.holograms_ft_bg = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg), axis=bg_average_axes, keepdims=True)
+
+        # #########################
+        # determine phase offsets
+        # #########################
+        if self.imgs_raw_bg is None:
+            phase_offsets = self.phase_offsets_bg
+        else:
+            if fit_phases:
+                with ProgressBar():
+                    phase_offsets = da.map_blocks(get_global_phase_shifts, holograms_ft, self.holograms_ft_bg, dtype=float,
+                                                  chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
+            else:
+                phase_offsets = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
+
+        self.phase_offsets = phase_offsets
+        self.holograms_ft = holograms_ft * da.exp(1j * self.phase_offsets)
+
+
+    def refocus(self, dz):
+        # todo: do I need to rename variable instead of redefining?
+        self.holograms_ft = da.map_blocks(prop_ft_medium, self.holograms_ft, self.dxy, dz, self.wavelength, self.no,
+                                   axis=(-2, -1),
+                                   dtype=complex)
+
+        self.holograms_ft_bg = da.map_blocks(prop_ft_medium, self.holograms_ft_bg, self.dxy, dz, self.wavelength, self.no,
+                                   axis=(-2, -1),
+                                   dtype=complex)
+
+
+    def set_scattered_field(self, scattered_field_regularization=10, mask=None):
+        """
+        The scattered field is only used directly in the Born reconstruction.
+
+        But separate the logic for computing it because can also be useful in displaying interferograms
+        @param scattered_field_regularization:
+        @param mask:
+        @return:
+        """
+
+        # compute scattered field in real-space
+        holograms_bg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft_bg, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+        holograms = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        efield_scattered = (holograms - holograms_bg) / (da.abs(holograms_bg) + scattered_field_regularization)
+
+        # cut out any regions we don't want in Fourier space
+        if mask is None:
+            mask = np.zeros((self.ny, self.nx), dtype=bool)
+
+        efield_scattered_ft_raw = da.fft.fftshift(da.fft.fft2(da.fft.ifftshift(efield_scattered, axes=(-1, -2)),
+                                                              axes=(-1, -2)), axes=(-1, -2))
+
+        # region to cut out of scattered field
+        combined_mask = np.logical_or(np.logical_not(self.pupil_mask), mask)
+
+        if np.any(combined_mask):
+            self.efield_scattered_ft = da.map_blocks(cut_mask,
+                                                     efield_scattered_ft_raw,
+                                                     combined_mask,
+                                                     self.fmax,
+                                                     dtype=complex)
+        else:
+            self.efield_scattered_ft = efield_scattered_ft_raw
+
+    def reconstruct_born(self, mode="naive", **kwargs):
+        """
+
+        @param mode: 'naive' or 'fista'
+        @param kwargs:
+        @return:
+        """
+
+        scattered_field_regularization = kwargs["scattered_field_regularization"]
+        niters = kwargs["niters"]
+        reconstruction_regularizer = kwargs["reconstruction_regularizer"]
+        dxy_sampling_factor = kwargs["dxy_sampling_factor"]
+        dz_sampling_factor = kwargs["dz_sampling_factor"]
+        z_fov = kwargs["z_fov"]
+        mask = kwargs["mask"]
+
+        imaginary_constraint = True
+        real_constraint = False
+        # only for FISTA approach
+        tv = True
+        tau = 0.02
+
+        # ############################
+        # compute scattered field
+        # ############################
+        self.set_scattered_field(scattered_field_regularization=scattered_field_regularization,
+                                 mask=mask)
+
+
+        # rechunk erecon_ft since must operate on all patterns at once
+        # get sampling so can determine new chunk sizes
+        (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max) = \
+            get_reconstruction_sampling(self.no,
+                                        self.na_detection,
+                                        self.get_beam_frqs(),
+                                        self.wavelength,
+                                        self.dxy,
+                                        self.holograms_ft.shape[-2:],
+                                        z_fov,
+                                        dz_sampling_factor=dz_sampling_factor,
+                                        dxy_sampling_factor=dxy_sampling_factor)
+
+        new_chunks = list(self.efield_scattered_ft.chunksize)
+        new_chunks[-3] = self.npatterns
+
+        # ############################
+        # scattering potential from measured data
+        # ############################
+        def recon(erecon_ft, no_data_value):
+            # only works on arrays with arbitrariy number of singleton dimensions and then npattern x ny x nx
+            dsizes = erecon_ft.shape[:-3]
+            if np.prod(dsizes) != 1:
+                raise ValueError(
+                    f"erecon_ft was wrong shape. Must have any number of leading singleton dimensions and then be"
+                    f"npatterns x ny x nx shape = {erecon_ft.shape}")
+
+            v_ft, drs = reconstruction(da.squeeze(erecon_ft), self.get_beam_frqs(), self.no,
+                                       self.na_detection, self.wavelength, self.dxy, z_fov=z_fov,
+                                       reg=reconstruction_regularizer,
+                                       dz_sampling_factor=dz_sampling_factor,
+                                       dxy_sampling_factor=dxy_sampling_factor, mode="born",
+                                       no_data_value=no_data_value)
+
+            return np.expand_dims(v_ft, axis=list(range(len(dsizes))))
+
+
+        if mode == "fista":
+            v_fts = da.map_blocks(recon, da.rechunk(self.efield_scattered_ft, chunks=new_chunks), 0, dtype=complex,
+                                  chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+
+            # settings
+            fista = True
+            steps_per_tv = 1
+
+            # define forward model
+            model = fwd_model_linear(self.get_beam_frqs(),
+                                     self.no,
+                                     self.na_detection,
+                                     self.wavelength,
+                                     (self.ny, self.nx),
+                                     self.dxy,
+                                     dxy_sp,
+                                     dz_sp,
+                                     (nz_sp, ny_sp, nx_sp),
+                                     mode="born",
+                                     interpolate=True)
+
+            model_csc = model.tocsc(copy=True)
+
+            # set step size
+            u, s, vh = sp.linalg.svds(model, k=1, which='LM')
+            # since lipschitz constant of model which is multiplied by...
+            step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
+
+            def fista_recon(v_ft_start, e_measured_ft):
+
+
+                v_ft_start = np.squeeze(v_ft_start)
+                # v_ft_start = fft.fftshift(fft.fftn(fft.ifftshift(np.zeros(v_ft_start.shape, dtype=complex))))
+                e_measured_ft = np.squeeze(e_measured_ft)
+                def cost(v_ft):
+                    # mean cost per (real-space) pixel
+                    # divide by nxy**2 again because using FT's and want mean cost in real space
+                    # recall that \sum_r |f(r)|^2 = 1/N \sum_k |f(k)|^2
+                    # NOTE: to get total cost, must take mean over patterns
+                    costs = np.mean(np.reshape(np.abs(model.dot(v_ft.ravel()) - e_measured_ft.ravel()) ** 2,
+                                               [self.npatterns, self.ny, self.nx]),
+                                    axis=(-1, -2)) / 2 / self.ny / self.ny
+                    return costs
+
+                def grad(v_ft):
+                    # first division is average
+                    # second division converts Fourier space to real-space sum
+                    dc_dm = (model.dot(v_ft.ravel()) - e_measured_ft.ravel()) / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
+                    dc_dv = (dc_dm[np.newaxis, :].conj() * model_csc)[0].conj()
+                    return dc_dv
+
+                # initialize
+                tstart = time.perf_counter()
+                costs = np.zeros((niters + 1, self.npatterns))
+                v_ft = v_ft_start.ravel()
+                q_last = 1
+                costs[0] = cost(v_ft)
+
+                for ii in range(niters):
+                    # gradient descent
+                    tstart_grad = time.perf_counter()
+                    dc_dv = grad(v_ft)
+
+                    v_ft -= step * dc_dv
+
+                    tend_grad = time.perf_counter()
+
+                    # FT so can apply TV
+                    tstart_fft = time.perf_counter()
+
+                    if self.use_gpu:
+                        v = cp.asnumpy(
+                            cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(cp.asarray(v_ft.reshape(v_ft.shape))))))
+                    else:
+                        v = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft.reshape(v_ft.shape))))
+
+                    tend_fft = time.perf_counter()
+
+                    # apply TV proximity operators
+                    tstart_tv = time.perf_counter()
+                    if tv and ii % steps_per_tv == 0:
+                        v_real = denoise_tv_chambolle(v.real, tau)
+                        v_imag = denoise_tv_chambolle(v.imag, tau)
+                    else:
+                        v_real = v.real
+                        v_imag = v.imag
+
+                    tend_tv = time.perf_counter()
+
+                    # apply projection onto constraints
+                    tstart_constraints = time.perf_counter()
+
+                    if imaginary_constraint:
+                        v_imag[v_imag > 0] = 0
+
+                    if real_constraint:
+                        # actually ... this is no longer right if there is any imaginary part
+                        v_real[v_real > 0] = 0
+
+                    tend_constraints = time.perf_counter()
+
+                    # ft back
+                    tstart_fft_back = time.perf_counter()
+
+                    if self.use_gpu:
+                        v_ft_prox = cp.asnumpy(
+                            cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(cp.asarray(v_real + 1j * v_imag)))).ravel())
+                    else:
+                        v_ft_prox = fft.fftshift(fft.fftn(fft.ifftshift(v_real + 1j * v_imag))).ravel()
+
+                    tend_fft_back = time.perf_counter()
+
+                    # update step
+                    tstart_update = time.perf_counter()
+
+                    q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
+
+                    if ii == 0 or ii == (niters - 1) or not fista:
+                        v_ft = v_ft_prox
+                    else:
+                        v_ft = v_ft_prox + (q_last - 1) / q_now * (v_ft_prox - v_ft_prox_last)
+
+                    tend_update = time.perf_counter()
+
+                    # compute errors
+                    tstart_err = time.perf_counter()
+
+                    costs[ii + 1] = cost(v_ft)
+
+                    tend_err = time.perf_counter()
+
+                    # update for next step
+                    q_last = q_now
+                    v_ft_prox_last = v_ft_prox
+
+                    # print information
+                    tend_iter = time.perf_counter()
+
+                    # debug
+                    # print(
+                    #     f"iteration {ii + 1:d}/{niters:d}, cost={np.mean(costs[ii + 1]):.3g},"
+                    #     f" grad={tend_grad - tstart_grad:.2f}s, fft={tend_fft - tstart_fft:.2f}s,"
+                    #     f" TV={tend_tv - tstart_tv:.2f}s, projection={tend_constraints - tstart_constraints:.2f}s,"
+                    #     f" fft={tend_fft_back - tstart_fft_back:.2f}s, update={tend_update - tstart_update:.2f}s,"
+                    #     f" err={tend_err - tstart_err:.2f}s, iter={tend_iter - tstart_grad:.2f}s,"
+                    #     f" total={time.perf_counter() - tstart:.2f}s", end="\r")
+
+                v_out_ft = v_ft.reshape((1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+
+                # debugging
+                # v_out = fft.fftshift(fft.ifftn(fft.ifftshift(v_out_ft)))
+                # n_out = get_n(v_out, self.no, self.wavelength)
+                #
+                # plot_n3d(np.squeeze(v_out_ft), self.no, self.wavelength, title="n out")
+                #
+                # e_out_ft = model.dot(v_out_ft.ravel()).reshape((self.npatterns, self.ny, self.nx))
+                # e_out_ft[:, np.logical_not(self.pupil_mask)] = 0
+                # e_out = fft.fftshift(fft.ifft2(fft.ifftshift(e_out_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+                #
+                # etest = fft.fftshift(fft.ifft2(fft.ifftshift(np.squeeze(self.efield_scattered_ft[0].compute()), axes=(-1, -2)),
+                #               axes=(-1, -2)), axes=(-1, -2))
+                # figh1, figh2 = compare_escatt(e_out, etest, self.get_beam_frqs(), self.dxy, ttl="E output",
+                #                               figsize=(20, 10))
+
+                return v_out_ft
+
+
+
+            efield_scat_rechunk = self.efield_scattered_ft.rechunk((1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
+            v_ft_out = da.map_blocks(fista_recon,
+                                     v_fts,
+                                     efield_scat_rechunk,
+                                     dtype=complex,
+                                     chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+
+
+
+        else:
+            v_fts = da.map_blocks(recon,
+                                  da.rechunk(self.efield_scattered_ft, chunks=new_chunks),
+                                  np.nan,
+                                  dtype=complex,
+                                  chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+
+            # ############################
+            # fill in fourier space with constraint algorithm
+            # ############################
+            v_ft_out = da.map_blocks(apply_n_constraints,
+                                     v_fts,
+                                     self.no,
+                                     self.wavelength,
+                                     n_iterations=niters,
+                                     beta=0.5,
+                                     use_raar=False,
+                                     use_gpu=False,
+                                     dtype=complex)
+
+        v_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_out, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
+
+        n = da.map_blocks(get_n,
+                          v_out,
+                          self.no,
+                          self.wavelength,
+                          dtype=complex)
+
+        return n, (dz_sp, dxy_sp, dxy_sp)
+
+    def reconstruct_rytov(self, mode="naive", **kwargs):
+        rytov_regul = kwargs["rytov_regularizer"]
+        niters = kwargs["niters"]
+        reconstruction_regularizer = kwargs["reconstruction_regularizer"]
+        dxy_sampling_factor = kwargs["dxy_sampling_factor"]
+        dz_sampling_factor = kwargs["dz_sampling_factor"]
+        z_fov = kwargs["z_fov"]
+
+        # ############################
+        # compute rytov phase
+        # ############################
+        holograms_bg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft_bg, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+        holograms = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        phi_rytov = da.map_blocks(get_rytov_phase, holograms, holograms_bg, rytov_regul, dtype=complex)
+        phi_rytov_ft = da.fft.fftshift(da.fft.fftn(da.fft.ifftshift(phi_rytov, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        # ############################
+        # do reconstruction
+        # ############################
+        def recon(erecon_ft):
+            # only works on arrays with arbitrariy number of singleton dimensions and then npattern x ny x nx
+            dsizes = erecon_ft.shape[:-3]
+            if np.prod(dsizes) != 1:
+                raise ValueError(
+                    f"erecon_ft was wrong shape. Must have any number of leading singleton dimensions and then be"
+                    f"npatterns x ny x nx shape = {erecon_ft.shape}")
+
+            v_ft, drs = reconstruction(da.squeeze(erecon_ft), self.get_beam_frqs(), self.no,
+                                                   self.na_detection, self.wavelength, self.dxy, z_fov=z_fov,
+                                                   reg=reconstruction_regularizer,
+                                                   dz_sampling_factor=dz_sampling_factor,
+                                                   dxy_sampling_factor=dxy_sampling_factor, mode="rytov")
+
+            return np.expand_dims(v_ft, axis=list(range(len(dsizes))))
+
+        # rechunk erecon_ft since must operate on all patterns at once
+        # get sampling so can determine new chunk sizes
+        (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max) = \
+            get_reconstruction_sampling(self.no,
+                                        self.na_detection,
+                                        self.get_beam_frqs(),
+                                        self.wavelength,
+                                        self.dxy,
+                                        self.holograms_ft.shape[-2:],
+                                        z_fov,
+                                        dz_sampling_factor=dz_sampling_factor,
+                                        dxy_sampling_factor=dxy_sampling_factor)
+
+        new_chunks = list(phi_rytov_ft.chunksize)
+        new_chunks[-3] = self.npatterns
+        v_fts = da.map_blocks(recon, da.rechunk(phi_rytov_ft, chunks=new_chunks), dtype=complex,
+                              chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+
+        # ############################
+        # fill in fourier space with constraint algorithm
+        # ############################
+        v_ft_infer = da.map_blocks(apply_n_constraints,
+                                   v_fts,
+                                   self.no,
+                                   self.wavelength,
+                                   n_iterations=niters,
+                                   beta=0.5,
+                                   use_raar=False,
+                                   use_gpu=False,
+                                   require_real_part_greater_bg=False,
+                                   dtype=complex)
+
+        v_ft_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_infer, axes=(-3, -2, -1)), axes=(-3, -2, -1)),
+                                   axes=(-3, -2, -1))
+
+        n_infer_out = da.map_blocks(get_n,
+                                    v_ft_out,
+                                    self.no,
+                                    self.wavelength,
+                                    dtype=complex)
+
+        return n_infer_out, (dz_sp, dxy_sp, dxy_sp)
+
+    def get_powers(self):
+        # compute powers
+        powers_rms = da.sqrt(da.mean(da.abs(self.imgs_raw) ** 2, axis=(-1, -2)))
+        e_powers_rms = da.sqrt(da.mean(da.abs(self.holograms_ft) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft.shape[-2:])
+
+        return powers_rms, e_powers_rms
+
+    def get_powers_bg(self):
+        # compute powers
+        powers_rms_bg = da.sqrt(da.mean(da.abs(self.imgs_raw_bg) ** 2, axis=(-1, -2)))
+        e_powers_rms_bg = da.sqrt(da.mean(da.abs(self.holograms_ft_bg) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft_bg.shape[-2:])
+
+        return powers_rms_bg, e_powers_rms_bg
+
+    def plot_interferograms(self, nmax_to_plot, save_dir=None, scattered_field_regularization=10):
+        """
+        Plot nmax interferograms
+
+        @param nmax_to_plot:
+        @param save_dir:
+        @param axes_names:
+        @return:
+        """
+        if not hasattr(self, "efield_scattered_ft"):
+            self.set_scattered_field(scattered_field_regularization=scattered_field_regularization)
+
+        if save_dir is not None:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(exist_ok=True)
+
+
+        nmax_to_plot = np.min([nmax_to_plot, np.prod(self.holograms_ft.shape[:-2])])
+
+        beam_frqs = self.get_beam_frqs()
+        theta, phi = get_angles(beam_frqs, self.no, self.wavelength)
+
+        def plot_interferograms(index, save_dir):
+            unraveled_inds = np.unravel_index(index, self.holograms_ft.shape[:-2])
+
+            desc = ""
+            for ii in range(len(unraveled_inds)):
+                desc += f"_{self.axes_names[ii]:s}={unraveled_inds[ii]:d}"
+
+            # with ProgressBar():
+            efields_ft_temp, efields_scattered_ft_temp, efields_bg_ft_temp = \
+                dask.compute(self.holograms_ft[unraveled_inds],
+                             self.efield_scattered_ft[unraveled_inds],
+                             self.holograms_ft_bg[unraveled_inds])
+
+            beam_ind = unraveled_inds[-1]
+
+            ttl = f"{desc.replace('_', ', '):s}\n" \
+                  f"theta={theta[beam_ind] * 180 / np.pi:.2f}deg, phi={phi[beam_ind] * 180 / np.pi:.2f}deg," \
+                  f" beam freq = ({beam_frqs[beam_ind, 0]:.3f}, {beam_frqs[beam_ind, 1]:.3f}, {beam_frqs[beam_ind, 2]:.3f})\n" \
+                  f"holography reference freq= ({self.reference_frq[0]:.3f}, {self.reference_frq[1]:.3f})"
+
+            figh = plot_scattered_angle(efields_ft_temp,
+                                        efields_bg_ft_temp,
+                                        efields_scattered_ft_temp,
+                                        beam_frqs[beam_ind],
+                                        self.reference_frq,
+                                        self.fmax * 2,
+                                        self.dxy,
+                                        title=ttl)
+
+            figh.savefig(Path(save_dir, f"{desc:s}_interferogram.png"))
+            plt.close(figh)
+
+        # collect delayed function calls
+        results_interferograms = []
+        for aa in range(nmax_to_plot):
+            results_interferograms.append(dask.delayed(plot_interferograms(aa, save_dir)))
+
+        # compute results = save/display figures
+        print(f"displaying {len(results_interferograms):d} interferograms")
+        with ProgressBar():
+            dask.compute(*results_interferograms)
+
+def cut_mask(img, mask, mask_val=0):
+    mask = np.expand_dims(mask, axis=list(range(img.ndim - 2)))
+
+    img_masked = np.array(img, copy=True)
+    img_masked[mask] = mask_val
+    return img_masked
 
 def get_angular_spectrum_kernel(dz, wavelength, no, shape, drs):
     """
@@ -163,8 +921,6 @@ def get_global_phase_shifts(imgs, ref_imgs, thresh=None):
     # broadcast images and references images to same shapes
     imgs, ref_imgs = np.broadcast_arrays(imgs, ref_imgs)
 
-    ny, nx = imgs.shape[-2:]
-
     # looper over all dimensions except the last two, which are the y and x dimensions respectively
     loop_shape = imgs.shape[:-2]
     phase_shifts = np.zeros(loop_shape + (1, 1))
@@ -223,6 +979,8 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
     U_total(r) = exp[\psi_o(r) + \psi_s(r)]
     where U_o(r) = exp[\psi_o(r)] is the unscattered field
 
+    We calculate \psi_s(r) = log | U_total(r) / U_o(r)| + 1j * unwrap[angle(U_total) - angle(U_o)]
+
     @param eimgs: npatterns x ny x nx
     @param eimgs_bg: same size as eimgs
     @param float regularization: regularization value
@@ -248,7 +1006,6 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
 
         # convert phase difference from interval [0, 2*np.pi) to [-np.pi, np.pi)
         phase_diff = np.mod(np.angle(eimgs[ind]) - np.angle(eimgs_bg[ind]), 2 * np.pi)
-        # phase_diff[phase_diff >= np.pi] = phase_diff[phase_diff >= np.pi] - 2 * np.pi
         phase_diff[phase_diff >= np.pi] -= 2 * np.pi
 
         # get rytov phase change
@@ -261,7 +1018,7 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
 
 # holograms
 def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.ndarray,
-                   use_gpu: bool=_cupy_available) -> np.ndarray:
+                   use_gpu: bool=_cupy_available, apodization=1) -> np.ndarray:
     """
     Given an off-axis hologram image, determine the electric field represented
 
@@ -273,9 +1030,9 @@ def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.nda
     """
     # FT of image
     if not use_gpu:
-        img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+        img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img * apodization, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
     else:
-        img_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fft2(cp.fft.ifftshift(img, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1)))
+        img_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fft2(cp.fft.ifftshift(img * apodization, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1)))
     ny, nx = img_ft.shape[-2:]
 
     # get frequency data
@@ -292,6 +1049,26 @@ def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.nda
 
 
 # tomographic reconstruction
+def get_fmax(no, na_det, na_exc, wavelength):
+    """
+    Maximum frequencies measurable in ODT image
+    @param no:
+    @param na_det:
+    @param na_exc:
+    @param wavelength:
+    @return:
+    """
+    alpha = np.arcsin(na_det / no)
+    beta = np.max(na_exc/ no)
+
+    # maximum frequencies present in ODT
+    fxy_max = (na_det + no * np.sin(beta)) / wavelength
+    fz_max = no / wavelength * np.max([1 - np.cos(alpha), 1 - np.cos(beta)])
+
+    fmax = np.array([fxy_max, fxy_max, fz_max])
+
+    return fmax
+
 def get_reconstruction_sampling(no, na_det, beam_frqs, wavelength, dxy, img_size, z_fov,
                                 dz_sampling_factor=1., dxy_sampling_factor=1.):
     """
@@ -313,6 +1090,8 @@ def get_reconstruction_sampling(no, na_det, beam_frqs, wavelength, dxy, img_size
     # ##################################
     # set sampling of 3D scattering potential
     # ##################################
+
+    # todo: let's just use beta based on na ... can always provide an effective na if desired
     theta, _ = get_angles(beam_frqs, no, wavelength)
     alpha = np.arcsin(na_det / no)
     beta = np.max(theta)
@@ -359,8 +1138,9 @@ def get_coords(drs, nrs, expand=False):
     return coords
 
 
-def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, dz_sp, v, mode="born", interpolate=False):
+def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, dz_sp, v_shape, mode="born", interpolate=False):
     """
+    Forward model from scattering potential v to imaged electric field after interacting with object
 
     @param beam_frqs:
     @param no:
@@ -371,9 +1151,12 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
     @param dxy_sp:
     @param dz_sp:
     @param v:
-    @param mode:
-    @return:
+    @param mode: "born" or "rytov"
+    @param interpolate:
+    @return model:
     """
+    # todo: can I combine this logic with reconstruct() in some way that I don't duplicate so much code?
+
     ny, nx = img_shape
 
     nimgs = len(beam_frqs)
@@ -392,14 +1175,15 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
     detectable = np.tile(detectable, [nimgs, 1, 1])
 
     # scattering potential frqs
-    nz_sp, ny_sp, nx_sp = v.shape
+    nz_v, ny_v, nx_v = v_shape
+    v_size = np.prod(v_shape)
 
-    fx_sp = fft.fftshift(fft.fftfreq(nx_sp, dxy_sp))
-    fy_sp = fft.fftshift(fft.fftfreq(ny_sp, dxy_sp))
-    fz_sp = fft.fftshift(fft.fftfreq(nz_sp, dz_sp))
-    dfx_sp = fx_sp[1] - fx_sp[0]
-    dfy_sp = fy_sp[1] - fy_sp[0]
-    dfz_sp = fz_sp[1] - fz_sp[0]
+    fx_v = fft.fftshift(fft.fftfreq(nx_v, dxy_sp))
+    fy_v = fft.fftshift(fft.fftfreq(ny_v, dxy_sp))
+    fz_v = fft.fftshift(fft.fftfreq(nz_v, dz_sp))
+    dfx_v = fx_v[1] - fx_v[0]
+    dfy_v = fy_v[1] - fy_v[0]
+    dfz_v = fz_v[1] - fz_v[0]
 
     # ##################################
     # find indices in scattering potential per image
@@ -423,9 +1207,9 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
 
         # indices into the final scattering potential
         # taking advantage of the fact that the final scattering potential indices have FFT structure
-        zind = Fz / dfz_sp + nz_sp // 2
-        yind = Fy / dfy_sp + ny_sp // 2
-        xind = Fx / dfx_sp + nx_sp // 2
+        zind = Fz / dfz_v + nz_v // 2
+        yind = Fy / dfy_v + ny_v // 2
+        xind = Fx / dfx_v + nx_v // 2
     elif mode == "rytov":
         # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * psi_s(fx - n/lambda * nx, fy - n/lambda * ny)
         # F(Fx, Fy, Fz) = 2*i * (2*pi*fz) * psi_s(Fx, Fy)
@@ -444,9 +1228,9 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
         Fz_rytov = fz_rytov - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
 
         # indices into the final scattering potential
-        zind = Fz_rytov / dfz_sp + nz_sp // 2
-        yind = Fy_rytov / dfy_sp + ny_sp // 2
-        xind = Fx_rytov / dfx_sp + nx_sp // 2
+        zind = Fz_rytov / dfz_v + nz_v // 2
+        yind = Fy_rytov / dfy_v + ny_v // 2
+        xind = Fx_rytov / dfx_v + nx_v // 2
 
         zind, yind, xind = np.broadcast_arrays(zind, yind, xind)
         zind = np.array(zind, copy=True)
@@ -455,14 +1239,6 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
     else:
         raise ValueError("'mode' must be 'born' or 'rytov' but was '%s'" % mode)
 
-    inds_raw = (zind, yind, xind)
-
-
-    # find indices in bounds
-    to_use = np.logical_and.reduce((zind >= 0, zind < nz_sp,
-                                    yind >= 0, yind < ny_sp,
-                                    xind >= 0, xind < nx_sp,
-                                    detectable))
 
     # build forward model as sparse matrix
     # E = M*V
@@ -480,9 +1256,9 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
         x2 = np.ceil(xind).astype(int)
 
         # find indices in bounds
-        to_use = np.logical_and.reduce((z1 >= 0, z2 < nz_sp,
-                                        y1 >= 0, y2 < ny_sp,
-                                        x1 >= 0, x2 < nx_sp,
+        to_use = np.logical_and.reduce((z1 >= 0, z2 < nz_v,
+                                        y1 >= 0, y2 < ny_v,
+                                        x1 >= 0, x2 < nx_v,
                                         detectable))
         # todo: add in the points this misses where only option is to round
 
@@ -511,7 +1287,7 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
         yinds_to_use = np.concatenate(yinds_to_use)
         xinds_to_use = np.concatenate(xinds_to_use)
 
-        cols = np.ravel_multi_index(tuple((zinds_to_use, yinds_to_use, xinds_to_use)), v.shape)
+        cols = np.ravel_multi_index(tuple((zinds_to_use, yinds_to_use, xinds_to_use)), v_shape)
 
         # construct sparse matrix values
         interp_weights_to_use = np.concatenate([w[to_use] for w in interp_weights])
@@ -519,6 +1295,12 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
         data = interp_weights_to_use / (2 * 1j * (2 * np.pi * fz_stack)) * dxy_sp * dxy_sp * dz_sp / (dxy ** 2)
 
     else:
+        # find indices in bounds
+        to_use = np.logical_and.reduce((zind >= 0, zind < nz_v,
+                                        yind >= 0, yind < ny_v,
+                                        xind >= 0, xind < nx_v,
+                                        detectable))
+
         # round coordinates to nearest values
         zind_round = np.round(zind).astype(int)
         yind_round = np.round(yind).astype(int)
@@ -529,25 +1311,28 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
         rows = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
 
         inds_to_use = tuple([i[to_use] for i in inds_round])
-        cols = np.ravel_multi_index(inds_to_use, v.shape)
+        cols = np.ravel_multi_index(inds_to_use, v_shape)
 
         # construct sparse matrix values
         fz_stack = np.tile(fz, [nimgs, 1, 1])
         data = np.ones(len(rows)) / (2 * 1j * (2 * np.pi * fz_stack[to_use])) * dxy_sp * dxy_sp * dz_sp / (dxy ** 2)
 
     # construct sparse matrix
-    model = sp.csr_matrix((data, (rows, cols)), shape=(nimgs * ny * nx, v.size))
+    model = sp.csr_matrix((data, (rows, cols)), shape=(nimgs * ny * nx, v_size))
 
     return model
 
 
 def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
-                   dxy_sampling_factor=1, mode="born", use_interpolation=False):
+                   dxy_sampling_factor=1, mode="born", no_data_value=np.nan):
     """
     Given a set of holograms obtained using ODT, put the hologram information back in the correct locations in
     Fourier space
 
-    @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used
+    Note: coordinates can be obtained from ...
+
+    @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used.
+    Any points in efield_fts which are NaN will be ignored
     @param beam_frqs: nimgs x 3, where each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2
     @param no: background index of refraction
     @param na_det: detection numerical aperture
@@ -558,7 +1343,8 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
     @param dz_sampling_factor: fraction of Nyquist sampling factor to use
     @param dxy_sampling_factor:
     @param mode: "born" or "rytov"
-    @return sp_ft, sp_ft_imgs, coords, fcoords:
+    @return v_ft:
+    @return drs: full coordinate grid can be obtained from get_coords
     """
 
     nimgs, ny, nx = efield_fts.shape[-3:]
@@ -573,24 +1359,34 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
     # ##################################
     # set sampling of 3D scattering potential
     # ##################################
-    (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp), _ = get_reconstruction_sampling(no, na_det, beam_frqs, wavelength,
-                                                                               dxy, (ny, nx), z_fov,
-                                                                               dz_sampling_factor, dxy_sampling_factor)
+    drs, (nz_v, ny_v, nx_v), _ = get_reconstruction_sampling(no,
+                                                             na_det,
+                                                             beam_frqs,
+                                                             wavelength,
+                                                             dxy,
+                                                             (ny, nx),
+                                                             z_fov,
+                                                             dz_sampling_factor=dz_sampling_factor,
+                                                             dxy_sampling_factor=dxy_sampling_factor)
 
-    x_sp = dxy_sp * (np.arange(nx_sp) - nx_sp // 2)
-    y_sp = dxy_sp * (np.arange(ny_sp) - ny_sp // 2)
-    z_sp = dz_sp * (np.arange(nz_sp) - nz_sp // 2)
+    dz_v, dy_v, dx_v = drs
 
-    fx_sp = fft.fftshift(fft.fftfreq(nx_sp, dxy_sp))
-    fy_sp = fft.fftshift(fft.fftfreq(ny_sp, dxy_sp))
-    fz_sp = fft.fftshift(fft.fftfreq(nz_sp, dz_sp))
-    dfx_sp = fx_sp[1] - fx_sp[0]
-    dfy_sp = fy_sp[1] - fy_sp[0]
-    dfz_sp = fz_sp[1] - fz_sp[0]
+    fx_v = fft.fftshift(fft.fftfreq(nx_v, dx_v))
+    fy_v = fft.fftshift(fft.fftfreq(ny_v, dy_v))
+    fz_v = fft.fftshift(fft.fftfreq(nz_v, dz_v))
+
+    dfx_v = fx_v[1] - fx_v[0]
+    dfy_v = fy_v[1] - fy_v[0]
+    dfz_v = fz_v[1] - fz_v[0]
 
     # ##################################
-    # find indices in scattering potential per image
+    # we an equation that looks like:
+    # V(Fx, Fy, Fz) = 2*i * (2*pi*fz) * Es(fxs, fys)
+    # where V is the scattering potential and E is an approximation of the scattered field
     # use the notation Fx, Fy, Fz to give the frequencies in the 3D scattering potential
+    # and fxs, fys the corresponding frequencies in the scattered field
+    # for each combination fxs, fys and beam angle, find indices into scattering potential which correspond
+    # to each (Fourier space) point in the image
     # ##################################
     if mode == "born":
         # ##################################
@@ -614,9 +1410,9 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
         # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
         # indices into the final scattering potential
         # taking advantage of the fact that the final scattering potential indices have FFT structure
-        zind = (np.round(Fz / dfz_sp) + nz_sp // 2).astype(int)
-        yind = (np.round(Fy / dfy_sp) + ny_sp // 2).astype(int)
-        xind = (np.round(Fx / dfx_sp) + nx_sp // 2).astype(int)
+        zind = (np.round(Fz / dfz_v) + nz_v // 2).astype(int)
+        yind = (np.round(Fy / dfy_v) + ny_v // 2).astype(int)
+        xind = (np.round(Fx / dfx_v) + nx_v // 2).astype(int)
     elif mode == "rytov":
         # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * psi_s(fx - n/lambda * nx, fy - n/lambda * ny)
         # F(Fx, Fy, Fz) = 2*i * (2*pi*fz) * psi_s(Fx, Fy)
@@ -638,23 +1434,23 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
         not_detectable = (fx_rytov ** 2 + fy_rytov ** 2) > (na_det / wavelength) ** 2
 
         # indices into the final scattering potential
-        zind = (np.round(Fz_rytov / dfz_sp) + nz_sp // 2).astype(int)
-        yind = (np.round(Fy_rytov / dfy_sp) + ny_sp // 2).astype(int)
-        xind = (np.round(Fx_rytov / dfx_sp) + nx_sp // 2).astype(int)
+        zind = (np.round(Fz_rytov / dfz_v) + nz_v // 2).astype(int)
+        yind = (np.round(Fy_rytov / dfy_v) + ny_v // 2).astype(int)
+        xind = (np.round(Fx_rytov / dfx_v) + nx_v // 2).astype(int)
 
         zind, yind, xind = np.broadcast_arrays(zind, yind, xind)
         zind = np.array(zind, copy=True)
         yind = np.array(yind, copy=True)
         xind = np.array(xind, copy=True)
     else:
-        raise ValueError("'mode' must be 'born' or 'rytov' but was '%s'" % mode)
+        raise ValueError(f"'mode' must be 'born' or 'rytov' but was '{mode:s}'")
 
     # only use those within bounds
     # when things work right, these should be the same for all images ... so maybe don't really need 3D array
     # this is correct NA check for Born, but maybe not for Rytov approx?
-    to_use_ind = np.logical_and.reduce((zind >= 0, zind < nz_sp,
-                                        yind >= 0, yind < ny_sp,
-                                        xind >= 0, xind < nx_sp,
+    to_use_ind = np.logical_and.reduce((zind >= 0, zind < nz_v,
+                                        yind >= 0, yind < ny_v,
+                                        xind >= 0, xind < nx_v,
                                         np.logical_not(not_detectable),
                                         np.logical_not(np.isnan(efield_fts))))
 
@@ -662,48 +1458,25 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
     cind = -np.ones(zind.shape, dtype=int)
     cind[to_use_ind] = np.ravel_multi_index((zind[to_use_ind].astype(int).ravel(),
                                              yind[to_use_ind].astype(int).ravel(),
-                                             xind[to_use_ind].astype(int).ravel()), (nz_sp, ny_sp, nx_sp))
+                                             xind[to_use_ind].astype(int).ravel()),
+                                            (nz_v, ny_v, nx_v))
 
-    # actually can do a little better than pixel rounding. Can interpolate to get appropriate fx, fy frequencies
-    # idea: Fx and Fy give the exact frequencies within the scattered field data, but once we find the corresponding
-    # pixel in the scaattering potential, there is a subpixel offset
-    # define Fx_on_pix and Fy_on_pix which give the exact frequencies in the scattering potential. Then we can
-    # interpolate the scattered field data to get this point.
-    # we still have some pixel error in Fz, and solving this would require interpolating among multiple angles
-    # which we don't want to do because then we are no longer working on a grid ...
-    Fx_on_pix = dfx_sp * (xind - nx_sp // 2)
-    Fy_on_pix = dfy_sp * (yind - ny_sp // 2)
 
     f_unshift_ft = np.zeros(efield_fts.shape, dtype=complex)
     for ii in range(nimgs):
-        if use_interpolation:
-            if mode == "rytov":
-                raise NotImplementedError("Current interpolation implementation does nto work with mode 'rytov'")
+        if mode == "born":
+            f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
+        elif mode == "rytov":
+            f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
 
-            # only interpolate at points we are going to use
-            interp_fcoords = np.stack((Fy_on_pix[ii, to_use_ind[ii]] + beam_frqs[ii, 1],
-                                       Fx_on_pix[ii, to_use_ind[ii]] + beam_frqs[ii, 0]), axis=1)
+    # ###########################
+    # put information back in Fourier space
+    # ###########################
 
-            # also want corrected fz
-            fz_temp = get_fz(interp_fcoords[:, 1], interp_fcoords[:, 0], no, wavelength)
+    v_ft = np.zeros((nz_v, ny_v, nx_v), dtype=complex)
+    # num_pts = np.zeros((nimgs, nz_v, ny_v, nx_v), dtype=np.int8)
+    num_pts_all = np.zeros((nz_v, ny_v, nx_v), dtype=np.int)
 
-            # do interpolation
-            f_unshift_ft[ii, to_use_ind[ii]] = interpn((fy[0, :, 0], fx[0, 0, :]),
-                                                       efield_fts[ii],
-                                                       interp_fcoords,
-                                                       method="linear") * 2 * 1j * (2 * np.pi * fz_temp)
-        else:
-            # no interp mode
-            if mode == "born":
-                f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
-            elif mode == "rytov":
-                f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
-
-
-    # one reconstruction per image
-    # spot_ft_imgs = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=complex) * np.nan
-    spot_ft = np.zeros((nz_sp, ny_sp, nx_sp), dtype=complex)
-    num_pts = np.zeros((nimgs, nz_sp, ny_sp, nx_sp), dtype=np.int8)
     for ii in range(nimgs):
         # check we don't have duplicate indices ... otherwise need to do something else ...
         cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
@@ -716,25 +1489,24 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
 
         # assuming at most one point for each ...
         inds_angle = (zind[ii][to_use_ind[ii]], yind[ii][to_use_ind[ii]], xind[ii][to_use_ind[ii]])
-        # since using DFT's instead of FT's have to adjust the normalization. Recall that FT ~ DFT * dr1 * ... * drn
-        spot_ft[inds_angle] += f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dxy_sp * dxy_sp * dz_sp)
-        num_pts[ii][inds_angle] = 1
+
+        # since using DFT's instead of FT's have to adjust the normalization
+        # FT ~ DFT * dr1 * ... * drn
+        v_ft[inds_angle] += f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dx_v * dy_v * dz_v)
+
+        # num_pts[ii][inds_angle] = 1
+        num_pts_all[inds_angle] += 1
+
 
     # average over angles/images
-    num_pts_all = np.sum(num_pts, axis=0)
+    # num_pts_all = np.sum(num_pts, axis=0)
     no_data = num_pts_all == 0
     is_data = np.logical_not(no_data)
 
-    spot_ft[is_data] = spot_ft[is_data] / (num_pts_all[is_data] + reg)
-    spot_ft[no_data] = np.nan
+    v_ft[is_data] = v_ft[is_data] / (num_pts_all[is_data] + reg)
+    v_ft[no_data] = no_data_value
 
-    # real space and fourier space coordinates
-    fcoords = (fx_sp, fy_sp, fz_sp)
-    coords = (x_sp, y_sp, z_sp)
-
-    # todo: get rid of coords since do not use them
-
-    return spot_ft, coords, fcoords
+    return v_ft, drs
 
 
 def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True,
@@ -775,9 +1547,13 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
             print("constraint iteration %d/%d, elapsed time = %0.2fs" % (ii + 1, n_iterations, time.perf_counter() - tstart), end="\r")
             if ii == (n_iterations - 1):
                 print("")
+
         # ############################
         # ensure n is physical
         # ############################
+
+        # todo: can do imaginary part with the scattering potential instead
+
         if not use_gpu:
             sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
         else:
@@ -787,7 +1563,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
         if require_real_part_greater_bg:
             # real part must be >= no
             correct_real = np.real(n) < no
-            n[correct_real] = no + np.imag(n[correct_real])
+            n[correct_real] = no + 1j * np.imag(n[correct_real])
 
         # imaginary part must be >= 0
         correct_imag = np.imag(n) < 0
@@ -1046,8 +1822,10 @@ def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
     fields_r = [img_efield_shift, img_efield_shift_bg, img_efield_shift_scatt]
     vmin_e = np.percentile(np.abs(img_efield_shift).ravel(), 0.1)
     vmax_e = np.percentile(np.abs(img_efield_shift).ravel(), 99.9)
-    vmin_scat = np.percentile(np.abs(img_efield_shift_scatt).ravel(), 0.1)
-    vmax_scat = np.percentile(np.abs(img_efield_shift_scatt).ravel(), 99.9)
+    # vmin_scat = np.percentile(np.abs(img_efield_shift_scatt).ravel(), 0.1)
+    # vmax_scat = np.percentile(np.abs(img_efield_shift_scatt).ravel(), 99.9)
+    vmin_scat = 0
+    vmax_scat = 1.25
     vmin_r = [vmin_e, vmin_e, vmin_scat]
     vmax_r = [vmax_e, vmax_e, vmax_scat]
     fields_ft = [img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft]
@@ -1266,21 +2044,30 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(30, 8
     return figh
 
 
-def plot_n3d(sp_ft, no, wavelength, coords, title=""):
+def plot_n3d(v_ft, no, wavelength, coords=None, title=""):
     """
     Plot 3D index of refraction
-    @param sp_ft: 3D Fourier transform of scattering potential
+    @param v_ft: 3D Fourier transform of scattering potential
     @param no: background index of refraction
     @param wavelength:
     @param coords: (x, y, z)
     @return:
     """
 
+    nz_sp, ny_sp, nx_sp = v_ft.shape
+
+    if coords is None:
+        x_sp = np.arange(nx_sp) - nx_sp // 2
+        y_sp = np.arange(ny_sp) - ny_sp // 2
+        z_sp = np.arange(nz_sp) - nz_sp // 2
+    else:
+        x_sp, y_sp, z_sp = coords
+
     # work with coordinates
-    x_sp, y_sp, z_sp = coords
-    nx_sp = len(x_sp)
-    ny_sp = len(y_sp)
-    nz_sp = len(z_sp)
+
+    # nx_sp = len(x_sp)
+    # ny_sp = len(y_sp)
+    # nz_sp = len(z_sp)
     dxy_sp = x_sp[1] - x_sp[0]
     dz_sp = z_sp[1] - z_sp[0]
 
@@ -1297,7 +2084,7 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
     extent_fxy = [fx[0] - 0.5 * dfx_sp, fx[-1] + 0.5 * dfx_sp, fy[0] - 0.5 * dfy_sp, fy[-1] + 0.5 * dfy_sp]
 
     # get need quantities
-    sp_ft_nonan = np.array(sp_ft, copy=True)
+    sp_ft_nonan = np.array(v_ft, copy=True)
     sp_ft_nonan[np.isnan(sp_ft_nonan)] = 0
     sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_nonan)))
 
@@ -1316,8 +2103,8 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
     if vmax_n_ft <= 0:
         vmax_n_ft = 1e-12
 
-    not_nan = np.logical_not(np.isnan(sp_ft))
-    vmax_sp_ft = 1.5 * np.percentile(np.abs(sp_ft[not_nan]), 99)
+    not_nan = np.logical_not(np.isnan(v_ft))
+    vmax_sp_ft = 1.5 * np.percentile(np.abs(v_ft[not_nan]), 99)
 
     # plots
     fmt_fn = lambda x: "%0.6f" % x
@@ -1355,7 +2142,7 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
             ax.set_ylabel("|n(f)|")
 
         ax = figh.add_subplot(grid[3, ii])
-        im = ax.imshow(np.abs(sp_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft),
+        im = ax.imshow(np.abs(v_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft),
                        origin="lower", extent=extent_fxy)
         im.format_cursor_data = fmt_fn
         if ii == 0:
@@ -1374,15 +2161,23 @@ def plot_n3d(sp_ft, no, wavelength, coords, title=""):
     return figh
 
 
-def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1):
+def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1, nmax_columns=21):
     """
+    Display slices of scattering potential in 3D. Show both real-space and Fourier-space
 
     @param v_ft:
     @param v_ft_gt:
     @param ttl:
     @param figsize:
-    @return:
+    @param gamma: gamma applied to FT images only
+    @param nmax_columns: maximum number of columns per figure. If number of slices of v_ft exceeds this, create more
+    figures to display
+    @return fighs: list of figures displaying real-space scattering potential
+    @return fighs_ft:
     """
+
+    fighs = []
+    fighs_ft = []
 
     v = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft)))
     v_gt = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft_gt)))
@@ -1395,53 +2190,63 @@ def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1):
     vmink = 0
     vmaxk = 1.2 * np.max(np.abs(v_ft_gt))
 
-    # display
-    figh = plt.figure(figsize=figsize)
-    figh.suptitle(f"{ttl:s}")
-    grid = figh.add_gridspec(nrows=6, ncols=v.shape[0] + 1, width_ratios=[1] * v.shape[0] + [0.1])
+    # create figures
+    nmax_columns = np.min([nmax_columns, v.shape[0]])
+    nfigs = int(np.ceil(v.shape[0] / nmax_columns))
+
+    for ii in range(nfigs):
+        figh = plt.figure(figsize=figsize)
+        figh.suptitle(f"{ttl:s} ({ii + 1:d}/{nfigs:d})")
+        grid = figh.add_gridspec(nrows=6, ncols=nmax_columns + 1, width_ratios=[1] * nmax_columns + [0.1])
+
+        fighs.append(figh)
 
     for ii in range(v.shape[0]):
-        ax = figh.add_subplot(grid[0, ii])
+        fig_num = ii % nmax_columns
+        col = ii - (fig_num * nmax_columns)
+        figh = fighs[nfigs]
+
+        ax = figh.add_subplot(grid[0, col])
         im = ax.imshow(v[ii].real, vmin=vminr, vmax=vmaxr, cmap="bone")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("Re(v)")
 
-        if ii == (v.shape[0] - 1):
-            ax = figh.add_subplot(grid[0, ii + 1])
+        if col == (nmax_columns - 1):
+            ax = figh.add_subplot(grid[0, col + 1])
             plt.colorbar(im, cax=ax)
 
-        ax = figh.add_subplot(grid[1, ii])
+        ax = figh.add_subplot(grid[1, col])
         im = ax.imshow(v_gt[ii].real, vmin=vminr, vmax=vmaxr, cmap="bone")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("Re(v gt)")
 
-        if ii == (v.shape[0] - 1):
-            ax = figh.add_subplot(grid[1, ii + 1])
+        if col == (nmax_columns - 1):
+            ax = figh.add_subplot(grid[1, col + 1])
             plt.colorbar(im, cax=ax)
 
-        ax = figh.add_subplot(grid[2, ii])
+        ax = figh.add_subplot(grid[2, col])
         im = ax.imshow(v[ii].real - v_gt[ii].real, vmin=vminr, vmax=-vminr, cmap="PiYG")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("Re(v - v gt)")
 
-        if ii == (v.shape[0] - 1):
-            ax = figh.add_subplot(grid[2, ii + 1])
+        if col == (nmax_columns - 1):
+            ax = figh.add_subplot(grid[2, col + 1])
             plt.colorbar(im, cax=ax)
 
-        ax = figh.add_subplot(grid[3, ii])
+        ax = figh.add_subplot(grid[3, col])
         im = ax.imshow(v[ii].imag, vmin=vmini, vmax=vmaxi, cmap="bone")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("Im(v)")
 
-        if ii == (v.shape[0] - 1):
+        if col == (nmax_columns - 1):
             ax = figh.add_subplot(grid[3, ii + 1])
             plt.colorbar(im, cax=ax)
 
@@ -1449,10 +2254,10 @@ def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1):
         im = ax.imshow(v_gt[ii].imag, vmin=vmini, vmax=vmaxi, cmap="bone")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("Im(v gt)")
 
-        if ii == (v.shape[0] - 1):
+        if col == (nmax_columns - 1):
             ax = figh.add_subplot(grid[4, ii + 1])
             plt.colorbar(im, cax=ax)
 
@@ -1460,75 +2265,82 @@ def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1):
         im = ax.imshow(v[ii].imag - v_gt[ii].imag, vmin=vmini, vmax=vmaxi, cmap="PiYG")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("Im(v - v gt)")
 
-        if ii == (v.shape[0] - 1):
+        if col == (nmax_columns - 1):
             ax = figh.add_subplot(grid[5, ii + 1])
             plt.colorbar(im, cax=ax)
 
     # k-space
-    figh_ft = plt.figure(figsize=figsize)
-    figh_ft.suptitle(f"{ttl:s} k-space")
-    grid = figh_ft.add_gridspec(nrows=5, ncols=v.shape[0] + 1, width_ratios=[1] * v.shape[0] + [0.1])
+    for ii in range(nfigs):
+        figh_ft = plt.figure(figsize=figsize)
+        figh_ft.suptitle(f"{ttl:s} k-space ({ii + 1:d}/{nfigs:d})")
+        grid = figh_ft.add_gridspec(nrows=5, ncols=v.shape[0] + 1, width_ratios=[1] * v.shape[0] + [0.1])
+
+        fighs_ft.append(figh_ft)
 
     for ii in range(v.shape[0]):
-        ax = figh_ft.add_subplot(grid[0, ii])
+        fig_num = ii % nmax_columns
+        col = ii - (fig_num * nmax_columns)
+        figh_ft = fighs_ft[nfigs]
+
+        ax = figh_ft.add_subplot(grid[0, col])
         im = ax.imshow(np.abs(v_ft[ii]), norm=PowerNorm(gamma=gamma, vmin=vmink, vmax=vmaxk), cmap="bone")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("|V(k)|")
 
-        if ii == (v.shape[0] - 1):
+        if col == (nmax_columns - 1):
             ax = figh_ft.add_subplot(grid[0, ii + 1])
             plt.colorbar(im, cax=ax)
 
-        ax = figh_ft.add_subplot(grid[1, ii])
+        ax = figh_ft.add_subplot(grid[1, col])
         im = ax.imshow(np.abs(v_ft_gt[ii]), norm=PowerNorm(gamma=gamma, vmin=vmink, vmax=vmaxk), cmap="bone")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("|V gt(k)|")
 
-        if ii == (v.shape[0] - 1):
+        if col == (nmax_columns - 1):
             ax = figh_ft.add_subplot(grid[1, ii + 1])
             plt.colorbar(im, cax=ax)
 
-        ax = figh_ft.add_subplot(grid[2, ii])
+        ax = figh_ft.add_subplot(grid[2, col])
         im = ax.imshow(np.abs(v_ft[ii] - v_ft_gt[ii]), norm=PowerNorm(gamma=gamma, vmin=vmink, vmax=vmaxk), cmap="bone")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("|V - V gt(k)|")
 
-        if ii == (v.shape[0] - 1):
+        if col == (nmax_columns - 1):
             ax = figh_ft.add_subplot(grid[2, ii + 1])
             plt.colorbar(im, cax=ax)
 
-        ax = figh_ft.add_subplot(grid[3, ii])
+        ax = figh_ft.add_subplot(grid[3, col])
         im = ax.imshow(np.angle(v_ft[ii]), vmin=-np.pi, vmax=np.pi, cmap="RdBu")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("Angle(V(k))")
 
-        if ii == (v.shape[0] - 1):
+        if col == (nmax_columns - 1):
             ax = figh_ft.add_subplot(grid[3, ii + 1])
             plt.colorbar(im, cax=ax)
 
-        ax = figh_ft.add_subplot(grid[4, ii])
+        ax = figh_ft.add_subplot(grid[4, col])
         im = ax.imshow(np.angle(v_ft_gt[ii]), vmin=-np.pi, vmax=np.pi, cmap="RdBu")
         ax.set_xticks([])
         ax.set_yticks([])
-        if ii == 0:
+        if col == 0:
             ax.set_ylabel("Angle(V gt(k))")
 
-        if ii == (v.shape[0] - 1):
+        if col == (nmax_columns - 1):
             ax = figh_ft.add_subplot(grid[4, ii + 1])
             plt.colorbar(im, cax=ax)
 
-    return figh, figh_ft
+    return fighs, fighs_ft
 
 
 def compare_escatt(e, e_gt, beam_frqs, dxy, ttl="", figsize=(35, 20), gamma=0.1):
