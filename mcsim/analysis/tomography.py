@@ -6,7 +6,6 @@ import datetime
 from pathlib import Path
 import numpy as np
 from numpy import fft
-import zarr
 import scipy.sparse as sp
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import interpn
@@ -374,7 +373,7 @@ class tomography:
 
         # rechunk erecon_ft since must operate on all patterns at once
         # get sampling so can determine new chunk sizes
-        (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max) = \
+        (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp) = \
             get_reconstruction_sampling(self.no,
                                         self.na_detection,
                                         self.get_beam_frqs(),
@@ -401,7 +400,7 @@ class tomography:
 
             v_ft, drs = reconstruction(da.squeeze(erecon_ft), self.get_beam_frqs(), self.no,
                                        self.na_detection, self.wavelength, self.dxy, z_fov=z_fov,
-                                       reg=reconstruction_regularizer,
+                                       regularization=reconstruction_regularizer,
                                        dz_sampling_factor=dz_sampling_factor,
                                        dxy_sampling_factor=dxy_sampling_factor, mode="born",
                                        no_data_value=no_data_value)
@@ -418,17 +417,16 @@ class tomography:
             steps_per_tv = 1
 
             # define forward model
-            model = fwd_model_linear(self.get_beam_frqs(),
-                                     self.no,
-                                     self.na_detection,
-                                     self.wavelength,
-                                     (self.ny, self.nx),
-                                     self.dxy,
-                                     dxy_sp,
-                                     dz_sp,
-                                     (nz_sp, ny_sp, nx_sp),
-                                     mode="born",
-                                     interpolate=True)
+            model, _ = fwd_model_linear(self.get_beam_frqs(),
+                                                self.no,
+                                                self.na_detection,
+                                                self.wavelength,
+                                                (self.ny, self.nx),
+                                                (self.dxy, self.dxy),
+                                                (nz_sp, ny_sp, nx_sp),
+                                                (dz_sp, dxy_sp, dxy_sp),
+                                                mode="born",
+                                                interpolate=True)
 
             model_csc = model.tocsc(copy=True)
 
@@ -645,16 +643,16 @@ class tomography:
                     f"npatterns x ny x nx shape = {erecon_ft.shape}")
 
             v_ft, drs = reconstruction(da.squeeze(erecon_ft), self.get_beam_frqs(), self.no,
-                                                   self.na_detection, self.wavelength, self.dxy, z_fov=z_fov,
-                                                   reg=reconstruction_regularizer,
-                                                   dz_sampling_factor=dz_sampling_factor,
-                                                   dxy_sampling_factor=dxy_sampling_factor, mode="rytov")
+                                       self.na_detection, self.wavelength, self.dxy, z_fov=z_fov,
+                                       regularization=reconstruction_regularizer,
+                                       dz_sampling_factor=dz_sampling_factor,
+                                       dxy_sampling_factor=dxy_sampling_factor, mode="rytov")
 
             return np.expand_dims(v_ft, axis=list(range(len(dsizes))))
 
         # rechunk erecon_ft since must operate on all patterns at once
         # get sampling so can determine new chunk sizes
-        (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max) = \
+        (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp) = \
             get_reconstruction_sampling(self.no,
                                         self.na_detection,
                                         self.get_beam_frqs(),
@@ -773,12 +771,14 @@ class tomography:
         with ProgressBar():
             dask.compute(*results_interferograms)
 
+
 def cut_mask(img, mask, mask_val=0):
     mask = np.expand_dims(mask, axis=list(range(img.ndim - 2)))
 
     img_masked = np.array(img, copy=True)
     img_masked[mask] = mask_val
     return img_masked
+
 
 def get_angular_spectrum_kernel(dz, wavelength, no, shape, drs):
     """
@@ -1049,25 +1049,26 @@ def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.nda
 
 
 # tomographic reconstruction
-def get_fmax(no, na_det, na_exc, wavelength):
+def get_fmax(no, na_detection, na_excitation, wavelength):
     """
     Maximum frequencies measurable in ODT image
-    @param no:
-    @param na_det:
-    @param na_exc:
+    @param no: index of refraction
+    @param na_detection:
+    @param na_excitation:
     @param wavelength:
-    @return:
+    @return (fx_max, fy_max, fz_max):
     """
-    alpha = np.arcsin(na_det / no)
-    beta = np.max(na_exc/ no)
+    alpha = np.arcsin(na_detection / no)
+    beta = np.max(na_excitation / no)
 
     # maximum frequencies present in ODT
-    fxy_max = (na_det + no * np.sin(beta)) / wavelength
+    fxy_max = (na_detection + no * np.sin(beta)) / wavelength
     fz_max = no / wavelength * np.max([1 - np.cos(alpha), 1 - np.cos(beta)])
 
     fmax = np.array([fxy_max, fxy_max, fz_max])
 
     return fmax
+
 
 def get_reconstruction_sampling(no, na_det, beam_frqs, wavelength, dxy, img_size, z_fov,
                                 dz_sampling_factor=1., dxy_sampling_factor=1.):
@@ -1087,10 +1088,6 @@ def get_reconstruction_sampling(no, na_det, beam_frqs, wavelength, dxy, img_size
     """
     ny, nx = img_size
 
-    # ##################################
-    # set sampling of 3D scattering potential
-    # ##################################
-
     # todo: let's just use beta based on na ... can always provide an effective na if desired
     theta, _ = get_angles(beam_frqs, no, wavelength)
     alpha = np.arcsin(na_det / no)
@@ -1100,25 +1097,33 @@ def get_reconstruction_sampling(no, na_det, beam_frqs, wavelength, dxy, img_size
     fxy_max = (na_det + no * np.sin(beta)) / wavelength
     fz_max = no / wavelength * np.max([1 - np.cos(alpha), 1 - np.cos(beta)])
 
+    # ##################################
     # generate real-space sampling from Nyquist sampling
-    dxy_sp = dxy_sampling_factor * 0.5 * 1 / fxy_max
-    dz_sp = dz_sampling_factor * 0.5 / fz_max
+    # ##################################
+    dxy_v = dxy_sampling_factor * 0.5 * 1 / fxy_max
+    dz_v = dz_sampling_factor * 0.5 / fz_max
+    drs = (dz_v, dxy_v, dxy_v)
 
+    # ##################################
+    # get size from FOV
+    # ##################################
     x_fov = nx * dxy  # um
-    nx_sp = int(np.ceil(x_fov / dxy_sp) + 1)
-    if np.mod(nx_sp, 2) == 0:
-        nx_sp += 1
+    nx_v = int(np.ceil(x_fov / dxy_v) + 1)
+    if np.mod(nx_v, 2) == 0:
+        nx_v += 1
 
     y_fov = ny * dxy
-    ny_sp = int(np.ceil(y_fov / dxy_sp) + 1)
-    if np.mod(ny_sp, 2) == 0:
-        ny_sp += 1
+    ny_v = int(np.ceil(y_fov / dxy_v) + 1)
+    if np.mod(ny_v, 2) == 0:
+        ny_v += 1
 
-    nz_sp = int(np.ceil(z_fov / dz_sp) + 1)
-    if np.mod(nz_sp, 2) == 0:
-        nz_sp += 1
+    nz_v = int(np.ceil(z_fov / dz_v) + 1)
+    if np.mod(nz_v, 2) == 0:
+        nz_v += 1
 
-    return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max)
+    n_size = (nz_v, ny_v, nx_v)
+
+    return drs, n_size
 
 
 def get_coords(drs, nrs, expand=False):
@@ -1138,61 +1143,78 @@ def get_coords(drs, nrs, expand=False):
     return coords
 
 
-def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, dz_sp, v_shape, mode="born", interpolate=False):
+def fwd_model_linear(beam_frqs, no, na_det, wavelength,
+                     e_shape: tuple[int],
+                     drs_e: tuple[float],
+                     v_shape: tuple[int],
+                     drs_v: tuple[float],
+                     mode: str = "born",
+                     interpolate: bool = False):
     """
     Forward model from scattering potential v to imaged electric field after interacting with object
 
-    @param beam_frqs:
-    @param no:
-    @param na_det:
+    @param beam_frqs: (nbeams, 3). Normalized to no/wavelength
+    @param no: index of refraction
+    @param na_det: detection numerical aperture
     @param wavelength:
-    @param img_shape:
-    @param dxy:
-    @param dxy_sp:
-    @param dz_sp:
-    @param v:
+    @param e_shape: (ny, nx), shape of scattered fields
+    @param drs_e: (dy, dx) pixel size of scattered field
+    @param v_shape: (nz, ny, nx) shape of scattering potential
+    @param drs_v: (dz, dy, dx) pixel size of scattering potential
     @param mode: "born" or "rytov"
-    @param interpolate:
+    @param interpolate: use trilinear interpolation or not
     @return model:
+    @return (data, row_index, column_index): raw data
     """
     # todo: can I combine this logic with reconstruct() in some way that I don't duplicate so much code?
 
-    ny, nx = img_shape
+    ny, nx = e_shape
+    dy, dx = drs_e
 
     nimgs = len(beam_frqs)
 
     # ##################################
-    # get frequencies of initial images and make broadcastable to shape (nimgs, ny, nx)
+    # get frequencies of electric field images and make broadcastable to shape (nimgs, ny, nx)
     # ##################################
+    fx = np.expand_dims(fft.fftshift(fft.fftfreq(nx, dx)), axis=(0, 1))
+    fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dy)), axis=(0, 2))
 
-    # frequency of initial images
-    fx = np.expand_dims(fft.fftshift(fft.fftfreq(nx, dxy)), axis=(0, 1))
-    fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dxy)), axis=(0, 2))
-    fz = get_fz(fx, fy, no, wavelength)
-
-    # logical array, which frqs in detection NA
-    detectable = np.sqrt(fx ** 2 + fy ** 2)[0] <= (na_det / wavelength)
-    detectable = np.tile(detectable, [nimgs, 1, 1])
-
-    # scattering potential frqs
+    # ##################################
+    # set sampling of 3D scattering potential
+    # ##################################
     nz_v, ny_v, nx_v = v_shape
     v_size = np.prod(v_shape)
+    dz_v, dy_v, dx_v = drs_v
 
-    fx_v = fft.fftshift(fft.fftfreq(nx_v, dxy_sp))
-    fy_v = fft.fftshift(fft.fftfreq(ny_v, dxy_sp))
-    fz_v = fft.fftshift(fft.fftfreq(nz_v, dz_sp))
+    fx_v = fft.fftshift(fft.fftfreq(nx_v, dx_v))
+    fy_v = fft.fftshift(fft.fftfreq(ny_v, dy_v))
+    fz_v = fft.fftshift(fft.fftfreq(nz_v, dz_v))
     dfx_v = fx_v[1] - fx_v[0]
     dfy_v = fy_v[1] - fy_v[0]
     dfz_v = fz_v[1] - fz_v[0]
 
     # ##################################
-    # find indices in scattering potential per image
+    # we an equation that looks like:
+    # V(Fx, Fy, Fz) = 2*i * (2*pi*fz) * Es(fxs, fys)
+    # where V is the scattering potential and E is an approximation of the scattered field
     # use the notation Fx, Fy, Fz to give the frequencies in the 3D scattering potential
+    # and fxs, fys the corresponding frequencies in the scattered field
+    # for each combination fxs, fys and beam angle, find indices into scattering potential which correspond
+    # to each (Fourier space) point in the image
+    # in reconstruction, implicitly assume that Es(fx, fy) are in the right place, so have to change coordinates
+    # to ensure this is true
     # ##################################
     if mode == "born":
         # ##################################
         # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
         # ##################################
+
+        # logical array, which frqs in detection NA
+        detectable = np.sqrt(fx ** 2 + fy ** 2)[0] <= (na_det / wavelength)
+        detectable = np.tile(detectable, [nimgs, 1, 1])
+
+        #
+        fz = np.tile(get_fz(fx, fy, no, wavelength), [nimgs, 1, 1])
 
         # construct frequencies where we have data about the 3D scattering potentials
         # frequencies of the sample F = f - no/lambda * beam_vec
@@ -1218,30 +1240,38 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
         # so although we can use fx, fy to stand in, we need to calculate the new z-component
         # Fz_rytov = np.sqrt( (n/lambda)**2 - (Fx + n/lambda * nx)**2 - (Fy + n/lambda * ny)**2) - n/lambda * nz
         # fz = Fz + n/lambda * nz
-        Fx_rytov = fx
-        Fy_rytov = fy
+        Fx = fx
+        Fy = fy
 
-        fx_rytov = Fx_rytov + np.expand_dims(beam_frqs[:, 0], axis=(1, 2))
-        fy_rytov = Fy_rytov + np.expand_dims(beam_frqs[:, 1], axis=(1, 2))
-        fz_rytov = get_fz(fx_rytov, fy_rytov, no, wavelength)
+        # helper frequencies for calculating fz
+        fx_rytov = Fx + np.expand_dims(beam_frqs[:, 0], axis=(1, 2))
+        fy_rytov = Fy + np.expand_dims(beam_frqs[:, 1], axis=(1, 2))
 
-        Fz_rytov = fz_rytov - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
+        fz = get_fz(fx_rytov,
+                    fy_rytov,
+                    no,
+                    wavelength)
+
+        Fz = fz - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
+
+        # take care of frequencies which do not contain signal
+        detectable = (fx_rytov ** 2 + fy_rytov ** 2) <= (na_det / wavelength) ** 2
 
         # indices into the final scattering potential
-        zind = Fz_rytov / dfz_v + nz_v // 2
-        yind = Fy_rytov / dfy_v + ny_v // 2
-        xind = Fx_rytov / dfx_v + nx_v // 2
+        zind = Fz / dfz_v + nz_v // 2
+        yind = Fy / dfy_v + ny_v // 2
+        xind = Fx / dfx_v + nx_v // 2
 
         zind, yind, xind = np.broadcast_arrays(zind, yind, xind)
         zind = np.array(zind, copy=True)
         yind = np.array(yind, copy=True)
         xind = np.array(xind, copy=True)
     else:
-        raise ValueError("'mode' must be 'born' or 'rytov' but was '%s'" % mode)
+        raise ValueError(f"'mode' must be 'born' or 'rytov' but was '{mode:s}'")
 
 
     # build forward model as sparse matrix
-    # E = M*V
+    # E(k) = model * V(k)
     # where V is made into a vector by ravelling
     # and the scattered fields are first stacked then ravelled
     # use csr for fast right mult L.dot(v)
@@ -1262,10 +1292,14 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
                                         detectable))
         # todo: add in the points this misses where only option is to round
 
-        inds = [(z1, y1, x1), (z2, y1, x1),
-                (z1, y2, x1), (z2, y2, x1),
-                (z1, y1, x2), (z2, y1, x2),
-                (z1, y2, x2), (z2, y2, x2)
+        inds = [(z1, y1, x1),
+                (z2, y1, x1),
+                (z1, y2, x1),
+                (z2, y2, x1),
+                (z1, y1, x2),
+                (z2, y1, x2),
+                (z1, y2, x2),
+                (z2, y2, x2)
                 ]
         interp_weights = [(zind - z1) * (yind - y1) * (xind - x1),
                           (z2 - zind) * (yind - y1) * (xind - x1),
@@ -1276,23 +1310,25 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
                           (zind - z1) * (y2 - yind) * (x2 - xind),
                           (z2 - zind) * (y2 - yind) * (x2 - xind)]
 
-        # rows -> indices into E vector
-        rows = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
-        rows = np.tile(rows, 8)
+        # row_index -> indices into E vector
+        row_index = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
+        row_index = np.tile(row_index, 8)
 
-        # cols -> indices into V vector
+        # column_index -> indices into V vector
         inds_to_use = [[i[to_use] for i in inow] for inow in inds]
         zinds_to_use, yinds_to_use, xinds_to_use = list(zip(*inds_to_use))
         zinds_to_use = np.concatenate(zinds_to_use)
         yinds_to_use = np.concatenate(yinds_to_use)
         xinds_to_use = np.concatenate(xinds_to_use)
 
-        cols = np.ravel_multi_index(tuple((zinds_to_use, yinds_to_use, xinds_to_use)), v_shape)
+        column_index = np.ravel_multi_index(tuple((zinds_to_use, yinds_to_use, xinds_to_use)), v_shape)
 
         # construct sparse matrix values
         interp_weights_to_use = np.concatenate([w[to_use] for w in interp_weights])
-        fz_stack = np.tile(np.tile(fz, [nimgs, 1, 1])[to_use], 8)
-        data = interp_weights_to_use / (2 * 1j * (2 * np.pi * fz_stack)) * dxy_sp * dxy_sp * dz_sp / (dxy ** 2)
+
+        fz_stack = np.tile(fz[to_use], 8)
+
+        data = interp_weights_to_use / (2 * 1j * (2 * np.pi * fz_stack)) * dx_v * dy_v * dz_v / (dx * dy)
 
     else:
         # find indices in bounds
@@ -1308,23 +1344,32 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength, img_shape, dxy, dxy_sp, 
         inds_round = (zind_round, yind_round, xind_round)
 
         # construct sparse matrix non-zero coords
-        rows = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
 
+        # row_index = position in E
+        row_index = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
+
+        # columns = position in V
         inds_to_use = tuple([i[to_use] for i in inds_round])
-        cols = np.ravel_multi_index(inds_to_use, v_shape)
+        column_index = np.ravel_multi_index(inds_to_use, v_shape)
 
-        # construct sparse matrix values
-        fz_stack = np.tile(fz, [nimgs, 1, 1])
-        data = np.ones(len(rows)) / (2 * 1j * (2 * np.pi * fz_stack[to_use])) * dxy_sp * dxy_sp * dz_sp / (dxy ** 2)
+        # matrix values
+        data = np.ones(len(row_index)) / (2 * 1j * (2 * np.pi * fz[to_use])) * dx_v * dy_v * dz_v / (dx * dy)
 
     # construct sparse matrix
-    model = sp.csr_matrix((data, (rows, cols)), shape=(nimgs * ny * nx, v_size))
+    # E(k) = model * V(k)
+    model = sp.csr_matrix((data, (row_index, column_index)), shape=(nimgs * ny * nx, v_size))
 
-    return model
+    return model, (data, row_index, column_index)
 
 
-def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10, reg=0.1, dz_sampling_factor=1,
-                   dxy_sampling_factor=1, mode="born", no_data_value=np.nan):
+def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength,
+                   dxy: float,
+                   z_fov: float = 10.,
+                   regularization: float = 0.1,
+                   dz_sampling_factor: float = 1,
+                   dxy_sampling_factor: float = 1,
+                   mode: str = "born",
+                   no_data_value: float = np.nan):
     """
     Given a set of holograms obtained using ODT, put the hologram information back in the correct locations in
     Fourier space
@@ -1339,7 +1384,7 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
     @param wavelength:
     @param dxy: pixel size
     @param z_fov: z-field of view
-    @param reg: regularization factor
+    @param regularization: regularization factor
     @param dz_sampling_factor: fraction of Nyquist sampling factor to use
     @param dxy_sampling_factor:
     @param mode: "born" or "rytov"
@@ -1350,16 +1395,9 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
     nimgs, ny, nx = efield_fts.shape[-3:]
 
     # ##################################
-    # get frequencies of initial images and make broadcastable to shape (nimgs, ny, nx)
-    # ##################################
-    fx = np.expand_dims(fft.fftshift(fft.fftfreq(nx, dxy)), axis=(0, 1))
-    fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dxy)), axis=(0, 2))
-    fz = get_fz(fx, fy, no, wavelength)
-
-    # ##################################
     # set sampling of 3D scattering potential
     # ##################################
-    drs, (nz_v, ny_v, nx_v), _ = get_reconstruction_sampling(no,
+    drs, (nz_v, ny_v, nx_v) = get_reconstruction_sampling(no,
                                                              na_det,
                                                              beam_frqs,
                                                              wavelength,
@@ -1369,141 +1407,55 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
                                                              dz_sampling_factor=dz_sampling_factor,
                                                              dxy_sampling_factor=dxy_sampling_factor)
 
-    dz_v, dy_v, dx_v = drs
-
-    fx_v = fft.fftshift(fft.fftfreq(nx_v, dx_v))
-    fy_v = fft.fftshift(fft.fftfreq(ny_v, dy_v))
-    fz_v = fft.fftshift(fft.fftfreq(nz_v, dz_v))
-
-    dfx_v = fx_v[1] - fx_v[0]
-    dfy_v = fy_v[1] - fy_v[0]
-    dfz_v = fz_v[1] - fz_v[0]
-
-    # ##################################
-    # we an equation that looks like:
-    # V(Fx, Fy, Fz) = 2*i * (2*pi*fz) * Es(fxs, fys)
-    # where V is the scattering potential and E is an approximation of the scattered field
-    # use the notation Fx, Fy, Fz to give the frequencies in the 3D scattering potential
-    # and fxs, fys the corresponding frequencies in the scattered field
-    # for each combination fxs, fys and beam angle, find indices into scattering potential which correspond
-    # to each (Fourier space) point in the image
-    # ##################################
-    if mode == "born":
-        # ##################################
-        # construct frequencies where we have data about the 3D scattering potentials
-        # frequencies of the sample F = f - no/lambda * beam_vec
-        # ##################################
-        Fx, Fy, Fz = np.broadcast_arrays(fx - np.expand_dims(beam_frqs[:, 0], axis=(1, 2)),
-                                         fy - np.expand_dims(beam_frqs[:, 1], axis=(1, 2)),
-                                         fz - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
-                                         )
-        # if don't copy, then elements of F's are reference to other elements.
-        # otherwise later when set some elements to nans, many that we don't expect would become nans also
-        Fx = np.array(Fx, copy=True)
-        Fy = np.array(Fy, copy=True)
-        Fz = np.array(Fz, copy=True)
-
-        # take care of frequencies which do not contain signal
-        not_detectable = (fx ** 2 + fy ** 2) > (na_det / wavelength) ** 2
-        not_detectable = np.tile(not_detectable, [nimgs, 1, 1])
-
-        # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
-        # indices into the final scattering potential
-        # taking advantage of the fact that the final scattering potential indices have FFT structure
-        zind = (np.round(Fz / dfz_v) + nz_v // 2).astype(int)
-        yind = (np.round(Fy / dfy_v) + ny_v // 2).astype(int)
-        xind = (np.round(Fx / dfx_v) + nx_v // 2).astype(int)
-    elif mode == "rytov":
-        # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * psi_s(fx - n/lambda * nx, fy - n/lambda * ny)
-        # F(Fx, Fy, Fz) = 2*i * (2*pi*fz) * psi_s(Fx, Fy)
-        # so want to change variables and take (Fx, Fy) -> (fx, fy)
-        # But have one problem: (Fx, Fy, Fz) do not form a normalized vector like (fx, fy, fz)
-        # so although we can use fx, fy to stand in, we need to calculate the new z-component
-        # Fz_rytov = np.sqrt( (n/lambda)**2 - (Fx + n/lambda * nx)**2 - (Fy + n/lambda * ny)**2) - n/lambda * nz
-        # fz = Fz + n/lambda * nz
-        Fx_rytov = fx
-        Fy_rytov = fy
-
-        fx_rytov = Fx_rytov + np.expand_dims(beam_frqs[:, 0], axis=(1, 2))
-        fy_rytov = Fy_rytov + np.expand_dims(beam_frqs[:, 1], axis=(1, 2))
-        fz_rytov = get_fz(fx_rytov, fy_rytov, no, wavelength)
-
-        Fz_rytov = fz_rytov - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
-
-        # take care of frequencies which do not contain signal
-        not_detectable = (fx_rytov ** 2 + fy_rytov ** 2) > (na_det / wavelength) ** 2
-
-        # indices into the final scattering potential
-        zind = (np.round(Fz_rytov / dfz_v) + nz_v // 2).astype(int)
-        yind = (np.round(Fy_rytov / dfy_v) + ny_v // 2).astype(int)
-        xind = (np.round(Fx_rytov / dfx_v) + nx_v // 2).astype(int)
-
-        zind, yind, xind = np.broadcast_arrays(zind, yind, xind)
-        zind = np.array(zind, copy=True)
-        yind = np.array(yind, copy=True)
-        xind = np.array(xind, copy=True)
-    else:
-        raise ValueError(f"'mode' must be 'born' or 'rytov' but was '{mode:s}'")
-
-    # only use those within bounds
-    # when things work right, these should be the same for all images ... so maybe don't really need 3D array
-    # this is correct NA check for Born, but maybe not for Rytov approx?
-    to_use_ind = np.logical_and.reduce((zind >= 0, zind < nz_v,
-                                        yind >= 0, yind < ny_v,
-                                        xind >= 0, xind < nx_v,
-                                        np.logical_not(not_detectable),
-                                        np.logical_not(np.isnan(efield_fts))))
-
-    # convert nD indices to 1D indices so can easily check if points are unique
-    cind = -np.ones(zind.shape, dtype=int)
-    cind[to_use_ind] = np.ravel_multi_index((zind[to_use_ind].astype(int).ravel(),
-                                             yind[to_use_ind].astype(int).ravel(),
-                                             xind[to_use_ind].astype(int).ravel()),
-                                            (nz_v, ny_v, nx_v))
-
-
-    f_unshift_ft = np.zeros(efield_fts.shape, dtype=complex)
-    for ii in range(nimgs):
-        if mode == "born":
-            f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz[0]) * efield_fts[ii]
-        elif mode == "rytov":
-            f_unshift_ft[ii] = 2 * 1j * (2 * np.pi * fz_rytov[ii]) * efield_fts[ii]
-
     # ###########################
     # put information back in Fourier space
     # ###########################
+    v_shape = (nz_v, ny_v, nx_v)
 
-    v_ft = np.zeros((nz_v, ny_v, nx_v), dtype=complex)
-    # num_pts = np.zeros((nimgs, nz_v, ny_v, nx_v), dtype=np.int8)
-    num_pts_all = np.zeros((nz_v, ny_v, nx_v), dtype=np.int)
+    model, (data, row_index, col_index) = fwd_model_linear(beam_frqs, no, na_det, wavelength,
+                                                           (ny, nx),
+                                                           (dxy, dxy),
+                                                           v_shape,
+                                                           drs,
+                                                           mode=mode,
+                                                           interpolate=False)
+
+    # recover indices into V and E
+    v_ind = np.unravel_index(col_index, v_shape)
+    e_ind = np.unravel_index(row_index, (nimgs, ny, nx))
+
+
+    # put information in correct space in Fourier space
+    v_ft = np.zeros(v_shape, dtype=complex)
+    num_pts_all = np.zeros(v_shape, dtype=int)
 
     for ii in range(nimgs):
         # check we don't have duplicate indices ... otherwise need to do something else ...
-        cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
-        if len(cind_unique_angle) != np.sum(to_use_ind[ii]):
-            # approach would be, get array mapping all elements to unique elements, using options for np.unique()
-            # and the cind's
-            # average these and keep track of number
-            # next, convert unique elements back to 3D indices and use the below code
-            raise NotImplementedError("reconstruction only implemented for one angle mapping")
+        # cind_unique_angle = np.unique(cind[ii][to_use_ind[ii]])
+        # if len(cind_unique_angle) != np.sum(to_use_ind[ii]):
+        #     # approach would be, get array mapping all elements to unique elements, using options for np.unique()
+        #     # and the cind's
+        #     # average these and keep track of number
+        #     # next, convert unique elements back to 3D indices and use the below code
+        #     raise NotImplementedError("reconstruction only implemented for one angle mapping")
 
-        # assuming at most one point for each ...
-        inds_angle = (zind[ii][to_use_ind[ii]], yind[ii][to_use_ind[ii]], xind[ii][to_use_ind[ii]])
+        this_angle = e_ind[0] == ii
+        vinds_angle = (v_ind[0][this_angle], v_ind[1][this_angle], v_ind[2][this_angle])
+        einds_angle = (e_ind[0][this_angle], e_ind[1][this_angle], e_ind[2][this_angle])
+        data_angle = data[this_angle]
 
+        # assuming at most one point for each ... otherwise haveproblems
         # since using DFT's instead of FT's have to adjust the normalization
         # FT ~ DFT * dr1 * ... * drn
-        v_ft[inds_angle] += f_unshift_ft[ii, to_use_ind[ii]] * (dxy * dxy) / (dx_v * dy_v * dz_v)
+        v_ft[vinds_angle] += efield_fts[einds_angle] / data_angle
 
-        # num_pts[ii][inds_angle] = 1
-        num_pts_all[inds_angle] += 1
-
+        num_pts_all[vinds_angle] += 1
 
     # average over angles/images
-    # num_pts_all = np.sum(num_pts, axis=0)
     no_data = num_pts_all == 0
     is_data = np.logical_not(no_data)
 
-    v_ft[is_data] = v_ft[is_data] / (num_pts_all[is_data] + reg)
+    v_ft[is_data] = v_ft[is_data] / (num_pts_all[is_data] + regularization)
     v_ft[no_data] = no_data_value
 
     return v_ft, drs
@@ -1512,7 +1464,7 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength, dxy, z_fov=10,
 def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True,
                         require_real_part_greater_bg=False, use_gpu=_cupy_available, print_info=False):
     """
-    Iterative apply constraints on the scattering potential and the index of refraction
+    Apply constraints on the scattering potential and the index of refraction using iterative projection
 
     constraint 1: scattering potential FT must match data at points where we information
     constraint 2: real(n) >= no and imag(n) >= 0
@@ -1753,9 +1705,16 @@ def fit_ref_frq(img_ft, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, f
 
 
 # plotting functions
-def plot_scattered_angle(img_efield_ft, img_efield_bg_ft, img_efield_scatt_ft,
-                         beam_frq, frq_ref, fmax_int, dxy,
-                         title="", figsize=(18, 10), gamma=0.1,
+def plot_scattered_angle(img_efield_ft,
+                         img_efield_bg_ft,
+                         img_efield_scatt_ft,
+                         beam_frq,
+                         frq_ref,
+                         fmax_int: float,
+                         dxy: float,
+                         title: str = "",
+                         figsize=(18, 10),
+                         gamma: float = 0.1,
                          **kwargs):
     """
     Plot diagnostic of ODT image and background image
@@ -2044,79 +2003,71 @@ def plot_odt_sampling(frqs, na_detect, na_excite, ni, wavelength, figsize=(30, 8
     return figh
 
 
-def plot_n3d(v_ft, no, wavelength, coords=None, title=""):
+def plot_n3d(n, no, coords=None, title=""):
     """
     Plot 3D index of refraction
     @param v_ft: 3D Fourier transform of scattering potential
     @param no: background index of refraction
-    @param wavelength:
     @param coords: (x, y, z)
     @return:
     """
 
-    nz_sp, ny_sp, nx_sp = v_ft.shape
+    nz_v, ny_v, nx_v = n.shape
 
+    # ####################
+    # real-space coordinates
+    # ####################
     if coords is None:
-        x_sp = np.arange(nx_sp) - nx_sp // 2
-        y_sp = np.arange(ny_sp) - ny_sp // 2
-        z_sp = np.arange(nz_sp) - nz_sp // 2
+        x_v = np.arange(nx_v) - nx_v // 2
+        y_v = np.arange(ny_v) - ny_v // 2
+        z_v = np.arange(nz_v) - nz_v // 2
     else:
-        x_sp, y_sp, z_sp = coords
+        x_v, y_v, z_v = coords
 
-    # work with coordinates
+    dxy_v = x_v[1] - x_v[0]
 
-    # nx_sp = len(x_sp)
-    # ny_sp = len(y_sp)
-    # nz_sp = len(z_sp)
-    dxy_sp = x_sp[1] - x_sp[0]
-    dz_sp = z_sp[1] - z_sp[0]
+    extent_v_xy = [x_v[0] - 0.5 * dxy_v, x_v[-1] + 0.5 * dxy_v,
+                   y_v[0] - 0.5 * dxy_v, y_v[-1] + 0.5 * dxy_v]
 
-    fx = fft.fftshift(fft.fftfreq(nx_sp, dxy_sp))
+    # ####################
+    # fourier-space coordinates
+    # ####################
+    fx = fft.fftshift(fft.fftfreq(nx_v, dxy_v))
     dfx_sp = fx[1] - fx[0]
-    fy = fft.fftshift(fft.fftfreq(ny_sp, dxy_sp))
+    fy = fft.fftshift(fft.fftfreq(ny_v, dxy_v))
     dfy_sp = fy[1] - fy[0]
 
-    extent_sp_xy = [x_sp[0] - 0.5 * dxy_sp, x_sp[-1] + 0.5 * dxy_sp, y_sp[0] - 0.5 * dxy_sp, y_sp[-1] + 0.5 * dxy_sp]
-    extent_sp_xz = [x_sp[0] - 0.5 * dxy_sp, x_sp[-1] + 0.5 * dxy_sp, z_sp[0] - 0.5 * dz_sp, z_sp[-1] + 0.5 * dz_sp]
-    extent_sp_yz = [y_sp[0] - 0.5 * dxy_sp, y_sp[-1] + 0.5 * dxy_sp, z_sp[0] - 0.5 * dz_sp, z_sp[-1] + 0.5 * dz_sp]
+    extent_fxy = [fx[0] - 0.5 * dfx_sp, fx[-1] + 0.5 * dfx_sp,
+                  fy[0] - 0.5 * dfy_sp, fy[-1] + 0.5 * dfy_sp]
 
+    # FT
+    n_ft = fft.fftshift(fft.fftn(fft.ifftshift(n)))
 
-    extent_fxy = [fx[0] - 0.5 * dfx_sp, fx[-1] + 0.5 * dfx_sp, fy[0] - 0.5 * dfy_sp, fy[-1] + 0.5 * dfy_sp]
-
-    # get need quantities
-    sp_ft_nonan = np.array(v_ft, copy=True)
-    sp_ft_nonan[np.isnan(sp_ft_nonan)] = 0
-    sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft_nonan)))
-
-    n_recon = get_n(sp, no, wavelength)
-    n_recon_ft = fft.fftshift(fft.fftn(fft.ifftshift(n_recon)))
-
-    vmax_real = 1.5 * np.percentile((np.real(n_recon) - no), 99.99)
-    if vmax_real <=0:
+    vmax_real = 1.5 * np.percentile((np.real(n) - no), 99.99)
+    if vmax_real <= 0:
         vmax_real = 1e-12
 
-    vmax_imag = 1.5 * np.percentile(np.imag(n_recon), 99.99)
+    vmax_imag = 1.5 * np.percentile(np.imag(n), 99.99)
     if vmax_imag <= 0:
         vmax_imag = 1e-12
 
-    vmax_n_ft = 1.5 * np.percentile(np.abs(n_recon_ft), 99.99)
+    vmax_n_ft = 1.5 * np.percentile(np.abs(n_ft), 99.99)
     if vmax_n_ft <= 0:
         vmax_n_ft = 1e-12
-
-    not_nan = np.logical_not(np.isnan(v_ft))
-    vmax_sp_ft = 1.5 * np.percentile(np.abs(v_ft[not_nan]), 99)
 
     # plots
     fmt_fn = lambda x: "%0.6f" % x
 
     figh = plt.figure(figsize=(16, 8))
-    figh.suptitle("Index of refraction, %s" % title)
-    grid = figh.add_gridspec(4, nz_sp + 1)
+    figh.suptitle(f"Index of refraction, {title:s}")
+    grid = figh.add_gridspec(4, nz_v + 1)
 
-    for ii in range(nz_sp):
+    for ii in range(nz_v):
         ax = figh.add_subplot(grid[0, ii])
-        ax.set_title("%0.1fum" % z_sp[ii])
-        im = ax.imshow(np.real(n_recon[ii]) - no, vmin=-vmax_real, vmax=vmax_real, cmap="RdBu", origin="lower", extent=extent_sp_xy)
+        ax.set_title("%0.1fum" % z_v[ii])
+        im = ax.imshow(np.real(n[ii]) - no,
+                       vmin=-vmax_real, vmax=vmax_real, cmap="RdBu",
+                       origin="lower", extent=extent_v_xy)
         im.format_cursor_data = fmt_fn
         ax.set_xticks([])
         ax.set_yticks([])
@@ -2125,7 +2076,9 @@ def plot_n3d(v_ft, no, wavelength, coords=None, title=""):
             ax.set_ylabel("real(n) - no")
 
         ax = figh.add_subplot(grid[1, ii])
-        im = ax.imshow(np.imag(n_recon[ii]), vmin=-vmax_imag, vmax=vmax_imag, cmap="RdBu", origin="lower", extent=extent_sp_xy)
+        im = ax.imshow(np.imag(n[ii]),
+                       vmin=-vmax_imag, vmax=vmax_imag, cmap="RdBu",
+                       origin="lower", extent=extent_v_xy)
         im.format_cursor_data = fmt_fn
         ax.set_xticks([])
         ax.set_yticks([])
@@ -2133,7 +2086,7 @@ def plot_n3d(v_ft, no, wavelength, coords=None, title=""):
             ax.set_ylabel("imag(n)")
 
         ax = figh.add_subplot(grid[2, ii])
-        im = ax.imshow(np.abs(n_recon_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_n_ft),
+        im = ax.imshow(np.abs(n_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_n_ft),
                        origin="lower", extent=extent_fxy)
         im.format_cursor_data = fmt_fn
         ax.set_xticks([])
@@ -2141,20 +2094,20 @@ def plot_n3d(v_ft, no, wavelength, coords=None, title=""):
         if ii == 0:
             ax.set_ylabel("|n(f)|")
 
-        ax = figh.add_subplot(grid[3, ii])
-        im = ax.imshow(np.abs(v_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft),
-                       origin="lower", extent=extent_fxy)
-        im.format_cursor_data = fmt_fn
-        if ii == 0:
-            ax.set_ylabel("|F(f)|")
-        ax.set_xticks([])
-        ax.set_yticks([])
+        # ax = figh.add_subplot(grid[3, ii])
+        # im = ax.imshow(np.abs(v_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft),
+        #                origin="lower", extent=extent_fxy)
+        # im.format_cursor_data = fmt_fn
+        # if ii == 0:
+        #     ax.set_ylabel("|F(f)|")
+        # ax.set_xticks([])
+        # ax.set_yticks([])
 
-    ax = figh.add_subplot(grid[0, nz_sp])
+    ax = figh.add_subplot(grid[0, nz_v])
     ax.axis("off")
     plt.colorbar(ScalarMappable(norm=Normalize(vmin=-vmax_real, vmax=vmax_real), cmap="RdBu"), ax=ax)
 
-    ax = figh.add_subplot(grid[1, nz_sp])
+    ax = figh.add_subplot(grid[1, nz_v])
     ax.axis("off")
     plt.colorbar(ScalarMappable(norm=Normalize(vmin=-vmax_imag, vmax=vmax_imag), cmap="RdBu"), ax=ax)
 
