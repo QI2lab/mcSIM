@@ -317,6 +317,9 @@ class tomography:
         @return:
         """
 
+        # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
+        # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
+
         # compute scattered field in real-space
         holograms_bg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft_bg, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
         holograms = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
@@ -342,27 +345,27 @@ class tomography:
         else:
             self.efield_scattered_ft = efield_scattered_ft_raw
 
-    def reconstruct_born(self, mode="naive", **kwargs):
+    def reconstruct_born(self,
+                         mode="naive",
+                         scattered_field_regularization=50,
+                         niters=100,
+                         reconstruction_regularizer=0.1,
+                         dxy_sampling_factor=1.,
+                         dz_sampling_factor=1.,
+                         z_fov=20,
+                         mask=None,
+                         use_tv=True,
+                         tau=0.02,
+                         use_imgainary_constraint=True,
+                         use_real_constraint=False,
+                         interpolate_model=True
+                         ):
         """
 
         @param mode: 'naive' or 'fista'
-        @param kwargs:
         @return:
         """
 
-        scattered_field_regularization = kwargs["scattered_field_regularization"]
-        niters = kwargs["niters"]
-        reconstruction_regularizer = kwargs["reconstruction_regularizer"]
-        dxy_sampling_factor = kwargs["dxy_sampling_factor"]
-        dz_sampling_factor = kwargs["dz_sampling_factor"]
-        z_fov = kwargs["z_fov"]
-        mask = kwargs["mask"]
-
-        imaginary_constraint = True
-        real_constraint = False
-        # only for FISTA approach
-        tv = True
-        tau = 0.02
 
         # ############################
         # compute scattered field
@@ -398,23 +401,28 @@ class tomography:
                     f"erecon_ft was wrong shape. Must have any number of leading singleton dimensions and then be"
                     f"npatterns x ny x nx shape = {erecon_ft.shape}")
 
-            v_ft, drs = reconstruction(da.squeeze(erecon_ft), self.get_beam_frqs(), self.no,
-                                       self.na_detection, self.wavelength, self.dxy, z_fov=z_fov,
+            v_ft, drs = reconstruction(da.squeeze(erecon_ft),
+                                       self.get_beam_frqs(),
+                                       self.no,
+                                       self.na_detection,
+                                       self.wavelength,
+                                       self.dxy,
+                                       z_fov=z_fov,
                                        regularization=reconstruction_regularizer,
                                        dz_sampling_factor=dz_sampling_factor,
-                                       dxy_sampling_factor=dxy_sampling_factor, mode="born",
+                                       dxy_sampling_factor=dxy_sampling_factor,
+                                       mode="born",
                                        no_data_value=no_data_value)
 
             return np.expand_dims(v_ft, axis=list(range(len(dsizes))))
 
 
         if mode == "fista":
-            v_fts = da.map_blocks(recon, da.rechunk(self.efield_scattered_ft, chunks=new_chunks), 0, dtype=complex,
+            v_fts = da.map_blocks(recon,
+                                  da.rechunk(self.efield_scattered_ft, chunks=new_chunks),
+                                  0,
+                                  dtype=complex,
                                   chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
-
-            # settings
-            fista = True
-            steps_per_tv = 1
 
             # define forward model
             model, _ = fwd_model_linear(self.get_beam_frqs(),
@@ -426,152 +434,48 @@ class tomography:
                                                 (nz_sp, ny_sp, nx_sp),
                                                 (dz_sp, dxy_sp, dxy_sp),
                                                 mode="born",
-                                                interpolate=True)
-
-            model_csc = model.tocsc(copy=True)
+                                                interpolate=interpolate_model)
 
             # set step size
             u, s, vh = sp.linalg.svds(model, k=1, which='LM')
             # since lipschitz constant of model which is multiplied by...
             step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
 
-            def fista_recon(v_ft_start, e_measured_ft):
+            def fista_recon(v_fts, efield_scattered_ft):
+                results = grad_descent(v_fts,
+                                       efield_scattered_ft,
+                                       model,
+                                       step,
+                                       niters=niters,
+                                       use_fista=True,
+                                       use_gpu=self.use_gpu,
+                                       use_tv=use_tv,
+                                       tau=tau,
+                                       use_imaginary_constraint=use_imgainary_constraint,
+                                       use_real_constraint=use_real_constraint,
+                                       debug=False
+                                       )
 
-
-                v_ft_start = np.squeeze(v_ft_start)
-                # v_ft_start = fft.fftshift(fft.fftn(fft.ifftshift(np.zeros(v_ft_start.shape, dtype=complex))))
-                e_measured_ft = np.squeeze(e_measured_ft)
-                def cost(v_ft):
-                    # mean cost per (real-space) pixel
-                    # divide by nxy**2 again because using FT's and want mean cost in real space
-                    # recall that \sum_r |f(r)|^2 = 1/N \sum_k |f(k)|^2
-                    # NOTE: to get total cost, must take mean over patterns
-                    costs = np.mean(np.reshape(np.abs(model.dot(v_ft.ravel()) - e_measured_ft.ravel()) ** 2,
-                                               [self.npatterns, self.ny, self.nx]),
-                                    axis=(-1, -2)) / 2 / self.ny / self.ny
-                    return costs
-
-                def grad(v_ft):
-                    # first division is average
-                    # second division converts Fourier space to real-space sum
-                    dc_dm = (model.dot(v_ft.ravel()) - e_measured_ft.ravel()) / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
-                    dc_dv = (dc_dm[np.newaxis, :].conj() * model_csc)[0].conj()
-                    return dc_dv
-
-                # initialize
-                tstart = time.perf_counter()
-                costs = np.zeros((niters + 1, self.npatterns))
-                v_ft = v_ft_start.ravel()
-                q_last = 1
-                costs[0] = cost(v_ft)
-
-                for ii in range(niters):
-                    # gradient descent
-                    tstart_grad = time.perf_counter()
-                    dc_dv = grad(v_ft)
-
-                    v_ft -= step * dc_dv
-
-                    tend_grad = time.perf_counter()
-
-                    # FT so can apply TV
-                    tstart_fft = time.perf_counter()
-
-                    if self.use_gpu:
-                        v = cp.asnumpy(
-                            cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(cp.asarray(v_ft.reshape(v_ft.shape))))))
-                    else:
-                        v = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft.reshape(v_ft.shape))))
-
-                    tend_fft = time.perf_counter()
-
-                    # apply TV proximity operators
-                    tstart_tv = time.perf_counter()
-                    if tv and ii % steps_per_tv == 0:
-                        v_real = denoise_tv_chambolle(v.real, tau)
-                        v_imag = denoise_tv_chambolle(v.imag, tau)
-                    else:
-                        v_real = v.real
-                        v_imag = v.imag
-
-                    tend_tv = time.perf_counter()
-
-                    # apply projection onto constraints
-                    tstart_constraints = time.perf_counter()
-
-                    if imaginary_constraint:
-                        v_imag[v_imag > 0] = 0
-
-                    if real_constraint:
-                        # actually ... this is no longer right if there is any imaginary part
-                        v_real[v_real > 0] = 0
-
-                    tend_constraints = time.perf_counter()
-
-                    # ft back
-                    tstart_fft_back = time.perf_counter()
-
-                    if self.use_gpu:
-                        v_ft_prox = cp.asnumpy(
-                            cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(cp.asarray(v_real + 1j * v_imag)))).ravel())
-                    else:
-                        v_ft_prox = fft.fftshift(fft.fftn(fft.ifftshift(v_real + 1j * v_imag))).ravel()
-
-                    tend_fft_back = time.perf_counter()
-
-                    # update step
-                    tstart_update = time.perf_counter()
-
-                    q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
-
-                    if ii == 0 or ii == (niters - 1) or not fista:
-                        v_ft = v_ft_prox
-                    else:
-                        v_ft = v_ft_prox + (q_last - 1) / q_now * (v_ft_prox - v_ft_prox_last)
-
-                    tend_update = time.perf_counter()
-
-                    # compute errors
-                    tstart_err = time.perf_counter()
-
-                    costs[ii + 1] = cost(v_ft)
-
-                    tend_err = time.perf_counter()
-
-                    # update for next step
-                    q_last = q_now
-                    v_ft_prox_last = v_ft_prox
-
-                    # print information
-                    tend_iter = time.perf_counter()
-
-                    # debug
-                    # print(
-                    #     f"iteration {ii + 1:d}/{niters:d}, cost={np.mean(costs[ii + 1]):.3g},"
-                    #     f" grad={tend_grad - tstart_grad:.2f}s, fft={tend_fft - tstart_fft:.2f}s,"
-                    #     f" TV={tend_tv - tstart_tv:.2f}s, projection={tend_constraints - tstart_constraints:.2f}s,"
-                    #     f" fft={tend_fft_back - tstart_fft_back:.2f}s, update={tend_update - tstart_update:.2f}s,"
-                    #     f" err={tend_err - tstart_err:.2f}s, iter={tend_iter - tstart_grad:.2f}s,"
-                    #     f" total={time.perf_counter() - tstart:.2f}s", end="\r")
-
+                v_ft = results["x"]
                 v_out_ft = v_ft.reshape((1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
 
-                # debugging
-                # v_out = fft.fftshift(fft.ifftn(fft.ifftshift(v_out_ft)))
-                # n_out = get_n(v_out, self.no, self.wavelength)
-                #
-                # plot_n3d(np.squeeze(v_out_ft), self.no, self.wavelength, title="n out")
-                #
-                # e_out_ft = model.dot(v_out_ft.ravel()).reshape((self.npatterns, self.ny, self.nx))
-                # e_out_ft[:, np.logical_not(self.pupil_mask)] = 0
-                # e_out = fft.fftshift(fft.ifft2(fft.ifftshift(e_out_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-                #
-                # etest = fft.fftshift(fft.ifft2(fft.ifftshift(np.squeeze(self.efield_scattered_ft[0].compute()), axes=(-1, -2)),
-                #               axes=(-1, -2)), axes=(-1, -2))
-                # figh1, figh2 = compare_escatt(e_out, etest, self.get_beam_frqs(), self.dxy, ttl="E output",
-                #                               figsize=(20, 10))
-
                 return v_out_ft
+
+
+            # debugging
+            # v_out = fft.fftshift(fft.ifftn(fft.ifftshift(v_out_ft)))
+            # n_out = get_n(v_out, self.no, self.wavelength)
+            #
+            # plot_n3d(np.squeeze(v_out_ft), self.no, self.wavelength, title="n out")
+            #
+            # e_out_ft = model.dot(v_out_ft.ravel()).reshape((self.npatterns, self.ny, self.nx))
+            # e_out_ft[:, np.logical_not(self.pupil_mask)] = 0
+            # e_out = fft.fftshift(fft.ifft2(fft.ifftshift(e_out_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+            #
+            # etest = fft.fftshift(fft.ifft2(fft.ifftshift(np.squeeze(self.efield_scattered_ft[0].compute()), axes=(-1, -2)),
+            #               axes=(-1, -2)), axes=(-1, -2))
+            # figh1, figh2 = compare_escatt(e_out, etest, self.get_beam_frqs(), self.dxy, ttl="E output",
+            #                               figsize=(20, 10))
 
 
 
@@ -602,8 +506,12 @@ class tomography:
                                      beta=0.5,
                                      use_raar=False,
                                      use_gpu=False,
+                                     require_real_part_greater_bg=use_real_constraint,
                                      dtype=complex)
 
+        # ############################
+        # convert results to index of refraction
+        # ############################
         v_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_out, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
 
         n = da.map_blocks(get_n,
@@ -614,13 +522,21 @@ class tomography:
 
         return n, (dz_sp, dxy_sp, dxy_sp)
 
-    def reconstruct_rytov(self, mode="naive", **kwargs):
-        rytov_regul = kwargs["rytov_regularizer"]
-        niters = kwargs["niters"]
-        reconstruction_regularizer = kwargs["reconstruction_regularizer"]
-        dxy_sampling_factor = kwargs["dxy_sampling_factor"]
-        dz_sampling_factor = kwargs["dz_sampling_factor"]
-        z_fov = kwargs["z_fov"]
+    def reconstruct_rytov(self,
+                          mode="naive",
+                          scattered_field_regularization=50,
+                          niters=100,
+                          reconstruction_regularizer=0.1,
+                          dxy_sampling_factor=1.,
+                          dz_sampling_factor=1.,
+                          z_fov=20,
+                          mask=None,
+                          use_tv=True,
+                          tau=0.02,
+                          use_imgainary_constraint=True,
+                          use_real_constraint=False,
+                          interpolate_model=True
+                          ):
 
         # ############################
         # compute rytov phase
@@ -628,13 +544,13 @@ class tomography:
         holograms_bg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft_bg, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
         holograms = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-        phi_rytov = da.map_blocks(get_rytov_phase, holograms, holograms_bg, rytov_regul, dtype=complex)
+        phi_rytov = da.map_blocks(get_rytov_phase, holograms, holograms_bg, scattered_field_regularization, dtype=complex)
         phi_rytov_ft = da.fft.fftshift(da.fft.fftn(da.fft.ifftshift(phi_rytov, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
         # ############################
-        # do reconstruction
+        # scattering potential from measured data
         # ############################
-        def recon(erecon_ft):
+        def recon(erecon_ft, no_data_value):
             # only works on arrays with arbitrariy number of singleton dimensions and then npattern x ny x nx
             dsizes = erecon_ft.shape[:-3]
             if np.prod(dsizes) != 1:
@@ -642,17 +558,24 @@ class tomography:
                     f"erecon_ft was wrong shape. Must have any number of leading singleton dimensions and then be"
                     f"npatterns x ny x nx shape = {erecon_ft.shape}")
 
-            v_ft, drs = reconstruction(da.squeeze(erecon_ft), self.get_beam_frqs(), self.no,
-                                       self.na_detection, self.wavelength, self.dxy, z_fov=z_fov,
+            v_ft, drs = reconstruction(da.squeeze(erecon_ft),
+                                       self.get_beam_frqs(),
+                                       self.no,
+                                       self.na_detection,
+                                       self.wavelength,
+                                       self.dxy,
+                                       z_fov=z_fov,
                                        regularization=reconstruction_regularizer,
                                        dz_sampling_factor=dz_sampling_factor,
-                                       dxy_sampling_factor=dxy_sampling_factor, mode="rytov")
+                                       dxy_sampling_factor=dxy_sampling_factor,
+                                       mode="rytov",
+                                       no_data_value=no_data_value)
 
             return np.expand_dims(v_ft, axis=list(range(len(dsizes))))
 
         # rechunk erecon_ft since must operate on all patterns at once
         # get sampling so can determine new chunk sizes
-        (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp) = \
+        drs_v, v_size = \
             get_reconstruction_sampling(self.no,
                                         self.na_detection,
                                         self.get_beam_frqs(),
@@ -665,33 +588,92 @@ class tomography:
 
         new_chunks = list(phi_rytov_ft.chunksize)
         new_chunks[-3] = self.npatterns
-        v_fts = da.map_blocks(recon, da.rechunk(phi_rytov_ft, chunks=new_chunks), dtype=complex,
-                              chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+
+        if mode == "fista":
+            v_fts = da.map_blocks(recon,
+                                  da.rechunk(phi_rytov_ft, chunks=new_chunks),
+                                  0,
+                                  dtype=complex,
+                                  chunks=(1,) * self.nextra_dims + v_size)
+
+            # define forward model
+            model, _ = fwd_model_linear(self.get_beam_frqs(),
+                                        self.no,
+                                        self.na_detection,
+                                        self.wavelength,
+                                        (self.ny, self.nx),
+                                        (self.dxy, self.dxy),
+                                        v_size,
+                                        drs_v,
+                                        mode="rytov",
+                                        interpolate=interpolate_model)
+
+            # set step size
+            u, s, vh = sp.linalg.svds(model, k=1, which='LM')
+            # since lipschitz constant of model which is multiplied by...
+            step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
+
+            def fista_recon(v_fts, efield_scattered_ft):
+                results = grad_descent(v_fts,
+                                       efield_scattered_ft,
+                                       model,
+                                       step,
+                                       niters=niters,
+                                       use_fista=True,
+                                       use_gpu=self.use_gpu,
+                                       use_tv=use_tv,
+                                       tau=tau,
+                                       use_imaginary_constraint=use_imgainary_constraint,
+                                       use_real_constraint=use_real_constraint,
+                                       debug=False
+                                       )
+
+                v_ft = results["x"]
+                v_out_ft = v_ft.reshape((1,) * self.nextra_dims + v_size)
+
+                return v_out_ft
+
+
+            v_ft_out = da.map_blocks(fista_recon,
+                                     v_fts,
+                                     da.rechunk(phi_rytov_ft, chunks=new_chunks),
+                                     dtype=complex,
+                                     chunks=(1,) * self.nextra_dims + v_size)
+
+        else:
+            v_fts = da.map_blocks(recon,
+                                  da.rechunk(phi_rytov_ft, chunks=new_chunks),
+                                  np.nan,
+                                  dtype=complex,
+                                  chunks=(1,) * self.nextra_dims + v_size)
+
+            # ############################
+            # fill in fourier space with constraint algorithm
+            # ############################
+            v_ft_out = da.map_blocks(apply_n_constraints,
+                                     v_fts,
+                                     self.no,
+                                     self.wavelength,
+                                     n_iterations=niters,
+                                     beta=0.5,
+                                     use_raar=False,
+                                     use_gpu=False,
+                                     require_real_part_greater_bg=use_real_constraint,
+                                     dtype=complex)
 
         # ############################
-        # fill in fourier space with constraint algorithm
+        # convert results to index of refraction
         # ############################
-        v_ft_infer = da.map_blocks(apply_n_constraints,
-                                   v_fts,
-                                   self.no,
-                                   self.wavelength,
-                                   n_iterations=niters,
-                                   beta=0.5,
-                                   use_raar=False,
-                                   use_gpu=False,
-                                   require_real_part_greater_bg=False,
-                                   dtype=complex)
+        v_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_out, axes=(-3, -2, -1)), axes=(-3, -2, -1)),
+                                axes=(-3, -2, -1))
 
-        v_ft_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_infer, axes=(-3, -2, -1)), axes=(-3, -2, -1)),
-                                   axes=(-3, -2, -1))
+        n = da.map_blocks(get_n,
+                          v_out,
+                          self.no,
+                          self.wavelength,
+                          dtype=complex)
 
-        n_infer_out = da.map_blocks(get_n,
-                                    v_ft_out,
-                                    self.no,
-                                    self.wavelength,
-                                    dtype=complex)
-
-        return n_infer_out, (dz_sp, dxy_sp, dxy_sp)
+        return n, drs_v
 
     def get_powers(self):
         # compute powers
@@ -732,9 +714,7 @@ class tomography:
         def plot_interferograms(index, save_dir):
             unraveled_inds = np.unravel_index(index, self.holograms_ft.shape[:-2])
 
-            desc = ""
-            for ii in range(len(unraveled_inds)):
-                desc += f"_{self.axes_names[ii]:s}={unraveled_inds[ii]:d}"
+            desc = "_".join([f"{self.axes_names[ii]:s}={unraveled_inds[ii]:d}" for ii in range(len(unraveled_inds))])
 
             # with ProgressBar():
             efields_ft_temp, efields_scattered_ft_temp, efields_bg_ft_temp = \
@@ -771,6 +751,182 @@ class tomography:
         with ProgressBar():
             dask.compute(*results_interferograms)
 
+
+def grad_descent(v_ft_start,
+                 e_measured_ft,
+                 model,
+                 step,
+                 niters=100,
+                 use_fista=True,
+                 use_gpu=True,
+                 use_tv=True,
+                 tau=1,
+                 use_imaginary_constraint=True,
+                 use_real_constraint=False,
+                 debug=False):
+    """
+
+    @param v_ft_start:
+    @param e_measured_ft:
+    @param model:
+    @param step:
+    @param niters:
+    @param use_fista:
+    @param use_gpu:
+    @param use_tv:
+    @param tau:
+    @param use_imaginary_constraint:
+    @param use_real_constraint:
+    @param debug:
+    @return results: dict
+    """
+
+    v_ft_start = np.squeeze(v_ft_start)
+    e_measured_ft = np.squeeze(e_measured_ft)
+
+    # prepare arguments
+    npatterns, ny, nx = e_measured_ft.shape
+
+    # model information
+    model_csc = model.tocsc(copy=True)
+
+
+    # cost functions and etc
+    def cost(v_ft):
+        # mean cost per (real-space) pixel
+        # divide by nxy**2 again because using FT's and want mean cost in real space
+        # recall that \sum_r |f(r)|^2 = 1/N \sum_k |f(k)|^2
+        # NOTE: to get total cost, must take mean over patterns
+        costs = np.mean(np.reshape(np.abs(model.dot(v_ft.ravel()) - e_measured_ft.ravel()) ** 2,
+                                   [npatterns, ny, nx]),
+                        axis=(-1, -2)) / 2 / ny / ny
+        return costs
+
+    def grad(v_ft):
+        # first division is average
+        # second division converts Fourier space to real-space sum
+        dc_dm = (model.dot(v_ft.ravel()) - e_measured_ft.ravel()) / (npatterns * ny * nx) / (
+                    ny * nx)
+        dc_dv = (dc_dm[np.newaxis, :].conj() * model_csc)[0].conj()
+        return dc_dv
+
+    # initialize
+    steps_per_tv = 1
+
+    tstart = time.perf_counter()
+    costs = np.zeros((niters + 1, npatterns))
+    v_ft = v_ft_start.ravel()
+    q_last = 1
+    costs[0] = cost(v_ft)
+
+    timing = np.zeros((niters, 1))
+    timing_names = ["iteration"]
+
+    for ii in range(niters):
+        # gradient descent
+        tstart_grad = time.perf_counter()
+        dc_dv = grad(v_ft)
+
+        v_ft -= step * dc_dv
+
+        tend_grad = time.perf_counter()
+
+        # FT so can apply TV
+        tstart_fft = time.perf_counter()
+
+        if use_gpu:
+            v = cp.asnumpy(
+                cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(cp.asarray(v_ft.reshape(v_ft.shape))))))
+        else:
+            v = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft.reshape(v_ft.shape))))
+
+        tend_fft = time.perf_counter()
+
+        # apply TV proximity operators
+        tstart_tv = time.perf_counter()
+        if use_tv and ii % steps_per_tv == 0:
+            v_real = denoise_tv_chambolle(v.real, tau)
+            v_imag = denoise_tv_chambolle(v.imag, tau)
+        else:
+            v_real = v.real
+            v_imag = v.imag
+
+        tend_tv = time.perf_counter()
+
+        # apply projection onto constraints
+        tstart_constraints = time.perf_counter()
+
+        if use_imaginary_constraint:
+            v_imag[v_imag > 0] = 0
+
+        if use_real_constraint:
+            # actually ... this is no longer right if there is any imaginary part
+            v_real[v_real > 0] = 0
+
+        tend_constraints = time.perf_counter()
+
+        # ft back
+        tstart_fft_back = time.perf_counter()
+
+        if use_gpu:
+            v_ft_prox = cp.asnumpy(
+                cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(cp.asarray(v_real + 1j * v_imag)))).ravel())
+        else:
+            v_ft_prox = fft.fftshift(fft.fftn(fft.ifftshift(v_real + 1j * v_imag))).ravel()
+
+        tend_fft_back = time.perf_counter()
+
+        # update step
+        tstart_update = time.perf_counter()
+
+        q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
+
+        if ii == 0 or ii == (niters - 1) or not use_fista:
+            v_ft = v_ft_prox
+        else:
+            v_ft = v_ft_prox + (q_last - 1) / q_now * (v_ft_prox - v_ft_prox_last)
+
+        tend_update = time.perf_counter()
+
+        # compute errors
+        tstart_err = time.perf_counter()
+
+        costs[ii + 1] = cost(v_ft)
+
+        tend_err = time.perf_counter()
+
+        # update for next step
+        q_last = q_now
+        v_ft_prox_last = v_ft_prox
+
+        # print information
+        tend_iter = time.perf_counter()
+        timing[ii] = tend_iter
+
+        if debug:
+            print(
+                f"iteration {ii + 1:d}/{niters:d}, cost={np.mean(costs[ii + 1]):.3g},"
+                f" grad={tend_grad - tstart_grad:.2f}s, fft={tend_fft - tstart_fft:.2f}s,"
+                f" TV={tend_tv - tstart_tv:.2f}s, projection={tend_constraints - tstart_constraints:.2f}s,"
+                f" fft={tend_fft_back - tstart_fft_back:.2f}s, update={tend_update - tstart_update:.2f}s,"
+                f" err={tend_err - tstart_err:.2f}s, iter={tend_iter - tstart_grad:.2f}s,"
+                f" total={time.perf_counter() - tstart:.2f}s", end="\r")
+
+    # dictionary to store summary results
+    results = {"step_size": step,
+               "niterations": niters,
+               "fista": use_fista,
+               "tv": use_tv,
+               "tau": tau,
+               "use_imaginary_constraint": use_imaginary_constraint,
+               "use_real_constraint": use_real_constraint,
+               "timing": timing,
+               "timing_column_names": timing_names,
+               "costs": costs,
+               "x": v_ft
+               }
+
+    return results
 
 def cut_mask(img, mask, mask_val=0):
     mask = np.expand_dims(mask, axis=list(range(img.ndim - 2)))
