@@ -1441,10 +1441,7 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
         yind = Fy / dfy_v + ny_v // 2
         xind = Fx / dfx_v + nx_v // 2
 
-        zind, yind, xind = np.broadcast_arrays(zind, yind, xind)
-        zind = np.array(zind, copy=True)
-        yind = np.array(yind, copy=True)
-        xind = np.array(xind, copy=True)
+        zind, yind, xind = [np.array(a, copy=True) for a in np.broadcast_arrays(zind, yind, xind)]
     else:
         raise ValueError(f"'mode' must be 'born' or 'rytov' but was '{mode:s}'")
 
@@ -1456,38 +1453,41 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
     # use csr for fast right mult L.dot(v)
     # use csc for fast left mult w.dot(L)
     if interpolate:
-        # trilinear interpolation scheme ... needs points before and after
-        z1 = np.floor(zind).astype(int)
-        z2 = np.ceil(zind).astype(int)
-        y1 = np.floor(yind).astype(int)
-        y2 = np.ceil(yind).astype(int)
-        x1 = np.floor(xind).astype(int)
-        x2 = np.ceil(xind).astype(int)
+        # trilinear interpolation scheme ... needs 8 points in cube around point of interest
+        z0 = np.floor(zind).astype(int)
+        z1 = z0 + 1
+        y0 = np.floor(yind).astype(int)
+        y1 = y0 + 1
+        x0 = np.floor(xind).astype(int)
+        x1 = x0 + 1
 
         # find indices in bounds
-        to_use = np.logical_and.reduce((z1 >= 0, z2 < nz_v,
-                                        y1 >= 0, y2 < ny_v,
-                                        x1 >= 0, x2 < nx_v,
+        to_use = np.logical_and.reduce((z0 >= 0, z1 < nz_v,
+                                        y0 >= 0, y1 < ny_v,
+                                        x0 >= 0, x1 < nx_v,
                                         detectable))
         # todo: add in the points this misses where only option is to round
-
-        inds = [(z1, y1, x1),
-                (z2, y1, x1),
-                (z1, y2, x1),
-                (z2, y2, x1),
-                (z1, y1, x2),
-                (z2, y1, x2),
-                (z1, y2, x2),
-                (z2, y2, x2)
+        # todo: could do this by adding to_use per coordinate ... and then normalizing the rows of the matrix
+        # indices into V for each coordinate
+        inds = [(z0, y0, x0),
+                (z1, y0, x0),
+                (z0, y1, x0),
+                (z1, y1, x0),
+                (z0, y0, x1),
+                (z1, y0, x1),
+                (z0, y1, x1),
+                (z1, y1, x1)
                 ]
-        interp_weights = [(zind - z1) * (yind - y1) * (xind - x1),
-                          (z2 - zind) * (yind - y1) * (xind - x1),
-                          (zind - z1) * (y2 - yind) * (xind - x1),
-                          (z2 - zind) * (y2 - yind) * (xind - x1),
-                          (zind - z1) * (yind - y1) * (x2 - xind),
-                          (z2 - zind) * (yind - y1) * (x2 - xind),
-                          (zind - z1) * (y2 - yind) * (x2 - xind),
-                          (z2 - zind) * (y2 - yind) * (x2 - xind)]
+
+        # no denominators since using units where coordinate step is 1
+        interp_weights = [(z1 - zind) * (y1 - yind) * (x1 - xind),
+                          (zind - z0) * (y1 - yind) * (x1 - xind),
+                          (z1 - zind) * (yind - y0) * (x1 - xind),
+                          (zind - z0) * (yind - y0) * (x1 - xind),
+                          (z1 - zind) * (y1 - yind) * (xind - x0),
+                          (zind - z0) * (y1 - yind) * (xind - x0),
+                          (z1 - zind) * (yind - y0) * (xind - x0),
+                          (zind - z0) * (yind - y0) * (xind - x0)]
 
         # row_index -> indices into E vector
         row_index = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
@@ -1495,19 +1495,14 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
 
         # column_index -> indices into V vector
         inds_to_use = [[i[to_use] for i in inow] for inow in inds]
-        zinds_to_use, yinds_to_use, xinds_to_use = list(zip(*inds_to_use))
-        zinds_to_use = np.concatenate(zinds_to_use)
-        yinds_to_use = np.concatenate(yinds_to_use)
-        xinds_to_use = np.concatenate(xinds_to_use)
+        zinds_to_use, yinds_to_use, xinds_to_use = [np.concatenate(i) for i in list(zip(*inds_to_use))]
 
         column_index = np.ravel_multi_index(tuple((zinds_to_use, yinds_to_use, xinds_to_use)), v_shape)
 
         # construct sparse matrix values
         interp_weights_to_use = np.concatenate([w[to_use] for w in interp_weights])
 
-        fz_stack = np.tile(fz[to_use], 8)
-
-        data = interp_weights_to_use / (2 * 1j * (2 * np.pi * fz_stack)) * dx_v * dy_v * dz_v / (dx * dy)
+        data = interp_weights_to_use / (2 * 1j * (2 * np.pi * np.tile(fz[to_use], 8))) * dx_v * dy_v * dz_v / (dx * dy)
 
     else:
         # find indices in bounds
@@ -1516,18 +1511,15 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
                                         xind >= 0, xind < nx_v,
                                         detectable))
 
-        # round coordinates to nearest values
-        zind_round = np.round(zind).astype(int)
-        yind_round = np.round(yind).astype(int)
-        xind_round = np.round(xind).astype(int)
-        inds_round = (zind_round, yind_round, xind_round)
+        # round coordinates to nearest integers
+        inds_round = (np.round(zind).astype(int),
+                      np.round(yind).astype(int),
+                      np.round(xind).astype(int))
 
-        # construct sparse matrix non-zero coords
-
-        # row_index = position in E
+        # row index = position in E
         row_index = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
 
-        # columns = position in V
+        # column index = position in V
         inds_to_use = tuple([i[to_use] for i in inds_round])
         column_index = np.ravel_multi_index(inds_to_use, v_shape)
 
@@ -1536,6 +1528,8 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
 
     # construct sparse matrix
     # E(k) = model * V(k)
+    # column index = position in V
+    # row index = position in E
     model = sp.csr_matrix((data, (row_index, column_index)), shape=(nimgs * ny * nx, v_size))
 
     return model, (data, row_index, column_index)
