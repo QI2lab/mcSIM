@@ -356,6 +356,8 @@ class tomography:
                          mask=None,
                          use_tv=True,
                          tau=0.02,
+                         use_lasso=False,
+                         tau_lasso=0.1,
                          use_imgainary_constraint=True,
                          use_real_constraint=False,
                          interpolate_model=True
@@ -451,6 +453,8 @@ class tomography:
                                        use_gpu=self.use_gpu,
                                        use_tv=use_tv,
                                        tau=tau,
+                                       use_lasso=use_lasso,
+                                       tau_lasso=tau_lasso,
                                        use_imaginary_constraint=use_imgainary_constraint,
                                        use_real_constraint=use_real_constraint,
                                        debug=False
@@ -460,23 +464,6 @@ class tomography:
                 v_out_ft = v_ft.reshape((1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
 
                 return v_out_ft
-
-
-            # debugging
-            # v_out = fft.fftshift(fft.ifftn(fft.ifftshift(v_out_ft)))
-            # n_out = get_n(v_out, self.no, self.wavelength)
-            #
-            # plot_n3d(np.squeeze(v_out_ft), self.no, self.wavelength, title="n out")
-            #
-            # e_out_ft = model.dot(v_out_ft.ravel()).reshape((self.npatterns, self.ny, self.nx))
-            # e_out_ft[:, np.logical_not(self.pupil_mask)] = 0
-            # e_out = fft.fftshift(fft.ifft2(fft.ifftshift(e_out_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-            #
-            # etest = fft.fftshift(fft.ifft2(fft.ifftshift(np.squeeze(self.efield_scattered_ft[0].compute()), axes=(-1, -2)),
-            #               axes=(-1, -2)), axes=(-1, -2))
-            # figh1, figh2 = compare_escatt(e_out, etest, self.get_beam_frqs(), self.dxy, ttl="E output",
-            #                               figsize=(20, 10))
-
 
 
             efield_scat_rechunk = self.efield_scattered_ft.rechunk((1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
@@ -533,6 +520,8 @@ class tomography:
                           mask=None,
                           use_tv=True,
                           tau=0.02,
+                          use_lasso=False,
+                          tau_lasso=0.1,
                           use_imgainary_constraint=True,
                           use_real_constraint=False,
                           interpolate_model=True
@@ -623,6 +612,8 @@ class tomography:
                                        use_gpu=self.use_gpu,
                                        use_tv=use_tv,
                                        tau=tau,
+                                       use_lasso=use_lasso,
+                                       tau_lasso=tau_lasso,
                                        use_imaginary_constraint=use_imgainary_constraint,
                                        use_real_constraint=use_real_constraint,
                                        debug=False
@@ -752,6 +743,21 @@ class tomography:
             dask.compute(*results_interferograms)
 
 
+def soft_threshold(t, x):
+    """
+    Softmax function, which is the proximal operator for the LASSO (L1 regularization) problem
+
+    @param t: softmax parameter
+    @param x: array to take softmax of
+    @return x_out:
+    """
+    x_out = np.array(x, copy=True)
+    x_out[x > t] -= t
+    x_out[x < -t] += t
+    x_out[np.abs(x) <= t] = 0
+
+    return x_out
+
 def grad_descent(v_ft_start,
                  e_measured_ft,
                  model,
@@ -761,6 +767,8 @@ def grad_descent(v_ft_start,
                  use_gpu=True,
                  use_tv=True,
                  tau=1,
+                 use_lasso=False,
+                 tau_lasso=1,
                  use_imaginary_constraint=True,
                  use_real_constraint=False,
                  debug=False):
@@ -852,6 +860,10 @@ def grad_descent(v_ft_start,
             v_imag = v.imag
 
         tend_tv = time.perf_counter()
+
+        if use_lasso:
+            v_real = soft_threshold(tau_lasso, v_real)
+            v_imag = soft_threshold(tau_lasso, v_imag)
 
         # apply projection onto constraints
         tstart_constraints = time.perf_counter()
@@ -1173,8 +1185,12 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
 
 
 # holograms
-def unmix_hologram(img: np.ndarray, dxy: float, fmax_int: float, frq_ref: np.ndarray,
-                   use_gpu: bool=_cupy_available, apodization=1) -> np.ndarray:
+def unmix_hologram(img: np.ndarray,
+                   dxy: float,
+                   fmax_int: float,
+                   frq_ref: np.ndarray,
+                   use_gpu: bool=_cupy_available,
+                   apodization: np.ndarray = 1) -> np.ndarray:
     """
     Given an off-axis hologram image, determine the electric field represented
 
@@ -1226,8 +1242,15 @@ def get_fmax(no, na_detection, na_excitation, wavelength):
     return fmax
 
 
-def get_reconstruction_sampling(no, na_det, beam_frqs, wavelength, dxy, img_size, z_fov,
-                                dz_sampling_factor=1., dxy_sampling_factor=1.):
+def get_reconstruction_sampling(no: float,
+                                na_det: float,
+                                beam_frqs: np.ndarray,
+                                wavelength: float,
+                                dxy: float,
+                                img_size: tuple[int],
+                                z_fov: float,
+                                dz_sampling_factor: float = 1.,
+                                dxy_sampling_factor: float = 1.):
     """
     Get information about pixel grid scattering potential will be reconstructed on
 
@@ -1240,7 +1263,7 @@ def get_reconstruction_sampling(no, na_det, beam_frqs, wavelength, dxy, img_size
     @param z_fov: field-of-view in z-direction
     @param dz_sampling_factor: z-spacing as a fraction of the nyquist limit
     @param dxy_sampling_factor: xy-spacing as a fraction of nyquist limit
-    @return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp), (fz_max, fxy_max):
+    @return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp):
     """
     ny, nx = img_size
 
@@ -1617,15 +1640,22 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength,
     return v_ft, drs
 
 
-def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_raar=True,
-                        require_real_part_greater_bg=False, use_gpu=_cupy_available, print_info=False):
+def apply_n_constraints(v_ft: np.ndarray,
+                        no: float,
+                        wavelength: float,
+                        n_iterations: int = 100,
+                        beta: float = 0.5,
+                        use_raar: bool = True,
+                        require_real_part_greater_bg: bool = False,
+                        use_gpu: bool = _cupy_available,
+                        print_info: bool = False):
     """
     Apply constraints on the scattering potential and the index of refraction using iterative projection
 
     constraint 1: scattering potential FT must match data at points where we information
     constraint 2: real(n) >= no and imag(n) >= 0
 
-    @param sp_ft: 3D fourier transform of scattering potential. This array should have nan values where the array
+    @param v_ft: 3D fourier transform of scattering potential. This array should have nan values where the array
      values are unknown.
     @param no: background index of refraction
     @param wavelength: wavelength in um
@@ -1635,15 +1665,15 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
     @return scattering_pot_ft:
     """
     # scattering_potential masked with nans where no information
-    sp_ft = np.array(sp_ft, copy=True)
-    sp_data = np.array(sp_ft, copy=True)
+    v_ft = np.array(v_ft, copy=True)
+    sp_data = np.array(v_ft, copy=True)
 
-    if not np.any(np.isnan(sp_ft)):
+    if not np.any(np.isnan(v_ft)):
         raise ValueError("sp_ft contained no NaN's, so there is no information to infer")
 
-    no_data = np.isnan(sp_ft)
+    no_data = np.isnan(v_ft)
     is_data = np.logical_not(no_data)
-    sp_ft[no_data] = 0
+    v_ft[no_data] = 0
 
     # try smoothing image first ...
     # todo: is this useful?
@@ -1663,9 +1693,9 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
         # todo: can do imaginary part with the scattering potential instead
 
         if not use_gpu:
-            sp = fft.fftshift(fft.ifftn(fft.ifftshift(sp_ft, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
+            sp = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
         else:
-            sp = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(sp_ft, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1)))
+            sp = cp.asnumpy(cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(v_ft, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1)))
         n = get_n(sp, no, wavelength)
 
         if require_real_part_greater_bg:
@@ -1684,7 +1714,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
             sp_ps_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1)))
 
         if use_raar:
-            sp_ft_pm = np.array(sp_ft, copy=True)
+            sp_ft_pm = np.array(v_ft, copy=True)
             sp_ft_pm[is_data] = sp_data[is_data]
 
             # ############################
@@ -1713,7 +1743,7 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
                 sp_ps_pm_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(sp_ps_pm, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1)))
 
             # update
-            sp_ft = beta * sp_ft - beta * sp_ps_ft + (1 - 2 * beta) * sp_ft_pm + 2 * beta * sp_ps_pm_ft
+            v_ft = beta * v_ft - beta * sp_ps_ft + (1 - 2 * beta) * sp_ft_pm + 2 * beta * sp_ps_pm_ft
         else:
             # ############################
             # projected Pm * Ps
@@ -1722,9 +1752,9 @@ def apply_n_constraints(sp_ft, no, wavelength, n_iterations=100, beta=0.5, use_r
             sp_ft_pm_ps[is_data] = sp_data[is_data]
 
             # update
-            sp_ft = sp_ft_pm_ps
+            v_ft = sp_ft_pm_ps
 
-    return sp_ft
+    return v_ft
 
 
 # fit frequencies
