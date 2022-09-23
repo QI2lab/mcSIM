@@ -961,6 +961,7 @@ def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[f
         # we do not apply an fftshift, so we don't have to apply an intermediate shift in our FFTs later
         axis_expand_x = list(range(n_extra_dims + 1))
         x = np.expand_dims(fft.fftfreq(nx) * nx * dx, axis=axis_expand_x)
+        # todo: replace with this second option which is more intuitive
         # x = np.expand_dims(fft.ifftshift(np.arange(nx) - nx // 2) * dx, axis=axis_expand_x)
 
         axis_expand_y = list(range(n_extra_dims)) + [-1]
