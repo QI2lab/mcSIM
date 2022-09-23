@@ -438,10 +438,15 @@ class tomography:
                                                 mode="born",
                                                 interpolate=interpolate_model)
 
-            # set step size
+            # set step size. Lipschitz constant of \nabla cost is given by the largest singular value of linear model
+            # (also the square root of the largest eigenvalue of model^t * model)
             u, s, vh = sp.linalg.svds(model, k=1, which='LM')
-            # since lipschitz constant of model which is multiplied by...
-            step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
+            # todo: should also add a factor of 0.5 but maybe doesn't matter
+            # todo: think this should be 1 / s **2
+            # lipschitz_estimate = 0.5 * s**2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
+            # step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
+            lipschitz_estimate = s ** 2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
+            step = 1 / lipschitz_estimate
 
             def fista_recon(v_fts, efield_scattered_ft):
                 results = grad_descent(v_fts,
@@ -600,7 +605,9 @@ class tomography:
             # set step size
             u, s, vh = sp.linalg.svds(model, k=1, which='LM')
             # since lipschitz constant of model which is multiplied by...
-            step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
+            lipschitz_estimate = s**2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
+            step = 1 / lipschitz_estimate
+            # step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
 
             def fista_recon(v_fts, efield_scattered_ft):
                 results = grad_descent(v_fts,
@@ -773,6 +780,7 @@ def grad_descent(v_ft_start,
                  use_real_constraint=False,
                  debug=False):
     """
+    Perform gradient descent using a linear model
 
     @param v_ft_start:
     @param e_measured_ft:
@@ -893,6 +901,7 @@ def grad_descent(v_ft_start,
 
         q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
 
+        # todo: better to apply the proximal operator last or do FISTA as usual...
         if ii == 0 or ii == (niters - 1) or not use_fista:
             v_ft = v_ft_prox
         else:
@@ -900,7 +909,7 @@ def grad_descent(v_ft_start,
 
         tend_update = time.perf_counter()
 
-        # compute errors
+        # compute cost
         tstart_err = time.perf_counter()
 
         costs[ii + 1] = cost(v_ft)
@@ -927,14 +936,17 @@ def grad_descent(v_ft_start,
     # dictionary to store summary results
     results = {"step_size": step,
                "niterations": niters,
-               "fista": use_fista,
-               "tv": use_tv,
-               "tau": tau,
+               "use_fista": use_fista,
+               "use_tv": use_tv,
+               "tau_tv": tau,
+               "use_l1": use_lasso,
+               "tau_l1": tau_lasso,
                "use_imaginary_constraint": use_imaginary_constraint,
                "use_real_constraint": use_real_constraint,
                "timing": timing,
                "timing_column_names": timing_names,
                "costs": costs,
+               "x_init": v_ft_start,
                "x": v_ft
                }
 
@@ -1331,6 +1343,7 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
                      interpolate: bool = False):
     """
     Forward model from scattering potential v to imaged electric field after interacting with object
+    # todo: add mask to remove points don't want to consider
 
     @param beam_frqs: (nbeams, 3). Normalized to no/wavelength
     @param no: index of refraction
@@ -2335,9 +2348,9 @@ def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1, nmax_columns
         fighs.append(figh)
 
     for ii in range(v.shape[0]):
-        fig_num = ii % nmax_columns
+        fig_num = ii // nmax_columns
         col = ii - (fig_num * nmax_columns)
-        figh = fighs[nfigs]
+        figh = fighs[fig_num]
 
         ax = figh.add_subplot(grid[0, col])
         im = ax.imshow(v[ii].real, vmin=vminr, vmax=vmaxr, cmap="bone")
@@ -2414,9 +2427,9 @@ def compare_v3d(v_ft, v_ft_gt, ttl="", figsize=(35, 20), gamma=0.1, nmax_columns
         fighs_ft.append(figh_ft)
 
     for ii in range(v.shape[0]):
-        fig_num = ii % nmax_columns
+        fig_num = ii // nmax_columns
         col = ii - (fig_num * nmax_columns)
-        figh_ft = fighs_ft[nfigs]
+        figh_ft = fighs_ft[fig_num]
 
         ax = figh_ft.add_subplot(grid[0, col])
         im = ax.imshow(np.abs(v_ft[ii]), norm=PowerNorm(gamma=gamma, vmin=vmink, vmax=vmaxk), cmap="bone")
