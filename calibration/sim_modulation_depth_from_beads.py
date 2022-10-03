@@ -238,7 +238,7 @@ for d in data_dirs:
                         # do fitting
                         # todo: fitting on gpu not working ... not sure if the problem is the fixed parameters or something else
                         fps[ic][:, it, iz, ia, ip, :], fit_states, chi_sqrs, niters, fit_t = \
-                            localize.fit_gauss_rois(img_rois, coords_rois, fps_start[ic], fixed_params=fixed_params, use_gpu=False) #, use_gpu=False #, debug=True)
+                            localize.fit_rois(img_rois, coords_rois, fps_start[ic], fixed_params=fixed_params, use_gpu=False) #, use_gpu=False #, debug=True)
 
                         for aaa in range(np.min([nrois_to_plot, len(fps_start[ic])])):
                             localize.plot_gauss_roi(fps[ic][aaa, it, iz, ia, ip], rois[ic][aaa], imgs_now,

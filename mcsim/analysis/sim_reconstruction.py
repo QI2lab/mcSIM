@@ -3518,9 +3518,12 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
         psf = None
 
     # get coordinates
-    x = tools.get_fft_pos(nx, pix_size, centered=True, mode="symmetric")
-    y = tools.get_fft_pos(ny, pix_size, centered=True, mode="symmetric")
-    z = tools.get_fft_pos(nz, pix_size, centered=True, mode="symmetric")
+    x = (np.arange(nx) - nx // 2) * pix_size
+    y = (np.arange(ny) - ny // 2) * pix_size
+    z = (np.arange(nz) - nz // 2) * pix_size
+    # x = tools.get_fft_pos(nx, pix_size, centered=True, mode="symmetric")
+    # y = tools.get_fft_pos(ny, pix_size, centered=True, mode="symmetric")
+    # z = tools.get_fft_pos(nz, pix_size, centered=True, mode="symmetric")
     zz, yy, xx = np.meshgrid(z, y, x, indexing="ij")
 
     nxb = nx / nbin
@@ -3567,19 +3570,22 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
 
     # generate images
     sim_imgs = np.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
+    patterns = np.zeros((nangles, nphases, nz, nyb, nxb), dtype=float)
     snrs = np.zeros(sim_imgs.shape)
     mcnrs = np.zeros(sim_imgs.shape)
     for ii in range(nangles):
         for jj in range(nphases):
 
-            pattern = amps[ii, jj] * (1 + mod_depths[ii] * np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
+            pattern = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
 
             if not coherent_projection:
                 pattern = localize_psf.fit_psf.blur_img_otf(pattern, otf).real
+
+            patterns[ii, jj] = pattern
 
             sim_imgs[ii, jj], snrs[ii, jj] = camera_noise.simulated_img(ground_truth * pattern, gains, offsets,
                                                                         readout_noise_sds, psf=psf, **kwargs)
             # todo: compute mcnr
             mcnrs[ii, jj] = 0
 
-    return np.squeeze(sim_imgs), np.squeeze(snrs)
+    return np.squeeze(sim_imgs), np.squeeze(snrs), np.squeeze(patterns)
