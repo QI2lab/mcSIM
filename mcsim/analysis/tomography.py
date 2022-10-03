@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from numpy import fft
 import scipy.sparse as sp
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
 from scipy.interpolate import interpn
 from scipy.signal.windows import tukey
 from skimage.restoration import unwrap_phase, denoise_tv_chambolle
@@ -175,34 +175,40 @@ class tomography:
         #return frqs_hologram
         self.hologram_frqs = frqs_hologram
 
-    def estimate_reference_frq(self, save_dir=None):
+    def estimate_reference_frq(self, mode="fit", save_dir=None):
         """
         Estimate hologram reference frequency by looking at residual speckle
         @param save_dir:
         @return:
         """
-        saving = save_dir is not None
 
-        # load one slice of background data to get frequency reference. Load the first slice along all dimensions
-        slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
-        imgs_frq_cal = np.squeeze(self.imgs_raw_bg[slices])
+        if mode == "fit":
+            saving = save_dir is not None
 
-        imgs_frq_cal_ft = fft.fftshift(fft.fft2(fft.ifftshift(imgs_frq_cal, axes=(-1, -2)), axes=(-1, -2)),
-                                       axes=(-1, -2))
-        imgs_frq_cal_ft_abs_mean = np.mean(np.abs(imgs_frq_cal_ft), axis=0)
+            # load one slice of background data to get frequency reference. Load the first slice along all dimensions
+            slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
+            imgs_frq_cal = np.squeeze(self.imgs_raw_bg[slices])
 
-        results, circ_dbl_fn, figh_ref_frq = fit_ref_frq(imgs_frq_cal_ft_abs_mean, self.dxy, 2*self.fmax, show_figure=saving)
-        frq_ref = results["fit_params"][:2]
+            imgs_frq_cal_ft = fft.fftshift(fft.fft2(fft.ifftshift(imgs_frq_cal, axes=(-1, -2)), axes=(-1, -2)),
+                                           axes=(-1, -2))
+            imgs_frq_cal_ft_abs_mean = np.mean(np.abs(imgs_frq_cal_ft), axis=0)
 
-        # flip sign if necessary to ensure close to guess
-        if np.linalg.norm(frq_ref - self.reference_frq) > np.linalg.norm(frq_ref + self.reference_frq):
-            frq_ref = -frq_ref
+            results, circ_dbl_fn, figh_ref_frq = fit_ref_frq(imgs_frq_cal_ft_abs_mean, self.dxy, 2*self.fmax, show_figure=saving)
+            frq_ref = results["fit_params"][:2]
 
-        if saving:
-            save_dir = Path(save_dir)
-            save_dir.mkdir(exist_ok=True)
+            # flip sign if necessary to ensure close to guess
+            if np.linalg.norm(frq_ref - self.reference_frq) > np.linalg.norm(frq_ref + self.reference_frq):
+                frq_ref = -frq_ref
 
-            figh_ref_frq.savefig(Path(save_dir, "frequency_reference_diagnostic.png"))
+            if saving:
+                save_dir = Path(save_dir)
+                save_dir.mkdir(exist_ok=True)
+
+                figh_ref_frq.savefig(Path(save_dir, "frequency_reference_diagnostic.png"))
+        elif mode == "average":
+            frq_ref = np.mean(self.hologram_frqs, axis=0)
+        else:
+            raise ValueError(f"'mode' must be '{mode:s}' but must be 'fit' or 'average'")
 
         self.reference_frq = frq_ref
 
@@ -243,7 +249,11 @@ class tomography:
         if mask is None:
             holograms_ft = holograms_ft_raw
         else:
-            holograms_ft = da.map_blocks(cut_mask, holograms_ft_raw, mask, dtype=complex)
+            # ensure masks has same dims and chunks as holograms_ft_raw
+            masks_da = da.from_array(np.expand_dims(mask, axis=list(range(0, self.imgs_raw.ndim - mask.ndim))),
+                                     chunks=holograms_ft_raw.chunksize)
+
+            holograms_ft = da.map_blocks(cut_mask, holograms_ft_raw, masks_da, dtype=complex)
 
         # #########################
         # background holograms
@@ -257,7 +267,10 @@ class tomography:
             if mask is None:
                 holograms_ft_bg = holograms_ft_raw_bg
             else:
-                holograms_ft_bg = da.map_blocks(cut_mask, holograms_ft_raw_bg, mask, dtype=complex)
+                # ensure masks has same dims and chunks as holograms_ft_raw
+                masks_da_bg = da.from_array(np.expand_dims(mask, axis=list(range(0, self.imgs_raw.ndim - mask.ndim))),
+                                         chunks=holograms_ft_raw_bg.chunksize)
+                holograms_ft_bg = da.map_blocks(cut_mask, holograms_ft_raw_bg, masks_da_bg, dtype=complex)
 
         # #########################
         # determine background phases
@@ -327,16 +340,21 @@ class tomography:
         efield_scattered = (holograms - holograms_bg) / (da.abs(holograms_bg) + scattered_field_regularization)
 
         # cut out any regions we don't want in Fourier space
-        if mask is None:
-            mask = np.zeros((self.ny, self.nx), dtype=bool)
-
         efield_scattered_ft_raw = da.fft.fftshift(da.fft.fft2(da.fft.ifftshift(efield_scattered, axes=(-1, -2)),
                                                               axes=(-1, -2)), axes=(-1, -2))
 
+        if mask is None:
+            mask = np.zeros((self.ny, self.nx), dtype=bool)
+
         # region to cut out of scattered field
-        combined_mask = np.logical_or(np.logical_not(self.pupil_mask), mask)
+        # allow for possiblity mask is of either size ny x nx or npatterns x ny x nx
+        combined_mask = np.logical_or(np.expand_dims(np.logical_not(self.pupil_mask), axis=list(range(0, mask.ndim - self.pupil_mask.ndim))),
+                                      mask)
 
         if np.any(combined_mask):
+            combined_mask_da = da.from_array(np.expand_dims(combined_mask, axis=list(range(0, self.imgs_raw.ndim - combined_mask.ndim))),
+                                             chunks=efield_scattered_ft_raw.chunksize)
+
             self.efield_scattered_ft = da.map_blocks(cut_mask,
                                                      efield_scattered_ft_raw,
                                                      combined_mask,
@@ -522,7 +540,7 @@ class tomography:
                           dxy_sampling_factor=1.,
                           dz_sampling_factor=1.,
                           z_fov=20,
-                          mask=None,
+                          mask=None, # todo implement
                           use_tv=True,
                           tau=0.02,
                           use_lasso=False,
@@ -750,6 +768,43 @@ class tomography:
             dask.compute(*results_interferograms)
 
 
+    def show_image(self, index, figsize=(24, 10)):
+        """
+        display raw image
+        @param index:
+        @param figsize:
+        @return:
+        """
+        extent = [self.x[0] - 0.5 * self.dxy, self.x[-1] + 0.5 * self.dxy,
+                  self.y[-1] + 0.5 * self.dxy, self.y[0] - 0.5 * self.dxy]
+
+        extent_f = [self.fxs[0] - 0.5 * self.dfx, self.fxs[-1] + 0.5 * self.dxy,
+                    self.fys[-1] + 0.5 * self.dfy, self.fys[0] - 0.5 * self.dfy]
+
+        figh = plt.figure(figsize=figsize)
+        figh.suptitle(f"{index}, {self.axes_names}")
+        grid = figh.add_gridspec(nrows=1, ncols=4, width_ratios=[1, 0.1, 1, 0.1])
+
+        img_now = self.imgs_raw[index].compute()
+        img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_now)))
+
+        ax = figh.add_subplot(grid[0, 0])
+        im = ax.imshow(img_now, extent=extent, cmap="bone")
+        ax.set_title("raw image")
+
+        ax = figh.add_subplot(grid[0, 1])
+        plt.colorbar(im, cax=ax)
+
+        ax = figh.add_subplot(grid[0, 2])
+        im = ax.imshow(np.abs(img_ft), extent=extent_f,
+                       norm=PowerNorm(gamma=0.1), cmap="bone")
+        ax.set_title("raw FT")
+
+        ax = figh.add_subplot(grid[0, 3])
+        plt.colorbar(im, cax=ax)
+
+        return figh
+
 def soft_threshold(t, x):
     """
     Softmax function, which is the proximal operator for the LASSO (L1 regularization) problem
@@ -953,7 +1008,8 @@ def grad_descent(v_ft_start,
     return results
 
 def cut_mask(img, mask, mask_val=0):
-    mask = np.expand_dims(mask, axis=list(range(img.ndim - 2)))
+    # if mask does not cover full image, broadcast so it does
+    mask = np.expand_dims(mask, axis=list(range(img.ndim - mask.ndim)))
 
     img_masked = np.array(img, copy=True)
     img_masked[mask] = mask_val
@@ -1765,7 +1821,8 @@ def apply_n_constraints(v_ft: np.ndarray,
 
 
 # fit frequencies
-def fit_ref_frq(img_ft, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filter_size=0, show_figure=False):
+def fit_ref_frq(img_ft, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, filter_size=0,
+                dilate_erode_footprint_size=10, show_figure=False):
     """
     Determine the hologram reference frequency from a single imaged, based on the regions in the hologram beyond the
     maximum imaging frequency that have information. These are expected to be circles centered around the reference
@@ -1827,6 +1884,13 @@ def fit_ref_frq(img_ft, dxy, fmax_int, search_rad_fraction=1, npercentiles=50, f
 
     # masked image
     img_ft_ref_mask = np.logical_and(np.abs(img_ft) > thresh, ff_perp > frad_search)
+
+    # dilate and erode
+    footprint = np.ones((dilate_erode_footprint_size, dilate_erode_footprint_size), dtype=bool)
+    # dilate to remove holes
+    img_ft_ref_mask = maximum_filter(img_ft_ref_mask, footprint=footprint)
+    # remove to get back to original size
+    img_ft_ref_mask = minimum_filter(img_ft_ref_mask, footprint=footprint)
 
     # #########################
     # define fitting function and get initial guesses
