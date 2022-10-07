@@ -476,14 +476,16 @@ def validate_channel_map(cm):
     return True, "array validated"
 
 
-def save_config_file(fname, pattern_data, channel_map=None):
+def save_config_file(fname, pattern_data: dict, channel_map=None):
     """
-    Save DMD firmware configuration file
-    @param fname:
-    @param pattern_data:
+    Save DMD firmware configuration data to json file
+    @param fname: file name to save
+    @param pattern_data: dictionary of pattern information to store
     @param channel_map:
     @return:
     """
+    # todo: use zarr instead ... and save firmware pattern image data along with it
+
     tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
     # ensure no numpy arrays in pattern_data
@@ -509,15 +511,16 @@ def save_config_file(fname, pattern_data, channel_map=None):
                         current_ch_dict[mode][k] = v.tolist()
 
     with open(fname, "w") as f:
-        json.dump({"timestamp": tstamp, "firmware_pattern_data": pattern_data_list,
+        json.dump({"timestamp": tstamp,
+                   "firmware_pattern_data": pattern_data_list,
                    "channel_map": channel_map_list}, f, indent="\t")
 
 
 def load_config_file(fname):
     """
-    Load DMD firmware configuration file
+    Load DMD firmware data from json configuration file
     @param fname:
-    @return:
+    @return pattern_data, channel_map, tstamp:
     """
     with open(fname, "r") as f:
         data = json.load(f)
@@ -553,7 +556,7 @@ def get_preset_info(preset, pattern_data):
     Get useful data from preset
     @param preset:
     @param pattern_data:
-    @return:
+    @return pd_all, pd, bi, pi, inds:
     """
     # indices of patterns
     bi = preset["bit_indices"]
@@ -626,8 +629,15 @@ class dlp6500:
                       'pattern image memory address is out of range': 17,
                       'internal error': 255}
 
-    def __init__(self, vendor_id=0x0451, product_id=0xc900, debug: bool = True, firmware_pattern_info: list = None,
-                 presets: dict = None, config_file=None, initialize=True):
+    def __init__(self,
+                 vendor_id=0x0451,
+                 product_id=0xc900,
+                 debug: bool = True,
+                 firmware_pattern_info: list = None,
+                 presets: dict = None,
+                 config_file=None,
+                 firmware_patterns=None,
+                 initialize=True):
         """
         Get instance of DLP LightCrafter evaluation module (DLP6500 or DLP9000). This is the base class which os
         dependent classes should inherit from. The derived classes only need to implement _get_device and
@@ -661,6 +671,16 @@ class dlp6500:
         # set firmware pattern info
         self.firmware_pattern_info = firmware_pattern_info
         self.presets = presets
+
+        # todo: is there a way to read these out from DMD itself?
+        if firmware_patterns is not None:
+            firmware_patterns = np.array(firmware_patterns)
+            self.picture_indices, self.bit_indices = firmware_index_2pic_bit(np.arange(len(firmware_patterns)))
+        else:
+            self.picture_indices = None
+            self.bit_indices = None
+
+        self.firmware_patterns = firmware_patterns
 
         # USB packet length not including report_id_byte
         self.packet_length_bytes = 64
@@ -2032,7 +2052,7 @@ if __name__ == "__main__":
     try:
         pattern_data, presets, _ = load_config_file(fname)
     except FileNotFoundError:
-        raise FileNotFoundError(f"file `{fname:s}` was not found. For the command line parser to work, place "
+        raise FileNotFoundError(f"configuration file `{fname:s}` was not found. For the command line parser to work, place "
                                 f"a file with this name in the same directory as dlp6500.py")
 
     # #######################
