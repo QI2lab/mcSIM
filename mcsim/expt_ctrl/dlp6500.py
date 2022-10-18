@@ -14,6 +14,7 @@ which cannot be used with e.g. python and the ctypes library as a dll could be.
 This DMD control code was originally based on refactoring in https://github.com/mazurenko/Lightcrafter6500DMDControl.
 The combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycrafter6500.
 """
+
 import pywinusb.hid as pyhid
 import sys
 import time
@@ -21,8 +22,13 @@ import struct
 import numpy as np
 import copy
 import datetime
-import json
 import argparse
+# for dealing with configuration files
+import json
+import zarr
+import warnings
+from pathlib import Path
+import numcodecs
 
 
 ##############################################
@@ -476,9 +482,9 @@ def validate_channel_map(cm):
     return True, "array validated"
 
 
-def save_config_file(fname, pattern_data: dict, channel_map=None):
+def save_config_file(fname, pattern_data: dict, channel_map=None, firmware_patterns=None, use_zarr=True):
     """
-    Save DMD firmware configuration data to json file
+    Save DMD firmware configuration data to zarr or json file
     @param fname: file name to save
     @param pattern_data: dictionary of pattern information to store
     @param channel_map:
@@ -510,10 +516,30 @@ def save_config_file(fname, pattern_data: dict, channel_map=None):
                     if isinstance(v, np.ndarray):
                         current_ch_dict[mode][k] = v.tolist()
 
-    with open(fname, "w") as f:
-        json.dump({"timestamp": tstamp,
-                   "firmware_pattern_data": pattern_data_list,
-                   "channel_map": channel_map_list}, f, indent="\t")
+    if use_zarr:
+        z = zarr.open(fname, "w")
+
+        if firmware_patterns is not None:
+            z.array("firmware_patterns",
+                    firmware_patterns.astype(bool),
+                    compressor=numcodecs.packbits.PackBits(),
+                    dtype=bool,
+                    chunks=(1, firmware_patterns.shape[-2], firmware_patterns.shape[-1]))
+
+        z.attrs["timestamp"] = tstamp
+        z.attrs["firmware_pattern_data"] = pattern_data_list
+        z.attrs["channel_map"] = channel_map_list
+
+    else:
+        if firmware_patterns is not None:
+            warnings.warn("firmware_patterns were provided but json configuration file was selected."
+                          " Use zarr instead to save firmware patterns")
+
+
+        with open(fname, "w") as f:
+            json.dump({"timestamp": tstamp,
+                       "firmware_pattern_data": pattern_data_list,
+                       "channel_map": channel_map_list}, f, indent="\t")
 
 
 def load_config_file(fname):
@@ -522,12 +548,31 @@ def load_config_file(fname):
     @param fname:
     @return pattern_data, channel_map, tstamp:
     """
-    with open(fname, "r") as f:
-        data = json.load(f)
 
-    tstamp = data["timestamp"]
-    pattern_data = data["firmware_pattern_data"]
-    channel_map = data["channel_map"]
+    fname = Path(fname)
+
+    if fname.suffix == ".json":
+        with open(fname, "r") as f:
+            data = json.load(f)
+
+        tstamp = data["timestamp"]
+        pattern_data = data["firmware_pattern_data"]
+        channel_map = data["channel_map"]
+        firmware_patterns = None
+
+    elif fname.suffix == ".zarr":
+        z = zarr.open(fname, "r")
+        tstamp = z.attrs["timestamp"]
+        pattern_data = z.attrs["firmware_pattern_data"]
+        channel_map = z.attrs["channel_map"]
+
+        try:
+            firmware_patterns = z["firmware_patterns"]
+        except ValueError:
+            firmware_patterns = None
+
+    else:
+        raise ValueError("fname suffix was 'fname.suffix' but must be '.json' or '.zarr'")
 
     # convert entries to numpy arrays
     for p in pattern_data:
@@ -548,7 +593,7 @@ def load_config_file(fname):
                     if isinstance(v, list):
                         m[k] = np.atleast_1d(v)
 
-    return pattern_data, channel_map, tstamp
+    return pattern_data, channel_map, firmware_patterns, tstamp
 
 
 def get_preset_info(preset, pattern_data):
@@ -654,23 +699,20 @@ class dlp6500:
         :param config_file: either provide config file or provide firmware_pattern_info and presets
         """
 
-        if config_file is not None and (firmware_pattern_info is not None or presets is not None):
-            raise ValueError("both config_file and either firmware_pattern_info or presets were provided. But"
-                             "only one of these should be provided.")
+        if config_file is not None and (firmware_pattern_info is not None or presets is not None or firmware_patterns is not None):
+            raise ValueError("both config_file and either firmware_pattern_info, presets, or firmware_patterns"
+                             " were provided. But if config file is provided, these other settings should not be"
+                             " set directly.")
 
             # load configuration file
         if config_file is not None:
-            firmware_pattern_info, presets, _ = load_config_file(config_file)
+            firmware_pattern_info, presets, firmware_patterns, _ = load_config_file(config_file)
 
         if firmware_pattern_info is None:
             firmware_pattern_info = []
 
         if presets is None:
             presets = {}
-
-        # set firmware pattern info
-        self.firmware_pattern_info = firmware_pattern_info
-        self.presets = presets
 
         # todo: is there a way to read these out from DMD itself?
         if firmware_patterns is not None:
@@ -680,6 +722,9 @@ class dlp6500:
             self.picture_indices = None
             self.bit_indices = None
 
+        # set firmware pattern info
+        self.firmware_pattern_info = firmware_pattern_info
+        self.presets = presets
         self.firmware_patterns = firmware_patterns
 
         # USB packet length not including report_id_byte

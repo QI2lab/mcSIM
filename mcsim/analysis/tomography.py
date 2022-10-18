@@ -8,7 +8,6 @@ import numpy as np
 from numpy import fft
 import scipy.sparse as sp
 from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
-from scipy.interpolate import interpn
 from scipy.signal.windows import tukey
 from skimage.restoration import unwrap_phase, denoise_tv_chambolle
 import dask
@@ -110,13 +109,9 @@ class tomography:
         self.use_gpu = False
         self.reconstruction_settings = {} # keys will differ depending on recon mode
 
-    def use_slice_as_background(self, axis, index):
-        raise NotImplementedError()
-        self.imgs_raw_bg = self.imgs_raw
-
     def estimate_hologram_frqs(self, save_dir=None):
         """
-        Estimate hologram frequencies form raw image
+        Estimate hologram frequencies from raw image
         @param save_dir:
         @return:
         """
@@ -214,6 +209,7 @@ class tomography:
 
     def get_beam_frqs(self):
         """
+        Get beam incident beam frequencies from hologram frequencies and reference frequency
 
         @return beam_frqs:
         """
@@ -277,6 +273,7 @@ class tomography:
         # #########################
         if fit_phases:
             # optionally determine background phase offsets
+            print("computing background phase offsets")
             with ProgressBar():
                 # take one slice from all axes which will be averaged. Otherwise, must keep the dimensions
                 slices = tuple([slice(0, 1) if a in bg_average_axes else slice(None) for a in range(self.nextra_dims)] +
@@ -299,6 +296,7 @@ class tomography:
             phase_offsets = self.phase_offsets_bg
         else:
             if fit_phases:
+                print("computing phase offsets")
                 with ProgressBar():
                     phase_offsets = da.map_blocks(get_global_phase_shifts, holograms_ft, self.holograms_ft_bg, dtype=float,
                                                   chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
@@ -357,46 +355,57 @@ class tomography:
 
             self.efield_scattered_ft = da.map_blocks(cut_mask,
                                                      efield_scattered_ft_raw,
-                                                     combined_mask,
+                                                     combined_mask_da,
                                                      self.fmax,
                                                      dtype=complex)
         else:
             self.efield_scattered_ft = efield_scattered_ft_raw
 
-    def reconstruct_born(self,
-                         mode="naive",
-                         scattered_field_regularization=50,
-                         niters=100,
-                         reconstruction_regularizer=0.1,
-                         dxy_sampling_factor=1.,
-                         dz_sampling_factor=1.,
-                         z_fov=20,
-                         mask=None,
-                         use_tv=True,
-                         tau=0.02,
-                         use_lasso=False,
-                         tau_lasso=0.1,
-                         use_imgainary_constraint=True,
-                         use_real_constraint=False,
-                         interpolate_model=True
-                         ):
+    def reconstruct_linear(self,
+                           mode,
+                           solver="naive",
+                           scattered_field_regularization=50,
+                           niters=100,
+                           reconstruction_regularizer=0.1,
+                           dxy_sampling_factor=1.,
+                           dz_sampling_factor=1.,
+                           z_fov=20,
+                           mask=None,
+                           use_tv: bool = True,
+                           tau: float = 0.02,
+                           use_lasso: bool = False,
+                           tau_lasso: float = 0.1,
+                           use_imaginary_constraint: bool = True,
+                           use_real_constraint: bool = False,
+                           interpolate_model: bool = True
+                           ):
         """
 
-        @param mode: 'naive' or 'fista'
+        @param mode: "born" or "rytov"
+        @param solver: "naive" or "fista"
+        @param scattered_field_regularization:
+        @param niters:
+        @param reconstruction_regularizer:
+        @param dxy_sampling_factor:
+        @param dz_sampling_factor:
+        @param z_fov:
+        @param mask:
+        @param use_tv:
+        @param tau:
+        @param use_lasso:
+        @param tau_lasso:
+        @param use_imaginary_constraint:
+        @param use_real_constraint:
+        @param interpolate_model:
         @return:
         """
-
-
         # ############################
-        # compute scattered field
+        # set sampling info
         # ############################
-        self.set_scattered_field(scattered_field_regularization=scattered_field_regularization,
-                                 mask=mask)
-
 
         # rechunk erecon_ft since must operate on all patterns at once
         # get sampling so can determine new chunk sizes
-        (dz_sp, dxy_sp, _), (nz_sp, ny_sp, nx_sp) = \
+        drs_v, v_size = \
             get_reconstruction_sampling(self.no,
                                         self.na_detection,
                                         self.get_beam_frqs(),
@@ -407,8 +416,29 @@ class tomography:
                                         dz_sampling_factor=dz_sampling_factor,
                                         dxy_sampling_factor=dxy_sampling_factor)
 
-        new_chunks = list(self.efield_scattered_ft.chunksize)
+        new_chunks = list(self.holograms_ft.chunksize)
         new_chunks[-3] = self.npatterns
+
+        # ############################
+        # compute scattered field
+        # ############################
+
+        if mode == "born":
+            self.set_scattered_field(scattered_field_regularization=scattered_field_regularization, mask=mask)
+            eraw_start = da.rechunk(self.efield_scattered_ft, chunks=new_chunks)
+        elif mode == "rytov":
+            # ############################
+            # compute rytov phase
+            # ############################
+            holograms_bg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft_bg, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+            holograms = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+            phi_rytov = da.map_blocks(get_rytov_phase, holograms, holograms_bg, scattered_field_regularization, dtype=complex)
+            phi_rytov_ft = da.fft.fftshift(da.fft.fftn(da.fft.ifftshift(phi_rytov, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+            eraw_start = da.rechunk(phi_rytov_ft, chunks=new_chunks)
+        else:
+            raise ValueError(f"'mode' must be 'born' or 'rytov' but was '{mode:s}'")
 
         # ############################
         # scattering potential from measured data
@@ -431,38 +461,36 @@ class tomography:
                                        regularization=reconstruction_regularizer,
                                        dz_sampling_factor=dz_sampling_factor,
                                        dxy_sampling_factor=dxy_sampling_factor,
-                                       mode="born",
+                                       mode=mode,
                                        no_data_value=no_data_value)
 
             return np.expand_dims(v_ft, axis=list(range(len(dsizes))))
 
 
-        if mode == "fista":
-            v_fts = da.map_blocks(recon,
-                                  da.rechunk(self.efield_scattered_ft, chunks=new_chunks),
-                                  0,
-                                  dtype=complex,
-                                  chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+        if solver == "fista":
+            # reconstruction starting point ... put info back in right place in Fourier space
+            v_fts_start = da.map_blocks(recon,
+                                        eraw_start,
+                                        0,
+                                        dtype=complex,
+                                        chunks=(1,) * self.nextra_dims + v_size)
 
             # define forward model
             model, _ = fwd_model_linear(self.get_beam_frqs(),
-                                                self.no,
-                                                self.na_detection,
-                                                self.wavelength,
-                                                (self.ny, self.nx),
-                                                (self.dxy, self.dxy),
-                                                (nz_sp, ny_sp, nx_sp),
-                                                (dz_sp, dxy_sp, dxy_sp),
-                                                mode="born",
-                                                interpolate=interpolate_model)
+                                        self.no,
+                                        self.na_detection,
+                                        self.wavelength,
+                                        (self.ny, self.nx),
+                                        (self.dxy, self.dxy),
+                                        v_size,
+                                        drs_v,
+                                        mode=mode,
+                                        interpolate=interpolate_model)
 
             # set step size. Lipschitz constant of \nabla cost is given by the largest singular value of linear model
             # (also the square root of the largest eigenvalue of model^t * model)
             u, s, vh = sp.linalg.svds(model, k=1, which='LM')
             # todo: should also add a factor of 0.5 but maybe doesn't matter
-            # todo: think this should be 1 / s **2
-            # lipschitz_estimate = 0.5 * s**2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
-            # step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
             lipschitz_estimate = s ** 2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
             step = 1 / lipschitz_estimate
 
@@ -478,38 +506,39 @@ class tomography:
                                        tau=tau,
                                        use_lasso=use_lasso,
                                        tau_lasso=tau_lasso,
-                                       use_imaginary_constraint=use_imgainary_constraint,
+                                       use_imaginary_constraint=use_imaginary_constraint,
                                        use_real_constraint=use_real_constraint,
                                        debug=False
                                        )
 
                 v_ft = results["x"]
-                v_out_ft = v_ft.reshape((1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+                v_out_ft = v_ft.reshape((1,) * self.nextra_dims + v_size)
 
                 return v_out_ft
 
-
-            efield_scat_rechunk = self.efield_scattered_ft.rechunk((1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
             v_ft_out = da.map_blocks(fista_recon,
-                                     v_fts,
-                                     efield_scat_rechunk,
+                                     v_fts_start, # initial guess
+                                     # da.rechunk(phi_rytov_ft, chunks=new_chunks),
+                                     eraw_start, # data
                                      dtype=complex,
-                                     chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+                                     chunks=(1,) * self.nextra_dims + v_size)
 
 
 
         else:
-            v_fts = da.map_blocks(recon,
-                                  da.rechunk(self.efield_scattered_ft, chunks=new_chunks),
-                                  np.nan,
-                                  dtype=complex,
-                                  chunks=(1,) * self.nextra_dims + (nz_sp, ny_sp, nx_sp))
+
+            # reconstruction starting point ... put info back in right place in Fourier space
+            v_fts_start = da.map_blocks(recon,
+                                        eraw_start,
+                                        np.nan,
+                                        dtype=complex,
+                                        chunks=(1,) * self.nextra_dims + v_size)
 
             # ############################
             # fill in fourier space with constraint algorithm
             # ############################
             v_ft_out = da.map_blocks(apply_n_constraints,
-                                     v_fts,
+                                     v_fts_start,
                                      self.no,
                                      self.wavelength,
                                      n_iterations=niters,
@@ -518,6 +547,7 @@ class tomography:
                                      use_gpu=False,
                                      require_real_part_greater_bg=use_real_constraint,
                                      dtype=complex)
+
 
         # ############################
         # convert results to index of refraction
@@ -530,166 +560,8 @@ class tomography:
                           self.wavelength,
                           dtype=complex)
 
-        return n, (dz_sp, dxy_sp, dxy_sp)
+        return n, v_fts_start, drs_v
 
-    def reconstruct_rytov(self,
-                          mode="naive",
-                          scattered_field_regularization=50,
-                          niters=100,
-                          reconstruction_regularizer=0.1,
-                          dxy_sampling_factor=1.,
-                          dz_sampling_factor=1.,
-                          z_fov=20,
-                          mask=None, # todo implement
-                          use_tv=True,
-                          tau=0.02,
-                          use_lasso=False,
-                          tau_lasso=0.1,
-                          use_imgainary_constraint=True,
-                          use_real_constraint=False,
-                          interpolate_model=True
-                          ):
-
-        # ############################
-        # compute rytov phase
-        # ############################
-        holograms_bg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft_bg, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-        holograms = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-        phi_rytov = da.map_blocks(get_rytov_phase, holograms, holograms_bg, scattered_field_regularization, dtype=complex)
-        phi_rytov_ft = da.fft.fftshift(da.fft.fftn(da.fft.ifftshift(phi_rytov, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-        # ############################
-        # scattering potential from measured data
-        # ############################
-        def recon(erecon_ft, no_data_value):
-            # only works on arrays with arbitrariy number of singleton dimensions and then npattern x ny x nx
-            dsizes = erecon_ft.shape[:-3]
-            if np.prod(dsizes) != 1:
-                raise ValueError(
-                    f"erecon_ft was wrong shape. Must have any number of leading singleton dimensions and then be"
-                    f"npatterns x ny x nx shape = {erecon_ft.shape}")
-
-            v_ft, drs = reconstruction(da.squeeze(erecon_ft),
-                                       self.get_beam_frqs(),
-                                       self.no,
-                                       self.na_detection,
-                                       self.wavelength,
-                                       self.dxy,
-                                       z_fov=z_fov,
-                                       regularization=reconstruction_regularizer,
-                                       dz_sampling_factor=dz_sampling_factor,
-                                       dxy_sampling_factor=dxy_sampling_factor,
-                                       mode="rytov",
-                                       no_data_value=no_data_value)
-
-            return np.expand_dims(v_ft, axis=list(range(len(dsizes))))
-
-        # rechunk erecon_ft since must operate on all patterns at once
-        # get sampling so can determine new chunk sizes
-        drs_v, v_size = \
-            get_reconstruction_sampling(self.no,
-                                        self.na_detection,
-                                        self.get_beam_frqs(),
-                                        self.wavelength,
-                                        self.dxy,
-                                        self.holograms_ft.shape[-2:],
-                                        z_fov,
-                                        dz_sampling_factor=dz_sampling_factor,
-                                        dxy_sampling_factor=dxy_sampling_factor)
-
-        new_chunks = list(phi_rytov_ft.chunksize)
-        new_chunks[-3] = self.npatterns
-
-        if mode == "fista":
-            v_fts = da.map_blocks(recon,
-                                  da.rechunk(phi_rytov_ft, chunks=new_chunks),
-                                  0,
-                                  dtype=complex,
-                                  chunks=(1,) * self.nextra_dims + v_size)
-
-            # define forward model
-            model, _ = fwd_model_linear(self.get_beam_frqs(),
-                                        self.no,
-                                        self.na_detection,
-                                        self.wavelength,
-                                        (self.ny, self.nx),
-                                        (self.dxy, self.dxy),
-                                        v_size,
-                                        drs_v,
-                                        mode="rytov",
-                                        interpolate=interpolate_model)
-
-            # set step size
-            u, s, vh = sp.linalg.svds(model, k=1, which='LM')
-            # since lipschitz constant of model which is multiplied by...
-            lipschitz_estimate = s**2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
-            step = 1 / lipschitz_estimate
-            # step = 1 / s * (self.npatterns * self.ny * self.nx) * (self.ny * self.nx)
-
-            def fista_recon(v_fts, efield_scattered_ft):
-                results = grad_descent(v_fts,
-                                       efield_scattered_ft,
-                                       model,
-                                       step,
-                                       niters=niters,
-                                       use_fista=True,
-                                       use_gpu=self.use_gpu,
-                                       use_tv=use_tv,
-                                       tau=tau,
-                                       use_lasso=use_lasso,
-                                       tau_lasso=tau_lasso,
-                                       use_imaginary_constraint=use_imgainary_constraint,
-                                       use_real_constraint=use_real_constraint,
-                                       debug=False
-                                       )
-
-                v_ft = results["x"]
-                v_out_ft = v_ft.reshape((1,) * self.nextra_dims + v_size)
-
-                return v_out_ft
-
-
-            v_ft_out = da.map_blocks(fista_recon,
-                                     v_fts,
-                                     da.rechunk(phi_rytov_ft, chunks=new_chunks),
-                                     dtype=complex,
-                                     chunks=(1,) * self.nextra_dims + v_size)
-
-        else:
-            v_fts = da.map_blocks(recon,
-                                  da.rechunk(phi_rytov_ft, chunks=new_chunks),
-                                  np.nan,
-                                  dtype=complex,
-                                  chunks=(1,) * self.nextra_dims + v_size)
-
-            # ############################
-            # fill in fourier space with constraint algorithm
-            # ############################
-            v_ft_out = da.map_blocks(apply_n_constraints,
-                                     v_fts,
-                                     self.no,
-                                     self.wavelength,
-                                     n_iterations=niters,
-                                     beta=0.5,
-                                     use_raar=False,
-                                     use_gpu=False,
-                                     require_real_part_greater_bg=use_real_constraint,
-                                     dtype=complex)
-
-        # ############################
-        # convert results to index of refraction
-        # ############################
-        v_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_out, axes=(-3, -2, -1)), axes=(-3, -2, -1)),
-                                axes=(-3, -2, -1))
-
-        n = da.map_blocks(get_n,
-                          v_out,
-                          self.no,
-                          self.wavelength,
-                          dtype=complex)
-
-        return n, drs_v
 
     def get_powers(self):
         # compute powers
@@ -1040,7 +912,7 @@ def get_angular_spectrum_kernel(dz, wavelength, no, shape, drs):
 
     return kernel
 
-
+# todo: put this in field_prop.py
 def propagate_field(efield_start, n_stack, no, drs, wavelength, use_gpu=_cupy_available):
     """
     Propagate electric field through medium with index of refraction n(x, y, z) using the projection approximation.
@@ -1537,6 +1409,7 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
                                         detectable))
         # todo: add in the points this misses where only option is to round
         # todo: could do this by adding to_use per coordinate ... and then normalizing the rows of the matrix
+        # todo: but what if miss point in E array entirely?
         # indices into V for each coordinate
         inds = [(z0, y0, x0),
                 (z1, y0, x0),
