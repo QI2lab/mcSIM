@@ -844,6 +844,11 @@ class phantom_cam(camera):
         result = getattr(self._phcon, "PhSet")(self.cam_index, ct.c_uint(gsQuiet), ct.byref(state_c))
         if result != 0:
             raise Exception(self.get_error(result))
+        
+    def set_black_reference(self):
+        result = getattr(self._phcon, "PhBlackReferenceCI")(self.cam_index, None)
+        if result != 0:
+            raise Exception(self.get_error(result))
 
     # deal with cines
     def set_cines(self, ncins):
