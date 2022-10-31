@@ -102,7 +102,7 @@ guess_ind_1d = np.argmax(np.abs(img_ft) * (fyfy <= 0) * (ff_perp > fmax_int) * g
 guess_ind = np.unravel_index(guess_ind_1d, img_ft.shape)
 
 frq_guess = np.array([fxfx[guess_ind], fyfy[guess_ind]])
-frq_fit, mask, _ = sim.fit_modulation_frq(img_ft, img_ft, dxy, frq_guess=frq_guess, roi_pix_size=50)
+frq_fit, mask, _ = sim.fit_modulation_frq(img_ft, img_ft, dxy, frq_guess=frq_guess, max_frq_shift=50 * dfx)
 # sim.plot_correlation_fit(img_ft, img_ft, frq_fit, dxy, frqs_guess=frq_guess)
 
 # plot hologram fit
