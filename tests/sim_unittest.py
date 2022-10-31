@@ -41,12 +41,13 @@ class TestSIM(unittest.TestCase):
         # Fourier transform and frequency grid
         mft = fft.fftshift(fft.fft2(fft.ifftshift(m)))
         fx = fft.fftshift(np.fft.fftfreq(nxy, dxy))
+        dfx = fx[1] - fx[0]
         fy = fft.fftshift(np.fft.fftfreq(nxy, dxy))
         ff = np.sqrt(np.expand_dims(fx, axis=0)**2 + np.expand_dims(fy, axis=1)**2)
 
         # do fitting
         mask = ff > 0.6 * fmax
-        frq_extracted, mask, _ = sim.fit_modulation_frq(mft, mft, dxy, mask)
+        frq_extracted, mask, _ = sim.fit_modulation_frq(mft, mft, dxy, mask, max_frq_shift=5 * dfx)
 
         self.assertAlmostEqual(np.abs(frq_extracted[0]), np.abs(frqs[0]), places=5)
         self.assertAlmostEqual(np.abs(frq_extracted[1]), np.abs(frqs[1]), places=5)
@@ -138,8 +139,10 @@ class TestSIM(unittest.TestCase):
             self.assertAlmostEqual(phi, float(phases_fit), places=3)
 
             # test frequency
+            fx = fft.fftshift(fft.fftfreq(gt_ft.shape[0], nbin * dxy))
+            dfx = fx[1] - fx[0]
             frq_guess = freq + np.random.uniform(-0.005, 0.005, 2)
-            frqs_fit, _, result = sim.fit_modulation_frq(gt_ft, gt_ft, nbin * dxy, frq_guess=frq_guess)
+            frqs_fit, _, result = sim.fit_modulation_frq(gt_ft, gt_ft, nbin * dxy, frq_guess=frq_guess, max_frq_shift=5 * dfx)
             np.testing.assert_allclose(frqs_fit, freq, atol=1e-5)
 
 

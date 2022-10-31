@@ -197,8 +197,8 @@ class SimImageSet:
         # self.y = tools.get_fft_pos(self.ny, self.dy, mode='symmetric')
         # self.x_us = tools.get_fft_pos(self.upsample_fact * self.nx, self.dx / self.upsample_fact, mode='symmetric')
         # self.y_us = tools.get_fft_pos(self.upsample_fact * self.ny, self.dy / self.upsample_fact, mode='symmetric')
-        self.x = (np.arange(self.nx) - self.nx // 2) * self.dx
-        self.y = (np.arange(self.ny) - self.ny // 2) * self.dy
+        self.x = (np.arange(self.nx) - (self.nx // 2)) * self.dx
+        self.y = (np.arange(self.ny) - (self.ny // 2)) * self.dy
         self.x_us = (np.arange(self.nx * self.upsample_fact) - (self.nx * self.upsample_fact) // 2) * (self.dx / self.upsample_fact)
         self.y_us = (np.arange(self.ny * self.upsample_fact) - (self.ny * self.upsample_fact) // 2) * (self.dy / self.upsample_fact)
 
@@ -773,10 +773,11 @@ class SimImageSet:
         nangles = fts1.shape[0]
 
         # todo: maybe should take some average/combination of the widefield images to try and improve signal
+        dfx = self.fx[1] - self.fx[0]
         # e.g. could multiply each by expected phase values?
         results = joblib.Parallel(n_jobs=-1, verbose=1, timeout=None)(
             joblib.delayed(fit_modulation_frq)(
-                fts1[ii, 0], fts2[ii, 0], self.dx, frq_guess=frq_guess[ii])
+                fts1[ii, 0], fts2[ii, 0], self.dx, frq_guess=frq_guess[ii], max_frq_shift=5 * dfx)
             for ii in range(nangles)
         )
 
@@ -2317,60 +2318,43 @@ def correct_modulation_for_bead_size(bead_radii, frqs, phis=(0, 2 * np.pi / 3, 4
 
 
 # estimate frequency of modulation patterns
-def fit_modulation_frq(ft1: np.ndarray, ft2: np.ndarray, dxy: float,
+def fit_modulation_frq(ft1: np.ndarray,
+                       ft2: np.ndarray,
+                       dxy: float,
                        mask: np.ndarray = None,
-                       frq_guess: tuple[float] = None, roi_pix_size: int = 5,
-                       use_jacobian: bool = False, max_frq_shift=None,
+                       frq_guess: tuple[float] = None,
+                       use_jacobian: bool = False,
+                       max_frq_shift: float = None,
                        keep_guess_if_better: bool = True):
     """
-    todo: drop roi_pix_size argument in favor of max_frq_shift
-
     Find SIM frequency from image by maximizing
     C(f) =  \sum_k img_ft(k) x img_ft*(k+f) = F(img_ft) * F(img_ft*) = F(|img_ft|^2).
 
     Note that there is ambiguity in the definition of this frequency, as -f will also be a peak. If frq_guess is
-    provided, the peak closest to the guess will be returned. Otherwise, this function returns
-    the frequency which has positive y-component. If the y-component is zero, it returns positive x-component.
-
-    Function works in two steps: initially consider C(f) = |ft(img_ft)|^2 at the same frequency points as the DFT. Then,
-    use this as the starting guess and minimize this function for other frequencies.
-
-    Note, faster to give img as input instead of its fourier transform, because getting shifted ft of image requires
-    only one fft, whereas getting shifted fourier transform of the transform itself requires two (ifft, then fft again)
+    provided, the peak closest to the guess will be returned.
 
     :param ft1: 2D Fourier space image
     :param ft2: 2D Fourier space image to be cross correlated with ft1
-    :param dxy: pixel size
-    :param fmax:
-    :param exclude_res: frequencies less than this fraction of fmax are excluded from peak finding. Not
-    :param frq_guess: frequency guess [fx, fy]. Can be None.
-    :param roi_pix_size: half-size of the region of interest around frq_guess used to estimate the peak location. This
-    parameter is only used if frq_guess is provided.
+    :param dxy: pixel size. Units of dxy and max_frq_shift must be consistent
+    :param mask: boolean array same size as ft1 and ft2. Only consider frequency points where mask is True
+    :param frq_guess: frequency guess [fx, fy]. If frequency guess is None, an initial guess will be chosen by
+    finding the maximum f_guess = argmax_f |ft1(f)|^2
+     Currently roi_pix_size is only used internally to set max_frq_shift
     :param use_jacobian: use the jacobian during the fitting procedure. Because jacobian calculation is expensive,
     this does not speed up fitting.
+    :param max_frq_shift: maximum frequency shift to consider vis-a-vis the guess frequency
+    :param keep_guess_if_better: keep the initial frequency guess if the cost function is lower at this point than after fitting
 
-    :return fit_frqs:
-    :return mask: mask detailing region used in fitting
+    :return fit_frqs, mask, fit_result:
     """
-
-    # extract options
-    ny, nx = ft1.shape
-
-    # coords
-    x = tools.get_fft_pos(nx, dxy, centered=False, mode='symmetric')
-    y = tools.get_fft_pos(ny, dxy, centered=False, mode='symmetric')
-    xx, yy = np.meshgrid(x, y)
 
     # get frequency data
     fxs = fft.fftshift(fft.fftfreq(ft1.shape[1], dxy))
-    dfx = fxs[1] - fxs[0]
     fys = fft.fftshift(fft.fftfreq(ft1.shape[0], dxy))
-    dfy = fys[1] - fys[0]
     fxfx, fyfy = np.meshgrid(fxs, fys)
-    ff = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
     if max_frq_shift is None:
-        max_frq_shift = dfx * roi_pix_size
+        max_frq_shift = np.inf
 
     # mask
     if mask is None:
@@ -2379,53 +2363,51 @@ def fit_modulation_frq(ft1: np.ndarray, ft2: np.ndarray, dxy: float,
     if mask.shape != ft1.shape:
         raise ValueError("mask must have same shape as image")
 
-    # update mask to account for frequency guess
+    # update mask to only consider region near frequency guess
     if frq_guess is not None:
-        # account for frq_guess
-        f_dist_guess = np.sqrt( (fxfx - frq_guess[0])**2 + (fyfy - frq_guess[1])**2)
-        mask[f_dist_guess > max_frq_shift] = 0
+        mask[np.sqrt((fxfx - frq_guess[0])**2 + (fyfy - frq_guess[1])**2) > max_frq_shift] = 0
 
-    # cross correlation of Fourier transforms
-    # WARNING: correlate2d uses a different convention for the frequencies of the output, which will not agree with the fft convention
-    # take conjugates so this will give \sum ft1 * ft2.conj()
-    # scipy.signal.correlate(g1, g2)(fo) seems to compute \sum_f g1^*(f) * g2(f - fo), but I want g1^*(f)*g2(f+fo)
-    cc = np.abs(scipy.signal.correlate(ft2, ft1, mode='same'))
-
+    # ############################
+    # set initial guess
+    # ############################
     if frq_guess is None:
+        # cross correlation of Fourier transforms
+        # WARNING: correlate2d uses a different convention for the frequencies of the output, which will not agree with the fft convention
+        # take conjugates so this will give \sum ft1 * ft2.conj()
+        # scipy.signal.correlate(g1, g2)(fo) seems to compute \sum_f g1^*(f) * g2(f - fo), but I want g1^*(f)*g2(f+fo)
+        cc = np.abs(scipy.signal.correlate(ft2, ft1, mode='same'))
+
         # get initial frq_guess by looking at cc at discrete frequency set and finding max
         max_ind = np.argmax(cc * mask)
         subscript = np.unravel_index(max_ind, cc.shape)
-
-        # if cy initial frq_guess, return frequency with positive fy. If fy=0, return with positive fx.
-        # i.e. want to sort so that larger y-subscript is returned first
-        # since img is real, also peak at [-fx, -fy]. Find those subscripts
-        # todo: could exactly calculate where these will be, but this is good enough for now.
-        # a = np.argmin(np.abs(fxfx[subscript] + fxfx[0, :]))
-        # b = np.argmin(np.abs(fyfy[subscript] + fyfy[:, 0]))
-        # reflected_subscript = (b, a)
-
-        # subscript_list = [subscript, reflected_subscript]
-        #
-        # m = np.max(ft1.shape)
-        # subscript_list.sort(key=lambda x: x[0] * m + x[1], reverse=True)
-        # subscript, reflected_subscript = subscript_list
 
         init_params = np.array([fxfx[subscript], fyfy[subscript]])
     else:
         init_params = frq_guess
 
+    # ############################
+    # define cross-correlation and minimization objective function
+    # ############################
+    # real-space coordinates
+    ny, nx = ft1.shape
+    x = fft.ifftshift(dxy * (np.arange(nx) - (nx // 2)))
+    y = fft.ifftshift(dxy * (np.arange(ny) - (ny // 2)))
+    xx, yy = np.meshgrid(x, y)
 
-    # do fitting
     img2 = fft.fftshift(fft.ifft2(fft.ifftshift(ft2)))
+
     # compute ft2(f + fo)
     def fft_shifted(f): return fft.fftshift(fft.fft2(np.exp(-1j*2*np.pi * (f[0] * xx + f[1] * yy)) * fft.ifftshift(img2)))
+
     # cross correlation
     # todo: conjugating ft2 instead of ft1, as in typical definition of cross correlation. Doesn't matter bc taking norm
     def cc_fn(f): return np.sum(ft1 * fft_shifted(f).conj())
     fft_norm = np.sum(np.abs(ft1) * np.abs(ft2))**2
     def min_fn(f): return -np.abs(cc_fn(f))**2 / fft_norm
 
+    # ############################
     # derivatives and jacobian
+    # ############################
     # these work, but the cost of evaluating this is so large that it slows down the fitting. This is not surprising,
     # as evaluating the jacobian is equivalent to ~4 function evaluations. So even though having the jacobian reduces
     # the number of function evaluations by a factor of ~3, this increase wins.
@@ -2437,23 +2419,28 @@ def fit_modulation_frq(ft1: np.ndarray, ft2: np.ndarray, dxy: float,
     def jac(f): return np.array([-2 * (cc_fn(f) * dfx_cc(f).conj()).real / fft_norm,
                                  -2 * (cc_fn(f) * dfy_cc(f).conj()).real / fft_norm])
 
+    # ############################
+    # do fitting
+    # ############################
     # enforce frequency fit in same box as guess
-    lbs = (init_params[0] - max_frq_shift, init_params[1] - max_frq_shift)
-    ubs = (init_params[0] + max_frq_shift, init_params[1] + max_frq_shift)
+    lbs = (init_params[0] - max_frq_shift,
+           init_params[1] - max_frq_shift)
+    ubs = (init_params[0] + max_frq_shift,
+           init_params[1] + max_frq_shift)
     bounds = ((lbs[0], ubs[0]), (lbs[1], ubs[1]))
 
     if use_jacobian:
-        result = scipy.optimize.minimize(min_fn, init_params, bounds=bounds, jac=jac)
+        fit_result = scipy.optimize.minimize(min_fn, init_params, bounds=bounds, jac=jac)
     else:
-        result = scipy.optimize.minimize(min_fn, init_params, bounds=bounds)
+        fit_result = scipy.optimize.minimize(min_fn, init_params, bounds=bounds)
 
-    fit_frqs = result.x
+    fit_frqs = fit_result.x
 
     # ensure we never get a worse point than our initial guess
     if keep_guess_if_better and min_fn(init_params) < min_fn(fit_frqs):
         fit_frqs = init_params
 
-    return fit_frqs, mask, result
+    return fit_frqs, mask, fit_result
 
 
 def plot_correlation_fit(img1_ft: np.ndarray, img2_ft: np.ndarray, frqs, dxy: float,
@@ -2688,8 +2675,8 @@ def get_phase_realspace(img, sim_frq, dxy, phase_guess=0, origin="center"):
     if origin == "center":
         # x = tools.get_fft_pos(nx, dxy, centered=True, mode="symmetric")
         # y = tools.get_fft_pos(ny, dxy, centered=True, mode="symmetric")
-        x = (np.arange(nx) - nx // 2) * dxy
-        y = (np.arange(ny) - ny // 2) * dxy
+        x = (np.arange(nx) - (nx // 2)) * dxy
+        y = (np.arange(ny) - (ny // 2)) * dxy
     elif origin == "edge":
         x = tools.get_fft_pos(nx, dxy, centered=False, mode="positive")
         y = tools.get_fft_pos(ny, dxy, centered=False, mode="positive")
@@ -3518,9 +3505,9 @@ def get_simulated_sim_imgs(ground_truth, frqs, phases, mod_depths,
         psf = None
 
     # get coordinates
-    x = (np.arange(nx) - nx // 2) * pix_size
-    y = (np.arange(ny) - ny // 2) * pix_size
-    z = (np.arange(nz) - nz // 2) * pix_size
+    x = (np.arange(nx) - (nx // 2)) * pix_size
+    y = (np.arange(ny) - (ny // 2)) * pix_size
+    z = (np.arange(nz) - (nz // 2)) * pix_size
     # x = tools.get_fft_pos(nx, pix_size, centered=True, mode="symmetric")
     # y = tools.get_fft_pos(ny, pix_size, centered=True, mode="symmetric")
     # z = tools.get_fft_pos(nz, pix_size, centered=True, mode="symmetric")

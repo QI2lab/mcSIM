@@ -753,7 +753,7 @@ def get_fft_pos(length, dt=1, centered=True, mode='symmetric'):
 
     # symmetric, centered frequencies
     pos = np.arange(-np.ceil(0.5 * (length - 1)), np.floor(0.5 * (length - 1)) + 1)
-    # todo: note that this is the same np.arange(length) - length // 2
+    # todo: note that this is the same np.arange(length) - (length // 2)
 
     if mode == 'symmetric':
         pass

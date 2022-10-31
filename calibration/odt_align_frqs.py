@@ -56,7 +56,7 @@ for ii in range(nimgs):
 
     frq_guess = np.array([fxfx[guess_ind], fyfy[guess_ind]])
 
-    hologram_frqs[ii], mask, _ = sim.fit_modulation_frq(img_ft[ii], img_ft[ii], dxy, fmax=np.inf, frq_guess=frq_guess, roi_pix_size=50)
+    hologram_frqs[ii], mask, _ = sim.fit_modulation_frq(img_ft[ii], img_ft[ii], dxy, fmax=np.inf, frq_guess=frq_guess, max_frq_shift=50 * dfx)
     # sim.plot_correlation_fit(img_ft, img_ft, hologram_frq, dxy, frqs_guess=frq_guess)
 
     # ######################
