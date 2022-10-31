@@ -9,6 +9,7 @@ from numpy import fft
 import scipy.sparse as sp
 from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
 from scipy.signal.windows import tukey
+from numpy.linalg import lstsq
 from skimage.restoration import unwrap_phase, denoise_tv_chambolle
 import dask
 import dask.array as da
@@ -18,6 +19,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm, Normalize
 from matplotlib.patches import Circle, Arc
 from matplotlib.cm import ScalarMappable
+import napari
+import zarr
 #
 import localize_psf.fit as fit
 import mcsim.analysis.sim_reconstruction as sim
@@ -93,8 +96,8 @@ class tomography:
 
         # generate coordinates
         self.dxy = dxy
-        self.x = (np.arange(self.nx) - self.nx // 2) * dxy
-        self.y = (np.arange(self.ny) - self.ny // 2) * dxy
+        self.x = (np.arange(self.nx) - (self.nx // 2)) * dxy
+        self.y = (np.arange(self.ny) - (self.ny // 2)) * dxy
         self.fxs = fft.fftshift(fft.fftfreq(self.nx, self.dxy))
         self.fys = fft.fftshift(fft.fftfreq(self.ny, self.dxy))
         self.fxfx, self.fyfy = np.meshgrid(self.fxs, self.fys)
@@ -141,7 +144,9 @@ class tomography:
                                                  ff_diff_ref >= 0.5 * np.linalg.norm(self.hologram_frqs[ii] - self.reference_frq))
 
             # fit frequency
-            frq_holo, _, _ = sim.fit_modulation_frq(img_ref_ft, img_ref_ft, self.dxy, mask=allowed_search_mask, roi_pix_size=50)
+            frq_holo, _, _ = sim.fit_modulation_frq(img_ref_ft, img_ref_ft, self.dxy, mask=allowed_search_mask,
+                                                    max_frq_shift=50 * self.dfx)
+                                                    #roi_pix_size=50)
 
             if saving:
                 figh = sim.plot_correlation_fit(img_ref_ft, img_ref_ft, frq_holo, self.dxy)
@@ -239,8 +244,14 @@ class tomography:
         # #########################
         # unmix holograms
         # #########################
-        holograms_ft_raw = da.map_blocks(unmix_hologram, self.imgs_raw, self.dxy, 2*self.fmax, self.reference_frq,
-                                         self.use_gpu, apodization=apodization, dtype=complex)
+        holograms_ft_raw = da.map_blocks(unmix_hologram,
+                                         self.imgs_raw,
+                                         self.dxy,
+                                         2*self.fmax,
+                                         self.reference_frq,
+                                         self.use_gpu,
+                                         apodization=apodization,
+                                         dtype=complex)
 
         if mask is None:
             holograms_ft = holograms_ft_raw
@@ -257,8 +268,14 @@ class tomography:
         if self.imgs_raw_bg is None:
             holograms_ft_bg = self.holograms_ft
         else:
-            holograms_ft_raw_bg = da.map_blocks(unmix_hologram, self.imgs_raw_bg, self.dxy, 2*self.fmax, self.reference_frq,
-                                                self.use_gpu, apodization=apodization, dtype=complex)
+            holograms_ft_raw_bg = da.map_blocks(unmix_hologram,
+                                                self.imgs_raw_bg,
+                                                self.dxy,
+                                                2*self.fmax,
+                                                self.reference_frq,
+                                                self.use_gpu,
+                                                apodization=apodization,
+                                                dtype=complex)
 
             if mask is None:
                 holograms_ft_bg = holograms_ft_raw_bg
@@ -281,13 +298,21 @@ class tomography:
 
                 hologram_ft_ref = holograms_ft_bg[slices]
 
-                phase_offsets_bg = da.map_blocks(get_global_phase_shifts, holograms_ft_bg, hologram_ft_ref, dtype=float,
-                                                 chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
+                fit_params = da.map_blocks(get_global_phase_shifts,
+                                           holograms_ft_bg,
+                                           hologram_ft_ref,
+                                           dtype=complex,
+                                           chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
+                # phase_offsets_bg = da.angle(fit_params[..., 0])
+                # phase_offsets_bg = da.imag(fit_params[..., 0])
+                phase_offsets_bg = da.angle(fit_params)
         else:
             phase_offsets_bg = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
 
         self.phase_offsets_bg = phase_offsets_bg
-        self.holograms_ft_bg = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg), axis=bg_average_axes, keepdims=True)
+        self.holograms_ft_bg = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+                                       axis=bg_average_axes,
+                                       keepdims=True)
 
         # #########################
         # determine phase offsets
@@ -298,8 +323,14 @@ class tomography:
             if fit_phases:
                 print("computing phase offsets")
                 with ProgressBar():
-                    phase_offsets = da.map_blocks(get_global_phase_shifts, holograms_ft, self.holograms_ft_bg, dtype=float,
-                                                  chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
+                    fit_params = da.map_blocks(get_global_phase_shifts,
+                                               holograms_ft,
+                                               self.holograms_ft_bg,
+                                               dtype=complex,
+                                               chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
+                    # phase_offsets = da.angle(fit_params[..., 0])
+                    # phase_offsets = da.imag(fit_params[..., 0])
+                    phase_offsets = da.angle(fit_params)
             else:
                 phase_offsets = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
 
@@ -309,13 +340,17 @@ class tomography:
 
     def refocus(self, dz):
         # todo: do I need to rename variable instead of redefining?
-        self.holograms_ft = da.map_blocks(prop_ft_medium, self.holograms_ft, self.dxy, dz, self.wavelength, self.no,
-                                   axis=(-2, -1),
-                                   dtype=complex)
+        self.holograms_ft = da.map_blocks(prop_ft_medium,
+                                          self.holograms_ft,
+                                          self.dxy, dz, self.wavelength, self.no,
+                                          axis=(-2, -1),
+                                          dtype=complex)
 
-        self.holograms_ft_bg = da.map_blocks(prop_ft_medium, self.holograms_ft_bg, self.dxy, dz, self.wavelength, self.no,
-                                   axis=(-2, -1),
-                                   dtype=complex)
+        self.holograms_ft_bg = da.map_blocks(prop_ft_medium,
+                                             self.holograms_ft_bg,
+                                             self.dxy, dz, self.wavelength, self.no,
+                                             axis=(-2, -1),
+                                             dtype=complex)
 
 
     def set_scattered_field(self, scattered_field_regularization=10, mask=None):
@@ -1026,12 +1061,19 @@ def get_global_phase_shifts(imgs, ref_imgs, thresh=None):
     @param thresh: only consider points in images where both abs(imgs) and abs(ref_imgs) > thresh
     @return phase_shifts:
     """
+    x = np.arange(imgs.shape[-1])
+    y = np.arange(imgs.shape[-2])
+    xx, yy = np.meshgrid(x, y)
+    xx = np.expand_dims(xx, axis=list(range(imgs.ndim - 2)))
+    yy = np.expand_dims(yy, axis=list(range(imgs.ndim - 2)))
+
     # broadcast images and references images to same shapes
-    imgs, ref_imgs = np.broadcast_arrays(imgs, ref_imgs)
+    imgs, ref_imgs, xx, yy = np.broadcast_arrays(imgs, ref_imgs, xx, yy)
 
     # looper over all dimensions except the last two, which are the y and x dimensions respectively
     loop_shape = imgs.shape[:-2]
-    phase_shifts = np.zeros(loop_shape + (1, 1))
+    # phase_shifts = np.zeros(loop_shape + (1, 1))
+    fit_params = np.zeros(loop_shape + (1, 1), dtype=complex)
     nfits = np.prod(loop_shape).astype(int)
     for ii in range(nfits):
         ind = np.unravel_index(ii, loop_shape)
@@ -1042,15 +1084,38 @@ def get_global_phase_shifts(imgs, ref_imgs, thresh=None):
             mask = np.logical_and(np.abs(imgs[ind]) > thresh, np.abs(ref_imgs) > thresh)
 
         # todo: could add a more sophisticated fitting function if seemed useful
-        def fn(p): return np.abs(imgs[ind] * np.exp(1j * p[0]) - ref_imgs[ind])[mask].ravel()
+        # def fn(p): return np.abs(imgs[ind] * np.exp(1j * p[0]) - ref_imgs[ind])[mask].ravel()
         # def jac(p): return [(1j * imgs[ind] * np.exp(1j * p[0])).ravel()]
         # s1 = np.mean(imgs[ii])
         # s2 = np.mean(ref_imgs[ii])
         # def fn(p): return np.abs(s1 * np.exp(1j * p[0]) - s2)
-        results = fit.fit_least_squares(fn, [0])
-        phase_shifts[ind] = results["fit_params"]
 
-    return phase_shifts
+        # results = fit.fit_least_squares(fn, [0])
+        # phase_shifts[ind] = results["fit_params"]
+
+        # linear least squares approach is ~10x faster than non-linear approach (not surprisingly!)
+        # tstart = time.perf_counter()
+
+        # A = np.stack((imgs[ind][mask], xx[ind][mask], yy[ind][mask]), axis=1)
+        # B = ref_imgs[ind][mask]
+        # fps, _, _, _ = lstsq(A, B, rcond=None)
+        # fit_params[ind, :] = fps
+        A = np.expand_dims(imgs[ind][mask], axis=1)
+        B = ref_imgs[ind][mask]
+        fps, _, _, _ = lstsq(A, B, rcond=None)
+        fit_params[ind, :] = fps
+        
+        # take log first to linearize fitting of gradient phase
+        # todo: this did not converge...
+        # A = np.stack((np.log(imgs[ind][mask]), xx[ind][mask], yy[ind][mask]), axis=1)
+        # B = np.log(ref_imgs[ind][mask])
+        # fps, _, _, _ = lstsq(A, B, rcond=None)
+        # fit_params[ind, :] = fps
+
+        # phase_shifts[ind] = np.angle(fit_params[0])
+        # print(time.perf_counter() - tstart)
+
+    return fit_params
 
 
 # convert between index of refraction and scattering potential
@@ -1254,7 +1319,7 @@ def get_coords(drs, nrs, expand=False):
     @param expand: if False then return z, y, x as 1D arrays, otherwise return as 3D arrays
     @return: coords (z, y, x)
     """
-    coords = [dr * (np.arange(nr) - nr // 2) for dr, nr in zip(drs, nrs)]
+    coords = [dr * (np.arange(nr) - (nr // 2)) for dr, nr in zip(drs, nrs)]
 
     if expand:
         coords = np.meshgrid(*coords, indexing="ij")
@@ -1865,8 +1930,9 @@ def plot_scattered_angle(img_efield_ft,
 
     # real-space coordinates
     ny, nx = img_efield_ft.shape
-    x = (np.arange(nx) - nx // 2) * dxy
-    y = (np.arange(ny) - ny // 2) * dxy
+    # x = (np.arange(nx) - (nx // 2)) * dxy
+    # y = (np.arange(ny) - (ny // 2)) * dxy
+    x, y = get_coords((dxy, dxy), (nx, ny))
     extent_xy = [x[0] - 0.5 * dxy, x[-1] + 0.5 * dxy,
                  y[-1] + 0.5 * dxy, y[0] - 0.5 * dxy]
 
@@ -2148,9 +2214,9 @@ def plot_n3d(n, no, coords=None, title=""):
     # real-space coordinates
     # ####################
     if coords is None:
-        x_v = np.arange(nx_v) - nx_v // 2
-        y_v = np.arange(ny_v) - ny_v // 2
-        z_v = np.arange(nz_v) - nz_v // 2
+        x_v = np.arange(nx_v) - (nx_v // 2)
+        y_v = np.arange(ny_v) - (ny_v // 2)
+        z_v = np.arange(nz_v) - (nz_v // 2)
     else:
         x_v, y_v, z_v = coords
 
@@ -2439,8 +2505,9 @@ def compare_escatt(e, e_gt, beam_frqs, dxy, ttl="", figsize=(35, 20), gamma=0.1)
     """
     nbeams, ny, nx = e.shape
 
-    x, y = np.meshgrid((np.arange(nx) - nx // 2) * dxy,
-                       (np.arange(ny) - ny // 2) * dxy)
+    x, y  = get_coords((dxy, dxy), (nx, ny))
+    # x, y = np.meshgrid((np.arange(nx) - nx // 2) * dxy,
+    #                    (np.arange(ny) - ny // 2) * dxy)
 
     e_gt_ft = fft.fftshift(fft.fft2(fft.fftshift(e_gt, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
     e_ft = fft.fftshift(fft.fft2(fft.fftshift(e, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
@@ -2573,3 +2640,241 @@ def compare_escatt(e, e_gt, beam_frqs, dxy, ttl="", figsize=(35, 20), gamma=0.1)
             plt.colorbar(im, cax=ax)
 
     return figh, figh_ft
+
+def display_tomography_recon(recon_fname, raw_data_fname=None,
+                             show_raw=True, show_raw_ft=False,
+                             show_v_fft=False, show_efields=False,
+                             block_while_display=True):
+    """
+    Display reconstruction results and (optionally) raw data in Napari
+
+    @param recon_fname:
+    @param raw_data_fname:
+    @param show_raw:
+    @param show_v_fft:
+    @param show_efields:
+    @return:
+    """
+    img_z = zarr.open(recon_fname, "r")
+    dxy = img_z.attrs["camera_path_attributes"]["dx_um"]
+    proc_roi = img_z.attrs["processing roi"]
+    ny = proc_roi[1] - proc_roi[0]
+    nx = proc_roi[3] - proc_roi[2]
+
+    cam_roi = img_z.attrs["camera_path_attributes"]["camera_roi"]
+    ny_raw = cam_roi[1] - cam_roi[0]
+    nx_raw = cam_roi[3] - cam_roi[2]
+
+    dz_v = img_z.attrs["dz"]
+    dxy_v = img_z.attrs["dx"]
+    nz_sp = img_z.n.shape[-4]
+    ny_sp = img_z.n.shape[-2]
+    nx_sp = img_z.n.shape[-1]
+    npatterns = len(img_z.attrs["beam_frqs"])
+    wavelength = img_z.attrs["wavelength"]
+    no = img_z.attrs["no"]
+    use_tv = img_z.attrs["use_tv"]
+    tau = img_z.attrs["tv_tau"]
+    use_lasso = img_z.attrs["use_l1"]
+    tau_lasso = img_z.attrs["l1_tau"]
+
+    if not hasattr(img_z, "efield_bg_ft") or not hasattr(img_z, "efield_scattered_ft") or not hasattr(img_z, "efields_ft"):
+        show_efields = False
+
+
+    if raw_data_fname is not None:
+        raw_data = zarr.open(raw_data_fname, "r")
+        imgs = da.from_zarr(raw_data.cam2.odt)
+    else:
+        show_raw = False
+
+    # ######################
+    # create viewer
+    # ######################
+    viewer = napari.Viewer(title=str(recon_fname))
+
+    # ######################
+    # raw data
+    # ######################
+    if show_raw:
+        ims_raw_stack = da.stack([imgs] * nz_sp, axis=-3)
+        viewer.add_image(ims_raw_stack, scale=(dz_v / dxy_v, 1, 1),
+                         # translate=(0, tm_set.nx * tm_set.dxy),
+                         name="raw images", contrast_limits=[0, 4096])
+
+        if show_raw_ft:
+            imgs_raw_ft = da.fft.fftshift(da.fft.fft2(da.fft.ifftshift(imgs, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+            img_raw_ft_stack = da.stack([imgs_raw_ft] * nz_sp, axis=-3)
+            viewer.add_image(da.abs(img_raw_ft_stack), scale=(dz_v / dxy_v, 1, 1),
+                             name="raw images ft",
+                             gamma=0.2,
+                             translate=(ny_raw, 0))
+
+    # ######################
+    # reconstructed index of refraction
+    # ######################
+    # Napari is using convention (y, x) whereas I'm using (x, y), so need to swap these dimensions in affine xforms
+    swap_xy = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+    affine_recon2cam = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
+
+    # plot index of refraction
+    # todo: add affine xforms to put recon in correct position wrt to raw data
+    n_im = da.from_zarr(img_z.n)[..., 1, :, :]
+    n_im_stack = da.stack([n_im] * npatterns, axis=-4)
+
+    n_r = da.from_zarr(img_z.n)[..., 0, :, :]
+    n_r_stack = da.stack([n_r] * npatterns, axis=-4)
+
+    # for convenience of affine xforms, keep xy in pixels
+    viewer.add_image(n_im_stack,
+                     scale=(dz_v / dxy_v, 1, 1),
+                     name="n.imaginary",
+                     affine=swap_xy.dot(affine_recon2cam.dot(swap_xy)),
+                     contrast_limits=[0, 0.05], visible=False)
+
+    viewer.add_image(n_r_stack - no,
+                     scale=(dz_v / dxy_v, 1, 1),
+                     name=f"n-no, tv={use_tv * tau:.3f}, l1={use_lasso * tau_lasso:.3f}",
+                     affine=swap_xy.dot(affine_recon2cam.dot(swap_xy)),
+                     contrast_limits=[0, 0.05])
+
+    # ######################
+    # show ROI in image
+    # ######################
+    if show_raw:
+        # draw so that points inside rectangle are in the ROI. Points under rectangle are not
+        proc_roi_rect = np.array([[[proc_roi[0] - 1, proc_roi[2] - 1],
+                                   [proc_roi[0] - 1, proc_roi[3]],
+                                   [proc_roi[1], proc_roi[3]],
+                                   [proc_roi[1], proc_roi[2] - 1]
+                                   ]])
+        viewer.add_shapes(proc_roi_rect, shape_type="polygon", name="processing ROI", edge_width=1,
+                          edge_color=[1, 0, 0, 1], face_color=[0, 0, 0, 0])
+
+
+    # ######################
+    # Fts
+    # ######################
+    if show_v_fft:
+        # plot Fourier transform of scattering potential
+        n_full = img_z.n[..., 0, :, :] + 1j * img_z.n[..., 1, :, :]
+        v = da.map_blocks(get_scattering_potential, n_full, img_z.attrs["no"], wavelength)
+        v_ft = da.fft.fftshift(da.fft.fftn(da.fft.ifftshift(v, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
+        v_ft_stack = da.stack([v_ft] * npatterns, axis=-4)
+
+        v_ft_start = da.abs(da.from_zarr(img_z.v_ft_start))
+        v_ft_start_stack = da.stack([v_ft_start] * npatterns, axis=-4)
+
+        viewer.add_image(da.abs(v_ft_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|v ft|", gamma=0.1, visible=False)
+        viewer.add_image(da.abs(v_ft_start_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|v ft| start", gamma=0.1, visible=False)
+
+    # ######################
+    # electric fields
+    # ######################
+    if show_efields:
+        csize = list(img_z.efield_scattered_ft.chunks)
+        csize[-3] = img_z.efield_scattered_ft.shape[-3]
+
+        # scattered field
+        escatt_load = da.from_zarr(img_z.efield_scattered_ft).rechunk(csize)
+
+        escatt = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(
+            escatt_load,
+            axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        escatt_stack = da.stack([escatt] * nz_sp, axis=-3)
+
+        # display amplitude and phase
+        viewer.add_image(da.abs(escatt_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|e scatt|", contrast_limits=[0, 1.2],
+                         translate=(0, nx_raw))
+
+        #
+        viewer.add_image(da.angle(escatt_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="angle(e scatt)", contrast_limits=[-np.pi, np.pi],
+                         colormap="PiYG",
+                         translate=(ny, nx_raw))
+
+        # measured field
+        e_load_ft = da.from_zarr(img_z.efields_ft).rechunk(csize)
+
+        e = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(
+            e_load_ft,
+            axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        estack = da.stack([e] * nz_sp, axis=-3)
+
+        # display amplitude and phase
+        viewer.add_image(da.abs(estack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|e|", contrast_limits=[0, 500],
+                         translate=(0, nx_raw + nx))
+
+        #
+        viewer.add_image(da.angle(estack), scale=(dz_v / dxy_v, 1, 1),
+                         name="angle(e)", contrast_limits=[-np.pi, np.pi],
+                         colormap="PiYG",
+                         translate=(ny, nx_raw + nx))
+
+        # background field
+        ebg_load_ft = da.from_zarr(img_z.efield_bg_ft).rechunk(csize)
+
+        ebg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(
+            ebg_load_ft,
+            axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        ebg_stack = da.stack([ebg] * nz_sp, axis=-3)
+
+        for dd in range(estack.ndim):
+            if ebg_stack.shape[dd] == 1 and ebg_stack.shape[dd] != estack.shape[dd]:
+                ebg_stack = da.concatenate([ebg_stack] * estack.shape[dd], axis=dd)
+
+        # display amplitude and phase
+        viewer.add_image(da.abs(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|e bg|", contrast_limits=[0, 500],
+                         translate=(0, nx_raw + 2 * nx))
+
+        #
+        viewer.add_image(da.angle(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="angle(e bg)", contrast_limits=[-np.pi, np.pi],
+                         colormap="PiYG",
+                         translate=(ny, nx_raw + 2 * nx))
+
+        # phase diff
+        pd = da.mod(da.angle(estack) - da.angle(ebg_stack), 2 * np.pi)
+        pd_even = pd - 2*np.pi * (pd > np.pi)
+        viewer.add_image(pd_even, scale=(dz_v / dxy_v, 1, 1),
+                         name="angle(e) - angle(e bg)", contrast_limits=[-1, 1],
+                         colormap="PiYG",
+                         translate=(2*ny, nx_raw + 2 * nx))
+
+        # compute electric field power
+        efield_power = da.mean(da.abs(e), axis=(-1, -2), keepdims=True)
+        efield_power_stack = da.stack([efield_power] * nz_sp, axis=-3)
+        viewer.add_image(efield_power_stack, scale=(dz_v / dxy_v, ny, nx),
+                         name="efield amp",
+                         contrast_limits=[0, 1000],
+                         colormap="fire",
+                         translate=(2 * ny + ny / 2, nx_raw + nx + nx / 2)
+                         )
+
+    # ######################
+    # phase shifts
+    # ######################
+    dphi = da.from_zarr(img_z.phase_shifts)
+    dphi_stack = da.stack([dphi] * nz_sp, axis=-3)
+    viewer.add_image(dphi_stack, scale=(dz_v / dxy_v, ny, nx),
+                     name="phase shifts",
+                     contrast_limits=[-np.pi, np.pi],
+                     colormap="PiYG",
+                     translate=(2*ny + ny / 2, nx_raw + nx / 2)
+                     )
+
+    viewer.dims.axis_labels = ["position", "time", "", "", "pattern", "z", "y", "x"]
+
+    # block until closed by user
+    if block_while_display:
+        viewer.show(block=True)
+
+    return viewer
