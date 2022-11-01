@@ -8,7 +8,7 @@ import numpy as np
 from numpy import fft
 import scipy.sparse as sp
 from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
-from scipy.signal.windows import tukey
+from scipy.signal.windows import tukey, hann
 from numpy.linalg import lstsq
 from skimage.restoration import unwrap_phase, denoise_tv_chambolle
 import dask
@@ -23,6 +23,7 @@ import napari
 import zarr
 #
 import localize_psf.fit as fit
+import localize_psf.rois as rois
 import mcsim.analysis.sim_reconstruction as sim
 import mcsim.analysis.analysis_tools as tools
 from field_prop import prop_ft_medium
@@ -43,7 +44,7 @@ class tomography:
                  na_excitation,
                  dxy,
                  reference_frq_guess,
-                 hologram_frqs_guess=None,
+                 hologram_frqs_guess,
                  imgs_raw_bg=None,
                  phase_offsets=None,
                  axes_names=None):
@@ -79,9 +80,13 @@ class tomography:
         else:
             self.axes_names = axes_names
 
-        # hologram frequency info
-        self.reference_frq = np.array(reference_frq_guess) # 2
-        self.hologram_frqs = np.array(hologram_frqs_guess) # npatterns x 2
+        # hologram frequency info. Both should be broadcastable to same size as imgs
+        # shape = ... x 1 x 1 x 1 x 2
+        self.reference_frq = np.expand_dims(np.array(reference_frq_guess),
+                                            axis=list(range(self.nextra_dims)) + [-2, -3])
+        # shape = ... x npatterns x 1 x 1 x 2
+        self.hologram_frqs = np.expand_dims(np.array(hologram_frqs_guess),
+                                            axis=list(range(self.nextra_dims)) + [-2, -3])
 
         # physical parameters
         self.wavelength = wavelength
@@ -112,9 +117,9 @@ class tomography:
         self.use_gpu = False
         self.reconstruction_settings = {} # keys will differ depending on recon mode
 
-    def estimate_hologram_frqs(self, save_dir=None):
+    def estimate_hologram_frqs(self, roi_size_pix, roi_size_pix_small=5, save_dir=None):
         """
-        Estimate hologram frequencies from raw image
+        Estimate hologram frequencies from raw images
         @param save_dir:
         @return:
         """
@@ -124,33 +129,91 @@ class tomography:
             save_dir = Path(save_dir)
             save_dir.mkdir(exist_ok=True)
 
-        # ############################
-        # calibrate pattern frequencies
-        # ############################
-
-        # load one slice of background data to get frequency reference. Load the first slice along all dimensions
-        slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
-        imgs_frq_cal = np.squeeze(self.imgs_raw_bg[slices])
 
         # frequency data associated with images
         fxfx, fyfy = np.meshgrid(self.fxs, self.fys)
 
-        def get_hologram_frqs(img, ii):
-            img_ref_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
+        def get_hologram_frqs(img, fx_guess, fy_guess,
+                              use_guess_init_params,
+                              saving, roi_size_pix, block_id=None):
+            """
 
-            # define allowed search area
-            ff_diff_ref = np.abs((fxfx - self.reference_frq[0]) ** 2 + (fyfy - self.reference_frq[1]) ** 2)
-            allowed_search_mask = np.logical_and(ff_diff_ref < 1.25 * self.fmax,
-                                                 ff_diff_ref >= 0.5 * np.linalg.norm(self.hologram_frqs[ii] - self.reference_frq))
+            @param img:
+            @param fx_guess:
+            @param fy_guess:
+            @param use_guess_init_params: if True use guess not only to find an initial ROI but also as the initial
+            guess in the fit
+            @param saving:
+            @param roi_size_pix:
+            @param block_id: can use this to figure out what blcok we are in when running with dask.array map_blocks()
+            @return:
+            """
 
-            # fit frequency
-            frq_holo, _, _ = sim.fit_modulation_frq(img_ref_ft, img_ref_ft, self.dxy, mask=allowed_search_mask,
-                                                    max_frq_shift=50 * self.dfx)
-                                                    #roi_pix_size=50)
+            # this will get block id when function is run using map_blocks
+            if block_id is not None:
+                pattern_index = block_id[-4]
+                time_index = block_id[1]
+            else:
+                block_id = -1
+                pattern_index = -1
+
+            # ROI centered on frequency guess
+            nx_center_2 = np.argmin(np.abs(np.squeeze(fx_guess) - self.fxs))
+            ny_center_2 = np.argmin(np.abs(np.squeeze(fy_guess) - self.fys))
+            roi2 = rois.get_centered_roi([ny_center_2, nx_center_2],
+                                         [roi_size_pix, roi_size_pix],
+                                         min_vals=[0, 0],
+                                         max_vals=img.shape[-2:])
+
+            apodization = np.expand_dims(np.expand_dims(hann(img.shape[-1]), axis=0) *
+                                         np.expand_dims(hann(img.shape[-2]), axis=1),
+                                         axis=list(range(img.ndim - 2)))
+
+            img_ref_ft = fft.fftshift(fft.fft2(fft.ifftshift(np.squeeze(img * apodization))))
+            ft2 = img_ref_ft[..., roi2[0]:roi2[1], roi2[2]:roi2[3]]
+
+            # fit to Gaussian
+            fxfx_roi = rois.cut_roi(roi2, fxfx)
+            fyfy_roi = rois.cut_roi(roi2, fyfy)
+            if use_guess_init_params:
+                fx_ip_guess = np.squeeze(fx_guess)
+                fy_ip_guess = np.squeeze(fy_guess)
+            else:
+                max_ind = np.unravel_index(np.argmax(np.abs(ft2)), ft2.shape)
+                fx_ip_guess = fxfx_roi[max_ind]
+                fy_ip_guess = fyfy_roi[max_ind]
+
+            init_params = [np.max(np.abs(ft2)),
+                           fx_ip_guess,
+                           fy_ip_guess,
+                           self.dfx * 3, self.dfy * 3, 0, 0]
+            fixed_params = [False, False, False, False, False, False, True]
+
+            rgauss, fit_fn = fit.fit_gauss2d(np.abs(ft2),
+                                             init_params=init_params,
+                                             fixed_params=fixed_params,
+                                             xx=fxfx_roi,
+                                             yy=fyfy_roi)
+
+            frq_holo = np.expand_dims(rgauss["fit_params"][1:3],
+                                      axis=list(range(fx_guess.ndim)))
+
 
             if saving:
-                figh = sim.plot_correlation_fit(img_ref_ft, img_ref_ft, frq_holo, self.dxy)
-                figh.savefig(Path(save_dir, f"{ii:d}_angle_correlation_diagnostic.png"))
+                figh = sim.plot_correlation_fit(img_ref_ft, img_ref_ft,
+                                                np.squeeze(frq_holo),
+                                                self.dxy,
+                                                roi_size=(roi2[1] - roi2[0], roi2[3] - roi2[2]),
+                                                frqs_guess=np.array([np.squeeze(fx_guess), np.squeeze(fy_guess)])
+                                                )
+                # figh = plt.figure()
+                # n = PowerNorm(gamma=0.1, vmin=0, vmax=np.max(np.abs(ft2)))
+                # ax = figh.add_subplot(1, 2, 1)
+                # ax.imshow(np.abs(ft2), norm=n)
+                # ax = figh.add_subplot(1, 2, 2)
+                # ax.imshow(fit_fn(fxfx_roi, fyfy_roi), norm=n)
+
+                figh.savefig(Path(save_dir, f"{pattern_index:d}=pattern_{time_index:d}=time_angle_correlation_diagnostic.png"))
                 plt.close(figh)
 
             return frq_holo
@@ -158,26 +221,59 @@ class tomography:
         # do frequency calibration
         print(f"calibrating {self.npatterns:d} pattern frequencies")
 
-        # create list of tasks
-        results = []
-        for ii, im in enumerate(imgs_frq_cal):
-            results.append(dask.delayed(get_hologram_frqs)(im, ii))
+        # ############################
+        # calibrate frequency for one set of images using coarse initial frequency guesses
+        # ############################
+        # load one slice of background data to get frequency reference. Load the first slice along all dimensions
+        slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
+
+        frq_chunks= (1,) *self.nextra_dims + (1, 1, 1, 2)
+        fguesses = da.from_array(self.hologram_frqs, chunks=frq_chunks)
 
         with ProgressBar():
-            r = dask.compute(*results)
-        frqs_hologram = np.array(r)
+            frqs_hologram = da.map_blocks(get_hologram_frqs,
+                                          self.imgs_raw_bg[slices],
+                                          fguesses[slices][..., 0],
+                                          fguesses[slices][..., 1],
+                                          False,
+                                          saving,
+                                          roi_size_pix,
+                                          dtype=float,
+                                          chunks=(1,) * self.nextra_dims + (1, 1, 1, 2),
+                                          new_axis=-1).compute()
 
         # for hologram interference frequencies, use frequency closer to guess value
-        frq_dists_ref = np.linalg.norm(frqs_hologram - np.expand_dims(self.reference_frq, axis=0), axis=1)
-        frq_dists_neg_ref = np.linalg.norm(frqs_hologram + np.expand_dims(self.reference_frq, axis=0), axis=1)
-        frqs_hologram[frq_dists_neg_ref < frq_dists_ref] = -frqs_hologram[frq_dists_neg_ref < frq_dists_ref]
+        frq_dists_ref = np.linalg.norm(frqs_hologram - self.reference_frq, axis=-1)[slices]
+        frq_dists_neg_ref = np.linalg.norm(frqs_hologram + self.reference_frq, axis=-1)[slices]
+        frqs_hologram[frq_dists_neg_ref < frq_dists_ref] *= -1
+
+        # ############################
+        # fit ALL hologram frequencies ...
+        # ############################
+        f_finer_guesses = da.from_array(frqs_hologram).rechunk(frq_chunks)
+
+        with ProgressBar():
+            f = da.map_blocks(get_hologram_frqs,
+                              self.imgs_raw,
+                              f_finer_guesses[..., 0],
+                              f_finer_guesses[..., 1],
+                              False,
+                              False,
+                              roi_size_pix_small,
+                              dtype=float,
+                              chunks=(1,) * self.nextra_dims + (1, 1, 1, 2),
+                              new_axis=-1).compute()
 
         #return frqs_hologram
-        self.hologram_frqs = frqs_hologram
+        self.hologram_frqs = f
 
-    def estimate_reference_frq(self, mode="fit", save_dir=None):
+    def estimate_reference_frq(self,
+                               mode="fit",
+                               save_dir=None):
         """
-        Estimate hologram reference frequency by looking at residual speckle
+        Estimate hologram reference frequency
+        @param mode: if "fit" fit the residual speckle pattern to try and estimate the reference frequency.
+         If "average" take the average of self.hologram_frqs as the reference frequency
         @param save_dir:
         @return:
         """
@@ -193,7 +289,10 @@ class tomography:
                                            axes=(-1, -2))
             imgs_frq_cal_ft_abs_mean = np.mean(np.abs(imgs_frq_cal_ft), axis=0)
 
-            results, circ_dbl_fn, figh_ref_frq = fit_ref_frq(imgs_frq_cal_ft_abs_mean, self.dxy, 2*self.fmax, show_figure=saving)
+            results, circ_dbl_fn, figh_ref_frq = fit_ref_frq(imgs_frq_cal_ft_abs_mean,
+                                                             self.dxy,
+                                                             2*self.fmax,
+                                                             show_figure=saving)
             frq_ref = results["fit_params"][:2]
 
             # flip sign if necessary to ensure close to guess
@@ -206,7 +305,7 @@ class tomography:
 
                 figh_ref_frq.savefig(Path(save_dir, "frequency_reference_diagnostic.png"))
         elif mode == "average":
-            frq_ref = np.mean(self.hologram_frqs, axis=0)
+            frq_ref = np.mean(self.hologram_frqs, axis=-4, keepdims=True)
         else:
             raise ValueError(f"'mode' must be '{mode:s}' but must be 'fit' or 'average'")
 
@@ -216,17 +315,17 @@ class tomography:
         """
         Get beam incident beam frequencies from hologram frequencies and reference frequency
 
-        @return beam_frqs:
+        @return beam_frqs: array of size N1 x N2 ... x Nm x 3
         """
 
         bxys = self.hologram_frqs - np.expand_dims(self.reference_frq, axis=0)
-        bzs = get_fz(bxys[:, 0], bxys[:, 1], self.no, self.wavelength)
+        bzs = get_fz(bxys[..., 0], bxys[..., 1], self.no, self.wavelength)
         # x, y, z
-        beam_frqs = np.concatenate((bxys, np.expand_dims(bzs, axis=1)), axis=1)
+        beam_frqs = np.stack((bxys[..., 0], bxys[..., 1], bzs), axis=-1)
 
         return beam_frqs
 
-    def unmix_holograms(self, mask=None, bg_average_axes=(0,), fit_phases=False, apodization=None):
+    def unmix_holograms(self, bg_average_axes, mask=None, fit_phases=False, apodization=None):
         """
         Unmix and preprocess holograms
         @param mask: area to be cut out of hologrms
@@ -241,6 +340,8 @@ class tomography:
                                          np.expand_dims(tukey(self.ny, alpha=0.1), axis=1),
                                          axis=tuple(range(self.nextra_dims + 1)))
 
+        ref_frq_da = da.from_array(self.reference_frq, chunks=(1,) * (self.reference_frq.ndim - 1) + (2,))
+
         # #########################
         # unmix holograms
         # #########################
@@ -248,7 +349,8 @@ class tomography:
                                          self.imgs_raw,
                                          self.dxy,
                                          2*self.fmax,
-                                         self.reference_frq,
+                                         ref_frq_da[..., 0],
+                                         ref_frq_da[..., 1],
                                          self.use_gpu,
                                          apodization=apodization,
                                          dtype=complex)
@@ -272,7 +374,8 @@ class tomography:
                                                 self.imgs_raw_bg,
                                                 self.dxy,
                                                 2*self.fmax,
-                                                self.reference_frq,
+                                                ref_frq_da[..., 0],
+                                                ref_frq_da[..., 1],
                                                 self.use_gpu,
                                                 apodization=apodization,
                                                 dtype=complex)
@@ -398,7 +501,7 @@ class tomography:
 
     def reconstruct_linear(self,
                            mode,
-                           solver="naive",
+                           solver="fista",
                            scattered_field_regularization=50,
                            niters=100,
                            reconstruction_regularizer=0.1,
@@ -435,15 +538,17 @@ class tomography:
         @return:
         """
         # ############################
-        # set sampling info
+        # set grid sampling info
         # ############################
+        mean_beam_frqs = np.mean(self.get_beam_frqs(), axis=tuple(range(self.hologram_frqs.ndim - 3)))[:, 0, 0]
+        beam_frqs_da = da.from_array(self.get_beam_frqs(), chunks=(1,) * (self.hologram_frqs.ndim - 3) + (self.npatterns, 1, 1, 3))
 
         # rechunk erecon_ft since must operate on all patterns at once
         # get sampling so can determine new chunk sizes
         drs_v, v_size = \
             get_reconstruction_sampling(self.no,
                                         self.na_detection,
-                                        self.get_beam_frqs(),
+                                        self.na_excitation,
                                         self.wavelength,
                                         self.dxy,
                                         self.holograms_ft.shape[-2:],
@@ -468,7 +573,11 @@ class tomography:
             holograms_bg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft_bg, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
             holograms = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-            phi_rytov = da.map_blocks(get_rytov_phase, holograms, holograms_bg, scattered_field_regularization, dtype=complex)
+            phi_rytov = da.map_blocks(get_rytov_phase,
+                                      holograms,
+                                      holograms_bg,
+                                      scattered_field_regularization,
+                                      dtype=complex)
             phi_rytov_ft = da.fft.fftshift(da.fft.fftn(da.fft.ifftshift(phi_rytov, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
             eraw_start = da.rechunk(phi_rytov_ft, chunks=new_chunks)
@@ -487,15 +596,16 @@ class tomography:
                     f"npatterns x ny x nx shape = {erecon_ft.shape}")
 
             v_ft, drs = reconstruction(da.squeeze(erecon_ft),
-                                       self.get_beam_frqs(),
+                                       mean_beam_frqs[..., 0],
+                                       mean_beam_frqs[..., 1],
+                                       mean_beam_frqs[..., 2],
                                        self.no,
                                        self.na_detection,
                                        self.wavelength,
                                        self.dxy,
-                                       z_fov=z_fov,
+                                       drs_v,
+                                       v_size,
                                        regularization=reconstruction_regularizer,
-                                       dz_sampling_factor=dz_sampling_factor,
-                                       dxy_sampling_factor=dxy_sampling_factor,
                                        mode=mode,
                                        no_data_value=no_data_value)
 
@@ -511,7 +621,9 @@ class tomography:
                                         chunks=(1,) * self.nextra_dims + v_size)
 
             # define forward model
-            model, _ = fwd_model_linear(self.get_beam_frqs(),
+            model, _ = fwd_model_linear(mean_beam_frqs[..., 0], # todo: should I use real beam frqs?
+                                        mean_beam_frqs[..., 1],
+                                        mean_beam_frqs[..., 2],
                                         self.no,
                                         self.na_detection,
                                         self.wavelength,
@@ -587,7 +699,8 @@ class tomography:
         # ############################
         # convert results to index of refraction
         # ############################
-        v_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_out, axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
+        v_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_out,
+                                                              axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
 
         n = da.map_blocks(get_n,
                           v_out,
@@ -631,6 +744,7 @@ class tomography:
 
         nmax_to_plot = np.min([nmax_to_plot, np.prod(self.holograms_ft.shape[:-2])])
 
+        # todo: correct for new angles
         beam_frqs = self.get_beam_frqs()
         theta, phi = get_angles(beam_frqs, self.no, self.wavelength)
 
@@ -1193,7 +1307,8 @@ def get_rytov_phase(eimgs, eimgs_bg, regularization):
 def unmix_hologram(img: np.ndarray,
                    dxy: float,
                    fmax_int: float,
-                   frq_ref: np.ndarray,
+                   fx_ref: np.ndarray,
+                   fy_ref: np.ndarray,
                    use_gpu: bool=_cupy_available,
                    apodization: np.ndarray = 1) -> np.ndarray:
     """
@@ -1202,7 +1317,8 @@ def unmix_hologram(img: np.ndarray,
     @param img: n1 x ... x n_{-3} x n_{-2} x n_{-1} array
     @param dxy: pixel size
     @param fmax_int: maximum frequency where intensity OTF has support
-    @param frq_ref: reference frequency (fx, fy)
+    @param fx_ref:
+    @param ry_ref:
     @return:
     """
     # FT of image
@@ -1210,6 +1326,7 @@ def unmix_hologram(img: np.ndarray,
         img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img * apodization, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
     else:
         img_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fft2(cp.fft.ifftshift(img * apodization, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1)))
+
     ny, nx = img_ft.shape[-2:]
 
     # get frequency data
@@ -1219,7 +1336,7 @@ def unmix_hologram(img: np.ndarray,
     ff_perp = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
     # compute efield
-    efield_ft = tools.translate_ft(img_ft, frq_ref[..., 0], frq_ref[..., 1], drs=(dxy, dxy), use_gpu=use_gpu)
+    efield_ft = tools.translate_ft(img_ft, fx_ref, fy_ref, drs=(dxy, dxy), use_gpu=use_gpu)
     efield_ft[..., ff_perp > fmax_int / 2] = 0
 
     return efield_ft
@@ -1249,7 +1366,7 @@ def get_fmax(no, na_detection, na_excitation, wavelength):
 
 def get_reconstruction_sampling(no: float,
                                 na_det: float,
-                                beam_frqs: np.ndarray,
+                                na_exc: float,
                                 wavelength: float,
                                 dxy: float,
                                 img_size: tuple[int],
@@ -1261,7 +1378,8 @@ def get_reconstruction_sampling(no: float,
 
     @param no: background index of refraction
     @param na_det: numerical aperture of detection objective
-    @param beam_frqs:
+    @param na_exc: maximum excitation numerical aperture (i.e. corresponding to the steepest input beam and not nec.
+    the objective).
     @param wavelength: wavelength
     @param dxy: camera pixel size
     @param img_size: (ny, nx) size of hologram images
@@ -1273,18 +1391,19 @@ def get_reconstruction_sampling(no: float,
     ny, nx = img_size
 
     # todo: let's just use beta based on na ... can always provide an effective na if desired
-    theta, _ = get_angles(beam_frqs, no, wavelength)
+    # theta, _ = get_angles(beam_frqs, no, wavelength)
     alpha = np.arcsin(na_det / no)
-    beta = np.max(theta)
+    # beta = np.max(theta)
+    beta = np.arcsin(na_exc / no)
 
     # maximum frequencies present in ODT
-    fxy_max = (na_det + no * np.sin(beta)) / wavelength
+    fxy_max = (na_det + na_exc) / wavelength
     fz_max = no / wavelength * np.max([1 - np.cos(alpha), 1 - np.cos(beta)])
 
     # ##################################
     # generate real-space sampling from Nyquist sampling
     # ##################################
-    dxy_v = dxy_sampling_factor * 0.5 * 1 / fxy_max
+    dxy_v = dxy_sampling_factor * 0.5 / fxy_max
     dz_v = dz_sampling_factor * 0.5 / fz_max
     drs = (dz_v, dxy_v, dxy_v)
 
@@ -1327,7 +1446,12 @@ def get_coords(drs, nrs, expand=False):
     return coords
 
 
-def fwd_model_linear(beam_frqs, no, na_det, wavelength,
+def fwd_model_linear(beam_fx,
+                     beam_fy,
+                     beam_fz,
+                     no: float,
+                     na_det: float,
+                     wavelength: float,
                      e_shape: tuple[int],
                      drs_e: tuple[float],
                      v_shape: tuple[int],
@@ -1356,7 +1480,7 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
     ny, nx = e_shape
     dy, dx = drs_e
 
-    nimgs = len(beam_frqs)
+    nimgs = len(beam_fx)
 
     # ##################################
     # get frequencies of electric field images and make broadcastable to shape (nimgs, ny, nx)
@@ -1403,9 +1527,9 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
 
         # construct frequencies where we have data about the 3D scattering potentials
         # frequencies of the sample F = f - no/lambda * beam_vec
-        Fx, Fy, Fz = np.broadcast_arrays(fx - np.expand_dims(beam_frqs[:, 0], axis=(1, 2)),
-                                         fy - np.expand_dims(beam_frqs[:, 1], axis=(1, 2)),
-                                         fz - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
+        Fx, Fy, Fz = np.broadcast_arrays(fx - np.expand_dims(beam_fx, axis=(1, 2)),
+                                         fy - np.expand_dims(beam_fy, axis=(1, 2)),
+                                         fz - np.expand_dims(beam_fz, axis=(1, 2))
                                          )
         # if don't copy, then elements of F's are reference to other elements.
         Fx = np.array(Fx, copy=True)
@@ -1429,15 +1553,15 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
         Fy = fy
 
         # helper frequencies for calculating fz
-        fx_rytov = Fx + np.expand_dims(beam_frqs[:, 0], axis=(1, 2))
-        fy_rytov = Fy + np.expand_dims(beam_frqs[:, 1], axis=(1, 2))
+        fx_rytov = Fx + np.expand_dims(beam_fx, axis=(1, 2))
+        fy_rytov = Fy + np.expand_dims(beam_fy, axis=(1, 2))
 
         fz = get_fz(fx_rytov,
                     fy_rytov,
                     no,
                     wavelength)
 
-        Fz = fz - np.expand_dims(beam_frqs[:, 2], axis=(1, 2))
+        Fz = fz - np.expand_dims(beam_fz, axis=(1, 2))
 
         # take care of frequencies which do not contain signal
         detectable = (fx_rytov ** 2 + fy_rytov ** 2) <= (na_det / wavelength) ** 2
@@ -1542,12 +1666,17 @@ def fwd_model_linear(beam_frqs, no, na_det, wavelength,
     return model, (data, row_index, column_index)
 
 
-def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength,
+def reconstruction(efield_fts,
+                   beam_fx,
+                   beam_fy,
+                   beam_fz,
+                   no: float,
+                   na_det: float,
+                   wavelength: float,
                    dxy: float,
-                   z_fov: float = 10.,
+                   drs_v: tuple[float],
+                   v_shape: tuple[int],
                    regularization: float = 0.1,
-                   dz_sampling_factor: float = 1,
-                   dxy_sampling_factor: float = 1,
                    mode: str = "born",
                    no_data_value: float = np.nan):
     """
@@ -1558,15 +1687,17 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength,
 
     @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used.
     Any points in efield_fts which are NaN will be ignored
-    @param beam_frqs: nimgs x 3, where each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2
+    @param beam_fx: beam frqs must satify each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2.
+     Divide these into three arguments to make this function easier to use with dask map_blocks()
+    @param beam_fy:
+    @param beam_fz:
     @param no: background index of refraction
     @param na_det: detection numerical aperture
     @param wavelength:
     @param dxy: pixel size
-    @param z_fov: z-field of view
+    @param drs_v: (dz_v, dy_v, dx_v) pixel size for scattering potential reconstruction grid
+    @param v_shape: (nz_v, ny_v, nx_v) grid size for scattering potential reconstruction grid
     @param regularization: regularization factor
-    @param dz_sampling_factor: fraction of Nyquist sampling factor to use
-    @param dxy_sampling_factor:
     @param mode: "born" or "rytov"
     @return v_ft:
     @return drs: full coordinate grid can be obtained from get_coords
@@ -1577,26 +1708,30 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength,
     # ##################################
     # set sampling of 3D scattering potential
     # ##################################
-    drs, (nz_v, ny_v, nx_v) = get_reconstruction_sampling(no,
-                                                             na_det,
-                                                             beam_frqs,
-                                                             wavelength,
-                                                             dxy,
-                                                             (ny, nx),
-                                                             z_fov,
-                                                             dz_sampling_factor=dz_sampling_factor,
-                                                             dxy_sampling_factor=dxy_sampling_factor)
+    # drs_v, v_shape = get_reconstruction_sampling(no,
+    #                                             na_det,
+    #                                             na_exc,
+    #                                            wavelength,
+    #                                            dxy,
+    #                                            (ny, nx),
+    #                                            z_fov,
+    #                                            dz_sampling_factor=dz_sampling_factor,
+    #                                            dxy_sampling_factor=dxy_sampling_factor)
 
     # ###########################
     # put information back in Fourier space
     # ###########################
-    v_shape = (nz_v, ny_v, nx_v)
 
-    model, (data, row_index, col_index) = fwd_model_linear(beam_frqs, no, na_det, wavelength,
+    model, (data, row_index, col_index) = fwd_model_linear(beam_fx,
+                                                           beam_fy,
+                                                           beam_fz,
+                                                           no,
+                                                           na_det,
+                                                           wavelength,
                                                            (ny, nx),
                                                            (dxy, dxy),
                                                            v_shape,
-                                                           drs,
+                                                           drs_v,
                                                            mode=mode,
                                                            interpolate=False)
 
@@ -1635,10 +1770,11 @@ def reconstruction(efield_fts, beam_frqs, no, na_det, wavelength,
     no_data = num_pts_all == 0
     is_data = np.logical_not(no_data)
 
+    # todo: want to weight regularization against OTF
     v_ft[is_data] = v_ft[is_data] / (num_pts_all[is_data] + regularization)
     v_ft[no_data] = no_data_value
 
-    return v_ft, drs
+    return v_ft, drs_v
 
 
 def apply_n_constraints(v_ft: np.ndarray,
