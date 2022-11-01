@@ -2327,8 +2327,9 @@ def fit_modulation_frq(ft1: np.ndarray,
                        max_frq_shift: float = None,
                        keep_guess_if_better: bool = True):
     """
-    Find SIM frequency from image by maximizing
-    C(f) =  \sum_k img_ft(k) x img_ft*(k+f) = F(img_ft) * F(img_ft*) = F(|img_ft|^2).
+    Find SIM frequency from image by maximizing the cross correlation between ft1 and ft2
+    C(df) =  \sum_f ft1(f) x ft2^*(f + df)
+    modulation freqency = argmax_{df} |C(df)|
 
     Note that there is ambiguity in the definition of this frequency, as -f will also be a peak. If frq_guess is
     provided, the peak closest to the guess will be returned.
@@ -2338,20 +2339,19 @@ def fit_modulation_frq(ft1: np.ndarray,
     :param dxy: pixel size. Units of dxy and max_frq_shift must be consistent
     :param mask: boolean array same size as ft1 and ft2. Only consider frequency points where mask is True
     :param frq_guess: frequency guess [fx, fy]. If frequency guess is None, an initial guess will be chosen by
-    finding the maximum f_guess = argmax_f |ft1(f)|^2
+    finding the maximum f_guess = argmax_f CC[ft1, ft2](f), where CC[ft1, ft2] is the discrete cross-correlation
      Currently roi_pix_size is only used internally to set max_frq_shift
-    :param use_jacobian: use the jacobian during the fitting procedure. Because jacobian calculation is expensive,
-    this does not speed up fitting.
+    :param use_jacobian: use the jacobian during the fitting procedure. Because the jacobian calculation is expensive,
+    this does not speed up fitting even though it decreases the number of required iterations
     :param max_frq_shift: maximum frequency shift to consider vis-a-vis the guess frequency
-    :param keep_guess_if_better: keep the initial frequency guess if the cost function is lower at this point than after fitting
+    :param keep_guess_if_better: keep the initial frequency guess if the cost function is more optimal
+     at this point than after fitting
 
     :return fit_frqs, mask, fit_result:
     """
 
-    # get frequency data
-    fxs = fft.fftshift(fft.fftfreq(ft1.shape[1], dxy))
-    fys = fft.fftshift(fft.fftfreq(ft1.shape[0], dxy))
-    fxfx, fyfy = np.meshgrid(fxs, fys)
+    if ft1.shape != ft2.shape:
+        raise ValueError("must have ft1.shape = ft2.shape")
 
     if max_frq_shift is None:
         max_frq_shift = np.inf
@@ -2359,9 +2359,17 @@ def fit_modulation_frq(ft1: np.ndarray,
     # mask
     if mask is None:
         mask = np.ones(ft1.shape, dtype=bool)
+    else:
+        mask = np.array(mask, copy=True)
 
     if mask.shape != ft1.shape:
-        raise ValueError("mask must have same shape as image")
+        raise ValueError("mask must have same shape as ft1")
+
+    # get frequency data
+    fxs = fft.fftshift(fft.fftfreq(ft1.shape[1], dxy))
+    fys = fft.fftshift(fft.fftfreq(ft1.shape[0], dxy))
+    fxfx, fyfy = np.meshgrid(fxs, fys)
+
 
     # update mask to only consider region near frequency guess
     if frq_guess is not None:
@@ -2374,16 +2382,62 @@ def fit_modulation_frq(ft1: np.ndarray,
         # cross correlation of Fourier transforms
         # WARNING: correlate2d uses a different convention for the frequencies of the output, which will not agree with the fft convention
         # take conjugates so this will give \sum ft1 * ft2.conj()
-        # scipy.signal.correlate(g1, g2)(fo) seems to compute \sum_f g1^*(f) * g2(f - fo), but I want g1^*(f)*g2(f+fo)
+        # scipy.signal.correlate(g1, g2)(fo) seems to compute \sum_f g1^*(f) x g2(f - fo), but I want g1^*(f) x g2(f+fo) # todo: is this right?
         cc = np.abs(scipy.signal.correlate(ft2, ft1, mode='same'))
 
         # get initial frq_guess by looking at cc at discrete frequency set and finding max
-        max_ind = np.argmax(cc * mask)
-        subscript = np.unravel_index(max_ind, cc.shape)
+        subscript = np.unravel_index(np.argmax(cc * mask), cc.shape)
 
         init_params = np.array([fxfx[subscript], fyfy[subscript]])
     else:
         init_params = frq_guess
+
+    # ############################
+    # sample code using only a limited ROI to speed up process
+    # ############################
+    # nx_center_2 = np.argmin(np.abs(frq_guess[0] - self.fxs))
+    # ny_center_2 = np.argmin(np.abs(frq_guess[1] - self.fys))
+    # roi2 = rois.get_centered_roi([ny_center_2, nx_center_2],
+    #                              [roi_size_pix, roi_size_pix])
+    #
+    # # # make sure ROI does not exceed image bounds
+    # if roi2[0] < 0:
+    #     roi2[0] = 0
+    # if roi2[1] > img_ref_ft.shape[-2]:
+    #     roi2[1] = img_ref_ft.shape[-2]
+    #
+    # if roi2[2] < 0:
+    #     roi2[2] = 0
+    # if roi2[3] > img_ref_ft.shape[-1]:
+    #     roi2[3] = img_ref_ft.shape[-1]
+    #
+    # roi_size_y = roi2[1] - roi2[0]
+    # roi_size_x = roi2[3] - roi2[2]
+    #
+    # # centered ROI
+    # roi1 = localize_psf.rois.get_centered_roi([self.ny // 2, self.nx // 2], [roi_size_y, roi_size_x])
+    #
+    # # cut ROI's
+    # ft1 = img_ref_ft[..., roi1[0]:roi1[1], roi1[2]:roi1[3]]
+    # ft2 = img_ref_ft[..., roi2[0]:roi2[1], roi2[2]:roi2[3]]
+    #
+    # # frequency offset between two ROI's
+    # frq_offset = np.array([self.fxs[roi2[2]] - self.fxs[roi1[2]],
+    #                        self.fys[roi2[0]] - self.fys[roi1[0]]
+    #                        ])
+    #
+    # # fit frequency
+    # dfrq_holo_roi, _, r = sim.fit_modulation_frq(ft1, ft2, self.dxy,
+    #                                              mask=None,
+    #                                              #max_frq_shift=roi_size_pix // 2 * self.dfx
+    #                                              )
+    # # convert to fractional pixel shifts
+    # dfrq_holo_pix = np.array([dfrq_holo_roi[0] * ft1.shape[-1] * self.dxy,
+    #                           dfrq_holo_roi[1] * ft1.shape[-2] * self.dxy])
+    # # have to convert dfrq_holo back to frequency for full image
+    # dfrq_holo = np.array([dfrq_holo_pix[0] * self.dfx, dfrq_holo_pix[1] * self.dfy])
+    #
+    # frq_holo = frq_offset + dfrq_holo
 
     # ############################
     # define cross-correlation and minimization objective function
@@ -2436,6 +2490,10 @@ def fit_modulation_frq(ft1: np.ndarray,
 
     fit_frqs = fit_result.x
 
+    # convert to dictionary and add anythin we want to it
+    fit_result = dict(fit_result)
+    fit_result["init_params"] = init_params
+
     # ensure we never get a worse point than our initial guess
     if keep_guess_if_better and min_fn(init_params) < min_fn(fit_frqs):
         fit_frqs = init_params
@@ -2444,7 +2502,7 @@ def fit_modulation_frq(ft1: np.ndarray,
 
 
 def plot_correlation_fit(img1_ft: np.ndarray, img2_ft: np.ndarray, frqs, dxy: float,
-                         fmax=None, frqs_guess=None, roi_size: int = 31,
+                         fmax=None, frqs_guess=None, roi_size: tuple[int] = (31, 31),
                          peak_pixels: int = 2, figsize=(20, 10), title: str = "", gamma: float = 0.1, cmap="bone"):
     """
     Display SIM parameter fitting results visually, in a way that is easy to inspect.
@@ -2480,9 +2538,14 @@ def plot_correlation_fit(img1_ft: np.ndarray, img2_ft: np.ndarray, frqs, dxy: fl
 
     # compute peak values
     fx_sim, fy_sim = frqs
-    peak_cc = tools.get_peak_value(cc, fxs, fys, [fx_sim, fy_sim], peak_pixels)
-    peak1_dc = tools.get_peak_value(img1_ft, fxs, fys, [0, 0], peak_pixels)
-    peak2 = tools.get_peak_value(img2_ft, fxs, fys, [fx_sim, fy_sim], peak_pixels)
+    try:
+        peak_cc = tools.get_peak_value(cc, fxs, fys, [fx_sim, fy_sim], peak_pixels)
+        peak1_dc = tools.get_peak_value(img1_ft, fxs, fys, [0, 0], peak_pixels)
+        peak2 = tools.get_peak_value(img2_ft, fxs, fys, [fx_sim, fy_sim], peak_pixels)
+    except ZeroDivisionError:
+        peak_cc = np.nan
+        peak1_dc = np.nan
+        peak2 = np.nan
 
     # create figure
     figh = plt.figure(figsize=figsize)
@@ -2524,7 +2587,10 @@ def plot_correlation_fit(img1_ft: np.ndarray, img2_ft: np.ndarray, frqs, dxy: fl
     # #######################################
     roi_cx = np.argmin(np.abs(fx_sim - fxs))
     roi_cy = np.argmin(np.abs(fy_sim - fys))
-    roi = rois.get_centered_roi([roi_cy, roi_cx], [roi_size, roi_size], min_vals=[0, 0], max_vals=cc.shape)
+    roi = rois.get_centered_roi([roi_cy, roi_cx],
+                                roi_size,
+                                min_vals=[0, 0],
+                                max_vals=cc.shape)
 
     extent_roi = tools.get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
