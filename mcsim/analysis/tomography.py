@@ -31,6 +31,7 @@ from field_prop import prop_ft_medium
 _gpu_available = True
 try:
     import cupy as cp
+    import cupyx.scipy.sparse as sp_gpu
     from cucim.skimage.restoration import denoise_tv_chambolle as denoise_tv_chambolle_gpu
 except ImportError:
     _gpu_available = False
@@ -115,7 +116,6 @@ class tomography:
         self.pupil = self.pupil_mask.astype(complex) # value of pupil function
 
         # settings
-        self.use_gpu = False
         self.reconstruction_settings = {} # keys will differ depending on recon mode
 
 
@@ -363,7 +363,7 @@ class tomography:
                                          2*self.fmax,
                                          ref_frq_da[..., 0],
                                          ref_frq_da[..., 1],
-                                         self.use_gpu,
+                                         False,
                                          apodization=apodization,
                                          dtype=complex)
 
@@ -388,7 +388,7 @@ class tomography:
                                                 2*self.fmax,
                                                 ref_frq_da[..., 0],
                                                 ref_frq_da[..., 1],
-                                                self.use_gpu,
+                                                False,
                                                 apodization=apodization,
                                                 dtype=complex)
 
@@ -528,7 +528,8 @@ class tomography:
                            tau_lasso: float = 0,
                            use_imaginary_constraint: bool = True,
                            use_real_constraint: bool = False,
-                           interpolate_model: bool = True):
+                           interpolate_model: bool = True,
+                           use_gpu: bool = False):
         """
 
         @param mode: "born" or "rytov"
@@ -551,20 +552,20 @@ class tomography:
         # set grid sampling info
         # ############################
         mean_beam_frqs = np.mean(self.get_beam_frqs(), axis=tuple(range(self.hologram_frqs.ndim - 3)))[:, 0, 0]
+        # todo: use this later
         beam_frqs_da = da.from_array(self.get_beam_frqs(), chunks=(1,) * (self.hologram_frqs.ndim - 3) + (self.npatterns, 1, 1, 3))
 
         # rechunk erecon_ft since must operate on all patterns at once
         # get sampling so can determine new chunk sizes
-        drs_v, v_size = \
-            get_reconstruction_sampling(self.no,
-                                        self.na_detection,
-                                        self.na_excitation,
-                                        self.wavelength,
-                                        self.dxy,
-                                        self.holograms_ft.shape[-2:],
-                                        z_fov,
-                                        dz_sampling_factor=dz_sampling_factor,
-                                        dxy_sampling_factor=dxy_sampling_factor)
+        drs_v, v_size = get_reconstruction_sampling(self.no,
+                                                    self.na_detection,
+                                                    self.na_excitation,
+                                                    self.wavelength,
+                                                    self.dxy,
+                                                    self.holograms_ft.shape[-2:],
+                                                    z_fov,
+                                                    dz_sampling_factor=dz_sampling_factor,
+                                                    dxy_sampling_factor=dxy_sampling_factor)
 
         new_chunks = list(self.holograms_ft.chunksize)
         new_chunks[-3] = self.npatterns
@@ -658,7 +659,7 @@ class tomography:
                                        step,
                                        niters=niters,
                                        use_fista=True,
-                                       use_gpu=self.use_gpu,
+                                       use_gpu=use_gpu,
                                        tau_tv=tau_tv,
                                        tau_lasso=tau_lasso,
                                        use_imaginary_constraint=use_imaginary_constraint,
@@ -672,11 +673,9 @@ class tomography:
 
             v_ft_out = da.map_blocks(fista_recon,
                                      v_fts_start, # initial guess
-                                     # da.rechunk(phi_rytov_ft, chunks=new_chunks),
                                      eraw_start, # data
                                      dtype=complex,
                                      chunks=(1,) * self.nextra_dims + v_size)
-
 
 
         else:
@@ -847,10 +846,11 @@ def soft_threshold(t, x):
     @param x: array to take softmax of
     @return x_out:
     """
-    x_out = np.array(x, copy=True)
+    # x_out = np.array(x, copy=True)
+    x_out = x.copy()
     x_out[x > t] -= t
     x_out[x < -t] += t
-    x_out[np.abs(x) <= t] = 0
+    x_out[abs(x) <= t] = 0
 
     return x_out
 
@@ -888,11 +888,27 @@ def grad_descent(v_ft_start,
     @return results: dict
     """
 
-    use_tv = tau_tv != 0
-    use_lasso = tau_lasso != 0
+    v_ft_start = v_ft_start.squeeze()
+    e_measured_ft = e_measured_ft.squeeze()
 
-    v_ft_start = np.squeeze(v_ft_start)
-    e_measured_ft = np.squeeze(e_measured_ft)
+    # if using GPU, avoid need to transfer this back
+    v_ft_start_preserved = v_ft_start.copy()
+
+    # put on gpu optionally
+    if use_gpu:
+        v_ft_start = cp.array(v_ft_start)
+        e_measured_ft = cp.array(e_measured_ft)
+        model = sp_gpu.csr_matrix(model)
+        step = cp.array(step)
+        def ift(m): return cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(m)))
+        def ft(m): return cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(m)))
+        def prox_tv(v): return denoise_tv_chambolle_gpu(v.real, tau_tv), denoise_tv_chambolle_gpu(v.imag, tau_tv)
+    else:
+        def ift(m): return fft.fftshift(fft.ifftn(fft.ifftshift(m)))
+
+        def ft(m): return fft.fftshift(fft.fftn(fft.ifftshift(m)))
+
+        def prox_tv(v): return denoise_tv_chambolle(v.real, tau_tv), denoise_tv_chambolle(v.imag, tau_tv)
 
     # prepare arguments
     npatterns, ny, nx = e_measured_ft.shape
@@ -906,17 +922,19 @@ def grad_descent(v_ft_start,
         # divide by nxy**2 again because using FT's and want mean cost in real space
         # recall that \sum_r |f(r)|^2 = 1/N \sum_k |f(k)|^2
         # NOTE: to get total cost, must take mean over patterns
-        costs = np.mean(np.reshape(np.abs(model.dot(v_ft.ravel()) - e_measured_ft.ravel()) ** 2,
-                                   [npatterns, ny, nx]),
-                        axis=(-1, -2)) / 2 / ny / ny
+        # operations should be written as methods of arrays (as opposed to numpy functions) to be portable between numpy,cupy, dask.array
+        costs = (abs(model.dot(v_ft.ravel()) - e_measured_ft.ravel()) ** 2).reshape([npatterns, ny, nx]).mean(axis=(-1, -2)) / 2 / ny / ny
+
+        if use_gpu:
+            costs = costs.get()
+
         return costs
 
     def grad(v_ft):
         # first division is average
         # second division converts Fourier space to real-space sum
-        dc_dm = (model.dot(v_ft.ravel()) - e_measured_ft.ravel()) / (npatterns * ny * nx) / (
-                    ny * nx)
-        dc_dv = (dc_dm[np.newaxis, :].conj() * model_csc)[0].conj()
+        dc_dm = (model.dot(v_ft.ravel()) - e_measured_ft.ravel()) / (npatterns * ny * nx) / (ny * nx)
+        dc_dv = (dc_dm[None, :].conj() * model_csc)[0].conj()
         return dc_dv
 
     # initialize
@@ -928,8 +946,8 @@ def grad_descent(v_ft_start,
     q_last = 1
     costs[0] = cost(v_ft)
 
-    timing = np.zeros((niters, 1))
-    timing_names = ["iteration"]
+    timing_names = ["iteration", "grad calculation", "ifft", "TV", "L1", "positivity", "fft", "fista", "cost"]
+    timing = np.zeros((niters, len(timing_names)))
 
     for ii in range(niters):
         # gradient descent
@@ -943,30 +961,29 @@ def grad_descent(v_ft_start,
         # FT so can apply TV
         tstart_fft = time.perf_counter()
 
-        if use_gpu:
-            v = cp.asnumpy(
-                cp.fft.fftshift(cp.fft.ifftn(cp.fft.ifftshift(cp.asarray(v_ft.reshape(v_ft.shape))))))
-        else:
-            v = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft.reshape(v_ft.shape))))
+        v = ift(v_ft.reshape(v_ft.shape))
 
         tend_fft = time.perf_counter()
 
         # apply TV proximity operators
         tstart_tv = time.perf_counter()
-        if use_tv and ii % steps_per_tv == 0:
-            v_real = denoise_tv_chambolle(v.real, tau_tv)
-            v_imag = denoise_tv_chambolle(v.imag, tau_tv)
+        if tau_tv != 0 and ii % steps_per_tv == 0:
+            v_real, v_imag = prox_tv(v)
         else:
             v_real = v.real
             v_imag = v.imag
 
         tend_tv = time.perf_counter()
 
-        if use_lasso:
+        # apply L1 proximity operators
+        tstart_l1 = time.perf_counter()
+        if tau_lasso != 0:
             v_real = soft_threshold(tau_lasso, v_real)
             v_imag = soft_threshold(tau_lasso, v_imag)
 
-        # apply projection onto constraints
+        tend_l1 = time.perf_counter()
+
+        # apply projection onto constraints (proximity operators)
         tstart_constraints = time.perf_counter()
 
         if use_imaginary_constraint:
@@ -978,14 +995,10 @@ def grad_descent(v_ft_start,
 
         tend_constraints = time.perf_counter()
 
-        # ft back
+        # ft back to Fourier space
         tstart_fft_back = time.perf_counter()
 
-        if use_gpu:
-            v_ft_prox = cp.asnumpy(
-                cp.fft.fftshift(cp.fft.fftn(cp.fft.ifftshift(cp.asarray(v_real + 1j * v_imag)))).ravel())
-        else:
-            v_ft_prox = fft.fftshift(fft.fftn(fft.ifftshift(v_real + 1j * v_imag))).ravel()
+        v_ft_prox = ft(v_real + 1j * v_imag).ravel()
 
         tend_fft_back = time.perf_counter()
 
@@ -994,7 +1007,7 @@ def grad_descent(v_ft_start,
 
         q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
 
-        # todo: better to apply the proximal operator last or do FISTA as usual...
+        # todo: is it better to apply the proximal operator last or do FISTA as usual?
         if ii == 0 or ii == (niters - 1) or not use_fista:
             v_ft = v_ft_prox
         else:
@@ -1009,27 +1022,45 @@ def grad_descent(v_ft_start,
 
         tend_err = time.perf_counter()
 
-        # update for next step
+        # update for next gradient-descent/FISTA iteration
         q_last = q_now
         v_ft_prox_last = v_ft_prox
 
         # print information
         tend_iter = time.perf_counter()
-        timing[ii] = tend_iter
+        timing[ii, 0] = tend_iter - tstart_grad
+        timing[ii, 1] = tend_grad - tstart_grad
+        timing[ii, 2] = tend_fft - tstart_fft
+        timing[ii, 3] = tend_tv - tstart_tv
+        timing[ii, 4] = tend_l1 - tstart_l1
+        timing[ii, 5] = tend_constraints - tstart_constraints
+        timing[ii, 6] = tend_fft_back - tstart_fft_back
+        timing[ii, 7] = tend_update - tstart_update
+        timing[ii, 8] = tend_err - tstart_err
 
         if debug:
             print(
-                f"iteration {ii + 1:d}/{niters:d}, cost={np.mean(costs[ii + 1]):.3g},"
-                f" grad={tend_grad - tstart_grad:.2f}s, fft={tend_fft - tstart_fft:.2f}s,"
-                f" TV={tend_tv - tstart_tv:.2f}s, projection={tend_constraints - tstart_constraints:.2f}s,"
-                f" fft={tend_fft_back - tstart_fft_back:.2f}s, update={tend_update - tstart_update:.2f}s,"
-                f" err={tend_err - tstart_err:.2f}s, iter={tend_iter - tstart_grad:.2f}s,"
-                f" total={time.perf_counter() - tstart:.2f}s", end="\r")
+                f"iteration {ii + 1:d}/{niters:d},"
+                f" cost={np.mean(costs[ii + 1]):.3g},"
+                f" grad={tend_grad - tstart_grad:.2f}s,"
+                f" fft={tend_fft - tstart_fft:.2f}s,"
+                f" TV={tend_tv - tstart_tv:.2f}s,"
+                f" projection={tend_constraints - tstart_constraints:.2f}s,"
+                f" fft={tend_fft_back - tstart_fft_back:.2f}s,"
+                f" update={tend_update - tstart_update:.2f}s,"
+                f" cost={tend_err - tstart_err:.2f}s,"
+                f" iter={tend_iter - tstart_grad:.2f}s,"
+                f" total={time.perf_counter() - tstart:.2f}s",
+                end="\r")
 
-    # dictionary to store summary results
+    if use_gpu:
+        v_ft = v_ft.get()
+
+    # store summary results
     results = {"step_size": step,
                "niterations": niters,
                "use_fista": use_fista,
+               "use_gpu": use_gpu,
                "tau_tv": tau_tv,
                "tau_l1": tau_lasso,
                "use_imaginary_constraint": use_imaginary_constraint,
@@ -1037,7 +1068,7 @@ def grad_descent(v_ft_start,
                "timing": timing,
                "timing_column_names": timing_names,
                "costs": costs,
-               "x_init": v_ft_start,
+               "x_init": v_ft_start_preserved,
                "x": v_ft
                }
 
