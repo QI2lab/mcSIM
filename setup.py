@@ -15,11 +15,14 @@ required_pkgs = ['numpy',
                  'psutil',
                  'tifffile',
                  'dask',
-                 'localize_psf @ git+https://git@github.com/qi2lab/localize-psf@master#egg=localize_psf']
+                 'localize_psf @ git+https://git@github.com/qi2lab/localize-psf@master#egg=localize_psf'
+                 ]
 
 # extras
 extras = {'expt_ctrl': ['PyDAQmx'],
-          'gpu': ['cupy']
+          'gpu': ['cupy',
+                  'cucim @ git+https://github.com/rapidsai/cucim.git@v22.04.00#egg=cucim&subdirectory=python/cucim'
+                  ]
           }
 
 # check what platform we are on
