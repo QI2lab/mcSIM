@@ -299,6 +299,9 @@ class nidaq(daq):
         @param upper_lims_volts:
         @return:
         """
+        if isinstance(line_names, str):
+            line_names = [line_names]
+
         if self.analog_line_names is None:
             raise ValueError("cannot set lines by name because self.analog_line_names is None")
         lines = [self.analog_line_names[n] for n in line_names]
