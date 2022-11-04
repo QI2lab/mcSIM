@@ -119,9 +119,12 @@ for kk in range(ncolors):
                              normalize_histograms=False,
                              otf=otf,
                              wiener_parameter=0.1,
-                             background=100, gain=2, min_p2nr=0.5,
+                             background=100,
+                             gain=2,
+                             min_p2nr=0.5,
                              save_dir="data/%s_sim_reconstruction_%.0fnm" % (tstamp, excitation_wavelengths[kk] * 1e3),
-                             interactive_plotting=False, figsize=(22.85, 10))
+                             interactive_plotting=False,
+                             figsize=(22.85, 10))
     imgset.reconstruct()
     imgset.plot_figs()
     imgset.save_imgs()
