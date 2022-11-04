@@ -7,6 +7,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy import fft
 import localize_psf.rois as rois
+import warnings
 
 _cupy_available = True
 try:
@@ -149,7 +150,9 @@ def elliptical_grid(params, xx, yy, units='mean'):
     return distance_grid
 
 
-def bin(img, bin_size, mode='sum'):
+def bin(img: np.ndarray,
+        bin_size: list[int],
+        mode: str = 'sum') -> np.ndarray:
     """
     bin image by combining adjacent pixels
 
@@ -280,7 +283,10 @@ def duplicate_pix(img, nx=2, ny=2):
     return img_resampled
 
 
-def duplicate_pix_ft(img_ft, mx=2, my=2, centered=True):
+def duplicate_pix_ft(img_ft: np.ndarray,
+                     mx: int = 2,
+                     my: int = 2,
+                     centered: bool = True):
     """
     Resample the Fourier transform of image. In real space, this operation corresponds to replacing each pixel with a
     myxmx square of identical pixels. Note that this is often NOT the desired resampling behavior if you e.g. have
@@ -576,7 +582,10 @@ def nearest_point_on_line(line_point, line_unit_vec, pt):
     return nearest_pt, dist
 
 
-def get_linecut(img, start_coord, end_coord, width):
+def get_linecut(img,
+                start_coord,
+                end_coord,
+                width):
     """
     Get data along a 1D line from img
 
@@ -642,7 +651,9 @@ def get_extent(y, x, origin="lower"):
     return extent
 
 
-def map_intervals(vals, from_intervals, to_intervals):
+def map_intervals(vals,
+                  from_intervals: list[list[float]],
+                  to_intervals: list[list[float]]):
     """
     Given value v in interval [a, b], find the corresponding value in the interval [c, d]
 
@@ -701,6 +712,10 @@ def get_fft_frqs(length, dt=1, centered=True, mode='symmetric'):
     """
     # todo: deprecated since almost identical functionality from fft.fftfreq() in combination with fft.fftshift()
 
+    warnings.warn("mcim.analysis.analysis_tools.get_fft_frqs() is deprecated."
+                  " Use np.fft.fftfreq() in combination with np.fft.fftshift() to achieve same functionality")
+
+
     # generate symmetric, fftshifted frequencies
     if np.mod(length, 2) == 0:
         n = int((length - 2) / 2)
@@ -751,6 +766,8 @@ def get_fft_pos(length, dt=1, centered=True, mode='symmetric'):
     :return pos: list of positions
     """
 
+    warnings.warn("mcim.analysis.analysis_tools.get_fft_pos() is deprecated.")
+
     # symmetric, centered frequencies
     pos = np.arange(-np.ceil(0.5 * (length - 1)), np.floor(0.5 * (length - 1)) + 1)
     # todo: note that this is the same np.arange(length) - (length // 2)
@@ -800,7 +817,12 @@ def get_spline_fn(x1, x2, y1, y2, dy1, dy2):
 
 
 # translating images
-def translate_pix(img, shifts, dr=(1, 1), axes=(-2, -1), wrap=True, pad_val=0):
+def translate_pix(img: np.ndarray,
+                  shifts: tuple[float],
+                  dr: tuple[float] = (1, 1),
+                  axes: tuple[int] = (-2, -1),
+                  wrap: bool = True,
+                  pad_val: float = 0):
     """
     Translate image by given number of pixels with several different boundary conditions. If the shifts are sx, sy,
     then the image will be shifted by sx/dx and sy/dy. If these are not integers, they will be rounded to the closest
@@ -850,7 +872,11 @@ def translate_pix(img, shifts, dr=(1, 1), axes=(-2, -1), wrap=True, pad_val=0):
     return img, shifts_pix
 
 
-def translate_im(img, shift, dx=1, dy=None, use_gpu=_cupy_available):
+def translate_im(img: np.ndarray,
+                 shift: tuple[float],
+                 dx: float = 1,
+                 dy: float = None,
+                 use_gpu: bool = _cupy_available):
     """
     Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
 
@@ -863,6 +889,14 @@ def translate_im(img, shift, dx=1, dy=None, use_gpu=_cupy_available):
     :param dy: pixel size of image along y-direction
     :return img_shifted:
     """
+
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
+    img = xp.array(img)
+
     if img.ndim != 2:
         raise ValueError("img must be 2D")
 
@@ -873,23 +907,23 @@ def translate_im(img, shift, dx=1, dy=None, use_gpu=_cupy_available):
     # must use symmetric frequency representation to do correctly!
     # we are using the FT shift theorem to approximate the Nyquist-Whittaker interpolation formula,
     # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
-    fx = get_fft_frqs(img.shape[1], dt=dx, centered=False, mode='symmetric')
-    fy = get_fft_frqs(img.shape[0], dt=dy, centered=False, mode='symmetric')
-    fxfx, fyfy = np.meshgrid(fx, fy)
+    fx = xp.array(get_fft_frqs(img.shape[1], dt=dx, centered=False, mode='symmetric'))
+    fy = xp.array(get_fft_frqs(img.shape[0], dt=dy, centered=False, mode='symmetric'))
+    fxfx, fyfy = xp.meshgrid(fx, fy)
 
     # 1. ft
     # 2. multiply by exponential factor
     # 3. inverse ft
-    exp_factor = np.exp(1j * 2 * np.pi * (shift[0] * fyfy + shift[1] * fxfx))
-    if not use_gpu:
-        img_shifted = fft.fftshift(fft.ifft2(exp_factor * fft.fft2(fft.ifftshift(img))))
-    else:
-        img_shifted = cp.asnumpy(cp.fft.fftshift(cp.fft.ifft2(cp.array(exp_factor) * cp.fft.fft2(cp.fft.ifftshift(img)))))
+    exp_factor = xp.exp(1j * 2 * np.pi * (shift[0] * fyfy + shift[1] * fxfx))
+    img_shifted = xp.fft.fftshift(xp.fft.ifft2(xp.array(exp_factor) * xp.fft.fft2(cp.fft.ifftshift(img))))
 
     return img_shifted
 
 
-def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[float, float] = None,
+def translate_ft(img_ft: np.ndarray,
+                 fx: np.ndarray,
+                 fy: np.ndarray,
+                 drs: list[float, float] = None,
                  use_gpu: bool = _cupy_available) -> np.ndarray:
     """
     Given img_ft(f), return the translated function
@@ -913,14 +947,19 @@ def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[f
     :return img_ft_shifted: shifted images, same size as img_ft
     """
 
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
     if img_ft.ndim < 2:
         raise ValueError("img_ft must be at least 2D")
 
     n_extra_dims = img_ft.ndim - 2
     ny, nx = img_ft.shape[-2:]
 
-    fx = np.array(fx, copy=True)
-    fy = np.array(fy, copy=True)
+    fx = xp.array(fx, copy=True)
+    fy = xp.array(fy, copy=True)
 
     if fx.shape != fy.shape:
         raise ValueError(f"fx and fy must have same shape, but had shapes {fx.shape} and {fy.shape}")
@@ -928,7 +967,7 @@ def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[f
     # check if shapes are broadcastable
     shapes_broadcastable = True
     try:
-        _ = np.broadcast(fx, img_ft)
+        _ = xp.broadcast(fx, img_ft)
     except ValueError:
         shapes_broadcastable = False
 
@@ -940,12 +979,12 @@ def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[f
 
         # exponential phase ramp. Should be broadcastable to shape of img_ft
         axis_expand_frq = list(range(n_extra_dims - fx.ndim)) + [-2, -1]
-        fx = np.expand_dims(fx, axis=axis_expand_frq)
-        fy = np.expand_dims(fy, axis=axis_expand_frq)
+        fx = xp.expand_dims(fx, axis=axis_expand_frq)
+        fy = xp.expand_dims(fy, axis=axis_expand_frq)
 
     # do translations
-    if np.all(fx == 0) and np.all(fy == 0):
-        return np.array(img_ft, copy=True)
+    if xp.all(fx == 0) and xp.all(fy == 0):
+        return xp.array(img_ft, copy=True)
     else:
         # 1. shift frequencies in img_ft so zero frequency is in corner using ifftshift
         # 2. inverse ft
@@ -959,27 +998,22 @@ def translate_ft(img_ft: np.ndarray, fx: np.ndarray, fy: np.ndarray, drs: list[f
         # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
         # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
         # we do not apply an fftshift, so we don't have to apply an intermediate shift in our FFTs later
-        axis_expand_x = list(range(n_extra_dims + 1))
-        x = np.expand_dims(fft.fftfreq(nx) * nx * dx, axis=axis_expand_x)
+        axis_expand_x = tuple(range(n_extra_dims + 1))
+        x = xp.expand_dims(xp.fft.fftfreq(nx) * nx * dx, axis=axis_expand_x)
         # todo: replace with this second option which is more intuitive
         # x = np.expand_dims(fft.ifftshift(np.arange(nx) - nx // 2) * dx, axis=axis_expand_x)
 
-        axis_expand_y = list(range(n_extra_dims)) + [-1]
-        y = np.expand_dims(fft.fftfreq(ny) * ny * dy, axis=axis_expand_y)
+        axis_expand_y = tuple(range(n_extra_dims)) + (-1,)
+        y = xp.expand_dims(xp.fft.fftfreq(ny) * ny * dy, axis=axis_expand_y)
         # y = np.expand_dims(fft.ifftshift(np.arange(ny) - ny // 2) * dy, axis=axis_expand_y)
 
-        exp_factor = np.exp(-1j * 2 * np.pi * (fx * x + fy * y))
+        exp_factor = xp.exp(-1j * 2 * np.pi * (fx * x + fy * y))
 
-        if not use_gpu:
-            # ifft2(ifftshift(img_ft)) = ifftshift(img)
-            img_ft_shifted = fft.fftshift(fft.fft2(exp_factor *
-                                                   fft.ifft2(fft.ifftshift(img_ft, axes=(-1, -2)), axes=(-1, -2)),
-                                                   axes=(-1, -2)), axes=(-1, -2))
-        else:
-            img_ft_shifted = cp.asnumpy(cp.fft.fftshift(
-                                        cp.fft.fft2(cp.array(exp_factor) *
-                                        cp.fft.ifft2(cp.fft.ifftshift(img_ft, axes=(-1, -2)), axes=(-1, -2)),
-                                                    axes=(-1, -2)), axes=(-1, -2)))
+
+        img_ft_shifted = xp.fft.fftshift(
+                         xp.fft.fft2(xp.array(exp_factor) *
+                         xp.fft.ifft2(xp.fft.ifftshift(img_ft, axes=(-1, -2)),
+                                      axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
         return img_ft_shifted
 

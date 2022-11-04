@@ -9,7 +9,6 @@ from numpy import fft
 import scipy.sparse as sp
 from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
 from scipy.signal.windows import tukey, hann
-from numpy.linalg import lstsq
 from skimage.restoration import unwrap_phase, denoise_tv_chambolle
 import dask
 import dask.array as da
@@ -112,9 +111,12 @@ class tomography:
         self.dfx = self.fxs[1] - self.fxs[0]
         self.dfy = self.fys[1] - self.fys[0]
 
-        # pupil
-        self.pupil_mask = np.sqrt(self.fxfx**2 + self.fyfy**2) <= self.fmax  # where pupil allowed to be non-zero
-        self.pupil = self.pupil_mask.astype(complex) # value of pupil function
+        # where pupil allowed to be non-zero
+        self.pupil_mask = np.expand_dims(np.sqrt(self.fxfx**2 + self.fyfy**2) <= self.fmax,
+                                         axis=tuple(range(self.nextra_dims)) + (-3,))
+        # value of pupil function
+        self.pupil = np.expand_dims(self.pupil_mask.astype(complex),
+                                    axis=tuple(range(self.nextra_dims)) + (-3,))
 
         # settings
         self.reconstruction_settings = {} # keys will differ depending on recon mode
@@ -337,8 +339,9 @@ class tomography:
     def unmix_holograms(self,
                         bg_average_axes,
                         mask=None,
-                        fit_phases=False,
-                        apodization=None):
+                        fit_phases: bool = False,
+                        apodization=None,
+                        use_gpu: bool = False):
         """
         Unmix and preprocess holograms
         @param mask: area to be cut out of hologrms
@@ -348,10 +351,18 @@ class tomography:
         @return:
         """
 
+        if use_gpu:
+            xp = cp
+        else:
+            xp = np
+
+
         if apodization is None:
             apodization = np.expand_dims(np.expand_dims(tukey(self.nx, alpha=0.1), axis=0) *
                                          np.expand_dims(tukey(self.ny, alpha=0.1), axis=1),
                                          axis=tuple(range(self.nextra_dims + 1)))
+
+        apodization = xp.array(apodization)
 
         ref_frq_da = da.from_array(self.reference_frq, chunks=(1,) * (self.reference_frq.ndim - 1) + (2,))
 
@@ -364,18 +375,25 @@ class tomography:
                                          2*self.fmax,
                                          ref_frq_da[..., 0],
                                          ref_frq_da[..., 1],
-                                         False,
+                                         use_gpu=use_gpu,
                                          apodization=apodization,
                                          dtype=complex)
+
 
         if mask is None:
             holograms_ft = holograms_ft_raw
         else:
             # ensure masks has same dims and chunks as holograms_ft_raw
-            masks_da = da.from_array(np.expand_dims(mask, axis=list(range(0, self.imgs_raw.ndim - mask.ndim))),
+            masks_da = da.from_array(xp.expand_dims(xp.array(mask),
+                                                    axis=tuple(range(0, self.imgs_raw.ndim - mask.ndim))),
                                      chunks=holograms_ft_raw.chunksize)
 
-            holograms_ft = da.map_blocks(cut_mask, holograms_ft_raw, masks_da, dtype=complex)
+            holograms_ft = da.map_blocks(cut_mask,
+                                         holograms_ft_raw,
+                                         masks_da,
+                                         mask_val=0,
+                                         use_gpu=use_gpu,
+                                         dtype=complex)
 
         # #########################
         # background holograms
@@ -389,7 +407,7 @@ class tomography:
                                                 2*self.fmax,
                                                 ref_frq_da[..., 0],
                                                 ref_frq_da[..., 1],
-                                                False,
+                                                use_gpu=use_gpu,
                                                 apodization=apodization,
                                                 dtype=complex)
 
@@ -397,9 +415,15 @@ class tomography:
                 holograms_ft_bg = holograms_ft_raw_bg
             else:
                 # ensure masks has same dims and chunks as holograms_ft_raw
-                masks_da_bg = da.from_array(np.expand_dims(mask, axis=list(range(0, self.imgs_raw.ndim - mask.ndim))),
+                masks_da_bg = da.from_array(xp.expand_dims(xp.array(mask),
+                                                           axis=tuple(range(0, self.imgs_raw.ndim - mask.ndim))),
                                          chunks=holograms_ft_raw_bg.chunksize)
-                holograms_ft_bg = da.map_blocks(cut_mask, holograms_ft_raw_bg, masks_da_bg, dtype=complex)
+                holograms_ft_bg = da.map_blocks(cut_mask,
+                                                holograms_ft_raw_bg,
+                                                masks_da_bg,
+                                                mask_val=0,
+                                                use_gpu=use_gpu,
+                                                dtype=complex)
 
         # #########################
         # determine background phases
@@ -412,16 +436,14 @@ class tomography:
                 slices = tuple([slice(0, 1) if a in bg_average_axes else slice(None) for a in range(self.nextra_dims)] +
                                [slice(None)] * 3)
 
-                hologram_ft_ref = holograms_ft_bg[slices]
-
                 fit_params = da.map_blocks(get_global_phase_shifts,
                                            holograms_ft_bg,
-                                           hologram_ft_ref,
+                                           holograms_ft_bg[slices], # reference slices
+                                           use_gpu=use_gpu,
                                            dtype=complex,
                                            chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
-                # phase_offsets_bg = da.angle(fit_params[..., 0])
-                # phase_offsets_bg = da.imag(fit_params[..., 0])
-                phase_offsets_bg = da.angle(fit_params)
+
+                phase_offsets_bg = xp.angle(fit_params)
         else:
             phase_offsets_bg = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
 
@@ -442,11 +464,10 @@ class tomography:
                     fit_params = da.map_blocks(get_global_phase_shifts,
                                                holograms_ft,
                                                self.holograms_ft_bg,
+                                               use_gpu=use_gpu,
                                                dtype=complex,
                                                chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
-                    # phase_offsets = da.angle(fit_params[..., 0])
-                    # phase_offsets = da.imag(fit_params[..., 0])
-                    phase_offsets = da.angle(fit_params)
+                    phase_offsets = xp.angle(fit_params)
             else:
                 phase_offsets = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
 
@@ -455,7 +476,6 @@ class tomography:
 
 
     # def refocus(self, dz):
-    #     # todo: do I need to rename variable instead of redefining?
     #     self.holograms_ft = da.map_blocks(prop_ft_medium,
     #                                       self.holograms_ft,
     #                                       self.dxy, dz, self.wavelength, self.no,
@@ -470,8 +490,9 @@ class tomography:
 
 
     def set_scattered_field(self,
-                            scattered_field_regularization=10,
-                            mask=None):
+                            scattered_field_regularization,
+                            mask=None,
+                            use_gpu: bool = False):
         """
         The scattered field is only used directly in the Born reconstruction.
 
@@ -481,39 +502,40 @@ class tomography:
         @return:
         """
 
-        # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
-        # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
+        # if use_gpu:
+        #     xp = cp
+        # else:
+        #     xp = np
 
-        # compute scattered field in real-space
-        holograms_bg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft_bg, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-        holograms = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(self.holograms_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-        efield_scattered = (holograms - holograms_bg) / (da.abs(holograms_bg) + scattered_field_regularization)
+        efield_scattered_ft_raw = da.map_blocks(get_scattered_field,
+                                                self.holograms_ft,
+                                                self.holograms_ft_bg,
+                                                scattered_field_regularization,
+                                                use_gpu=use_gpu,
+                                                dtype=complex
+                                                )
 
         # cut out any regions we don't want in Fourier space
-        efield_scattered_ft_raw = da.fft.fftshift(da.fft.fft2(da.fft.ifftshift(efield_scattered, axes=(-1, -2)),
-                                                              axes=(-1, -2)), axes=(-1, -2))
+        # mask has value TRUE on regions we want to remove
+        # if mask is None:
+        #     combined_mask = self.pupil_mask
+        # else:
+        #     # try to expand mask if necessary
+        #     mask = xp.expand_dims(mask, axis=tuple(range(self.pupil_mask.ndim - mask.ndim)))
+        #     combined_mask = xp.logical_or(self.pupil_mask, mask)
+        #
+        # combined_mask_da = da.from_array(combined_mask, chunks=efield_scattered_ft_raw.chunksize)
+        #
+        #
+        # self.efield_scattered_ft = da.map_blocks(cut_mask,
+        #                                          efield_scattered_ft_raw,
+        #                                          combined_mask_da,
+        #                                          self.fmax,
+        #                                          mask_val=0,
+        #                                          use_gpu=True,
+        #                                          dtype=complex)
 
-        if mask is None:
-            mask = np.zeros((self.ny, self.nx), dtype=bool)
-
-        # region to cut out of scattered field
-        # allow for possiblity mask is of either size ny x nx or npatterns x ny x nx
-        combined_mask = np.logical_or(np.expand_dims(np.logical_not(self.pupil_mask), axis=list(range(0, mask.ndim - self.pupil_mask.ndim))),
-                                      mask)
-
-        if np.any(combined_mask):
-            combined_mask_da = da.from_array(np.expand_dims(combined_mask, axis=list(range(0, self.imgs_raw.ndim - combined_mask.ndim))),
-                                             chunks=efield_scattered_ft_raw.chunksize)
-
-            self.efield_scattered_ft = da.map_blocks(cut_mask,
-                                                     efield_scattered_ft_raw,
-                                                     combined_mask_da,
-                                                     self.fmax,
-                                                     dtype=complex)
-        else:
-            self.efield_scattered_ft = efield_scattered_ft_raw
-
+        self.efield_scattered_ft = efield_scattered_ft_raw
 
     def reconstruct_linear(self,
                            mode: str,
@@ -612,6 +634,7 @@ class tomography:
                                         regularization=reconstruction_regularizer,
                                         mode=mode,
                                         no_data_value=0,
+                                        use_gpu=use_gpu,
                                         dtype=complex,
                                         chunks=(1,) * self.nextra_dims + v_size)
 
@@ -696,11 +719,17 @@ class tomography:
                                      require_real_part_greater_bg=use_real_constraint,
                                      dtype=complex)
 
-
         # ############################
         # convert results to index of refraction
         # ############################
         def ft3d(vft):
+
+            if use_gpu:
+                xp = cp
+            else:
+                xp = np
+
+            vft = xp.array(vft)
 
             # clip extra dimensions, but keep track of how many there were
             ndim_start = vft.ndim
@@ -710,11 +739,6 @@ class tomography:
             ndim_end = vft.ndim
 
             # inverse FFT
-            if use_gpu:
-                vft = cp.array(vft)
-                xp = cp
-            else:
-                xp = np
 
             v = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(vft, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
             # restore extra dimensions
@@ -729,13 +753,11 @@ class tomography:
                               v_ft_out,
                               dtype=complex)
 
-        # v_out = da.fft.fftshift(da.fft.ifftn(da.fft.ifftshift(v_ft_out,
-        #                                                       axes=(-3, -2, -1)), axes=(-3, -2, -1)), axes=(-3, -2, -1))
-
         n = da.map_blocks(get_n,
                           v_out,
                           self.no,
                           self.wavelength,
+                          use_gpu=use_gpu,
                           dtype=complex)
 
         return n, v_fts_start, drs_v
@@ -921,14 +943,15 @@ def grad_descent(v_ft_start,
     # put on gpu optionally
     if use_gpu:
         xp = cp
-        v_ft_start = cp.array(v_ft_start)
-        e_measured_ft = cp.array(e_measured_ft)
         model = sp_gpu.csr_matrix(model)
-        step = cp.array(step)
         def prox_tv(v): return denoise_tv_chambolle_gpu(v.real, tau_tv), denoise_tv_chambolle_gpu(v.imag, tau_tv)
     else:
         xp = np
         def prox_tv(v): return denoise_tv_chambolle(v.real, tau_tv), denoise_tv_chambolle(v.imag, tau_tv)
+
+    v_ft_start = xp.array(v_ft_start)
+    e_measured_ft = xp.array(e_measured_ft)
+    step = xp.array(step)
 
     def ift(m): return xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(m)))
     def ft(m): return xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(m)))
@@ -1100,7 +1123,8 @@ def grad_descent(v_ft_start,
 
 def cut_mask(img: np.ndarray,
              mask: np.ndarray,
-             mask_val: float = 0):
+             mask_val: float = 0,
+             use_gpu: bool = False):
     """
     Mask points in image and set to a given value. Designed to be used with dask.array map_blocks()
     @param img:
@@ -1108,10 +1132,18 @@ def cut_mask(img: np.ndarray,
     @param mask_val:
     @return:
     """
-    # if mask does not cover full image, broadcast so it does
-    mask = np.expand_dims(mask, axis=list(range(img.ndim - mask.ndim)))
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
 
-    img_masked = np.array(img, copy=True)
+    img = xp.array(img)
+    mask = xp.array(mask)
+
+    # if mask does not cover full image, broadcast so it does
+    mask = xp.expand_dims(mask, axis=tuple(range(img.ndim - mask.ndim)))
+
+    img_masked = xp.array(img, copy=True)
     img_masked[mask] = mask_val
     return img_masked
 
@@ -1177,7 +1209,10 @@ def angles2frqs(no: float,
     return f
 
 
-def get_global_phase_shifts(imgs, ref_imgs, thresh=None):
+def get_global_phase_shifts(imgs,
+                            ref_imgs,
+                            thresh=None,
+                            use_gpu: bool = False):
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
     imgs * np.exp(1j * phase_shift) ~ img_ref
@@ -1187,31 +1222,37 @@ def get_global_phase_shifts(imgs, ref_imgs, thresh=None):
     @param thresh: only consider points in images where both abs(imgs) and abs(ref_imgs) > thresh
     @return phase_shifts:
     """
-    x = np.arange(imgs.shape[-1])
-    y = np.arange(imgs.shape[-2])
-    xx, yy = np.meshgrid(x, y)
-    xx = np.expand_dims(xx, axis=list(range(imgs.ndim - 2)))
-    yy = np.expand_dims(yy, axis=list(range(imgs.ndim - 2)))
+
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
+    # xx, yy = xp.meshgrid(xp.arange(imgs.shape[-1]),
+    #                      xp.arange(imgs.shape[-2]))
+    # xx = xp.expand_dims(xx, axis=tuple(range(imgs.ndim - 2)))
+    # yy = xp.expand_dims(yy, axis=tuple(range(imgs.ndim - 2)))
 
     # broadcast images and references images to same shapes
-    imgs, ref_imgs, xx, yy = np.broadcast_arrays(imgs, ref_imgs, xx, yy)
+    # imgs, ref_imgs, xx, yy = xp.broadcast_arrays(imgs, ref_imgs, xx, yy)
+    imgs, ref_imgs = xp.broadcast_arrays(imgs, ref_imgs)
 
     # looper over all dimensions except the last two, which are the y and x dimensions respectively
     loop_shape = imgs.shape[:-2]
 
-    fit_params = np.zeros(loop_shape + (1, 1), dtype=complex)
+    fit_params = xp.zeros(loop_shape + (1, 1), dtype=complex)
     nfits = np.prod(loop_shape).astype(int)
     for ii in range(nfits):
         ind = np.unravel_index(ii, loop_shape)
 
         if thresh is None:
-            mask = np.ones(imgs[ind].shape, dtype=bool)
+            mask = xp.ones(imgs[ind].shape, dtype=bool)
         else:
-            mask = np.logical_and(np.abs(imgs[ind]) > thresh, np.abs(ref_imgs) > thresh)
+            mask = xp.logical_and(np.abs(imgs[ind]) > thresh, xp.abs(ref_imgs) > thresh)
 
-        A = np.expand_dims(imgs[ind][mask], axis=1)
+        A = xp.expand_dims(imgs[ind][mask], axis=1)
         B = ref_imgs[ind][mask]
-        fps, _, _, _ = lstsq(A, B, rcond=None)
+        fps, _, _, _ = xp.linalg.lstsq(A, B, rcond=None)
         fit_params[ind, :] = fps
 
     return fit_params
@@ -1221,7 +1262,7 @@ def get_global_phase_shifts(imgs, ref_imgs, thresh=None):
 def get_n(scattering_pot,
           no: float,
           wavelength: float,
-          use_gpu=False):
+          use_gpu: bool = False):
     """
     convert from the scattering potential to the index of refraction
     @param scattering_pot: F(r) = - (2*np.pi / lambda)^2 * (n(r)^2 - no^2)
@@ -1233,6 +1274,8 @@ def get_n(scattering_pot,
         xp = cp
     else:
         xp = np
+
+    scattering_pot = xp.array(scattering_pot)
 
     k = 2 * np.pi / wavelength
     n = xp.sqrt(-scattering_pot / k ** 2 + no ** 2)
@@ -1258,7 +1301,7 @@ def get_scattering_potential(n: np.ndarray,
 def get_rytov_phase(eimgs_ft: np.ndarray,
                     eimgs_bg_ft: np.ndarray,
                     regularization: float,
-                    use_gpu: bool =_gpu_available):
+                    use_gpu: bool = _gpu_available):
     """
     Compute rytov phase from field and background field. The Rytov phase is \psi_s(r) where
     U_total(r) = exp[\psi_o(r) + \psi_s(r)]
@@ -1271,25 +1314,23 @@ def get_rytov_phase(eimgs_ft: np.ndarray,
     @param float regularization: regularization value
     @return psi_rytov:
     """
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
 
-    if np.any(np.array(eimgs_ft.shape[:-2]) != 1):
+    if xp.any(xp.array(eimgs_ft.shape[:-2]) != 1):
         raise ValueError()
 
-    if np.any(np.array(eimgs_bg_ft.shape[:-2]) != 1):
+    if xp.any(xp.array(eimgs_bg_ft.shape[:-2]) != 1):
         raise ValueError()
 
     n_extra_dims = eimgs_ft.ndim - 2
     eimgs_ft = eimgs_ft.squeeze()
     eimgs_bg_ft = eimgs_bg_ft.squeeze()
 
-    # nimgs = eimgs_ft.shape[0]
-
-    if use_gpu:
-        eimgs_ft = cp.array(eimgs_ft)
-        eimgs_bg_ft = cp.array(eimgs_bg_ft)
-        xp = cp
-    else:
-        xp = np
+    eimgs_ft = xp.array(eimgs_ft)
+    eimgs_bg_ft = xp.array(eimgs_bg_ft)
 
     def ift(m): return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
     def ft(m): return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
@@ -1318,11 +1359,49 @@ def get_rytov_phase(eimgs_ft: np.ndarray,
     # Fourier transform
     psi_rytov_ft = xp.expand_dims(ft(psi_rytov), axis=tuple(range(n_extra_dims)))
 
-    # todo: should I bring off the GPU or leave on?
-    # if use_gpu:
-    #     psi_rytov_ft = psi_rytov_ft.get()
-
     return psi_rytov_ft
+
+
+def get_scattered_field(eimgs_ft: np.ndarray,
+                        eimgs_bg_ft: np.ndarray,
+                        regularization: float,
+                        use_gpu: bool = False):
+
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
+    if xp.any(xp.array(eimgs_ft.shape[:-2]) != 1):
+        raise ValueError()
+
+    if xp.any(xp.array(eimgs_bg_ft.shape[:-2]) != 1):
+        raise ValueError()
+
+    n_extra_dims = eimgs_ft.ndim - 2
+    eimgs_ft = eimgs_ft.squeeze()
+    eimgs_bg_ft = eimgs_bg_ft.squeeze()
+
+    eimgs_ft = xp.array(eimgs_ft)
+    eimgs_bg_ft = xp.array(eimgs_bg_ft)
+
+    def ift(m): xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+    def ft(m): xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+    # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
+    # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
+
+    # compute scattered field
+    holograms_bg = ift(eimgs_bg_ft)
+    holograms = ift(eimgs_ft)
+
+    efield_scattered = (holograms - holograms_bg) / (xp.abs(holograms_bg) + regularization)
+
+    # Fourier transform
+    efield_scattered_ft_raw = xp.expand_dims(ft(efield_scattered), axis=tuple(range(n_extra_dims)))
+
+    return efield_scattered_ft_raw
 
 
 # holograms
@@ -1343,18 +1422,24 @@ def unmix_hologram(img: np.ndarray,
     @param ry_ref:
     @return:
     """
-    # FT of image
-    if not use_gpu:
-        img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img * apodization, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+    if use_gpu:
+        xp = cp
     else:
-        img_ft = cp.asnumpy(cp.fft.fftshift(cp.fft.fft2(cp.fft.ifftshift(img * apodization, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1)))
+        xp = np
+
+    img = xp.array(img)
+    apodization = xp.array(apodization)
+
+    # FT of image
+    img_ft = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(img * apodization, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1))
 
     ny, nx = img_ft.shape[-2:]
 
     # get frequency data
-    fxs = fft.fftshift(fft.fftfreq(nx, dxy))
-    fys = fft.fftshift(fft.fftfreq(ny, dxy))
-    fxfx, fyfy = np.meshgrid(fxs, fys)
+    fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
+    fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
+    fxfx, fyfy = xp.meshgrid(fxs, fys)
     ff_perp = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
     # compute efield
@@ -1735,6 +1820,8 @@ def reconstruction(efield_fts,
     else:
         xp = np
 
+    efield_fts = xp.array(efield_fts)
+
     n_leading_dims = efield_fts.ndim - 3
     efield_fts = efield_fts.squeeze()
     nimgs, ny, nx = efield_fts.shape
@@ -1755,13 +1842,18 @@ def reconstruction(efield_fts,
                                                            mode=mode,
                                                            interpolate=False)
 
+    if use_gpu:
+        data = cp.array(data)
+        row_index = cp.array(row_index)
+        col_index = cp.array(col_index)
+
     # recover indices into V and E
-    v_ind = np.unravel_index(col_index, v_shape)
-    e_ind = np.unravel_index(row_index, (nimgs, ny, nx))
+    v_ind = xp.unravel_index(col_index, v_shape)
+    e_ind = xp.unravel_index(row_index, (nimgs, ny, nx))
 
     # put information in correct space in Fourier space
-    v_ft = np.zeros(v_shape, dtype=complex)
-    num_pts_all = np.zeros(v_shape, dtype=int)
+    v_ft = xp.zeros(v_shape, dtype=complex)
+    num_pts_all = xp.zeros(v_shape, dtype=int)
 
     for ii in range(nimgs):
         # check we don't have duplicate indices ... otherwise need to do something else ...
@@ -1787,14 +1879,14 @@ def reconstruction(efield_fts,
 
     # average over angles/images
     no_data = num_pts_all == 0
-    is_data = np.logical_not(no_data)
+    is_data = xp.logical_not(no_data)
 
     # todo: want to weight regularization against OTF
     v_ft[is_data] = v_ft[is_data] / (num_pts_all[is_data] + regularization)
     v_ft[no_data] = no_data_value
 
     # expand to match original dimensions
-    v_ft = np.expand_dims(v_ft, axis=list(range(n_leading_dims)))
+    v_ft = xp.expand_dims(v_ft, axis=tuple(range(n_leading_dims)))
 
     return v_ft
 
