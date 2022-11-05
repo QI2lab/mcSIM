@@ -1327,16 +1327,16 @@ class SimImageSet:
         end_coord_re = [2*c for c in end_coord]
 
         # get cut from widefield image
-        coord_wf, cut_wf = tools.get_linecut(self.widefield, start_coord, end_coord, 1)
+        coord_wf, cut_wf = get_linecut(self.widefield, start_coord, end_coord, 1)
         coord_wf = self.dx * coord_wf
 
-        coord_os, cut_os = tools.get_linecut(self.sim_os, start_coord, end_coord, 1)
+        coord_os, cut_os = get_linecut(self.sim_os, start_coord, end_coord, 1)
         coord_os = self.dx * coord_os
 
-        coord_dc, cut_dc = tools.get_linecut(self.widefield_deconvolution, start_coord_re, end_coord_re, 1)
+        coord_dc, cut_dc = get_linecut(self.widefield_deconvolution, start_coord_re, end_coord_re, 1)
         coord_dc = 0.5 * self.dx * coord_dc
 
-        coord_sr, cut_sr = tools.get_linecut(self.sim_sr, start_coord_re, end_coord_re, 1)
+        coord_sr, cut_sr = get_linecut(self.sim_sr, start_coord_re, end_coord_re, 1)
         coord_sr = 0.5 * self.dx * coord_sr
 
         coords = {'wf': coord_wf, 'os': coord_os, 'dc': coord_dc, 'sr': coord_sr}
@@ -2778,13 +2778,13 @@ def get_phase_realspace(img: np.ndarray,
     ny, nx = img.shape
 
     if origin == "center":
-        # x = tools.get_fft_pos(nx, dxy, centered=True, mode="symmetric")
-        # y = tools.get_fft_pos(ny, dxy, centered=True, mode="symmetric")
         x = (np.arange(nx) - (nx // 2)) * dxy
         y = (np.arange(ny) - (ny // 2)) * dxy
     elif origin == "edge":
-        x = tools.get_fft_pos(nx, dxy, centered=False, mode="positive")
-        y = tools.get_fft_pos(ny, dxy, centered=False, mode="positive")
+        x = np.arange(nx) * dxy
+        y = np.arange(ny) * dxy
+        # x = tools.get_fft_pos(nx, dxy, centered=False, mode="positive")
+        # y = tools.get_fft_pos(ny, dxy, centered=False, mode="positive")
     else:
         raise ValueError(f"'origin' must be 'center' or 'edge' but was '{origin:s}'")
 
@@ -3565,6 +3565,50 @@ def get_band_overlap(band0: np.ndarray,
         phases[ii] = np.angle(corr)
 
     return phases, mags
+
+#
+def get_linecut(img,
+                start_coord,
+                end_coord,
+                width):
+    """
+    Get data along a 1D line from img
+
+    todo: would like the option to resample along the new coordinates? Otherwise the finite width
+    can lead to artifacts
+    :param img: 2D numpy array
+    :param start_coord: [xstart, ystart], where the upper left pixel of the array is at [0, 0]
+    :param end_coord: [xend, yend]
+    :param width: width of cut
+    :return xcut: coordinate along the cut (in pixels)
+    :return cut: values along the cut
+    """
+    xstart, ystart = start_coord
+    xend, yend = end_coord
+
+    angle = np.arctan((yend - ystart) / (xend - xstart))
+
+    xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
+    xrot = (xx - xstart) * np.cos(angle) + (yy - ystart) * np.sin(angle)
+    yrot = (yy - ystart) * np.cos(angle) - (xx - xstart) * np.sin(angle)
+
+    # line goes from (0,0) to (xend - xstart)
+    mask = np.ones(img.shape)
+    mask[yrot > 0.5 * width] = 0
+    mask[yrot < -0.5 * width] = 0
+    mask[xrot < 0] = 0
+    xrot_end = (xend - xstart) * np.cos(angle) + (yend - ystart) * np.sin(angle)
+    mask[xrot > xrot_end] = 0
+
+    xcut = xrot[mask != 0]
+    cut = img[mask != 0]
+
+    # sort by coordinate
+    inds = np.argsort(xcut)
+    xcut = xcut[inds]
+    cut = cut[inds]
+
+    return xcut, cut
 
 # filtering and combining images
 def get_wiener_filter(otf,

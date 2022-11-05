@@ -7,7 +7,6 @@ import numpy as np
 import scipy.sparse as sp
 from scipy import fft
 import localize_psf.rois as rois
-import warnings
 
 _cupy_available = True
 try:
@@ -265,87 +264,6 @@ def bin(img: np.ndarray,
 
 
 # resampling functions
-def duplicate_pix(img, nx=2, ny=2):
-    """
-    Resample image by expanding each pixel into a rectangle of ny x nx identical pixels
-
-    :param img: image to resample
-    :param nx:
-    :param ny:
-    :return:
-    """
-    if not isinstance(nx, int) or not isinstance(ny, int):
-        raise TypeError('nx and ny must be ints')
-
-    block = np.ones((ny, nx))
-    img_resampled = np.kron(img, block)
-
-    return img_resampled
-
-
-def duplicate_pix_ft(img_ft: np.ndarray,
-                     mx: int = 2,
-                     my: int = 2,
-                     centered: bool = True):
-    """
-    Resample the Fourier transform of image. In real space, this operation corresponds to replacing each pixel with a
-    myxmx square of identical pixels. Note that this is often NOT the desired resampling behavior if you e.g. have
-    an image. In that case you should use expand_fourier_sp() instead.
-
-
-    In Fourier space we take advantage of the following connection. Let a be the original sequence and
-    b[2n] = b[2n+1] = a[n]
-    a[k] = \sum_{n=0}^{N-1} a[n] * exp(-2*pi*i/N * k * n)
-    b[k] = \sum_{n=0}^{N-1} a[n] * {exp[-2*pi*i/(2N) * k * 2n] + exp[-2*pi*i/(2N) * k * 2n]}
-         =  (1 + exp(-2*pi*i*k/(2N)) a[k]
-    For N-1 < k < 2N, we are free to replace k by k-N
-
-    This generalizes to
-    b[k] = a[k] * \sum_{l=0}^{m-1} exp(-2*pi*i*k/(mN) * l)
-         = a[k] * (1 - exp(-2*pi*i*k/N)) / (1 - exp(-2*pi*i*k/(mN)))
-
-    :param img_ft:
-    :param centered: If False, treated as raw output of fft.fft2. If true, treated as fft.fftshift(fft.fft2())
-    :return:
-    """
-
-    ny, nx = img_ft.shape
-
-    if centered:
-        img_ft = fft.ifftshift(img_ft)
-
-    kxkx, kyky = np.meshgrid(range(nx*mx), range(ny*my))
-
-    phase_x = np.exp(-1j*2*np.pi * kxkx / (nx*mx))
-    factor_x = (1 - phase_x**mx) / (1 - phase_x)
-    # at kx or ky = 0 these give indeterminate forms
-    factor_x[kxkx == 0] = mx
-
-    phase_y = np.exp(-1j*2*np.pi * kyky / (ny*my))
-    factor_y = (1 - phase_y**my) / (1 - phase_y)
-    factor_y[kyky == 0] = my
-
-    img_ft_resampled = factor_x * factor_y * np.tile(img_ft, (my, mx))
-
-    if centered:
-        img_ft_resampled = fft.fftshift(img_ft_resampled)
-
-    return img_ft_resampled
-
-
-def resample_bandlimited(img, mag=(2, 2)):
-    """
-    Expand real-space imaging while keeping fourier content constant
-
-    :param img: nD image
-    :param mag:
-
-    :return img_resampled:
-    """
-    img_resampled = fft.fftshift(fft.ifft2(resample_bandlimited_ft(fft.fftshift(fft.fft2(fft.ifftshift(img))), mag)))
-    return img_resampled
-
-
 def resample_bandlimited_ft(img_ft, mag=(2, 2)):
     """
     Expand image by factors of mx and my while keeping Fourier content constant.
@@ -366,6 +284,7 @@ def resample_bandlimited_ft(img_ft, mag=(2, 2)):
     :return img_ft_expanded:
     """
     # todo: add axes argument, so will only resample some axes
+    # todo: move to sim_reconstruction.py
 
     if isinstance(mag, int):
         mag = [mag]
@@ -525,107 +444,6 @@ def pixel_overlap(centers1, centers2, lens1, lens2=None):
     return np.prod(overlaps)
 
 
-def segment_intersect(start1, end1, start2, end2):
-    """
-    Get intersection point of two 2D line segments
-    :param start1: [x, y]
-    :param end1:
-    :param start2:
-    :param end2:
-    :return:
-    """
-    # solve S1 * (1-t) + e1 * t = S2 * (1-r) * e2 * r
-    # phrase this as roi_size matrix problem:
-    # S1 - S2 = [[e1_x - s1_x, e2_x - s2_x]; [e1_y - s1_y, e2_y - s2_y]] * [t; r]
-    start1 = np.asarray(start1)
-    end1 = np.asarray(end1)
-    start2 = np.asarray(start2)
-    end2 = np.asarray(end2)
-
-    try:
-        # solve system of equations by inverting matrix
-        M = np.array([[start1[0] - end1[0], end2[0] - start2[0]],
-                      [start1[1] - end1[1], end2[1] - start2[1]]])
-        vs = np.linalg.inv(M).dot(np.asarray([[start1[0] - start2[0]], [start1[1] - start2[1]]]))
-    except np.linalg.LinAlgError:
-        return None
-
-    t = vs[0][0]
-    r = vs[1][0]
-
-    # check within bounds
-    if t<=1 and t>=0 and r<=1 and r>=0:
-        return start1 * (1-t) + end1 * t
-    else:
-        return None
-
-
-def nearest_point_on_line(line_point, line_unit_vec, pt):
-    """
-    Find the shortest distance between a line and a point of interest.
-
-    Parameterize line by v(t) = line_point + line_unit_vec * t
-
-    :param line_point: a point on the line
-    :param line_unit_vec: unit vector giving the direction of the line
-    :param pt: the point of interest
-
-    :return nearest_pt: the nearest point on the line to the point of interest
-    :return dist: the minimum distance between the line and the point of interest.
-    """
-    if np.linalg.norm(line_unit_vec) != 1:
-        raise ValueError("line_unit_vec norm != 1")
-    tmin = np.sum((pt - line_point) * line_unit_vec)
-    nearest_pt = line_point + tmin * line_unit_vec
-    dist = np.sqrt(np.sum((nearest_pt - pt)**2))
-
-    return nearest_pt, dist
-
-
-def get_linecut(img,
-                start_coord,
-                end_coord,
-                width):
-    """
-    Get data along a 1D line from img
-
-    todo: would like the option to resample along the new coordinates? Otherwise the finite width
-    can lead to artifacts
-    :param img: 2D numpy array
-    :param start_coord: [xstart, ystart], where the upper left pixel of the array is at [0, 0]
-    :param end_coord: [xend, yend]
-    :param width: width of cut
-    :return xcut: coordinate along the cut (in pixels)
-    :return cut: values along the cut
-    """
-    xstart, ystart = start_coord
-    xend, yend = end_coord
-
-    angle = np.arctan((yend - ystart) / (xend - xstart))
-
-    xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
-    xrot = (xx - xstart) * np.cos(angle) + (yy - ystart) * np.sin(angle)
-    yrot = (yy - ystart) * np.cos(angle) - (xx - xstart) * np.sin(angle)
-
-    # line goes from (0,0) to (xend - xstart)
-    mask = np.ones(img.shape)
-    mask[yrot > 0.5 * width] = 0
-    mask[yrot < -0.5 * width] = 0
-    mask[xrot < 0] = 0
-    xrot_end = (xend - xstart) * np.cos(angle) + (yend - ystart) * np.sin(angle)
-    mask[xrot > xrot_end] = 0
-
-    xcut = xrot[mask != 0]
-    cut = img[mask != 0]
-
-    # sort by coordinate
-    inds = np.argsort(xcut)
-    xcut = xcut[inds]
-    cut = cut[inds]
-
-    return xcut, cut
-
-
 # working with regions of interest
 def get_extent(y, x, origin="lower"):
     """
@@ -642,178 +460,15 @@ def get_extent(y, x, origin="lower"):
     dy = y[1] - y[0]
     dx = x[1] - x[0]
     if origin == "lower":
-        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
+        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx,
+                  y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
     elif origin == "upper":
-        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx, y[0] - 0.5 * dy, y[-1] + 0.5 * dy]
+        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx,
+                  y[0] - 0.5 * dy, y[-1] + 0.5 * dy]
     else:
         raise ValueError("origin must be 'lower' or 'upper' but was '%s'" % origin)
 
     return extent
-
-
-def map_intervals(vals,
-                  from_intervals: list[list[float]],
-                  to_intervals: list[list[float]]):
-    """
-    Given value v in interval [a, b], find the corresponding value in the interval [c, d]
-
-    :param vals: list of vals [v1, v2, v3, ..., vn]
-    :param from_intervals: list of intervals containing start values [[a1, b1], [a2, b2], ..., [an, bn]]
-    :param to_intervals: list of intervals containing end valus [[c1, d1], [c2, d2], ..., [cn, dn]]
-    :return:
-    """
-
-    # todo: maybe move to affine.py?
-    if not isinstance(vals, list):
-        vals = [vals]
-
-    if not isinstance(from_intervals[0], list):
-        from_intervals = [from_intervals]
-
-    if not isinstance(to_intervals[0], list):
-        to_intervals = [to_intervals]
-
-    vals_out = []
-    for v, i1, i2 in zip(vals, from_intervals, to_intervals):
-        vals_out.append((v - i1[0]) * (i2[1] - i2[0]) / (i1[1] - i1[0])  + i2[0])
-
-    return vals_out
-
-
-# fft tools
-def get_fft_frqs(length, dt=1, centered=True, mode='symmetric'):
-    """
-    Get frequencies associated with FFT, ordered from largest magnitude negative to largest magnitude positive.
-
-    We are always free to take f -> f + n*dt for any integer n, which allows us to transform between the 'symmetric'
-    and 'positive' frequency representations.
-
-    If fftshift=False, the natural frequency representation is the positive one, with
-    f = [0, ..., L-1]/(dt*L)
-
-    If fftshift=True, the natural frequency representation is the symmetric one
-    If x = [0, ..., L-1], then
-    for even length sequences, (L-1) = 2*N+1, and we have one more negative frequency than positive frequency:
-    f = [-(N+1), ..., 0, ..., N]/(dt*L) = [-L/2, ..., 0, ..., (L-2)/2]
-    and for odd length sequences, (L-1) = 2*N, and we have an equal number of negative and positive frequencies.
-    f = [    -N, ..., 0, ..., N]/(dt*L) = [-(L-1)/2, ..., 0, ..., (L-1)/2]
-    i.e. for sequences of even length, we have one more negative frequency than we have positive frequencies.
-
-
-    :param length: length of sample
-    :param dt: spacing between samples
-    :param centered: Bool. Controls the order in which fequencies are returned. If true, return
-    frequencies in the order corresponding to fftshift(fft(fn)), i.e. with origin in the center of the array.
-    If false, origin is at the edge.
-    :param mode: 'symmetric' or 'positive'. Controls which frequencies are repoted as postive/negative.
-    If 'positive', return positive representation of all frequencies. If 'symmetric', return frequencies larger
-    than length//2 as negative
-    :return:
-    """
-    # todo: deprecated since almost identical functionality from fft.fftfreq() in combination with fft.fftshift()
-
-    warnings.warn("mcim.analysis.analysis_tools.get_fft_frqs() is deprecated."
-                  " Use np.fft.fftfreq() in combination with np.fft.fftshift() to achieve same functionality")
-
-
-    # generate symmetric, fftshifted frequencies
-    if np.mod(length, 2) == 0:
-        n = int((length - 2) / 2)
-        frqs = np.arange(-(n+1), n+1) / length / dt
-    else:
-        n = int((length - 1) / 2)
-        frqs = np.arange(-n, n+1) / length / dt
-
-    # ifftshift if necessary
-    if centered:
-        pass
-    else:
-        # convert from origin at center to origin at edge
-        frqs = fft.ifftshift(frqs)
-
-    # shift back to positive if necessary
-    if mode == 'symmetric':
-        pass
-    elif mode == 'positive':
-        frqs[frqs < 0] = frqs[frqs < 0] + 1 / dt
-    else:
-        raise ValueError("mode must be 'symmetric' or 'positive', but was '%s'" % mode)
-
-    return frqs
-
-
-def get_fft_pos(length, dt=1, centered=True, mode='symmetric'):
-    """
-    Get position coordinates for use with fast fourier transforms (fft's) using one of several different conventions.
-
-    With the default arguments, will return the appropriate coordinates for the idiom
-    array_ft = fftshift(fft2(ifftshift(array)))
-
-    We are always free to change the position by a multiple of the overall length, i.e. x -> x + n*L for n an integer.
-
-    if centered=False,
-    pos = [0, 1, ..., L-1] * dt
-
-    if centered=True, then for a sequence of length L, we have
-    [- ceil( (L-1)/2), ..., 0, ..., floor( (L-1)/2)]
-    which is symmetric for L odd, and has one more positive coordinate for L even
-
-    :param length: length of array
-    :param dt: spacing between points
-    :param centered: controls the order in which frequencies are returned.
-    :param mode: "positive" or "symmetric": control which frequencies are reported as positive vs. negative
-
-    :return pos: list of positions
-    """
-
-    warnings.warn("mcim.analysis.analysis_tools.get_fft_pos() is deprecated.")
-
-    # symmetric, centered frequencies
-    pos = np.arange(-np.ceil(0.5 * (length - 1)), np.floor(0.5 * (length - 1)) + 1)
-    # todo: note that this is the same np.arange(length) - (length // 2)
-
-    if mode == 'symmetric':
-        pass
-    elif mode == 'positive':
-        pos[pos < 0] = pos[pos < 0] + length
-    else:
-        raise ValueError("mode must be 'symmetric' or 'positive', but was '%s'" % mode)
-
-    if centered:
-        pass
-    else:
-        pos = fft.ifftshift(pos)
-
-    pos = pos * dt
-
-    return pos
-
-
-def get_spline_fn(x1, x2, y1, y2, dy1, dy2):
-    """
-
-    :param x1:
-    :param x2:
-    :param y1:
-    :param y2:
-    :param dy1:
-    :param dy2:
-    :return spline_fn:
-    :return spline_deriv:
-    :return coeffs:
-    """
-    # s(x) = a * x**3 + b * x**2 + c * x + d
-    # vec = mat * [[a], [b], [c], [d]]
-    vec = np.array([[y1], [dy1], [y2], [dy2]])
-    mat = np.array([[x1**3, x1**2, x1, 1],
-                   [3*x1**2, 2*x1, 1, 0],
-                   [x2**3, x2**2, x2, 1],
-                   [3*x2**2, 2*x2, 1, 0]])
-    coeffs = np.linalg.inv(mat).dot(vec)
-
-    fn = lambda x: coeffs[0, 0] * x**3 + coeffs[1, 0] * x ** 2 + coeffs[2, 0] * x + coeffs[3, 0]
-    dfn = lambda x: 3 * coeffs[0, 0] * x**2 + 2 * coeffs[1, 0] * x + coeffs[2, 0]
-    return fn, dfn, coeffs
 
 
 # translating images
@@ -874,7 +529,7 @@ def translate_pix(img: np.ndarray,
 
 def translate_im(img: np.ndarray,
                  shift: tuple[float],
-                 dx: float = 1,
+                 drs: tuple[float] = (1, 1),
                  dy: float = None,
                  use_gpu: bool = _cupy_available):
     """
@@ -890,32 +545,33 @@ def translate_im(img: np.ndarray,
     :return img_shifted:
     """
 
+    if img.ndim != 2:
+        raise ValueError("img must be 2D")
+
     if use_gpu:
         xp = cp
     else:
         xp = np
 
     img = xp.array(img)
+    ny, nx = img.shape
 
-    if img.ndim != 2:
-        raise ValueError("img must be 2D")
-
-    if dy is None:
-        dy = dx
-    # todo: take (dx, dy) as argument instead
+    dy, dx = drs
 
     # must use symmetric frequency representation to do correctly!
     # we are using the FT shift theorem to approximate the Nyquist-Whittaker interpolation formula,
     # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
-    fx = xp.array(get_fft_frqs(img.shape[1], dt=dx, centered=False, mode='symmetric'))
-    fy = xp.array(get_fft_frqs(img.shape[0], dt=dy, centered=False, mode='symmetric'))
+    # fx = xp.array(get_fft_frqs(img.shape[1], dt=dx, centered=False, mode='symmetric'))
+    fx = xp.array(fft.fftfreq(nx, dx))
+    # fy = xp.array(get_fft_frqs(img.shape[0], dt=dy, centered=False, mode='symmetric'))
+    fy = xp.array(fft.fftfreq(ny, dy))
     fxfx, fyfy = xp.meshgrid(fx, fy)
 
     # 1. ft
     # 2. multiply by exponential factor
     # 3. inverse ft
     exp_factor = xp.exp(1j * 2 * np.pi * (shift[0] * fyfy + shift[1] * fxfx))
-    img_shifted = xp.fft.fftshift(xp.fft.ifft2(xp.array(exp_factor) * xp.fft.fft2(cp.fft.ifftshift(img))))
+    img_shifted = xp.fft.fftshift(xp.fft.ifft2(xp.array(exp_factor) * xp.fft.fft2(xp.fft.ifftshift(img))))
 
     return img_shifted
 
@@ -1042,61 +698,3 @@ def conj_transpose_fft(img_ft, axes=(-1, -2)):
     img_ft_ct = np.roll(img_ft_ct, shift=[1] * len(to_roll), axis=to_roll)
 
     return img_ft_ct
-
-
-def rfft2fft(img_rft):
-    """
-    Convert rfft2 representation to fft2
-    """
-
-    nx = img_rft.shape[0]
-    
-    img_fft = np.zeros((nx, nx), dtype=complex)
-    img_fft[: img_rft.shape[0], : img_rft.shape[1]] = img_rft
-    img_fft = fft.fftshift(img_fft)
-    test = conj_transpose_fft(img_fft)
-    img_fft[:, :nx // 2] = test[:, :nx // 2]
-    
-    return img_fft
-
-
-def shannon_whittaker_interp(pts, fn_vals, dt=1):
-    """
-    Get function value between sampling points using Shannon-Whittaker interpolation formula.
-
-    :param pts: point to find interpolated function
-    :param fn_vals: function at points n * dt
-    :param dt: sampling rate
-    :return fn_interp: fn(pts)
-    """
-    ns = np.arange(len(fn_vals))
-    fn_interp = np.zeros(pts.shape)
-    for ii in range(pts.size):
-        ind = np.unravel_index(ii, pts.shape)
-        fn_interp[ind] = np.sum(fn_vals * sinc(np.pi * (pts[ind] - ns * dt) / dt))
-
-    return fn_interp
-
-
-def shannon_whittaker_interp2d(pts, fn_vals, drs):
-    # todo: combine 1D and 2D functions to nD function
-    ns = np.expand_dims(np.arange(fn_vals.shape[0]), axis=1)
-    ms = np.expand_dims(np.arange(fn_vals.shape[1]), axis=0)
-
-    fn_interp = np.zeros(pts.shape)
-    for ii in range(pts.size):
-        ind = np.unravel_index(ii, pts.shape)
-        fn_interp[ind] = np.sum(fn_vals *
-                                sinc(np.pi * (pts[ind] - ns * drs[0]) / drs[0]) *
-                                sinc(np.pi * (pts[ind] - ms * drs[1]) / drs[1]))
-
-    return fn_interp
-
-
-def sinc(x):
-    """
-    sinc(x) = sin(x) / x
-    """
-    val = np.sin(x) / x
-    val[x == 0] = 1
-    return val

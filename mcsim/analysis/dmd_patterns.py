@@ -787,8 +787,10 @@ def get_pattern_fourier_component(unit_cell, x, y, vec_a, vec_b, na: int, nb: in
 
         # now correct for
         nx, ny = dmd_size
-        x_pattern = tools.get_fft_pos(nx)
-        y_pattern = tools.get_fft_pos(ny)
+        # x_pattern = tools.get_fft_pos(nx)
+        # y_pattern = tools.get_fft_pos(ny)
+        x_pattern = np.arange(nx) - (nx // 2)
+        y_pattern = np.arange(ny) - (ny // 2)
         # center coordinate in the edge coordinate system
         center_coord = np.array([-x_pattern[0], -y_pattern[0]])
 
