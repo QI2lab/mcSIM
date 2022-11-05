@@ -9,31 +9,6 @@ class TestTools(unittest.TestCase):
     def setUp(self):
         pass
 
-    def test_resample(self):
-        """
-        Compare resampling in Fourier space vs. real space
-        i.e. compare resample() with resample_fourier_sp()
-        :return:
-        """
-
-        expand_x = 3
-        expand_y = 2
-
-        img = np.random.rand(30, 30)
-        img_ft = fft.fft2(img)
-
-        img_resampled_rs = tools.duplicate_pix(img, nx=expand_x, ny=expand_y)
-        img_resampled_rs_ft = fft.fft2(img_resampled_rs)
-
-        img_resampled_fs = tools.duplicate_pix_ft(img_ft, mx=expand_x, my=expand_y, centered=False)
-        img_resampled_fs_rs = fft.ifft2(img_resampled_fs)
-
-        err_fs = np.abs(img_resampled_fs - img_resampled_rs_ft).max()
-        err_rs = np.abs(img_resampled_rs - img_resampled_fs_rs).max()
-
-        self.assertTrue(err_fs < 1e-12)
-        self.assertTrue(err_rs < 1e-12)
-
     def test_expand_fourier_sp(self):
         """
         Test expand_fourier_sp() function
@@ -113,8 +88,10 @@ class TestTools(unittest.TestCase):
         img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
         dx = 0.065
 
-        fx = tools.get_fft_frqs(img.shape[1], dx)
-        fy = tools.get_fft_frqs(img.shape[0], dx)
+        # fx = tools.get_fft_frqs(img.shape[1], dx)
+        # fy = tools.get_fft_frqs(img.shape[0], dx)
+        fx = fft.fftshift(fft.fftfreq(img.shape[1], dx))
+        fy = fft.fftshift(fft.fftfreq(img.shape[0], dx))
         df = fx[1] - fx[0]
 
         # x-shifting
@@ -136,45 +113,6 @@ class TestTools(unittest.TestCase):
             self.assertTrue(max_err < 1e-7)
 
         # todo: also test approximately gives the right thing for partial pixel shifts (i.e. that the phases make sense)
-
-    def test_fft_frqs(self):
-
-        dt = 0.46436
-        for n in [2, 3, 4, 3634, 581]:
-            frqs_np = np.fft.fftfreq(n, dt)
-
-            # positive and negative frequencies, with f=0 at edge
-            frqs_e = tools.get_fft_frqs(n, dt, centered=False, mode="symmetric")
-            self.assertAlmostEqual(np.abs(np.max(frqs_e - frqs_np)), 0, places=14)
-
-            # positive and negative frequencies, with f=0 at center
-            frqs_c = tools.get_fft_frqs(n, dt, centered=True, mode="symmetric")
-            self.assertAlmostEqual(np.abs(np.max(np.fft.fftshift(frqs_np) - frqs_c)), 0, places=14)
-
-            # positive frequencies with f=0 at edge
-            frqs_e_pos = tools.get_fft_frqs(n, dt, centered=False, mode="positive")
-            frqs_np_pos = np.array(frqs_np, copy=True)
-            frqs_np_pos[frqs_np_pos < 0] = frqs_np_pos[frqs_np_pos < 0] + 1/dt
-            self.assertAlmostEqual(np.abs(np.max(frqs_e_pos - frqs_np_pos)), 0, places=14)
-
-    def test_fft_pos(self):
-
-        dt = 0.46436
-        for n in [2, 3, 4, 5, 9, 10, 481, 5468]:
-            pos = np.arange(n) * dt
-
-            pos_e = tools.get_fft_pos(n, dt, centered=False, mode="positive")
-            self.assertAlmostEqual(np.max(np.abs(pos - pos_e)), 0, places=12)
-
-            pos_c = tools.get_fft_pos(n, dt, centered=True, mode="positive")
-            self.assertAlmostEqual(np.max(np.abs(fft.fftshift(pos) - pos_c)), 0, places=12)
-
-            pos = fft.fftshift(pos)
-            ind, = np.where(pos == 0)
-            pos[:ind[0]] = pos[:ind[0]] - n * dt
-
-            pos_c_symm = tools.get_fft_pos(n, dt, centered=True, mode="symmetric")
-            self.assertAlmostEqual(np.max(np.abs(pos - pos_c_symm)), 0, places=12)
 
 
 

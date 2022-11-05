@@ -131,8 +131,10 @@ rad_fourier_fov = 2 * np.sqrt(2 * np.log(2)) * sigma_eff_fourier
 npts = 51
 
 dxyf = (2 * rad_fourier_fov) / (npts - 1)
-xf = tools.get_fft_pos(npts, dxyf)
-yf = tools.get_fft_pos(npts, dxyf)
+# xf = tools.get_fft_pos(npts, dxyf)
+# yf = tools.get_fft_pos(npts, dxyf)
+xf = (np.arange(npts) - npts // 2) * dxyf
+yf = (np.arange(npts) - npts // 2) * dxyf
 extent_xyf = [xf[0] - 0.5 * dxyf, xf[-1] + 0.5 * dxyf, yf[0] - 0.5 * dxyf, yf[-1] + 0.5 * dxyf]
 
 xf, yf = np.meshgrid(xf, yf)
@@ -160,8 +162,10 @@ nyf, nxf = xf.shape
 def pupil_fn(r): return r < rl
 dxp = fl * wavelength / (nxf * dxyf)
 dyp = fl * wavelength / (nyf * dxyf)
-xp = tools.get_fft_pos(nxf, dxp)
-yp = tools.get_fft_pos(nyf, dyp)
+# xp = tools.get_fft_pos(nxf, dxp)
+# yp = tools.get_fft_pos(nyf, dyp)
+xp = (np.arange(nxf) - nxf //2 ) * dxp
+yp = (np.arange(nyf) - nyf //2 ) * dyp
 xxp, yyp = np.meshgrid(xp, yp)
 
 pupil = pupil_fn(np.sqrt(xxp**2 + yyp**2))

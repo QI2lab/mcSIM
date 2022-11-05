@@ -77,7 +77,8 @@ class TestSIM(unittest.TestCase):
         self.assertAlmostEqual(phi, float(phase_guess_edge), places=5)
 
         # create sample image with origin in center/i.e. using fft style coordinates
-        x_center = tools.get_fft_pos(nx, dx)
+        # x_center = tools.get_fft_pos(nx, dx)
+        x_center = (np.arange(nx) - nx // 2) * dx
         y_center = x_center
         xx_center, yy_center = np.meshgrid(x_center, y_center)
         m_center = 1 + 0.2 * np.cos(2 * np.pi * (frqs[0] * xx_center + frqs[1] * yy_center) + phi)
@@ -100,7 +101,8 @@ class TestSIM(unittest.TestCase):
         phi = 0.2377747474
 
         # create sample image with origin in center
-        x_center = tools.get_fft_pos(nx, dx)
+        # x_center = tools.get_fft_pos(nx, dx)
+        x_center = (np.arange(nx) - nx // 2) * dx
         y_center = x_center
         xx_center, yy_center = np.meshgrid(x_center, y_center)
         m_center = 1 + 0.2 * np.cos(2 * np.pi * (frqs[0] * xx_center + frqs[1] * yy_center) + phi)
@@ -172,8 +174,10 @@ class TestSIM(unittest.TestCase):
         gt = np.random.rand(ny, nx)
 
         # calculate sim patterns using real space method
-        x = tools.get_fft_pos(nx, dx)
-        y = tools.get_fft_pos(ny, dx)
+        # x = tools.get_fft_pos(nx, dx)
+        # y = tools.get_fft_pos(ny, dx)
+        x = (np.arange(nx) - nx // 2) * dx
+        y_center = (np.arange(ny) - ny // 2) * dx
         xx, yy = np.meshgrid(x, y)
 
         sim_rs = np.zeros((nangles, nphases, ny, nx))
