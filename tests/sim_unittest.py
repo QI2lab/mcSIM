@@ -12,6 +12,7 @@ class TestSIM(unittest.TestCase):
     def setUp(self):
         pass
 
+
     def test_fit_modulation_frq(self):
         """
         Test fit_modulation_frq() function
@@ -52,6 +53,7 @@ class TestSIM(unittest.TestCase):
         self.assertAlmostEqual(np.abs(frq_extracted[0]), np.abs(frqs[0]), places=5)
         self.assertAlmostEqual(np.abs(frq_extracted[1]), np.abs(frqs[1]), places=5)
 
+
     def test_getphase_realspace(self):
         """
         Test get_phase_realspace() function
@@ -87,6 +89,7 @@ class TestSIM(unittest.TestCase):
 
         self.assertAlmostEqual(phi, float(phase_guess_center), places=4)
 
+
     def test_get_phase_ft(self):
         """
         Test get_phase_ft() function, which guesses phase from value of image FT
@@ -112,6 +115,7 @@ class TestSIM(unittest.TestCase):
         phase_guess_center = sim.get_phase_ft(m_center_ft, frqs, dx)
 
         self.assertAlmostEqual(phi, float(phase_guess_center), places=5)
+
 
     def test_get_phase_wicker(self):
         pass
@@ -146,7 +150,6 @@ class TestSIM(unittest.TestCase):
             frq_guess = freq + np.random.uniform(-0.005, 0.005, 2)
             frqs_fit, _, result = sim.fit_modulation_frq(gt_ft, gt_ft, nbin * dxy, frq_guess=frq_guess, max_frq_shift=5 * dfx)
             np.testing.assert_allclose(frqs_fit, freq, atol=1e-5)
-
 
 
     def test_get_band_mixing_matrix(self):
@@ -291,6 +294,7 @@ class TestSIM(unittest.TestCase):
                                                                [3, 3.5, 4, 3.5],
                                                                [2, 2.5, 3, 2.5]])))
 
+
     def test_expand_fourier_sp_odd1d(self):
         """
         Test function with odd input size
@@ -303,6 +307,7 @@ class TestSIM(unittest.TestCase):
 
         max_err = np.max(np.abs(arr_exp[1::2] - arr))
         self.assertTrue(max_err < 1e-14)
+
 
     def test_expand_fourier_sp_even1d(self):
         """
@@ -317,6 +322,7 @@ class TestSIM(unittest.TestCase):
         max_err = np.max(np.abs(arr_exp[::2] - arr))
         self.assertTrue(max_err < 1e-14)
 
+
     def test_expand_fourier_sp_odd2d(self):
         """
         Test function with odd input size
@@ -329,6 +335,7 @@ class TestSIM(unittest.TestCase):
 
         max_err = np.max(np.abs(arr_exp[1::2, 1::2] - arr))
         self.assertTrue(max_err < 1e-14)
+
 
     def test_expand_fourier_sp_even2d(self):
         """

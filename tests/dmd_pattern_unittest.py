@@ -14,6 +14,7 @@ class TestPatterns(unittest.TestCase):
     def setUp(self):
         pass
 
+
     def test_pattern_main_phase_vs_phase_index(self):
         """
         Test get_sim_phase() on the main frequency component for one SIM pattern. Ensure works for all phase indices.
@@ -46,6 +47,7 @@ class TestPatterns(unittest.TestCase):
 
             # assert np.round(np.abs(pattern_phase_est - float(phase)), 3) == 0
             self.assertAlmostEqual(pattern_phase_est, float(phase), 3)
+
 
     def test_patterns_main_phase(self):
         """
@@ -116,6 +118,7 @@ class TestPatterns(unittest.TestCase):
 
                 # assert np.round(phase_diff, 1) == 0
                 self.assertAlmostEqual(phase_diff, 0, 1)
+
 
     def test_pattern_all_phases(self):
         """
@@ -217,6 +220,7 @@ class TestPatterns(unittest.TestCase):
             # self.assertAlmostEqual(np.nanmax(np.abs(efield_img - efield)), 0, 12)
             to_compare = np.logical_not(np.isnan(efield_img - efield))
             np.testing.assert_allclose(efield_img[to_compare], efield[to_compare], atol=1e-12)
+
 
     def test_affine_phase_xform(self):
         """
