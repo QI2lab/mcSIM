@@ -238,13 +238,14 @@ def pixel_overlap(centers1: np.ndarray,
 
     return np.prod(overlaps)
 
+
 # translating images
 def translate_pix(img: np.ndarray,
                   shifts: tuple[float],
                   dr: tuple[float] = (1, 1),
                   axes: tuple[int] = (-2, -1),
                   wrap: bool = True,
-                  pad_val: float = 0):
+                  pad_val: float = 0) -> (np.ndarray, list[int]):
     """
     Translate image by given number of pixels with several different boundary conditions. If the shifts are sx, sy,
     then the image will be shifted by sx/dx and sy/dy. If these are not integers, they will be rounded to the closest

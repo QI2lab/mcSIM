@@ -8,9 +8,8 @@ import json
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-import mcsim.analysis.fit_dmd_affine as fit_dmd_affine
+from mcsim.analysis import fit_dmd_affine, mm_io
 import mcsim.analysis.dmd_patterns as dmd
-import mcsim.analysis.mm_io as mm_io
 
 # ###########################
 # set image data location
@@ -52,10 +51,16 @@ affine_summary = {}
 for nc in range(len(channel_labels)):
     img, _ = mm_io.read_tiff(img_fname, slices=nc)
     img = img[0]
-    affine_xform_data, figh = fit_dmd_affine.estimate_xform(img, mask, pattern_centers, centers_init,
-                                                            indices_init, options, roi_size=roi_size,
+    affine_xform_data, figh = fit_dmd_affine.estimate_xform(img,
+                                                            mask,
+                                                            pattern_centers,
+                                                            centers_init,
+                                                            indices_init,
+                                                            options,
+                                                            roi_size=roi_size,
                                                             export_fname=f"affine_xform_{channel_labels[nc]:s}",
-                                                            export_dir=save_dir, chi_squared_relative_max=3,
+                                                            export_dir=save_dir,
+                                                            chi_squared_relative_max=3,
                                                             figsize=(20, 12))
 
     affine_summary[channel_labels[nc]] = affine_xform_data["affine_xform"]

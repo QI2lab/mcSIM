@@ -49,12 +49,6 @@ for jj in range(nc):
 
             uvec_fn_ax, uvec_fn_ay = sdmd.solve_combined_condition(d, gamma, rot_axis, wavelength, (n, -n))
 
-            # uvec_fn, a2lims = sdmd.solve_combined_condition(d, gamma, wavelength, n)
-            # a2s = np.linspace(a2lims[0], a2lims[1], nangles)
-
-            # axyzs[ii, jj, :npts//2], bxyzs[ii, jj, :npts//2] = uvec_fn(a2s, positive=True)
-            # axyzs[ii, jj, -1:npts//2-1:-1], bxyzs[ii, jj, -1:npts // 2 - 1:-1] = uvec_fn(a2s, positive=False)
-
             at1, bt1, _ = uvec_fn_ax(a_pts, positive=True)
             at2, bt2, _ = uvec_fn_ax(a_pts, positive=False)
             at3, bt3, _ = uvec_fn_ay(a_pts, positive=True)

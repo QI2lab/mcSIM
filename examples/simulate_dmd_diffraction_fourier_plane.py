@@ -10,18 +10,17 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
 import mcsim.analysis.simulate_dmd as sdmd
-import mcsim.analysis.analysis_tools as tools
-import localize_psf.fit_psf as fit_psf
+from localize_psf import fit_psf
 
 wavelength = 0.785
 k = 2*np.pi / wavelength
 
 # DMD
-dm = 7.56 # DMD pitch
+dm = 7.56  # DMD pitch
 gamma = 12 * np.pi/180
 rot_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0)
 nx = 1920
-ny = 1080 # 1080
+ny = 1080
 xx, yy = np.meshgrid(range(nx), range(ny))
 
 fxs_dmd = fft.fftshift(fft.fftfreq(nx))
@@ -32,30 +31,22 @@ extent_fxy_dmd = [fxs_dmd[0] - 0.5 * dfx_dmd, fxs_dmd[-1] + 0.5 * dfx_dmd,
                   fys_dmd[0] - 0.5 * dfy_dmd, fys_dmd[-1] + 0.5 * dfy_dmd]
 
 # lens properties
-fl = 200e3 # mm, lens focal length
+fl = 200e3  # mm, lens focal length
 rl = 0.5 * 25.4e3
 na = np.sin(np.arctan(rl/fl))
 fmax_efield = na / wavelength
 
 # set pattern
-cref = np.array([ny // 2 , nx // 2])
+cref = np.array([ny // 2, nx // 2])
 offset = np.array([0, 0])
 phase = 0
-# rad = np.inf
-# rad = 5
 rad = 300
-# ang = 0 * np.pi/180
-# frq = np.array([np.sin(ang), np.cos(ang)]) * 1/3
-# frq = np.array([-1/4, 1/4])
-# frq = np.array([0, 0])
 frq = -np.array([-1/4, 1/4])
-# frq = -np.array([-1/3, 1/3])
 
 pattern_base = np.round(np.cos(2*np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
 pattern_base[pattern_base <= 0] = 0
 pattern_base[pattern_base > 0] = 1
 pattern_base = 1 - pattern_base
-# pattern = np.ones((ny, nx), dtype=bool)
 
 pattern = np.array(pattern_base, copy=True).astype(bool)
 square_spot = False
@@ -88,7 +79,11 @@ bz_out = np.sqrt(1 - bx_out**2 - by_out**2)
 main_ir_order_out = np.stack((bx_out, by_out, bz_out))
 
 # uvec_in = sdmd.solve_diffraction_input(uvec_out, dm, dm, wavelength, order_ir)
-uvec_in_ir = sdmd.solve_diffraction_input(main_ir_order_out, dm, dm, wavelength, order_ir)
+uvec_in_ir = sdmd.solve_diffraction_input(main_ir_order_out,
+                                          dm,
+                                          dm,
+                                          wavelength,
+                                          order_ir)
 tp, tm = sdmd.uvector2tmtp(*uvec_in_ir.ravel())
 print("%.0fnm input angles:" % (wavelength * 1e3))
 print("theta_p = %0.2fdeg" % (tp * 180/np.pi))
@@ -110,14 +105,34 @@ carrier_uvec_out_check = sdmd.dmd_frq2uvec(main_ir_order_out, frq[0], frq[1], wa
 assert np.linalg.norm(carrier_uvec_out_check - optical_axis) < 1e-12
 
 # get positions of carrier frequency spot
-uvec_opt_axis_carrier = np.array(sdmd.dmd_frq2opt_axis_uvec(frq[0], frq[1], main_ir_order_out, optical_axis, dm, dm, wavelength)).ravel()
+uvec_opt_axis_carrier = np.array(sdmd.dmd_frq2opt_axis_uvec(frq[0],
+                                                            frq[1],
+                                                            main_ir_order_out,
+                                                            optical_axis,
+                                                            dm,
+                                                            dm,
+                                                            wavelength)).ravel()
 xc_carrier = uvec_opt_axis_carrier[0] * fl
 yc_carrier = uvec_opt_axis_carrier[1] * fl
 
 
 # get DFT positions
-efields_dft, _, _, sinc_on_dft, sinc_off_dft, bvecs_dft = sdmd.simulate_dmd_dft(pattern, beam * np.exp(1j * phase_errs), wavelength, gamma, -gamma, dm, dm, dm, dm, uvec_in_ir, order_ir)
-efields_dft_no_err, _, _, _, _, _ = sdmd.simulate_dmd_dft(pattern, beam * np.ones(pattern.shape), wavelength, gamma, -gamma, dm, dm, dm, dm, uvec_in_ir, order_ir)
+efields_dft, _, _, sinc_on_dft, sinc_off_dft, bvecs_dft = sdmd.simulate_dmd_dft(pattern,
+                                                                                beam * np.exp(1j * phase_errs),
+                                                                                wavelength,
+                                                                                gamma,
+                                                                                -gamma,
+                                                                                dm, dm, dm, dm,
+                                                                                uvec_in_ir,
+                                                                                order_ir)
+efields_dft_no_err, _, _, _, _, _ = sdmd.simulate_dmd_dft(pattern,
+                                                          beam * np.ones(pattern.shape),
+                                                          wavelength,
+                                                          gamma,
+                                                          -gamma,
+                                                          dm, dm, dm, dm,
+                                                          uvec_in_ir,
+                                                          order_ir)
 xf_dft, yf_dft, _ = sdmd.dmd_uvec2opt_axis_uvec(bvecs_dft, optical_axis)
 xf_dft *= fl
 yf_dft *= fl
@@ -126,16 +141,14 @@ yf_dft *= fl
 sigma_eff_dmd = rad / np.sqrt(2 * np.log(2)) * dm
 sigma_eff_fourier = fl * wavelength / (2*np.pi * sigma_eff_dmd)
 
-# rad_fourier_fov = 40
 rad_fourier_fov = 2 * np.sqrt(2 * np.log(2)) * sigma_eff_fourier
 npts = 51
 
 dxyf = (2 * rad_fourier_fov) / (npts - 1)
-# xf = tools.get_fft_pos(npts, dxyf)
-# yf = tools.get_fft_pos(npts, dxyf)
 xf = (np.arange(npts) - npts // 2) * dxyf
 yf = (np.arange(npts) - npts // 2) * dxyf
-extent_xyf = [xf[0] - 0.5 * dxyf, xf[-1] + 0.5 * dxyf, yf[0] - 0.5 * dxyf, yf[-1] + 0.5 * dxyf]
+extent_xyf = [xf[0] - 0.5 * dxyf, xf[-1] + 0.5 * dxyf,
+              yf[0] - 0.5 * dxyf, yf[-1] + 0.5 * dxyf]
 
 xf, yf = np.meshgrid(xf, yf)
 
@@ -149,23 +162,39 @@ opt_axis_uvecs = np.stack((bxps, byps, bzps), axis=-1)
 dmd_uvecs_out = np.stack(sdmd.opt_axis_uvec2dmd_uvec(opt_axis_uvecs, optical_axis), axis=-1)
 
 # do simulations
-efields, _, _ = sdmd.simulate_dmd(pattern, wavelength, gamma, -gamma, dm, dm, dm, dm, uvec_in_ir, dmd_uvecs_out,
-                                  rot_axis_on=rot_axis, rot_axis_off=rot_axis,
-                                  phase_errs=phase_errs, efield_profile=beam)
+efields, _, _ = sdmd.simulate_dmd(pattern,
+                                  wavelength,
+                                  gamma,
+                                  -gamma,
+                                  dm, dm, dm, dm,
+                                  uvec_in_ir,
+                                  dmd_uvecs_out,
+                                  rot_axis_on=rot_axis,
+                                  rot_axis_off=rot_axis,
+                                  phase_errs=phase_errs,
+                                  efield_profile=beam)
 
-efields_interp = sdmd.interpolate_dmd_data(pattern, beam, wavelength, gamma, -gamma,
-                                           dm, dm, dm, dm, uvec_in_ir, order_ir, dmd_uvecs_out,
-                                           rot_axis, rot_axis)
+efields_interp = sdmd.interpolate_dmd_data(pattern,
+                                           beam,
+                                           wavelength,
+                                           gamma,
+                                           -gamma,
+                                           dm, dm, dm, dm,
+                                           uvec_in_ir,
+                                           order_ir,
+                                           dmd_uvecs_out,
+                                           rot_axis,
+                                           rot_axis)
 
 # ideal PSF of lens
 nyf, nxf = xf.shape
 def pupil_fn(r): return r < rl
+
+
 dxp = fl * wavelength / (nxf * dxyf)
 dyp = fl * wavelength / (nyf * dxyf)
-# xp = tools.get_fft_pos(nxf, dxp)
-# yp = tools.get_fft_pos(nyf, dyp)
-xp = (np.arange(nxf) - nxf //2 ) * dxp
-yp = (np.arange(nyf) - nyf //2 ) * dyp
+xp = (np.arange(nxf) - nxf // 2) * dxp
+yp = (np.arange(nyf) - nyf // 2) * dyp
 xxp, yyp = np.meshgrid(xp, yp)
 
 pupil = pupil_fn(np.sqrt(xxp**2 + yyp**2))
@@ -183,20 +212,31 @@ gamma_norm = 1
 
 figh = plt.figure(figsize=(18, 8))
 grid = figh.add_gridspec(2, 5, hspace=0.5, wspace=0.5)
-figh.suptitle(("carrier freq = (%0.2f, %0.2f) 1/mirrors; input dir = (%0.3f, %0.3f, %0.3f);" +
-             r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f)deg\n"
-             "optical axis = (%0.3f, %0.3f, %0.3f);" + r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f);"
-             " blaze direction = (%0.3f, %0.3f, %0.3f);" + r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f)\n"
-             "radius=%0.1f, phase error = %0.3f*pi") %
-             (frq[0], frq[1],
-              uvec_in_ir[0, 0], uvec_in_ir[0, 1], uvec_in_ir[0, 2],
-              tm * 180 / np.pi, tp * 180 / np.pi,
-              optical_axis[0], optical_axis[1], optical_axis[2],
-              tm_oa * 180 / np.pi, tp_oa * 180 / np.pi,
-              uvec_blaze_off[0, 0], uvec_blaze_off[0, 1], uvec_blaze_off[0, 2],
-              tm_blaze * 180 / np.pi, tp_blaze * 180 / np.pi,
-              rad, phase_err_size / np.pi))
-# norm = np.max(np.abs(efields_dft_no_err))**2
+figh.suptitle(("carrier freq = (%0.2f, %0.2f) 1/mirrors;"
+               " input dir = (%0.3f, %0.3f, %0.3f);" +
+               r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f)deg\n"
+               "optical axis = (%0.3f, %0.3f, %0.3f);" + r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f);"
+               " blaze direction = (%0.3f, %0.3f, %0.3f);" + r" $\theta_-$, $\theta_+$" + " = (%0.2f, %0.2f)\n"
+               "radius=%0.1f, phase error = %0.3f*pi") %
+             (frq[0],
+              frq[1],
+              uvec_in_ir[0, 0],
+              uvec_in_ir[0, 1],
+              uvec_in_ir[0, 2],
+              tm * 180 / np.pi,
+              tp * 180 / np.pi,
+              optical_axis[0],
+              optical_axis[1],
+              optical_axis[2],
+              tm_oa * 180 / np.pi,
+              tp_oa * 180 / np.pi,
+              uvec_blaze_off[0, 0],
+              uvec_blaze_off[0, 1],
+              uvec_blaze_off[0, 2],
+              tm_blaze * 180 / np.pi,
+              tp_blaze * 180 / np.pi,
+              rad,
+              phase_err_size / np.pi))
 
 ax = figh.add_subplot(grid[0, 0])
 ax.imshow(np.abs(efields_dft)**2, origin="lower", extent=extent_fxy_dmd,

@@ -65,7 +65,8 @@ If the DMD is tilted, the DMD pattern frequencies f will not exactly match the o
 In particular, although the DMD pattern will have components at f and -f the optical system frequencies will
 not be perfectly centered on the optical axis.
 """
-import os
+
+from pathlib import Path
 import pickle
 import numpy as np
 from numpy import fft
@@ -79,9 +80,21 @@ from matplotlib.patches import Circle
 # ###########################################
 _dlp_1stgen_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0)
 
-def simulate_dmd(pattern, wavelength: float, gamma_on: float, gamma_off: float, dx: float, dy: float, wx: float, wy: float,
-                 uvec_in, uvecs_out, zshifts=None, phase_errs=None, efield_profile=None,
-                 rot_axis_on=_dlp_1stgen_axis, rot_axis_off=_dlp_1stgen_axis):
+def simulate_dmd(pattern,
+                 wavelength: float,
+                 gamma_on: float,
+                 gamma_off: float,
+                 dx: float,
+                 dy: float,
+                 wx: float,
+                 wy: float,
+                 uvec_in,
+                 uvecs_out,
+                 zshifts=None,
+                 phase_errs=None,
+                 efield_profile=None,
+                 rot_axis_on=_dlp_1stgen_axis,
+                 rot_axis_off=_dlp_1stgen_axis):
     """
     Simulate plane wave diffracted from a digital mirror device (DMD) naively. In most cases this function is not
     the most efficient to use! When working with SIM patterns it is much more efficient to rely on the tools
@@ -183,9 +196,19 @@ def simulate_dmd(pattern, wavelength: float, gamma_on: float, gamma_off: float, 
     return efields, sinc_efield_on, sinc_efield_off
 
 
-def simulate_dmd_dft(pattern, efield_profile, wavelength: float, gamma_on: float, gamma_off: float, dx: float,
-                     dy: float, wx: float, wy: float, uvec_in, order: tuple,
-                     dn_orders=0, rot_axis_on=_dlp_1stgen_axis, rot_axis_off=_dlp_1stgen_axis):
+def simulate_dmd_dft(pattern,
+                     efield_profile,
+                     wavelength: float,
+                     gamma_on: float,
+                     gamma_off: float,
+                     dx: float,
+                     dy: float,
+                     wx: float,
+                     wy: float,
+                     uvec_in, order: tuple,
+                     dn_orders=0,
+                     rot_axis_on=_dlp_1stgen_axis,
+                     rot_axis_off=_dlp_1stgen_axis):
     """
     Simulate DMD diffraction using DFT. These produces peaks at a discrete set of frequencies which are
     (b-a)_x = wavelength / dx * ix / nx for ix = 0, ... nx - 1
@@ -258,8 +281,20 @@ def simulate_dmd_dft(pattern, efield_profile, wavelength: float, gamma_on: float
     return efields, pattern_dft, pattern_complement_dft, sinc_efield_on, sinc_efield_off, uvecs_out_dft
 
 
-def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_off,
-                         dx, dy, wx, wy, uvec_in, order, bvecs_interp, rot_axis_on, rot_axis_off):
+def interpolate_dmd_data(pattern,
+                         efield_profile,
+                         wavelength,
+                         gamma_on: float,
+                         gamma_off: float,
+                         dx: float,
+                         dy: float,
+                         wx: float,
+                         wy: float,
+                         uvec_in,
+                         order,
+                         bvecs_interp,
+                         rot_axis_on,
+                         rot_axis_off):
     """
     Exact interpolation of  dmd diffraction DFT data to other output angles using Shannon-Whittaker interpolation formula.
 
@@ -327,8 +362,18 @@ def interpolate_dmd_data(pattern, efield_profile, wavelength, gamma_on, gamma_of
     return efields
 
 
-def get_diffracted_power(pattern, efield_profile, wavelength, gamma_on, gamma_off, dx, dy, wx, wy, uvec_in,
-                         rot_axis_on=_dlp_1stgen_axis, rot_axis_off=_dlp_1stgen_axis):
+def get_diffracted_power(pattern,
+                         efield_profile,
+                         wavelength: float,
+                         gamma_on: float,
+                         gamma_off: float,
+                         dx: float,
+                         dy: float,
+                         wx: float,
+                         wy: float,
+                         uvec_in,
+                         rot_axis_on=_dlp_1stgen_axis,
+                         rot_axis_off=_dlp_1stgen_axis):
     """
     Compute input and output power.
 
@@ -441,7 +486,8 @@ def sinc_fn(x):
     return y
 
 
-def get_rot_mat(rot_axis: list, gamma: float):
+def get_rot_mat(rot_axis: list,
+                gamma: float):
     """
     Get matrix which rotates points about the specified axis by the given angle. Think of this rotation matrix
     as acting on unit vectors, and hence its inverse R^{-1} transforms regular vectors. Therefore, we define
@@ -515,7 +561,11 @@ def get_rot_mat_angle_axis(rot_mat: np.ndarray):
 # ###########################################
 # convert between coordinate systems
 # ###########################################
-def xyz2mirror(vx, vy, vz, gamma, rot_axis=_dlp_1stgen_axis):
+def xyz2mirror(vx,
+               vy,
+               vz,
+               gamma: float,
+               rot_axis=_dlp_1stgen_axis):
     """
     Convert vector with components vx, vy, vz to v1, v2, v3.
 
@@ -541,13 +591,14 @@ def xyz2mirror(vx, vy, vz, gamma, rot_axis=_dlp_1stgen_axis):
     v2 = vx * rot_mat[0, 1] + vy * rot_mat[1, 1] + vz * rot_mat[2, 1]
     v3 = vx * rot_mat[0, 2] + vy * rot_mat[1, 2] + vz * rot_mat[2, 2]
 
-    # v1 = np.cos(gamma) / np.sqrt(2) * (vx - vy) - np.sin(gamma) * vz
-    # v2 = 1 / np.sqrt(2) * (vx + vy)
-    # v3 = np.sin(gamma) / np.sqrt(2) * (vx - vy) + np.cos(gamma) * vz
     return v1, v2, v3
 
 
-def mirror2xyz(v1, v2, v3, gamma, rot_axis=_dlp_1stgen_axis):
+def mirror2xyz(v1,
+               v2,
+               v3,
+               gamma: float,
+               rot_axis=_dlp_1stgen_axis):
     """
     Inverse function for xyz2mirror()
 
@@ -565,13 +616,12 @@ def mirror2xyz(v1, v2, v3, gamma, rot_axis=_dlp_1stgen_axis):
     vy = v1 * rot_mat[1, 0] + v2 * rot_mat[1, 1] + v3 * rot_mat[1, 2]
     vz = v1 * rot_mat[2, 0] + v2 * rot_mat[2, 1] + v3 * rot_mat[2, 2]
 
-    # vx = np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 + np.sin(gamma) / np.sqrt(2) * v3
-    # vy = -np.cos(gamma) / np.sqrt(2) * v1 + 1 / np.sqrt(2) * v2 - np.sin(gamma) / np.sqrt(2) * v3
-    # vz = -np.sin(gamma) * v1 + np.cos(gamma) * v3
     return vx, vy, vz
 
 
-def xyz2mpz(vx, vy, vz):
+def xyz2mpz(vx,
+            vy,
+            vz):
     """
     Convert from x, y, z coordinate system to m = (x-y)/sqrt(2), p = (x+y)/sqrt(2), z
 
@@ -587,7 +637,9 @@ def xyz2mpz(vx, vy, vz):
     return vm, vp, vz
 
 
-def mpz2xyz(vm, vp, vz):
+def mpz2xyz(vm,
+            vp,
+            vz):
     """
     Convert from m = (x-y)/sqrt(2), p = (x+y)/sqrt(2), z coordinate system to x, y, z
     @param vm:
@@ -605,7 +657,8 @@ def mpz2xyz(vm, vp, vz):
 # ###########################################
 # convert between different angular or unit vector representations of input and output directions
 # ###########################################
-def angle2xy(tp, tm):
+def angle2xy(tp,
+             tm):
     """
     Convert angle projections along the x and y axis to angle projections along the p=(x+y)/sqrt(2)
     and m=(x-y)/sqrt(2) axis.
@@ -621,7 +674,8 @@ def angle2xy(tp, tm):
     return tx, ty
 
 
-def angle2pm(tx, ty):
+def angle2pm(tx,
+             ty):
     """
     Convert angle projections along the the p=(x+y)/sqrt(2) and m=(x-y)/sqrt(2) to x and y axes.
 
@@ -636,7 +690,9 @@ def angle2pm(tx, ty):
     return tp, tm
 
 
-def uvector2txty(vx, vy, vz):
+def uvector2txty(vx,
+                 vy,
+                 vz):
     """
     Convert unit vector from components to theta_x, theta_y representation. Inverse function for get_unit_vector()
 
@@ -653,7 +709,9 @@ def uvector2txty(vx, vy, vz):
     return tx, ty
 
 
-def uvector2tmtp(vx, vy, vz):
+def uvector2tmtp(vx,
+                 vy,
+                 vz):
     """
     Convert unit vector to angle projections along ep and em
     @param vx:
@@ -666,12 +724,16 @@ def uvector2tmtp(vx, vy, vz):
     return tp, tm
 
 
-def pm2uvector(tm, tp, mode="in"):
+def pm2uvector(tm,
+               tp,
+               mode: str = "in"):
     tx, ty = angle2xy(tp, tm)
     return xy2uvector(tx, ty, mode=mode)
 
 
-def xy2uvector(tx, ty, mode="in"):
+def xy2uvector(tx,
+               ty,
+               mode: str = "in"):
     """
     Get incoming or outgoing unit vector of light propagation parametrized by angles tx and ty
 
@@ -713,7 +775,12 @@ def xy2uvector(tx, ty, mode="in"):
 # ###########################################
 # diffraction directions for different pattern frequencies
 # ###########################################
-def dmd_frq2uvec(uvec_out_dc, fx, fy, wavelength, dx, dy):
+def dmd_frq2uvec(uvec_out_dc,
+                 fx,
+                 fy,
+                 wavelength: float,
+                 dx: float,
+                 dy: float):
     """
     Determine the output diffraction vector b(f) given the output vector b(0) and the
     spatial frequency f = [fx, fy] in 1/mirrors.
@@ -735,7 +802,11 @@ def dmd_frq2uvec(uvec_out_dc, fx, fy, wavelength, dx, dy):
     return bfx, bfy, bfz
 
 
-def uvec2dmd_frq(uvec_out_dc, uvec_f, wavelength, dx, dy):
+def uvec2dmd_frq(uvec_out_dc,
+                 uvec_f,
+                 wavelength: float,
+                 dx: float,
+                 dy: float):
     """
     Inverse function of freq2uvec
 
@@ -773,7 +844,13 @@ def get_fourier_plane_basis(optical_axis_uvec):
     return xb, yb
 
 
-def dmd_frq2opt_axis_uvec(fx, fy, bvec, opt_axis_vec, dx, dy, wavelength):
+def dmd_frq2opt_axis_uvec(fx,
+                          fy,
+                          bvec,
+                          opt_axis_vec,
+                          dx: float,
+                          dy: float,
+                          wavelength: float):
     """
     Convert from DMD pattern frequencies to unit vectors about the optical axis. This can be easily converted to
     either spatial frequencies or positions in the Fourier plane.
@@ -825,7 +902,8 @@ def dmd_frq2opt_axis_uvec(fx, fy, bvec, opt_axis_vec, dx, dy, wavelength):
     return bf_xp, bf_yp, bf_zp
 
 
-def dmd_uvec2opt_axis_uvec(dmd_uvecs, opt_axis_vec):
+def dmd_uvec2opt_axis_uvec(dmd_uvecs,
+                           opt_axis_vec):
     """
     Convert unit vectors expressed relative to the dmd coordinate system
     dmd_uvecs = bx * ex + by * ey + bz * ez
@@ -853,7 +931,8 @@ def dmd_uvec2opt_axis_uvec(dmd_uvecs, opt_axis_vec):
     return bf_xp, bf_yp, bf_zp
 
 
-def opt_axis_uvec2dmd_uvec(opt_axis_uvecs, opt_axis_vec):
+def opt_axis_uvec2dmd_uvec(opt_axis_uvecs,
+                           opt_axis_vec):
     """
     Convert unit vectors expressed relative to the optical axis coordinate system,
     opt_axis_uvecs = bxp * exp + byp * eyp + bzp * ezp
@@ -878,7 +957,12 @@ def opt_axis_uvec2dmd_uvec(opt_axis_uvecs, opt_axis_vec):
 # ###########################################
 # functions for blaze condition only
 # ###########################################
-def blaze_envelope(wavelength, gamma, wx, wy, b_minus_a, rot_axis=_dlp_1stgen_axis):
+def blaze_envelope(wavelength: float,
+                   gamma: float,
+                   wx: float,
+                   wy: float,
+                   b_minus_a,
+                   rot_axis=_dlp_1stgen_axis):
     """
     Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
     This is the result of doing the integral
@@ -904,7 +988,9 @@ def blaze_envelope(wavelength, gamma, wx, wy, b_minus_a, rot_axis=_dlp_1stgen_ax
     return envelope
 
 
-def blaze_condition_fn(gamma: float, b_minus_a, rot_axis=_dlp_1stgen_axis):
+def blaze_condition_fn(gamma: float,
+                       b_minus_a,
+                       rot_axis=_dlp_1stgen_axis):
     """
     Return the dimensionsless part of the sinc function argument which determines the blaze condition.
     We refer to these functions as A_+(b-a, gamma) and A_-(b-a, gamma).
@@ -934,7 +1020,9 @@ def blaze_condition_fn(gamma: float, b_minus_a, rot_axis=_dlp_1stgen_axis):
     return val_plus, val_minus
 
 
-def solve_blaze_output(uvecs_in, gamma: float, rot_axis=_dlp_1stgen_axis):
+def solve_blaze_output(uvecs_in,
+                       gamma: float,
+                       rot_axis=_dlp_1stgen_axis):
     """
     Find the output angle which satisfies the blaze condition for arbitrary input angle
 
@@ -952,7 +1040,9 @@ def solve_blaze_output(uvecs_in, gamma: float, rot_axis=_dlp_1stgen_axis):
     return uvecs_out
 
 
-def solve_blaze_input(uvecs_out, gamma, rot_axis=_dlp_1stgen_axis):
+def solve_blaze_input(uvecs_out,
+                      gamma: float,
+                      rot_axis=_dlp_1stgen_axis):
     """
     Find the input angle which satisfies the blaze condition for arbitrary output angle.
 
@@ -967,7 +1057,10 @@ def solve_blaze_input(uvecs_out, gamma, rot_axis=_dlp_1stgen_axis):
 # ###########################################
 # functions for diffraction conditions only
 # ###########################################
-def get_physical_diff_orders(uvec_in, wavelength, dx, dy):
+def get_physical_diff_orders(uvec_in,
+                             wavelength: float,
+                             dx: float,
+                             dy: float):
     """
     Determine which diffraction orders are physically supported by the grating given a certain input direction
 
@@ -1014,7 +1107,11 @@ def get_physical_diff_orders(uvec_in, wavelength, dx, dy):
     return ns, allowed_dc, allowed_any
 
 
-def find_nearst_diff_order(uvec_in, uvec_out, wavelength, dx, dy):
+def find_nearst_diff_order(uvec_in,
+                           uvec_out,
+                           wavelength: float,
+                           dx: float,
+                           dy: float):
     """
     Given an input and output direction, find the nearest diffraction order
 
@@ -1043,15 +1140,19 @@ def find_nearst_diff_order(uvec_in, uvec_out, wavelength, dx, dy):
     return order
 
 
-def solve_diffraction_input(uvecs_out, dx, dy, wavelength, order):
+def solve_diffraction_input(uvecs_out,
+                            dx: float,
+                            dy: float,
+                            wavelength: float,
+                            order: tuple[int, int]):
     """
     Solve for the input direction which will be diffracted into the given output direction by
     the given diffraction order of the DMD
 
     :param uvecs_out:
-    :param float dx:
-    :param float dy:
-    :param float wavelength:
+    :param dx:
+    :param dy:
+    :param wavelength:
     :param order: (order_x, order_y). Typically order_y = -order_x, as otherwise the blaze condition cannot
     also be satisfied
     :return avecs:
@@ -1066,7 +1167,11 @@ def solve_diffraction_input(uvecs_out, dx, dy, wavelength, order):
     return uvecs_in
 
 
-def solve_diffraction_output(uvecs_in, dx, dy, wavelength, order):
+def solve_diffraction_output(uvecs_in,
+                             dx: float,
+                             dy: float,
+                             wavelength: float,
+                             order: tuple[int, int]):
     """
     Solve for the output direction into which the given input direction will be diffracted by the given
     order of the DMD
@@ -1102,7 +1207,10 @@ def solve_diffraction_output(uvecs_in, dx, dy, wavelength, order):
 # ###########################################
 # functions for solving blaze + diffraction conditions
 # ###########################################
-def get_diffraction_order_limits(wavelength: float, d: float, gamma: float, rot_axis=_dlp_1stgen_axis):
+def get_diffraction_order_limits(wavelength: float,
+                                 d: float,
+                                 gamma: float,
+                                 rot_axis=_dlp_1stgen_axis):
     """
     Find the maximum and minimum diffraction orders consistent with given parameters and the blaze condition.
     Note that only diffraction orders of the form (n, -n) can satisfy the Blaze condition, hence only the value
@@ -1135,7 +1243,10 @@ def get_diffraction_order_limits(wavelength: float, d: float, gamma: float, rot_
     return np.array([nmin, nmax], dtype=int)
 
 
-def solve_1color_1d(wavelength: float, d: float, gamma: float, order: int):
+def solve_1color_1d(wavelength: float,
+                    d: float,
+                    gamma: float,
+                    order: int):
     """
     Solve for the input and output angles satisfying both the diffraction condition and blaze angle for a given
     diffraction order (if possible). These function assumes that (1) the mirror rotation axis is the (x+y) axis and
@@ -1176,7 +1287,12 @@ def solve_1color_1d(wavelength: float, d: float, gamma: float, order: int):
     return uvecs_in, uvecs_out
 
 
-def solve_2color_on_off(d: float, gamma_on: float, wavelength_on: float, n_on: int, wavelength_off: float, n_off: int):
+def solve_2color_on_off(d: float,
+                        gamma_on: float,
+                        wavelength_on: float,
+                        n_on: int,
+                        wavelength_off: float,
+                        n_off: int):
     """
     Solve the combined blaze and diffraction conditions jointly for two wavelengths, assuming the first wavelength
     couples from the DMD "on" mirrors and the second from the "off" mirrors.
@@ -1238,8 +1354,11 @@ def solve_2color_on_off(d: float, gamma_on: float, wavelength_on: float, n_on: i
     return b_vecs, a_vecs_on, a_vecs_off
 
 
-def solve_combined_condition(d: float, gamma: float, rot_axis: tuple,
-                                wavelength: float, order: tuple):
+def solve_combined_condition(d: float,
+                             gamma: float,
+                             rot_axis: tuple,
+                             wavelength: float,
+                             order: tuple[int]):
     """
     Return functions for the simultaneous blaze/diffraction condition solution as a function of ax or ay
 
@@ -1361,8 +1480,13 @@ def solve_combined_condition(d: float, gamma: float, rot_axis: tuple,
     return uvec_fn_ax, uvec_fn_ay
 
 
-def solve_blazed_pattern_frequency(dx: float, dy: float, gamma: float, rot_axis: tuple,
-                                   wavelength: float, bf: tuple, order: tuple):
+def solve_blazed_pattern_frequency(dx: float,
+                                   dy: float,
+                                   gamma: float,
+                                   rot_axis: tuple,
+                                   wavelength: float,
+                                   bf: tuple,
+                                   order: tuple[int]):
     """
     Suppose we choose a desired output direction from the DMD and an order and wavelength of interest and we
     would like to align the diffracted order b(f) with this direction and stipulate that this direction satisfies
@@ -1390,7 +1514,12 @@ def solve_blazed_pattern_frequency(dx: float, dy: float, gamma: float, rot_axis:
     return f, bvec, avec
 
 
-def solve_diffraction_output_frq(frq, uvec_out, dx: float, dy: float, wavelength: float, order: tuple):
+def solve_diffraction_output_frq(frq,
+                                 uvec_out,
+                                 dx: float,
+                                 dy: float,
+                                 wavelength: float,
+                                 order: tuple[int]):
     """
     Suppose we want to arrange things so the output vector b(frq) points along a specific direction.
     Given that direction, solve for the required input angle and compute b(0).
@@ -1419,9 +1548,19 @@ def solve_diffraction_output_frq(frq, uvec_out, dx: float, dy: float, wavelength
 # ###########################################
 # 1D simulation in x-y plane and multiple wavelengths
 # ###########################################
-def simulate_1d(pattern, wavelengths: list, gamma_on: float, rot_axis_on: tuple,
-                gamma_off: float, rot_axis_off: tuple, dx: float, dy: float,
-                wx: float, wy: float, tm_ins, tm_out_offsets=None, ndiff_orders: int=10):
+def simulate_1d(pattern,
+                wavelengths: list,
+                gamma_on: float,
+                rot_axis_on: tuple,
+                gamma_off: float,
+                rot_axis_off: tuple,
+                dx: float,
+                dy: float,
+                wx: float,
+                wy: float,
+                tm_ins,
+                tm_out_offsets=None,
+                ndiff_orders: int=10):
     """
     Simulate various colors of light incident on a DMD, assuming the DMD is oriented so that the mirrors swivel in
     the same plane the incident light travels in and that this plane makes a 45 degree angle with the principle axes
@@ -1505,7 +1644,11 @@ def simulate_1d(pattern, wavelengths: list, gamma_on: float, rot_axis_on: tuple,
     return data
 
 
-def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 14)):
+def plot_1d_sim(data,
+                colors=None,
+                plot_log: bool = False,
+                save_dir=None,
+                figsize=(18, 14)):
     """
     Plot and optionally save results of simulate_1d()
 
@@ -1520,7 +1663,7 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
     # save data
     if save_dir is not None:
         # unique file name
-        fname = os.path.join(save_dir, 'simulation_data.pkl')
+        fname = Path(save_dir) / 'simulation_data.pkl'
         with open(fname, 'wb') as f:
             pickle.dump(data, f)
 
@@ -1672,8 +1815,7 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
         # saving
         # ###########################
         if save_dir is not None:
-            fname = os.path.join(save_dir, fname + '.png')
-            figh.savefig(fname)
+            figh.savefig(Path(save_dir) / f"{fname:s}.png")
             plt.close(figh)
 
     return figs, fig_names
@@ -1681,10 +1823,20 @@ def plot_1d_sim(data, colors=None, plot_log=False, save_dir=None, figsize=(18, 1
 # ###########################################
 # 2D simulation for multiple wavelengths
 # ###########################################
-def simulate_2d(pattern, wavelengths: list, gamma_on: float, rot_axis_on: tuple,
-                gamma_off: float, rot_axis_off: tuple, dx: float, dy: float,
-                wx: float, wy: float, tx_in, ty_in,
-                tout_offsets=None, ndiff_orders: int=7):
+def simulate_2d(pattern: np.ndarray,
+                wavelengths: list[float],
+                gamma_on: float,
+                rot_axis_on: tuple[float],
+                gamma_off: float,
+                rot_axis_off: tuple,
+                dx: float,
+                dy: float,
+                wx: float,
+                wy: float,
+                tx_in,
+                ty_in,
+                tout_offsets=None,
+                ndiff_orders: int = 7):
     """
     Simulate light incident on a DMD to determine output diffraction pattern. See simulate_dmd() for more information.
 
@@ -1779,7 +1931,10 @@ def simulate_2d(pattern, wavelengths: list, gamma_on: float, rot_axis_on: tuple,
     return data
 
 
-def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
+def plot_2d_sim(data: dict,
+                save_dir='dmd_simulation',
+                figsize=(18, 14),
+                gamma: float = 0.1):
     """
     Plot results from simulate_2d()
 
@@ -2012,16 +2167,22 @@ def plot_2d_sim(data, save_dir='dmd_simulation', figsize=(18, 14), gamma=0.1):
             # save results
             # ##################
             if save_dir is not None:
-                if not os.path.exists(save_dir):
-                    os.mkdir(save_dir)
+                save_dir = Path(save_dir)
+                if not save_dir.exists():
+                    save_dir.mkdir()
 
-                fpath = os.path.join(save_dir, fname)
-                fig.savefig(fpath)
+                fig.savefig(save_dir / fname)
 
     return figs, fig_names
 
 
-def simulate_2d_angles(wavelengths, gamma, dx, dy, tx_ins, ty_ins, ndiff_orders=15):
+def simulate_2d_angles(wavelengths: list[float],
+                       gamma: float,
+                       dx: float,
+                       dy: float,
+                       tx_ins,
+                       ty_ins,
+                       ndiff_orders: int = 15):
     """
     Determine Blaze and diffraction angles in 2D for provided input angles. For each input angle, identify the
     diffraction order which is closest to the blaze condition.
