@@ -1,4 +1,6 @@
-import datetime
+"""
+Tools for loading and manipulating MicroManager (https://micro-manager.org/) Tif data
+"""
 import glob
 import json
 import os
@@ -9,7 +11,8 @@ import pandas as pd
 import tifffile
 
 
-def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
+def parse_mm_metadata(metadata_dir,
+                      file_pattern: str = "*metadata*.txt"):
     """
     Parse all micromanager metadata files in subdirectories of metadata_dir. MM metadata is stored as JSON
     object in text file.
@@ -116,7 +119,6 @@ def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
             # this is also stored in "extra titles"
             data_current += [os.path.dirname(filename)]
 
-
             # combine all data
             data.append(data_current)
 
@@ -140,7 +142,12 @@ def parse_mm_metadata(metadata_dir, file_pattern="*metadata*.txt"):
     return image_metadata, dims, summary
 
 
-def read_mm_dataset(md, time_indices=None, channel_indices=None, z_indices=None, xy_indices=None, user_indices={}):
+def read_mm_dataset(md,
+                    time_indices=None,
+                    channel_indices=None,
+                    z_indices=None,
+                    xy_indices=None,
+                    user_indices={}):
     """
     Load a set of images from MicroManager metadata, read using parse_mm_metadata()
 
@@ -196,7 +203,8 @@ def read_mm_dataset(md, time_indices=None, channel_indices=None, z_indices=None,
     return imgs
 
 
-def read_tiff(fname, slices=None):
+def read_tiff(fname,
+              slices=None):
     """
     Read tiff file containing multiple images
 
@@ -236,7 +244,8 @@ def read_tiff(fname, slices=None):
     return imgs, tiff_metadata
 
 
-def read_multi_tiff(fnames, slice_indices):
+def read_multi_tiff(fnames,
+                    slice_indices):
     """
     Load multiple images and slices, defined by lists fnames and slice_indices,
     and return in same order as inputs. Automatically load all images from each file without multiple reads.
@@ -277,7 +286,13 @@ def read_multi_tiff(fnames, slice_indices):
     return imgs
 
 
-def save_tiff(img, save_fname, dtype, tif_metadata=None, axes_order='ZYX', hyperstack=False, **kwargs):
+def save_tiff(img: np.ndarray,
+              save_fname: str,
+              dtype,
+              tif_metadata=None,
+              axes_order='ZYX',
+              hyperstack: bool = False,
+              **kwargs):
     """
     Save an nD NumPy array to a tiff file
 
@@ -287,7 +302,6 @@ def save_tiff(img, save_fname, dtype, tif_metadata=None, axes_order='ZYX', hyper
     :param save_fname: path to save file
     :param np.dtype dtype: data type to save tif as
     :param tif_metadata: dictionary of tif metadata. All tags must be recognized.
-    :param other_metadata: dictionary of tif metadata with tags that will not be recognized.
     :param axes_order: a string consisting of XYZCTZ where the fastest axes are more to the right
     :param hyperstack: whether or not to save in format compatible with imagej hyperstack
     :return:
@@ -299,7 +313,7 @@ def save_tiff(img, save_fname, dtype, tif_metadata=None, axes_order='ZYX', hyper
     tifffile.imwrite(save_fname, img.astype(dtype), dtype=dtype, imagej=True, **kwargs)
 
 
-def parse_imagej_tiff_tag(tag):
+def parse_imagej_tiff_tag(tag: str):
     """
     Parse information from the TIFF "ImageDescription" tag saved by ImageJ. This tag has the form
     "key0=val0\nkey1=val1\n..."
@@ -323,8 +337,10 @@ def parse_imagej_tiff_tag(tag):
     return subtag_dict
 
 
-def tiffs2stack(fname_out, dir_path, fname_exp="*.tif",
-                exp=r"(?P<prefix>.*)nc=(?P<channel>\d+)_nt=(?P<time>\d+)_nxy=(?P<position>\d+)_nz=(?P<slice>\d+)"):
+def tiffs2stack(fname_out,
+                dir_path,
+                fname_exp: str = "*.tif",
+                exp: str = r"(?P<prefix>.*)nc=(?P<channel>\d+)_nt=(?P<time>\d+)_nxy=(?P<position>\d+)_nz=(?P<slice>\d+)"):
     """
     Combine single TIFF files into a stack based on name
 
@@ -394,14 +410,16 @@ def tiffs2stack(fname_out, dir_path, fname_exp="*.tif",
         imgs[channels[ii], times[ii], slices[ii]] = img[0]
 
     if np.any(np.isnan(imgs)):
-        print("WARNING: not all channels/times/slices/positions were accounted for. Those that were not found are replaced by NaNs")
+        print("WARNING: not all channels/times/slices/positions were accounted for."
+              " Those that were not found are replaced by NaNs")
 
     # save results
     img = tifffile.transpose_axes(img, "CTZYX", asaxes='TZCYXS')
     tifffile.imwrite(fname_out, img.astype(np.float32), imagej=True)
 
 
-def get_unique_name(fname, mode='file'):
+def get_unique_name(fname,
+                    mode='file'):
     """
     Produce a unique filename by appending an integer
 
@@ -426,10 +444,3 @@ def get_unique_name(fname, mode='file'):
         ii += 1
 
     return fname
-
-
-def get_timestamp():
-    # now = datetime.datetime.now()
-    # tstamp = '%04d_%02d_%02d_%02d;%02d;%02d' % (now.year, now.month, now.day, now.hour, now.minute, now.second)
-    tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
-    return tstamp
