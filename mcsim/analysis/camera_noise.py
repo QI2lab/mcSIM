@@ -9,15 +9,20 @@ import dask.array as da
 from dask.diagnostics import ProgressBar
 import matplotlib.pyplot as plt
 
+
 # camera calibration
-def get_pixel_statistics(imgs, description="", moments=(1, 2), corr_dists=None):
+def get_pixel_statistics(imgs,
+                         description: str = "",
+                         moments: tuple[int] = (1, 2),
+                         corr_dists: tuple[int] = None) -> dict:
     """
     Estimate camera readout noise from a set of images taken in zero light conditions
 
     :param imgs: numpy or dask image array. If you have a set of individual tiff files, such an array can be produced
     with dask_image, e.g.
     >>> imgs = dask_image.imread.imread("*.tif")
-    :param moments list of moments to calculate: by default only the first and second moment. But if also compute the
+    :param description:
+    :param moments: list of moments to calculate. by default only the first and second moment. But if also compute the
      3rd and 4th can estimate the uncertainty in the variance
     :param corr_dists: list of correlator distances (along x, y, and t) to compute correlations
 
@@ -28,7 +33,6 @@ def get_pixel_statistics(imgs, description="", moments=(1, 2), corr_dists=None):
 
     if corr_dists is not None and np.any([not isinstance(cd, int) for cd in corr_dists]):
         raise ValueError(f"All corr_dists values must be integers, but were {corr_dists}")
-
 
     tstart = time.process_time()
 
@@ -94,13 +98,17 @@ def get_pixel_statistics(imgs, description="", moments=(1, 2), corr_dists=None):
     return data
 
 
-def get_gain_map(dark_means, dark_vars, light_means, light_vars, max_mean=np.inf):
+def get_gain_map(dark_means: np.ndarray,
+                 dark_vars: np.ndarray,
+                 light_means: np.ndarray,
+                 light_vars: np.ndarray,
+                 max_mean: float = np.inf) -> (np.ndarray, np.ndarray, np.ndarray):
     """
 
     @param dark_means: array of size ny x nx
     @param dark_vars: array of size ny x nx
-    @param light_means: list of arrays of size ni x ny x nx
-    @param light_vars: list of arrays of size ni x ny x nx
+    @param light_means: array of size ni x ny x nx
+    @param light_vars: array of size ni x ny x nx
     @param max_mean: ignore data points with means larger than this value (to avoid issues with saturation)
     @return gains, dark_means, dark_vars:
     """
@@ -122,13 +130,13 @@ def get_gain_map(dark_means, dark_vars, light_means, light_vars, max_mean=np.inf
     return gains, dark_means, dark_vars
 
 
-def plot_noise_stats(noise_data, nbins=600, figsize=(20, 10)):
+def plot_noise_stats(noise_data: dict,
+                     nbins: int = 600,
+                     figsize: tuple[float] = (20, 10)):
     """
        Display gain curve for single pixel vs. illumination data
-       :param dict dark_data: {"means", "variances"} fields are ny x nx arrays
-       :param dict light_data: {"means", "means_unc", "variances", "variances_uncertainty"}
+       :param dict noise_data: {"means", "variances"} fields are ny x nx arrays
        fields  store nillum x ny x nx arrays
-       :param gains: ny x nx array of gains
        :param nbins: number of bins for histograms
        :param figsize:
        :return:
@@ -144,7 +152,6 @@ def plot_noise_stats(noise_data, nbins=600, figsize=(20, 10)):
         cx = noise_data['corr_x'] - offsets * np.roll(offsets, 1, axis=1)
         cy = noise_data['corr_y'] - offsets * np.roll(offsets, 1, axis=0)
         ct = noise_data['corr_t'] - offsets * offsets
-
 
     # ############################################
     # parameter histograms
@@ -271,8 +278,15 @@ def plot_noise_stats(noise_data, nbins=600, figsize=(20, 10)):
     return fighs, fig_names
 
 
-def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains,
-                              light_means_err=None, light_vars_err=None, nbins=600, figsize=(20, 10)):
+def plot_camera_noise_results(offsets: np.ndarray,
+                              dark_vars: np.ndarray,
+                              light_means: np.ndarray,
+                              light_vars: np.ndarray,
+                              gains: np.ndarray,
+                              light_means_err: np.ndarray = None,
+                              light_vars_err: np.ndarray = None,
+                              nbins: int = 600,
+                              figsize: tuple[float] = (20, 10)):
     """
     Display gain curve for single pixel vs. illumination data
     :param offsets: ny x nx
@@ -280,6 +294,8 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     :param light_means: ni x ny x nx
     :param light_vars: ni x ny x nx
     :param gains: ny x nx array of gains
+    :param light_means_err:
+    :param light_vars_err:
     :param nbins: number of bins for histograms
     :param figsize:
     :return:
@@ -310,14 +326,14 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     hmeans, _ = np.histogram(offsets.ravel(), bin_edges_offs)
     bin_centers_offs = 0.5 * (bin_edges_offs[:-1] + bin_edges_offs[1:])
 
-    vars_start = 0 #np.percentile(vars, 0.1) - 1
+    vars_start = 0  # np.percentile(vars, 0.1) - 1
     vars_end = np.percentile(dark_vars, 99.5)
     bin_edges_vars = np.linspace(vars_start, vars_end, nbins + 1)
     hvars, _ = np.histogram(dark_vars.ravel(), bin_edges_vars)
     bin_centers_vars = 0.5 * (bin_edges_vars[:-1] + bin_edges_vars[1:])
 
     # for comparison with read noise stats in electrons
-    sds_es_start = 0 #np.percentile(std_es, 0.1)
+    sds_es_start = 0  # np.percentile(std_es, 0.1)
     sds_es_end = np.percentile(std_es, 99.5)
     bin_edges_stds_es = np.linspace(sds_es_start, sds_es_end, nbins + 1)
     h_std_es, _ = np.histogram(std_es.ravel(), bin_edges_stds_es)
@@ -417,8 +433,12 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
 
     # plot gain fits
     figs_pix_eg = [[]]*3
-    figs_pix_eg_names = ["camera_gain_fitting_examples", "camera_gain_fitting_smallest_gains", "camera_gain_fitting_largest_gains"]
-    for ll, (yis, xis, fn) in enumerate(zip([yinds, yinds_small, yinds_large], [xinds, xinds_small, xinds_large], figs_pix_eg_names)):
+    figs_pix_eg_names = ["camera_gain_fitting_examples",
+                         "camera_gain_fitting_smallest_gains",
+                         "camera_gain_fitting_largest_gains"]
+    for ll, (yis, xis, fn) in enumerate(zip([yinds, yinds_small, yinds_large],
+                                            [xinds, xinds_small, xinds_large],
+                                            figs_pix_eg_names)):
         figh = plt.figure(figsize=figsize)
         grid3 = figh.add_gridspec(nrows=nrows, ncols=ncols, hspace=0.5, wspace=0.3)
         figh.suptitle(fn.replace("_", " "))
@@ -435,7 +455,11 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
             # plot dark frames
             ax.plot(offsets[y, x], dark_vars[y, x], 'b.')
             # plot light frames
-            ax.errorbar(light_means[:, y, x], light_vars[:, y, x], fmt='.', xerr=light_means_err[:, y, x], yerr=light_vars_err[:, y, x])
+            ax.errorbar(light_means[:, y, x],
+                        light_vars[:, y, x],
+                        fmt='.',
+                        xerr=light_means_err[:, y, x],
+                        yerr=light_vars_err[:, y, x])
             # plot fit
             ax.plot(minterp + offsets[y, x], minterp * gains[y, x] + dark_vars[y, x])
             ax.set_xlim([mean_vmin, mean_vmax])
@@ -453,4 +477,3 @@ def plot_camera_noise_results(offsets, dark_vars, light_means, light_vars, gains
     fns = [fn1, fn2] + figs_pix_eg_names
 
     return fighs, fns
-
