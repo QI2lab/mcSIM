@@ -10,7 +10,6 @@ of the imaging system on the coherent light.
 """
 
 import time
-# import sys
 import numpy as np
 from scipy import fft
 import scipy.signal
@@ -21,14 +20,14 @@ from matplotlib.colors import PowerNorm
 import matplotlib.patches
 import matplotlib.pyplot as plt
 
-import mcsim.analysis.dmd_patterns as dmd_patterns
-import mcsim.analysis.simulate_dmd as simulate_dmd
+from mcsim.analysis import dmd_patterns, simulate_dmd, sim_reconstruction
 import mcsim.analysis.analysis_tools as tools
-import mcsim.analysis.sim_reconstruction as sim_reconstruction
-import localize_psf.fit_psf as fit_psf
-import localize_psf.affine as affine
+from localize_psf import affine, fit_psf
 
-def frq2angles(frq_2d, wavelength, n):
+
+def frq2angles(frq_2d,
+               wavelength,
+               n):
     """
     Convert from frequency vectors (in angular spectrum representation) to angles
 
@@ -55,7 +54,11 @@ def frq2angles(frq_2d, wavelength, n):
 
     return phi, theta
 
-def angles2frq(theta, phi, wavelength, n):
+
+def angles2frq(theta,
+               phi,
+               wavelength,
+               n):
     """
 
     :param theta:
@@ -70,7 +73,12 @@ def angles2frq(theta, phi, wavelength, n):
                                    np.cos(theta)])
     return frq
 
-def interfere_polarized(theta1, phi1, theta2, phi2, alpha):
+
+def interfere_polarized(theta1,
+                        phi1,
+                        theta2,
+                        phi2,
+                        alpha):
     """
     Let the optical axis point along z. theta is the angle with respect to the optical axis,
     and phi is the azimuthal angle of the ray. Alpha is the azimuthal angle of the polarization,
@@ -106,10 +114,13 @@ def interfere_polarized(theta1, phi1, theta2, phi2, alpha):
         np.sin(alpha - phi1) * np.cos(alpha - phi2) * np.cos(phi1) * np.sin(phi2) * np.cos(theta2) + \
         np.cos(alpha - phi1) * np.cos(alpha - phi2) * np.sin(theta1) * np.sin(theta2)
 
-
     return int
 
-def interfere_unpolarized(theta1, phi1, theta2, phi2):
+
+def interfere_unpolarized(theta1,
+                          phi1,
+                          theta2,
+                          phi2):
     """
     Intereference averaged over input polarization
     :param theta1:
@@ -118,11 +129,12 @@ def interfere_unpolarized(theta1, phi1, theta2, phi2):
     :param phi2:
     :return:
     """
-    int = 0.5 * np.cos(phi1 - phi2)**2 * (1 + np.cos(theta1) * np.cos(theta2)) + \
-          0.5 * np.cos(phi1 - phi2) * np.sin(theta1) * np.sin(theta2) + \
-          0.5 * np.sin(phi1 - phi2)**2 * (np.cos(theta1) + np.cos(theta2))
+    intensity = 0.5 * np.cos(phi1 - phi2)**2 * (1 + np.cos(theta1) * np.cos(theta2)) + \
+                0.5 * np.cos(phi1 - phi2) * np.sin(theta1) * np.sin(theta2) + \
+                0.5 * np.sin(phi1 - phi2)**2 * (np.cos(theta1) + np.cos(theta2))
 
-    return int
+    return intensity
+
 
 def get_int_fc(efield_fc):
     """
@@ -141,7 +153,12 @@ def get_int_fc(efield_fc):
 
     return intensity_fc
 
-def get_int_fc_pol(efield_fc, vecs, wavelength, n, polarization_angle=None):
+
+def get_int_fc_pol(efield_fc,
+                   vecs,
+                   wavelength,
+                   n,
+                   polarization_angle=None):
     """
     Calculate intensity from electric field including effect of polarization.
 
@@ -199,17 +216,30 @@ def get_int_fc_pol(efield_fc, vecs, wavelength, n, polarization_angle=None):
     return intensity_fc
 
 
-def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img,
-                        to_use=None, use_guess_frqs=True, max_frq_shift_pix=1.5, force_start_from_guess=True,
-                        peak_pix=2, bg=100):
+def get_all_fourier_exp(imgs,
+                        frq_vects_theory,
+                        roi: list[int],
+                        pixel_size_um: float,
+                        fmax_img,
+                        to_use=None,
+                        use_guess_frqs: bool = True,
+                        max_frq_shift_pix: float = 1.5,
+                        force_start_from_guess: bool = True,
+                        peak_pix: int = 2,
+                        bg: float = 100):
     """
     Calculate Fourier components from a set of images.
 
     :param imgs: nimgs x ny x nx
-    :param vects: nimgs x nvecs1 x nvecs2 x 2
-    :param float pixel_size_um:
-    :param bool use_guess_frqs: if True, use guess frequencies computed from frq_vects_theory, if False use fitting
+    :param frq_vects_theory: nimgs x nvecs1 x nvecs2 x 2
+    :param roi:
+    :param pixel_size_um:
+    :param fmax_img:
+    :param to_use:
+    :param use_guess_frqs: if True, use guess frequencies computed from frq_vects_theory, if False use fitting
     procedure to find peak
+    :param max_frq_shift_pix:
+    :param force_start_from_guess:
     :param int peak_pix: number of pixels to use when calculating peak. Typically 2.
     :param float bg:
 
@@ -323,21 +353,22 @@ def get_all_fourier_exp(imgs, frq_vects_theory, roi, pixel_size_um, fmax_img,
 
     return intensity, intensity_unc, frq_vects_expt
 
-def get_all_fourier_thry(vas, vbs, nmax, nphases, phase_index, dmd_size):
+
+def get_all_fourier_thry(vas,
+                         vbs,
+                         nmax,
+                         nphases,
+                         phase_index,
+                         dmd_size):
     """
     Calculate theory intensity/electric field fourier components
 
     :param vas:
     :param vbs:
-    :param roi:
-    :param affine_xform:
-    :param pixel_size_um:
     :param nmax:
     :param nphases:
     :param phase_index:
     :param dmd_size:
-    :param use_blaze_correction:
-    :param dmd_params:
 
     :return efield_theory:
     :return ns:
@@ -372,22 +403,35 @@ def get_all_fourier_thry(vas, vbs, nmax, nphases, phase_index, dmd_size):
 
     return efield_theory, ns, ms, frq_vects_dmd
 
-def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, wavelength_ex, fmax_efield_ex,
-                               index_of_refraction, pixel_size_um, dmd_shape,
-                               use_blaze_correction=False, use_polarization_correction=False, dmd_params=None):
+
+def get_intensity_fourier_thry(efields,
+                               frq_vects_dmd,
+                               roi: list[int],
+                               affine_xform,
+                               wavelength_ex: float,
+                               fmax_efield_ex: float,
+                               index_of_refraction: float,
+                               pixel_size_um: float,
+                               dmd_shape: tuple[int],
+                               use_blaze_correction: bool = False,
+                               use_polarization_correction: bool = False,
+                               dmd_params: dict = None):
     """
 
     :param efields: nimgs x nvecs1 x nvecs2, electric field Fourier components from DMD pattern, with no blaze
      condition corrections.
     :param frq_vects_dmd: frequency vectors in 1/mirrors in DMD space. Size nimgs x nvecs1 x nvecs2 x 2
-    :param list[int] roi: region of interest within image. [ystart, yend, xstart, xend]
+    :param roi: region of interest within image. [ystart, yend, xstart, xend]
     :param affine_xform: affine transformation connecting image space and DMD space
      (using pixels as coordinates on both ends). This is a 3x3 matrix.
-    :param float fmax_efield_ex: maximum electric field frequency that can pass throught he imaging system from the
+    :param wavelength_ex:
+    :param fmax_efield_ex: maximum electric field frequency that can pass throught he imaging system from the
      DMD to sample, in 1/mirrors
-    :param float pixel_size_um: camera pixel size in um
-    :param bool use_blaze_correction: whether or not to use blaze correction
-    :param bool use_polarization_correction: whether or not to correct for polarization effects. Assumes input is
+    :param index_of_refraction:
+    :param pixel_size_um: camera pixel size in um
+    :param dmd_shape:
+    :param use_blaze_correction: whether or not to use blaze correction
+    :param use_polarization_correction: whether or not to correct for polarization effects. Assumes input is
     completely unpolarized. # todo: can add other polarization options
     :param dmd_params: {"wavelength", "gamma", "wx", "wy", "theta_ins": [tx, ty], "theta_outs": [tx, ty]}. These can be
     omitted if use_blaze_correction is False
@@ -448,7 +492,9 @@ def get_intensity_fourier_thry(efields, frq_vects_dmd, roi, affine_xform, wavele
 
     return intensity_theory, intensity_theory_xformed, frq_vects_cam, frq_vects_um
 
-def fit_phase_diff(phase_th, phase_expt, frqs):
+def fit_phase_diff(phase_th,
+                   phase_expt,
+                   frqs):
     """
     Match theory and experimental phases as best as possible by modifying affine transformation
     :param phase_th:
@@ -477,8 +523,24 @@ def fit_phase_diff(phase_th, phase_expt, frqs):
     return figh, results
 
 
-def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affine_xform, roi, nphases, phase_index, fmax_in=None,
-                 peak_int_exp=None, peak_int_exp_unc=None, peak_int_theory=None, otf=None, otf_unc=None, to_use=None,
+def plot_pattern(img: np.ndarray,
+                 va: list[int],
+                 vb: list[int],
+                 frq_vects,
+                 fmax_img: float,
+                 pixel_size_um: float,
+                 dmd_size: tuple[int],
+                 affine_xform,
+                 roi: list[int],
+                 nphases: int,
+                 phase_index: int,
+                 fmax_in=None,
+                 peak_int_exp=None,
+                 peak_int_exp_unc=None,
+                 peak_int_theory=None,
+                 otf=None,
+                 otf_unc=None,
+                 to_use=None,
                  figsize=(20, 10)):
     """
     plot image and affine xformed pattern it corresponds to
@@ -486,8 +548,8 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
     :param va: [vx, vy]
     :param vb: [vx, vy]
     :param frq_vects: vecs1 x nvecs2 x 2. in 1/um
-    :param float fmax_img: in 1/um
-    :param float pixel_size_um:
+    :param fmax_img: in 1/um
+    :param pixel_size_um:
     :param dmd_size: []
     :param affine_xform: affine transformation between DMD space and camera space
     :param roi: [ystart, yend, xstart, xend] region of interest in image
@@ -654,12 +716,21 @@ def plot_pattern(img, va, vb, frq_vects, fmax_img, pixel_size_um, dmd_size, affi
 
     return figh
 
-def plot_otf(frq_vects, fmax_img, otf, otf_unc=None, to_use=None, wf_corrected=None, figsize=(20, 10)):
+def plot_otf(frq_vects,
+             fmax_img: float,
+             otf,
+             otf_unc=None,
+             to_use=None,
+             wf_corrected=None,
+             figsize: tuple[float] = (20, 10)):
     """
     Plot complete OTF
     :param frq_vects:
     :param fmax_img:
     :param otf:
+    :param otf_unc:
+    :param to_use:
+    :param wf_corrected:
     :param figsize:
     :return:
     """
