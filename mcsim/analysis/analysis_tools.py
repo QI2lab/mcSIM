@@ -1,11 +1,9 @@
 """
-Miscellaneous helper functions. As I collect many relating to a certain area, these can be split into topic
-specific modules.
+Miscellaneous helper functions
 """
 
 import numpy as np
 import scipy.sparse as sp
-from scipy import fft
 import localize_psf.rois as rois
 
 _cupy_available = True
@@ -15,16 +13,18 @@ except ImportError:
     _cupy_available = False
 
 
-# image processing
-def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
+def azimuthal_avg(img: np.ndarray,
+                  dist_grid: np.ndarray,
+                  bin_edges: np.ndarray,
+                  weights: np.ndarray = None):
     """
     Take azimuthal average of img. All points which have a dist_grid value lying
     between successive bin_edges will be averaged. Points are considered to lie within a bin
     if their value is strictly smaller than the upper edge, and greater than or equal to the lower edge.
-    :param np.array img: 2D image
-    :param np.array dist_grid:
-    :param np.array or list bin_edges:
-    :param np.array weights:
+    :param img: 2D image
+    :param dist_grid:
+    :param bin_edges:
+    :param weights:
 
     :return az_avg:
     :return sdm:
@@ -96,7 +96,10 @@ def azimuthal_avg(img, dist_grid, bin_edges, weights=None):
     return az_avg, sdm, dist_mean, dist_sd, npts_bin, masks
 
 
-def elliptical_grid(params, xx, yy, units='mean'):
+def elliptical_grid(params: np.ndarray,
+                    xx: np.ndarray,
+                    yy: np.ndarray,
+                    units: str = 'mean') -> np.ndarray:
     """
     Get elliptical `distance' grid for use with azimuthal averaging. These `distances' will be the same for points lying
     on ellipses with the parameters specified by params.
@@ -125,7 +128,6 @@ def elliptical_grid(params, xx, yy, units='mean'):
     distance_grid = np.sqrt(
         ((xx - cx) * np.cos(theta) - (yy - cy) * np.sin(theta))**2 +
         ((yy - cy) * np.cos(theta) + (xx - cx) * np.sin(theta))**2 * aspect_ratio**2)
-
 
     if aspect_ratio < 1:
         if units == 'minor':
@@ -263,8 +265,8 @@ def bin(img: np.ndarray,
     return m_binned
 
 
-# resampling functions
-def resample_bandlimited_ft(img_ft, mag=(2, 2)):
+def resample_bandlimited_ft(img_ft: np.ndarray,
+                            mag: tuple[int] = (2, 2)):
     """
     Expand image by factors of mx and my while keeping Fourier content constant.
 
@@ -352,8 +354,13 @@ def resample_bandlimited_ft(img_ft, mag=(2, 2)):
 
     return img_ft_exp
 
+
 # geometry tools
-def get_peak_value(img, x, y, peak_coord, peak_pixel_size=1):
+def get_peak_value(img: np.ndarray,
+                   x: np.ndarray,
+                   y: np.ndarray,
+                   peak_coord: np.ndarray,
+                   peak_pixel_size: int = 1):
     """
     Estimate value for a peak that is not precisely aligned to the pixel grid by performing a weighted average
     over neighboring pixels, based on how much these overlap with a rectangular area surrounding the peak.
@@ -395,7 +402,10 @@ def get_peak_value(img, x, y, peak_coord, peak_pixel_size=1):
     return peak_value
 
 
-def pixel_overlap(centers1, centers2, lens1, lens2=None):
+def pixel_overlap(centers1: np.ndarray,
+                  centers2: np.ndarray,
+                  lens1: np.ndarray,
+                  lens2: np.ndarray=None):
     """
     Calculate overlap of two nd-square pixels. The pixels go from coordinates
     centers[ii] - 0.5 * lens[ii] to centers[ii] + 0.5 * lens[ii].
@@ -407,23 +417,13 @@ def pixel_overlap(centers1, centers2, lens1, lens2=None):
     :return overlaps: overlap area of pixels
     """
 
-    # if not isinstance(centers1, list):
-    #     centers1 = [centers1]
     centers1 = np.atleast_1d(centers1).ravel()
-
-    # if not isinstance(centers2, list):
-    #     centers2 = [centers2]
     centers2 = np.atleast_1d(centers2).ravel()
-
-    # if not isinstance(lens1, list):
-    #     lens1 = [lens1]
     lens1 = np.atleast_1d(lens1).ravel()
 
     if lens2 is None:
         lens2 = lens1
 
-    # if not isinstance(lens2, list):
-    #     lens2 = [lens2]
     lens2 = np.atleast_1d(lens2).ravel()
 
     overlaps = []
@@ -445,7 +445,9 @@ def pixel_overlap(centers1, centers2, lens1, lens2=None):
 
 
 # working with regions of interest
-def get_extent(y, x, origin="lower"):
+def get_extent(y: np.ndarray,
+               x: np.ndarray,
+               origin: str = "lower") -> list[float]:
     """
     Get extent required for plotting arrays using imshow in real coordinates. The resulting list can be
     passed directly to imshow using the extent keyword.
@@ -530,8 +532,7 @@ def translate_pix(img: np.ndarray,
 def translate_im(img: np.ndarray,
                  shift: tuple[float],
                  drs: tuple[float] = (1, 1),
-                 dy: float = None,
-                 use_gpu: bool = _cupy_available):
+                 use_gpu: bool = _cupy_available) -> np.ndarray:
     """
     Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
 
@@ -540,8 +541,9 @@ def translate_im(img: np.ndarray,
 
     :param img: NumPy array, size ny x nx
     :param shift: [yo, xo], in same units as pixels
-    :param dx: pixel size of image along x-direction
-    :param dy: pixel size of image along y-direction
+    :param drs: (dy, dx) pixel size of image along y- and x-directions
+    :param use_gpu: run on GPU using CuPy. NOTE: result will be returned as a CuPy array and caller must
+    convert to NumPy array with get() method or etc.
     :return img_shifted:
     """
 
@@ -561,10 +563,8 @@ def translate_im(img: np.ndarray,
     # must use symmetric frequency representation to do correctly!
     # we are using the FT shift theorem to approximate the Nyquist-Whittaker interpolation formula,
     # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
-    # fx = xp.array(get_fft_frqs(img.shape[1], dt=dx, centered=False, mode='symmetric'))
-    fx = xp.array(fft.fftfreq(nx, dx))
-    # fy = xp.array(get_fft_frqs(img.shape[0], dt=dy, centered=False, mode='symmetric'))
-    fy = xp.array(fft.fftfreq(ny, dy))
+    fx = xp.array(xp.fft.fftfreq(nx, dx))
+    fy = xp.array(xp.fft.fftfreq(ny, dy))
     fxfx, fyfy = xp.meshgrid(fx, fy)
 
     # 1. ft
@@ -665,7 +665,6 @@ def translate_ft(img_ft: np.ndarray,
 
         exp_factor = xp.exp(-1j * 2 * np.pi * (fx * x + fy * y))
 
-
         img_ft_shifted = xp.fft.fftshift(
                          xp.fft.fft2(xp.array(exp_factor) *
                          xp.fft.ifft2(xp.fft.ifftshift(img_ft, axes=(-1, -2)),
@@ -674,7 +673,8 @@ def translate_ft(img_ft: np.ndarray,
         return img_ft_shifted
 
 
-def conj_transpose_fft(img_ft, axes=(-1, -2)):
+def conj_transpose_fft(img_ft: np.ndarray,
+                       axes: tuple[int] = (-1, -2)) -> np.ndarray:
     """
     Given img_ft(f), return a new array
     img_new_ft(f) := conj(img_ft(-f))
