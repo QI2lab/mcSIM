@@ -265,96 +265,6 @@ def bin(img: np.ndarray,
     return m_binned
 
 
-def resample_bandlimited_ft(img_ft: np.ndarray,
-                            mag: tuple[int] = (2, 2)):
-    """
-    Expand image by factors of mx and my while keeping Fourier content constant.
-
-    Let the initial (real space) array be a_{ij} and the final be b_{ij}.
-    If a has odd sizes, b_{2i-1,2j-1} = a_{i,j}
-    If a has even sizes, b_{2i, 2j} = a_{i,j}
-    This choice is dictated by the ``natural'' FFT position values, and it ensures that the zero positions of b and a
-    give the same value.
-
-    NOTE: the expanded FT function is normalized so that the realspace values will match after an inverse FFT,
-    thus the corresponding Fourier space components will have the relationship b_k = a_k * b.size / a.size
-
-    :param img_ft: frequency space representation of image, arranged according to the natural FFT representation.
-    e.g. img_ft = fftshift(fft2(ifftshift(img))).
-    :param mag: (my, mx)
-
-    :return img_ft_expanded:
-    """
-    # todo: add axes argument, so will only resample some axes
-    # todo: move to sim_reconstruction.py
-
-    if isinstance(mag, int):
-        mag = [mag]
-
-    if not np.all([isinstance(m, int) for m in mag]):
-        raise ValueError("mx and my must both be integers")
-
-    if np.all([m == 1 for m in mag]):
-        return img_ft
-
-    if not np.all([m == 2 for m in mag]):
-        raise NotImplementedError("not implemented for any expansion except factor of 2")
-
-    # new method, works for arbitrary sized array
-    # don't need frequencies, but useful for checking using proper points in arrays
-    # frq_old = [get_fft_frqs(n) for n in img_ft.shape]
-    # frq_new = [get_fft_frqs(n * m, dt=1/m) for n, m in zip(img_ft.shape, mag)]
-    # center frequency for FFT of odd or even size is at position n//2
-    ind_start = [(m * n) // 2 - n // 2 for n, m in zip(img_ft.shape, mag)]
-
-    slice_obj = tuple([slice(istart, istart + n, 1) for istart, n in zip(ind_start, img_ft.shape)])
-    img_ft_exp = np.zeros([n * m for n, m in zip(img_ft.shape, mag)], dtype=complex)
-    img_ft_exp[slice_obj] = img_ft
-
-    # if initial array was even it had an unpaired negative frequency, but its pair is present in the larger array
-    # this negative frequency was at -N/2, so this enters the IFT for a_n as a_(k=-N/2) * exp(2*np.pi*i * -n/2)
-    # not that exp(2*np.pi*i * -k/2) = exp(2*np.pi*i * k/2), so this missing frequency doesn't matter for a
-    # however, when we construct b, in the IFT for b_n we now have b_(k=-N/2) * exp(2*np.pi*i * -n/4)
-    # Since we are supposing N is even, we must satisfy
-    # b_(2n) = a_n -> b_(k=-L/2) + b_(k=L/2) = a_(k=-L/2)
-    # Further, we want to ensure that b is real if a is real, which implies
-    # b_(k=-N/2) = 0.5 * a(k=-N/2)
-    # b_(k= N/2) = 0.5 * a(k=-N/2)
-    # no complex conjugate is required for b_(k=N/2). If a_n is real, then a(k=-N/2) must also be real.
-    #
-    # consider the 2D case. We have an unfamiliar condition required to make a real
-    # a_(ky=-N/2, kx) = conj(a_(ky=-N/2, -kx))
-    # recall -N/2 <-> N/2 to make this more familiar
-    # for b_(n, m) we have b_(ky=-N/2, kx) * exp(2*np.pi*i * -n/4) * exp(2*np.pi*i * kx*m/(fx*N))
-    # to ensure all b_(n, m) are real we must enforce
-    # b_(ky=N/2, kx) = conj(b(ky=-N/2, -kx))
-    # b_(ky, kx=N/2) = conj(b(-ky, kx=-N/2))
-    # on the other hand, to enforce b_(2n, 2m) = a_(n, m)
-    # a(ky=-N/2,  kx) = b(ky=-N/2,  kx) + b(ky=N/2,  kx)
-    # a(ky=-N/2, -kx) = b(ky=-N/2, -kx) + b(ky=N/2, -kx) = b^*(ky=-N/2, kx) + b^*(ky=N/2, kx)
-    # but this second equation doesn't give us any more information than the real condition above
-    # the easiest way to do this is...
-    # b(ky=+/- N/2, kx) = 0.5 * a(ky=-N/2, kx)
-    # for the edges, the conditions are
-    # b(ky=+/- N/2, kx=+/- N/2) = 0.25 * a(ky=kx=-N/2)
-    # b(ky=+/- N/2, kx=-/+ N/2) = 0.25 * a(ky=kx=-N/2)
-
-    for ii in range(img_ft.ndim):
-        slice_obj = [slice(None, None)] * img_ft.ndim
-        slice_obj[ii] = slice(ind_start[ii], ind_start[ii] + 1)
-
-        val = img_ft_exp[tuple(slice_obj)]
-        img_ft_exp[tuple(slice_obj)] *= 0.5
-
-        slice_obj[ii] = slice(ind_start[ii] + img_ft.shape[ii], ind_start[ii] + img_ft.shape[ii] + 1)
-        img_ft_exp[tuple(slice_obj)] = val
-
-    # correct normalization so real-space values of expanded array match real-space values of initial array
-    img_ft_exp = np.prod(mag) * img_ft_exp
-
-    return img_ft_exp
-
-
 # geometry tools
 def get_peak_value(img: np.ndarray,
                    x: np.ndarray,
@@ -442,36 +352,6 @@ def pixel_overlap(centers1: np.ndarray,
             overlaps.append(np.max([lend - lstart, 0]))
 
     return np.prod(overlaps)
-
-
-# working with regions of interest
-def get_extent(y: np.ndarray,
-               x: np.ndarray,
-               origin: str = "lower") -> list[float]:
-    """
-    Get extent required for plotting arrays using imshow in real coordinates. The resulting list can be
-    passed directly to imshow using the extent keyword.
-
-    Here we assume the values y and x are equally spaced and describe the center coordinates of each pixel
-
-    :param y: equally spaced y-coordinates
-    :param x: equally spaced x-coordinates
-    :param origin: "lower" or "upper" depending on if the y-origin is at the lower or upper edge of the image
-    :return extent: [xstart, xend, ystart, yend]
-    """
-    dy = y[1] - y[0]
-    dx = x[1] - x[0]
-    if origin == "lower":
-        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx,
-                  y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
-    elif origin == "upper":
-        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx,
-                  y[0] - 0.5 * dy, y[-1] + 0.5 * dy]
-    else:
-        raise ValueError("origin must be 'lower' or 'upper' but was '%s'" % origin)
-
-    return extent
-
 
 # translating images
 def translate_pix(img: np.ndarray,
@@ -672,29 +552,3 @@ def translate_ft(img_ft: np.ndarray,
 
         return img_ft_shifted
 
-
-def conj_transpose_fft(img_ft: np.ndarray,
-                       axes: tuple[int] = (-1, -2)) -> np.ndarray:
-    """
-    Given img_ft(f), return a new array
-    img_new_ft(f) := conj(img_ft(-f))
-
-    :param img_ft:
-    :param axes: axes on which to perform the transformation
-    """
-
-    # convert axes to positive number
-    axes = np.mod(axes, img_ft.ndim)
-
-    # flip and conjugate
-    img_ft_ct = np.flip(np.conj(img_ft), axis=axes)
-
-    # for odd FFT size, can simply flip the array to take f -> -f
-    # for even FFT size, have on more negative frequency than positive frequency component.
-    # by flipping array, have put the negative frequency components on the wrong side of the array
-    # (i.e. where the positive frequency components are)
-    # so must roll array to put them back on the right side
-    to_roll = [a for a in axes if np.mod(img_ft.shape[a], 2) == 0]
-    img_ft_ct = np.roll(img_ft_ct, shift=[1] * len(to_roll), axis=to_roll)
-
-    return img_ft_ct
