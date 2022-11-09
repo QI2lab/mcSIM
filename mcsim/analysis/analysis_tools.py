@@ -33,9 +33,11 @@ def azimuthal_avg(img: np.ndarray,
     :return masks:
     """
 
-    # there are many possible approaches for doing azimuthal averaging. Naive way: for each mask az_avg = np.mean(img[mask])
-    # also can do using scipy.ndimage.mean(img, labels=masks, index=np.arange(0, n_bins). scipy approach is slightly slower
-    # than np.bincount. Naive approach ~ factor of 2 slower.
+    # there are many possible approaches for doing azimuthal averaging.
+    # Naive way: for each mask az_avg = np.mean(img[mask])
+    # also can do using scipy.ndimage.mean(img, labels=masks, index=np.arange(0, n_bins)
+    # scipy approach is slightly slower than np.bincount.
+    # Naive approach ~ factor of 2 slower.
 
     if weights is None:
         weights = np.ones(img.shape)
@@ -130,22 +132,22 @@ def elliptical_grid(params: np.ndarray,
 
     if aspect_ratio < 1:
         if units == 'minor':
-            pass # if aspect ratio < 1 we are already in 'minor' units.
+            pass  # if aspect ratio < 1 we are already in 'minor' units.
         elif units == 'major':
             distance_grid = distance_grid / aspect_ratio
         elif units == 'mean':
             distance_grid = distance_grid / np.sqrt(aspect_ratio)
         else:
-            raise ValueError("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
+            raise ValueError(f"'units' must be 'minor', 'major', or 'mean', but was '{units:s}'")
     else:
         if units == 'minor':
             distance_grid = distance_grid / aspect_ratio
         elif units == 'major':
-            pass # if aspect ratio > 1 we are already in 'major' units
+            pass  # if aspect ratio > 1 we are already in 'major' units
         elif units == 'mean':
             distance_grid = distance_grid / np.sqrt(aspect_ratio)
         else:
-            raise ValueError("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
+            raise ValueError(f"'units' must be 'minor', 'major', or 'mean', but was '{units:s}'")
 
     return distance_grid
 
@@ -155,7 +157,7 @@ def get_peak_value(img: np.ndarray,
                    x: np.ndarray,
                    y: np.ndarray,
                    peak_coord: np.ndarray,
-                   peak_pixel_size: int = 1):
+                   peak_pixel_size: int = 1) -> complex:
     """
     Estimate value for a peak that is not precisely aligned to the pixel grid by performing a weighted average
     over neighboring pixels, based on how much these overlap with a rectangular area surrounding the peak.
@@ -181,26 +183,28 @@ def get_peak_value(img: np.ndarray,
 
     # get ROI around pixel for weighted averaging
     roi = rois.get_centered_roi([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])
-    img_roi = img[roi[0]:roi[1], roi[2]:roi[3]]
-    xx_roi = xx[roi[0]:roi[1], roi[2]:roi[3]]
-    yy_roi = yy[roi[0]:roi[1], roi[2]:roi[3]]
+    img_roi = rois.cut_roi(roi, img)
+    xx_roi = rois.cut_roi(roi, xx)
+    yy_roi = rois.cut_roi(roi, yy)
 
     # estimate value from weighted average of pixels in ROI, based on overlap with pixel area centered at [px, py]
     weights = np.zeros(xx_roi.shape)
     for ii in range(xx_roi.shape[0]):
         for jj in range(xx_roi.shape[1]):
-            weights[ii, jj] = pixel_overlap([py, px], [yy_roi[ii, jj], xx_roi[ii, jj]],
-                                            [peak_pixel_size * dy, peak_pixel_size * dx], [dy, dx]) / (dx * dy)
+            weights[ii, jj] = pixel_overlap([py, px],
+                                            [yy_roi[ii, jj], xx_roi[ii, jj]],
+                                            [peak_pixel_size * dy, peak_pixel_size * dx],
+                                            [dy, dx]) / (dx * dy)
 
     peak_value = np.average(img_roi, weights=weights)
 
     return peak_value
 
 
-def pixel_overlap(centers1: np.ndarray,
-                  centers2: np.ndarray,
-                  lens1: np.ndarray,
-                  lens2: np.ndarray=None):
+def pixel_overlap(centers1: list[float],
+                  centers2: list[float],
+                  lens1: list[float],
+                  lens2: list[float] = None) -> float:
     """
     Calculate overlap of two nd-square pixels. The pixels go from coordinates
     centers[ii] - 0.5 * lens[ii] to centers[ii] + 0.5 * lens[ii].
@@ -212,6 +216,7 @@ def pixel_overlap(centers1: np.ndarray,
     :return overlaps: overlap area of pixels
     """
 
+    # todo: vectorize
     centers1 = np.atleast_1d(centers1).ravel()
     centers2 = np.atleast_1d(centers2).ravel()
     lens1 = np.atleast_1d(lens1).ravel()
