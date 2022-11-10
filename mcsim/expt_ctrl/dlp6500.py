@@ -374,9 +374,6 @@ def erle_len2bytes(length):
         else:
             raise TypeError('length must be convertible to integer.')
 
-    # if not isinstance(length, int):
-    #     raise Exception('length must be an integer')
-
     if length < 0 or length > 2 ** 15 - 1:
         raise ValueError('length is negative or too large to be encoded.')
 
@@ -400,10 +397,7 @@ def erle_bytes2len(byte_list):
     :param list byte_list: [byte] or [lsb, msb]
     :return length:
     """
-    # if msb is None:
-    #     length = lsb
-    # else:
-    #     length = (msb << 7) + (lsb - 0x80)
+
     if len(byte_list) == 1:
         length = byte_list[0]
     else:
@@ -482,15 +476,20 @@ def validate_channel_map(cm):
     return True, "array validated"
 
 
-def save_config_file(fname, pattern_data: dict, channel_map=None, firmware_patterns=None, use_zarr=True):
+def save_config_file(fname,
+                     pattern_data: dict,
+                     channel_map: dict = None,
+                     firmware_patterns: np.ndarray = None,
+                     use_zarr: bool = True):
     """
     Save DMD firmware configuration data to zarr or json file
     @param fname: file name to save
     @param pattern_data: dictionary of pattern information to store
     @param channel_map:
+    @param firmware_patterns:
+    @param use_zarr:
     @return:
     """
-    # todo: use zarr instead ... and save firmware pattern image data along with it
 
     tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
@@ -596,7 +595,8 @@ def load_config_file(fname):
     return pattern_data, channel_map, firmware_patterns, tstamp
 
 
-def get_preset_info(preset, pattern_data):
+def get_preset_info(preset: dict,
+                    pattern_data):
     """
     Get useful data from preset
     @param preset:
@@ -629,8 +629,6 @@ class dlp6500:
     width = 1920 # pixels
     height = 1080 # pixels
     pitch = 7.56 # um
-    # todo: maybe add mirror geometry info too e.g. gamma_on, gamma_off, rotation information
-    # todo: but also maybe this requires too many assumptions about geometry that should not be made here
 
     # tried to match with the DLP6500 GUI names where possible
     command_dict = {'Read_Error_Code': 0x0100,
@@ -675,28 +673,35 @@ class dlp6500:
                       'internal error': 255}
 
     def __init__(self,
-                 vendor_id=0x0451,
-                 product_id=0xc900,
+                 vendor_id: int = 0x0451,
+                 product_id: int = 0xc900,
                  debug: bool = True,
                  firmware_pattern_info: list = None,
                  presets: dict = None,
-                 config_file=None,
-                 firmware_patterns=None,
-                 initialize=True):
+                 config_file = None,
+                 firmware_patterns: np.ndarray = None,
+                 initialize: bool = True,
+                 dmd_index: int = 0):
         """
         Get instance of DLP LightCrafter evaluation module (DLP6500 or DLP9000). This is the base class which os
         dependent classes should inherit from. The derived classes only need to implement _get_device and
         _send_raw_packet.
 
-        Note that DMD can be instantialized before being loaded. In this case, use constructor with initialize=False
-        and later call the initialize() method with the correct information.
+        Note that DMD can be instantiated before being loaded. In this case, use constructor with initialize=False
+        and later call the initialize() method with the desired arguments.
 
         :param vendor_id: vendor id, used to find DMD USB device
         :param product_id: product id, used to find DMD USB device
         :param bool debug: If True, will print output of commands.
         :param firmware_pattern_info:
         :param presets: dictionary of presets
-        :param config_file: either provide config file or provide firmware_pattern_info and presets
+        :param config_file: either provide config file or provide firmware_pattern_info, presets, and firmware_patterns
+        :param firmware_patterns: npatterns x ny x nx array of patterns stored in DMD firmware. NOTE, this class
+        does not deal with loading or reading patterns from the firmware. Do this with the TI GUI
+        :param initialize: whether to connect to the DMD. In certain cases it is convenient to create this object
+        before connecting to the DMD, if e.g. we want to pass the DMD to another class but we don't know what
+        DMD index we want yet
+        :param dmd_index: If multiple DMD's are attached, choose this one. Indexing starts at zero
         """
 
         if config_file is not None and (firmware_pattern_info is not None or presets is not None or firmware_patterns is not None):
@@ -737,7 +742,7 @@ class dlp6500:
 
         self.initialized = initialize
         if self.initialize:
-            self._get_device(vendor_id, product_id)
+            self._get_device(vendor_id, product_id, dmd_index)
 
 
     def __del__(self):
@@ -749,7 +754,7 @@ class dlp6500:
 
 
     # sending and receiving commands, operating system dependence
-    def _get_device(self, vendor_id, product_id):
+    def _get_device(self, vendor_id, product_id, dmd_index: int):
         """
         Return handle to DMD. This command can contain OS dependent implementation
 
@@ -759,7 +764,10 @@ class dlp6500:
         """
         pass
 
-    def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
+    def _send_raw_packet(self,
+                         buffer,
+                         listen_for_reply: bool = False,
+                         timeout: float = 5):
         """
         Send a single USB packet.
 
@@ -775,7 +783,10 @@ class dlp6500:
         pass
 
     # sending and receiving commands, no operating system dependence
-    def send_raw_command(self, buffer, listen_for_reply=False, timeout=5):
+    def send_raw_command(self,
+                         buffer,
+                         listen_for_reply: bool = False,
+                         timeout: float = 5):
         """
         Send a raw command over USB, possibly including multiple packets.
 
@@ -811,7 +822,12 @@ class dlp6500:
 
         return reply
 
-    def send_command(self, rw_mode, reply, command, data=(), sequence_byte=0x00):
+    def send_command(self,
+                     rw_mode: str,
+                     reply: bool,
+                     command: int,
+                     data=(),
+                     sequence_byte=0x00):
         """
         Send USB command to DLP6500 DMD. Only works on Windows. For documentation of DMD commands, see dlpu018.pdf,
         available at http://www.ti.com/product/DLPC900/technicaldocuments
@@ -892,7 +908,9 @@ class dlp6500:
 
         return self.send_raw_command(buffer, reply)
 
-    def decode_command(self, buffer, mode='first-packet'):
+    def decode_command(self,
+                       buffer,
+                       mode: str = 'first-packet'):
         """
         Decode DMD command into constituent pieces
         """
@@ -918,7 +936,8 @@ class dlp6500:
 
         return flag_byte, sequence_byte, data_len, cmd, data
 
-    def decode_flag_byte(self, flag_byte):
+    def decode_flag_byte(self,
+                         flag_byte):
         """
         Get parameters from flags set in the flag byte
         :param flag_byte:
@@ -933,7 +952,8 @@ class dlp6500:
 
         return result
 
-    def decode_response(self, buffer):
+    def decode_response(self,
+                        buffer):
         """
         Parse USB response from DMD into useful info
 
@@ -1121,7 +1141,11 @@ class dlp6500:
         return {'dmd type': dmd_type, 'firmware tag': firmware_tag}
 
     # trigger setup
-    def set_trigger_out(self, trigger_number=1, invert=False, rising_edge_delay_us=0, falling_edge_delay_us=0):
+    def set_trigger_out(self,
+                        trigger_number: int = 1,
+                        invert: bool = False,
+                        rising_edge_delay_us: int = 0,
+                        falling_edge_delay_us: int = 0):
         """
         Set DMD output trigger delays and polarity. Trigger 1 is the "advance frame" trigger and trigger 2 is the
         "enable" trigger
@@ -1171,7 +1195,9 @@ class dlp6500:
 
         return delay_us, mode
 
-    def set_trigger_in1(self, delay_us=105, edge_to_advance='rising'):
+    def set_trigger_in1(self,
+                        delay_us: int = 105,
+                        edge_to_advance: str = 'rising'):
         """
         Set delay and pattern advance edge for trigger input 1 ("advance frame" trigger)
 
@@ -1208,7 +1234,8 @@ class dlp6500:
         mode = resp['data'][0]
         return mode
 
-    def set_trigger_in2(self, edge_to_start='rising'):
+    def set_trigger_in2(self,
+                        edge_to_start: str = 'rising'):
         """
         Set polarity to start/stop pattern on for input trigger 2 ("enable" trigger)
 
@@ -1226,7 +1253,8 @@ class dlp6500:
         return self.send_command('w', False, self.command_dict["TRIG_IN2_CTL"], start_byte)
 
     # sequence start stop
-    def set_pattern_mode(self, mode='on-the-fly'):
+    def set_pattern_mode(self,
+                         mode: str = 'on-the-fly'):
         """
         Change the DMD display mode
 
@@ -1245,7 +1273,8 @@ class dlp6500:
 
         return self.send_command('w', True, self.command_dict["DISP_MODE"], data)
 
-    def start_stop_sequence(self, cmd):
+    def start_stop_sequence(self,
+                            cmd: str):
         """
         Start, stop, or pause a pattern sequence
 
@@ -1271,7 +1300,8 @@ class dlp6500:
     #######################################
     # commands for working batch files in firmware
     #######################################
-    def get_fwbatch_name(self, batch_index):
+    def get_fwbatch_name(self,
+                         batch_index: int):
         """
         Return name of batch file stored on firmware at batch_index
 
@@ -1291,7 +1321,8 @@ class dlp6500:
         return batch_name
 
 
-    def execute_fwbatch(self, batch_index):
+    def execute_fwbatch(self,
+                        batch_index: int):
         """
         Execute batch file stored on firmware at index batch_index
 
@@ -1301,7 +1332,8 @@ class dlp6500:
         return self.send_command('w', True, self.command_dict["Execute_Firmware_Batch_File"], [batch_index])
 
 
-    def set_fwbatch_delay(self, delay_ms):
+    def set_fwbatch_delay(self,
+                          delay_ms):
         """
         Set delay between batch file commands
         :param delay_ms:
@@ -1317,7 +1349,9 @@ class dlp6500:
     #######################################
     # low-level commands for working with patterns and pattern sequences
     #######################################
-    def pattern_display_lut_configuration(self, num_patterns, num_repeat=0):
+    def pattern_display_lut_configuration(self,
+                                          num_patterns: int,
+                                          num_repeat: int = 0):
         """
         Controls the execution of patterns stored in the lookup table (LUT). Before executing this command,
         stop the current pattern sequence.
@@ -1334,13 +1368,19 @@ class dlp6500:
         num_patterns_bytes = list(struct.unpack('BB', struct.pack('<H', num_patterns)))
         num_repeats_bytes = list(struct.unpack('BBBB', struct.pack('<I', num_repeat)))
 
-        # return self.send_command('w', False, 0x1A31, data=num_patterns_bytes + num_repeats_bytes)
         return self.send_command('w', True, self.command_dict["PAT_CONFIG"], data=num_patterns_bytes + num_repeats_bytes)
 
 
-    def pattern_display_lut_definition(self, sequence_position_index, exposure_time_us=105, dark_time_us=0,
-                                       wait_for_trigger=True, clear_pattern_after_trigger=False, bit_depth=1,
-                                       disable_trig_2=True, stored_image_index=0, stored_image_bit_index=0):
+    def pattern_display_lut_definition(self,
+                                       sequence_position_index,
+                                       exposure_time_us: int = 105,
+                                       dark_time_us: int = 0,
+                                       wait_for_trigger: bool = True,
+                                       clear_pattern_after_trigger: bool = False,
+                                       bit_depth: int = 1,
+                                       disable_trig_2: bool = True,
+                                       stored_image_index: int = 0,
+                                       stored_image_bit_index: int = 0):
         """
         Define parameters for pattern used in on-the-fly mode. This command is listed as "MBOX_DATA"
          in the DLPLightcrafter software GUI.
@@ -1417,7 +1457,9 @@ class dlp6500:
         return self.send_command('w', True, self.command_dict["MBOX_DATA"], data)
 
 
-    def init_pattern_bmp_load(self, pattern_length, pattern_index):
+    def init_pattern_bmp_load(self,
+                              pattern_length: int,
+                              pattern_index: int):
         """
         Initialize pattern BMP load command.
 
@@ -1433,11 +1475,12 @@ class dlp6500:
         num_bytes = list(struct.unpack('BBBB', struct.pack('<I', pattern_length)))
         data = index_bin + num_bytes
 
-        # return self.send_command('w', False, 0x1A2A, data=data)
         return self.send_command('w', True, self.command_dict["PATMEM_LOAD_INIT_MASTER"], data=data)
 
 
-    def pattern_bmp_load(self, compressed_pattern, compression_mode):
+    def pattern_bmp_load(self,
+                         compressed_pattern: list,
+                         compression_mode: str):
         """
         Load DMD pattern data for use in pattern on-the-fly mode. To load all necessary data to DMD correctly,
         invoke this from upload_pattern_sequence()
@@ -1496,9 +1539,16 @@ class dlp6500:
             command_index += 1
 
 
-    def upload_pattern_sequence(self, patterns, exp_times, dark_times, triggered=False,
-                                clear_pattern_after_trigger=True, bit_depth=1, num_repeats=0, compression_mode='erle',
-                                combine_images=True):
+    def upload_pattern_sequence(self,
+                                patterns: np.ndarray,
+                                exp_times: list[int],
+                                dark_times: list[int],
+                                triggered: bool = False,
+                                clear_pattern_after_trigger: bool = True,
+                                bit_depth: int = 1,
+                                num_repeats: int = 0,
+                                compression_mode: str = 'erle',
+                                combine_images: bool = True):
         """
         Upload on-the-fly pattern sequence to DMD.
         # todo: seems I need to call set_pattern_sequence() after this command to actually get sequence running. Why?
@@ -1511,18 +1561,18 @@ class dlp6500:
         This command is based on Table 5-3 in the DLP programming manual
 
         :param patterns: N x Ny x Nx NumPy array of uint8
-        :param list[int] exp_times: exposure times in us. Either a single uint8 number, or a list the same
+        :param exp_times: exposure times in us. Either a single uint8 number, or a list the same
          length as the number of patterns. >=105us
-        :param list[int] dark_times: dark times in us. Either a single uint8 number or a list the same length
+        :param dark_times: dark times in us. Either a single uint8 number or a list the same length
          as the number of patterns
-        :param bool triggered: Whether or not DMD should wait to be triggered to display the next pattern
-        :param bool clear_pattern_after_trigger: Whether or not to keep displaying the pattern at the
+        :param triggered: Whether or not DMD should wait to be triggered to display the next pattern
+        :param clear_pattern_after_trigger: Whether or not to keep displaying the pattern at the
          end of exposure time,
         i.e. during time while DMD is waiting for the next trigger.
-        :param int bit_depth: Bit depth of patterns
-        :param int num_repeats: Number of repeats. 0 means infinite.
-        :param str compression_mode: 'erle', 'rle', or 'none'
-        :param bool combine_images:
+        :param bit_depth: Bit depth of patterns
+        :param num_repeats: Number of repeats. 0 means infinite.
+        :param compression_mode: 'erle', 'rle', or 'none'
+        :param combine_images:
         :return stored_image_indices, stored_bit_indices: image and bit indices where each image was stored
         """
         # #########################
@@ -1582,7 +1632,9 @@ class dlp6500:
         for ii, (p, et, dt) in enumerate(zip(patterns, exp_times, dark_times)):
             stored_image_indices[ii] = ii // 24
             stored_bit_indices[ii] = ii % 24
-            buffer = self.pattern_display_lut_definition(ii, exposure_time_us=et, dark_time_us=dt,
+            buffer = self.pattern_display_lut_definition(ii,
+                                                         exposure_time_us=et,
+                                                         dark_time_us=dt,
                                                          wait_for_trigger=triggered,
                                                          clear_pattern_after_trigger=clear_pattern_after_trigger,
                                                          bit_depth=bit_depth,
@@ -1650,23 +1702,31 @@ class dlp6500:
         return stored_image_indices, stored_bit_indices
 
 
-    def set_pattern_sequence(self, image_indices, bit_indices, exp_times, dark_times, triggered=False,
-                             clear_pattern_after_trigger=True, bit_depth=1, num_repeats=0, mode='pre-stored'):
+    def set_pattern_sequence(self,
+                             image_indices: list[int],
+                             bit_indices: list[int],
+                             exp_times: int,
+                             dark_times: int,
+                             triggered: bool = False,
+                             clear_pattern_after_trigger: bool = True,
+                             bit_depth: int = 1,
+                             num_repeats: int = 0,
+                             mode: str= 'pre-stored'):
         """
         Setup pattern sequence from patterns previously stored in DMD memory, either in on-the-fly pattern mode,
         or in pre-stored pattern mode
 
         In most cases, use program_dmd_seq() instead of calling this function directly
 
-        :param list[int] image_indices:
-        :param list[int] bit_indices:
-        :param int exp_times:
-        :param int dark_times:
-        :param bool triggered:
-        :param bool clear_pattern_after_trigger:
-        :param int bit_depth:
-        :param int num_repeats: number of repeats. 0 repeats means repeat continuously.
-        :param str mode: pre-stored or
+        :param image_indices:
+        :param bit_indices:
+        :param exp_times:
+        :param dark_times:
+        :param triggered:
+        :param clear_pattern_after_trigger:
+        :param bit_depth:
+        :param num_repeats: number of repeats. 0 repeats means repeat continuously.
+        :param mode: pre-stored or
         :return:
         """
         # #########################
@@ -1761,9 +1821,14 @@ class dlp6500:
     # the concept of "channels" and "modes" describing families of DMD patterns. This information can be
     # supplied at instantiation using the "presets" argument
     #######################################
-    def get_dmd_sequence(self, modes: list[str], channels: list[str],
-                         nrepeats: list[int] = 1, noff_before: list[int] = 0, noff_after: list[int] = 0,
-                         blank: list[bool] = False, mode_pattern_indices: list[list[int]] = None):
+    def get_dmd_sequence(self,
+                         modes: list[str],
+                         channels: list[str],
+                         nrepeats: list[int] = 1,
+                         noff_before: list[int] = 0,
+                         noff_after: list[int] = 0,
+                         blank: list[bool] = False,
+                         mode_pattern_indices: list[list[int]] = None):
         """
         Generate DMD patterns from a list of modes and channels
 
@@ -1933,11 +1998,17 @@ class dlp6500:
 
         return pic_inds, bit_inds
 
-    def program_dmd_seq(self, modes: list[str], channels: list[str], nrepeats: list[int] = 1,
-                        noff_before: list[int] = 0, noff_after: list[int] = 0,
+    def program_dmd_seq(self,
+                        modes: list[str],
+                        channels: list[str],
+                        nrepeats: list[int] = 1,
+                        noff_before: list[int] = 0,
+                        noff_after: list[int] = 0,
                         blank: list[bool] = False,
                         mode_pattern_indices: list[list[int]] = None,
-                        triggered: bool = False, exp_time_us: int = 105, clear_pattern_after_trigger: bool = False,
+                        triggered: bool = False,
+                        exp_time_us: int = 105,
+                        clear_pattern_after_trigger: bool = False,
                         verbose: bool = False):
         """
         convenience function for generating DMD pattern and programming DMD
@@ -1991,18 +2062,28 @@ class dlp6500win(dlp6500):
         except AttributeError:
             pass # this will fail if object destroyed before being initialized
 
-    def _get_device(self, vendor_id, product_id):
+    def _get_device(self, vendor_id, product_id, dmd_index: int = 0):
         """
         Return handle to DMD. This command can contain OS dependent implenetation
 
         :param vendor_id: usb vendor id
         :param product_id: usb product id
+        :param dmd_index:
         :return:
         """
 
         filter = pyhid.HidDeviceFilter(vendor_id=vendor_id, product_id=product_id)
         devices = filter.get_devices()
-        self.dmd = devices[0]
+
+        dmd_indices = [ii for ii, d in enumerate(devices) if d.product_name == "DLPC900"]
+
+        if len(dmd_indices) <= dmd_index:
+            raise ValueError(f"Not enough DMD's detected for dmd_index={dmd_index:d}."
+                             f"Only {len(dmd_indices):d} DMD's were detected.")
+
+        chosen_index = dmd_indices[dmd_index]
+
+        self.dmd = devices[chosen_index]
         self.dmd.open()
 
         # variable for holding response of dmd
@@ -2063,11 +2144,14 @@ class dlp6500ix(dlp6500):
                                   " _send_raw_packet() need to be implemented.")
         super(dlp6500ix, self).__init__(**kwargs)
 
+
     def __del__(self):
         pass
 
-    def _get_device(self, vendor_id, product_id):
+
+    def _get_device(self, vendor_id, product_id, dmd_index: int):
         pass
+
 
     def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
         pass
@@ -2078,11 +2162,14 @@ class dlp6500dummy(dlp6500):
     def __init__(self, **kwargs):
         super(dlp6500dummy, self).__init__(**kwargs)
 
-    def _get_device(self, vendor_id, product_id):
+
+    def _get_device(self, vendor_id, product_id, dmd_index: int):
         pass
+
 
     def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
         pass
+
 
     def read_error_description(self):
         return [['']]
@@ -2093,9 +2180,9 @@ if __name__ == "__main__":
     # example command line parser
     # #######################
 
-    fname = "dmd_config.json"
+    fname = "dmd_config.zarr"
     try:
-        pattern_data, presets, _ = load_config_file(fname)
+        pattern_data, presets, _, _ = load_config_file(fname)
     except FileNotFoundError:
         raise FileNotFoundError(f"configuration file `{fname:s}` was not found. For the command line parser to work, place "
                                 f"a file with this name in the same directory as dlp6500.py")
