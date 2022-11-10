@@ -194,14 +194,17 @@ class tomography:
             init_params = [np.max(np.abs(ft2)),
                            fx_ip_guess,
                            fy_ip_guess,
-                           self.dfx * 3, self.dfy * 3, 0, 0]
+                           self.dfx * 3,
+                           self.dfy * 3,
+                           0,
+                           0]
             fixed_params = [False, False, False, False, False, False, True]
 
-            rgauss, fit_fn = fit.fit_gauss2d(np.abs(ft2),
-                                             init_params=init_params,
-                                             fixed_params=fixed_params,
-                                             xx=fxfx_roi,
-                                             yy=fyfy_roi)
+            rgauss = fit.gauss2dm().fit(np.abs(ft2),
+                                        (fyfy_roi, fxfx_roi),
+                                        init_params=init_params,
+                                        fixed_params=fixed_params,
+                                        guess_bounds=True)
 
             frq_holo = np.expand_dims(rgauss["fit_params"][1:3],
                                       axis=list(range(fx_guess.ndim)))
@@ -578,7 +581,6 @@ class tomography:
         # todo: use this later
         beam_frqs_da = da.from_array(self.get_beam_frqs(), chunks=(1,) * (self.hologram_frqs.ndim - 3) + (self.npatterns, 1, 1, 3))
 
-        # rechunk erecon_ft since must operate on all patterns at once
         # get sampling so can determine new chunk sizes
         drs_v, v_size = get_reconstruction_sampling(self.no,
                                                     self.na_detection,
@@ -597,6 +599,7 @@ class tomography:
         # compute scattered field
         # ############################
 
+        # rechunk efields since must operate on all patterns at once to get 3D volume
         if mode == "born":
             self.set_scattered_field(scattered_field_regularization=scattered_field_regularization, mask=mask)
             eraw_start = da.rechunk(self.efield_scattered_ft, chunks=new_chunks)
