@@ -3831,14 +3831,15 @@ def get_wiener_filter(otf,
 def get_simulated_sim_imgs(ground_truth: np.ndarray,
                            frqs,
                            phases,
-                           mod_depths: list,
+                           mod_depths: list[float],
                            gains,
                            offsets,
                            readout_noise_sds,
                            pix_size: float,
-                           amps=None,
+                           amps = None,
                            coherent_projection: bool = True,
-                           otf=None,
+                           otf: np.ndarray = None,
+                           use_gpu: bool = False,
                            **kwargs) -> (np.ndarray, np.ndarray, np.ndarray):
     """
     Get simulated SIM images, including the effects of shot-noise and camera noise.
@@ -3863,9 +3864,16 @@ def get_simulated_sim_imgs(ground_truth: np.ndarray,
     accurate as long as the photon number is large enough that the Poisson distribution is close to a normal distribution
     """
 
+    if use_gpu:
+        xp = cp
+    else:
+        xp = np
+
+    ground_truth = xp.array(ground_truth)
+
     # ensure ground truth is 3D
     if ground_truth.ndim == 2:
-        ground_truth = np.expand_dims(ground_truth, axis=0)
+        ground_truth = xp.expand_dims(ground_truth, axis=0)
     nz, ny, nx = ground_truth.shape
 
     # check bin sizes
@@ -3895,18 +3903,20 @@ def get_simulated_sim_imgs(ground_truth: np.ndarray,
         raise ValueError("mod_depths must have length nangles")
 
     if amps is None:
-        amps = np.ones((nangles, nphases))
+        amps = xp.ones((nangles, nphases))
+    else:
+        amps = xp.array(amps)
 
     if otf is not None:
-        psf, _ = fit_psf.otf2psf(otf)
+        psf, _ = fit_psf.otf2psf(otf, use_gpu=use_gpu)
     else:
         psf = None
 
     # get coordinates
-    x = (np.arange(nx) - (nx // 2)) * pix_size
-    y = (np.arange(ny) - (ny // 2)) * pix_size
-    z = (np.arange(nz) - (nz // 2)) * pix_size
-    zz, yy, xx = np.meshgrid(z, y, x, indexing="ij")
+    x = (xp.arange(nx) - (nx // 2)) * pix_size
+    y = (xp.arange(ny) - (ny // 2)) * pix_size
+    z = (xp.arange(nz) - (nz // 2)) * pix_size
+    zz, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
 
     nxb = nx / nbin
     nyb = ny / nbin
@@ -3954,17 +3964,20 @@ def get_simulated_sim_imgs(ground_truth: np.ndarray,
                                                                          bin2non_xform)
 
     # generate images
-    sim_imgs = np.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
-    patterns = np.zeros((nangles, nphases, nz, nyb, nxb), dtype=float)
-    snrs = np.zeros(sim_imgs.shape)
-    mcnrs = np.zeros(sim_imgs.shape)
+    frqs = xp.array(frqs)
+    phases = xp.array(phases)
+
+    sim_imgs = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
+    patterns = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=float)
+    snrs = xp.zeros(sim_imgs.shape)
+    mcnrs = xp.zeros(sim_imgs.shape)
     for ii in range(nangles):
         for jj in range(nphases):
 
-            pattern = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * np.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
+            pattern = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
 
             if not coherent_projection:
-                pattern = fit_psf.blur_img_otf(pattern, otf).real
+                pattern = fit_psf.blur_img_otf(pattern, otf, use_gpu=use_gpu).real
 
             patterns[ii, jj] = pattern
 
@@ -3973,8 +3986,9 @@ def get_simulated_sim_imgs(ground_truth: np.ndarray,
                                                                   offsets,
                                                                   readout_noise_sds,
                                                                   psf=psf,
+                                                                  use_gpu=use_gpu,
                                                                   **kwargs)
             # todo: compute mcnr
             mcnrs[ii, jj] = 0
 
-    return np.squeeze(sim_imgs), np.squeeze(snrs), np.squeeze(patterns)
+    return sim_imgs, snrs, patterns
