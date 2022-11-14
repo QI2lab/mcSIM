@@ -477,17 +477,32 @@ def validate_channel_map(cm):
 
 
 def save_config_file(fname,
-                     pattern_data: dict,
+                     pattern_data: list[dict],
                      channel_map: dict = None,
                      firmware_patterns: np.ndarray = None,
                      use_zarr: bool = True):
     """
     Save DMD firmware configuration data to zarr or json file
     @param fname: file name to save
-    @param pattern_data: dictionary of pattern information to store
-    @param channel_map:
-    @param firmware_patterns:
-    @param use_zarr:
+    @param pattern_data: list of dictionary objects, where each dictionary gives information about the corresponding
+    firmware pattern. The structure of these dictionaries is arbitrary, to support different types of user defined
+    patterns. However, it is convenient if they also have "picture_index" and "bit_index" keys, describing
+    the patterns location in the DMD firmware. Note that this information can be obtained from the dictionary's
+    position in the list using firmware_index_2pic_bit()
+    @param channel_map: a dictionary where the top level keys specify a general mode, e.g. "SIM" or "widefield".
+    channel_map[mode] is a dictionary with entries corresponding to collections of patterns. For example, mode "SIM"
+    might have pattern collections "blue" and "red". channel_map[mode][channels] is a dictionary with two keys:
+    "picture_indices" and "big_indices" specifying the pattern locations in the firmware
+    >>> channel_map = {"SIM": {"blue": {"picture_indices": np.zeros(10, dtype=int),
+    >>>                                 "bit_indices": np.arange(10).astype(int)
+    >>>                                 },
+    >>>                        "red": {"picture_indices": np.ones(10, dtype=int),
+    >>>                                 "bit_indices": np.arange(10).astype(int)
+    >>>                                 }
+    >>>                        }
+    >>>                }
+    @param firmware_patterns: 3D array of size npatterns x ny x nx
+    @param use_zarr: whether to save configuration file as zarr or json
     @return:
     """
 
@@ -2184,8 +2199,9 @@ if __name__ == "__main__":
     try:
         pattern_data, presets, _, _ = load_config_file(fname)
     except FileNotFoundError:
-        raise FileNotFoundError(f"configuration file `{fname:s}` was not found. For the command line parser to work, place "
-                                f"a file with this name in the same directory as dlp6500.py")
+        raise FileNotFoundError(f"configuration file `{fname:s}` was not found. For the command line parser to work,"
+                                f"create this file using save_config_file(), and place it in the same"
+                                f" directory as dlp6500.py")
 
     # #######################
     # define arguments
