@@ -15,7 +15,6 @@ from localize_psf import fit_psf, affine, rois
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 root_dir = Path("data")
 fname_raw_data = root_dir / "argosim_line_pairs.tif"
-use_gpu = False
 
 # ############################################
 # load image data, channel/angle/phase
@@ -132,7 +131,7 @@ for kk in range(ncolors):
                              background=100,
                              gain=2,
                              min_p2nr=0.5,
-                             use_gpu=use_gpu,
+                             use_gpu=False,
                              save_dir=root_dir / f"{tstamp:s}_sim_reconstruction_{excitation_wavelengths[kk] * 1e3:.0f}nm",
                              interactive_plotting=False,
                              figsize=(22.85, 10))
@@ -142,4 +141,3 @@ for kk in range(ncolors):
     imgset.plot_figs()
     # save reconstruction results
     imgset.save_imgs()
-    imgset.save_result()

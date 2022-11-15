@@ -48,7 +48,7 @@ has the appropriate version of [CuPy](https://cupy.dev/) installed
 Code for reconstructing SIM images from raw data using a Gustafsson/Wiener filter style reconstruction. Several
 reconstruction options are available, largely following either the approach of
 [openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980).
-To get started with reconstructing SIM data, see the example script [reconstruct_sim.py](examples/reconstruct_sim.py). 
+To get started with reconstructing SIM data, see the example script [reconstruct_sim.py](examples/reconstruct_sim_experiment.py). 
 
 # DMD simulation code
 ### [simulate_dmd.py](mcsim/analysis/simulate_dmd.py)
