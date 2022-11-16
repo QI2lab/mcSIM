@@ -27,7 +27,7 @@ git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .
 ```
-If you would like to edit the code, then install using the `-e` options,
+If you would like to edit the code, then install using the `-e` option,
 ```
 git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
@@ -41,11 +41,11 @@ cd mcSIM
 pip install .[expt_ctrl]
 ```
 Some functions can be optionally run on a GPU. If this is desired, ensure your python environment
-has the appropriate version of [CuPy](https://cupy.dev/) installed
+has the appropriate versions of [CuPy](https://cupy.dev/) and [cuCIM](https://pypi.org/project/cucim/) installed
 
 # SIM reconstruction code
 ### [sim_reconstruction.py](mcsim/analysis/sim_reconstruction.py)
-Code for reconstructing SIM images from raw data using a Gustafsson/Wiener filter style reconstruction. Several
+Code for reconstructing SIM images from raw data using a Gustafsson/Heintzmann Wiener filter style reconstruction. Several
 reconstruction options are available, largely following either the approach of
 [openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980).
 To get started with reconstructing SIM data, see the example script [reconstruct_sim.py](examples/reconstruct_sim_experiment.py). 
