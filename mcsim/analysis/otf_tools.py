@@ -326,10 +326,12 @@ def get_all_fourier_exp(imgs,
                 else:
                     # fit real fourier component in image space
                     # only need wavelength and na to get fmax
-                    frq_vects_expt[ii, aa, bb], mask, _ = sim_reconstruction.fit_modulation_frq(
-                        img_ft, img_ft, pixel_size_um, fmax_img,
-                        frq_guess=frq_vects_theory[ii, aa, bb], max_frq_shift=max_frq_shift,
-                        force_start_from_guess=force_start_from_guess)
+                    frq_vects_expt[ii, aa, bb], mask, _ = sim_reconstruction.fit_modulation_frq(img_ft, img_ft,
+                                                                                                pixel_size_um, fmax_img,
+                                                                                                frq_guess=
+                                                                                                frq_vects_theory[
+                                                                                                    ii, aa, bb],
+                                                                                                max_frq_shift=max_frq_shift)
 
                     sim_reconstruction.plot_correlation_fit(img_ft, img_ft, frq_vects_expt[ii, aa, bb],
                                                             pixel_size_um, fmax_img,

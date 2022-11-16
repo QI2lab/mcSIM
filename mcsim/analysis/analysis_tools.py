@@ -1,16 +1,19 @@
 """
-Miscellaneous helper functions
+Miscellaneous helper functions. Many are written to run on the GPU if the array passed to them are CuPy arrays
 """
 
 import numpy as np
+from typing import Union, Optional
 import localize_psf.rois as rois
 
 _cupy_available = True
 try:
     import cupy as cp
 except ImportError:
+    cp = np
     _cupy_available = False
 
+array = Union[np.ndarray, cp.ndarray]
 
 def azimuthal_avg(img: np.ndarray,
                   dist_grid: np.ndarray,
@@ -153,23 +156,30 @@ def elliptical_grid(params: np.ndarray,
 
 
 # geometry tools
-def get_peak_value(img: np.ndarray,
-                   x: np.ndarray,
-                   y: np.ndarray,
+def get_peak_value(img: array,
+                   x: array,
+                   y: array,
                    peak_coord: np.ndarray,
-                   peak_pixel_size: int = 1) -> complex:
+                   peak_pixel_size: int = 1) -> array:
     """
     Estimate value for a peak that is not precisely aligned to the pixel grid by performing a weighted average
     over neighboring pixels, based on how much these overlap with a rectangular area surrounding the peak.
     The size of this rectangular area is set by peak_pixel_size, given in integer multiples of a pixel.
 
-    :param img: image containing peak
-    :param x: x-coordinates of image
-    :param y: y-coordinates of image
-    :param peak_coord: peak coordinate [px, py]
+    :param img: array of size n0 x n1 ... x ny x nx. This function operates on the last two dimensions of the array
+    :param x: 1D array representing x-coordinates of images.
+    :param y: 1D array representing y-coordinates of image
+    :param peak_coord: peak coordinates [px, py]
     :param peak_pixel_size: number of pixels (along each direction) to sum to get peak value
+
     :return peak_value: estimated value of the peak
     """
+
+    if isinstance(img, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
     px, py = peak_coord
 
     # frequency coordinates
@@ -184,73 +194,72 @@ def get_peak_value(img: np.ndarray,
     # get ROI around pixel for weighted averaging
     roi = rois.get_centered_roi([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])
     img_roi = rois.cut_roi(roi, img)
-    xx_roi = rois.cut_roi(roi, xx)
-    yy_roi = rois.cut_roi(roi, yy)
 
-    # estimate value from weighted average of pixels in ROI, based on overlap with pixel area centered at [px, py]
-    weights = np.zeros(xx_roi.shape)
-    for ii in range(xx_roi.shape[0]):
-        for jj in range(xx_roi.shape[1]):
-            weights[ii, jj] = pixel_overlap([py, px],
-                                            [yy_roi[ii, jj], xx_roi[ii, jj]],
-                                            [peak_pixel_size * dy, peak_pixel_size * dx],
-                                            [dy, dx]) / (dx * dy)
+    xx_roi = xp.expand_dims(rois.cut_roi(roi, xx), axis=tuple(range(img_roi.ndim - 2)))
+    yy_roi = xp.expand_dims(rois.cut_roi(roi, yy), axis=tuple(range(img_roi.ndim - 2)))
 
-    peak_value = np.average(img_roi, weights=weights)
+
+    weights = pixel_overlap(xp.array([[py, px]]),
+                            xp.stack((yy_roi.ravel(), xx_roi.ravel()), axis=1),
+                            [peak_pixel_size * dy, peak_pixel_size * dx],
+                            [dy, dx]
+                            ) / (dx * dy)
+
+    _, weights = xp.broadcast_arrays(img_roi, weights.reshape(xx_roi.shape))
+
+    peak_value = xp.average(img_roi, weights=weights, axis=(-1, -2))
 
     return peak_value
 
 
-def pixel_overlap(centers1: list[float],
-                  centers2: list[float],
+def pixel_overlap(centers1: array,
+                  centers2: array,
                   lens1: list[float],
-                  lens2: list[float] = None) -> float:
+                  lens2: list[float] = None) -> array:
     """
     Calculate overlap of two nd-square pixels. The pixels go from coordinates
     centers[ii] - 0.5 * lens[ii] to centers[ii] + 0.5 * lens[ii].
 
-    :param centers1: list of coordinates defining centers of first pixel along each dimension
-    :param centers2: list of coordinates defining centers of second pixel along each dimension
+    :param centers1: Array of size ncenters x ndims. coordinates define centers of first pixel along each dimension.
+    :param centers2: Broadcastable to same size as centers1
     :param lens1: list of pixel 1 sizes along each dimension
     :param lens2: list of pixel 2 sizes along each dimension
     :return overlaps: overlap area of pixels
     """
 
-    # todo: vectorize
-    centers1 = np.atleast_1d(centers1).ravel()
-    centers2 = np.atleast_1d(centers2).ravel()
-    lens1 = np.atleast_1d(lens1).ravel()
+    if isinstance(centers1, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
+    centers1 = xp.array(centers1)
+    centers2 = xp.array(centers2)
+    centers1, centers2 = xp.broadcast_arrays(centers1, centers2)
+
+    lens1 = np.expand_dims(xp.array(lens1), axis=tuple(range(centers1.ndim - 1)))
 
     if lens2 is None:
         lens2 = lens1
 
-    lens2 = np.atleast_1d(lens2).ravel()
+    lens2 = xp.array(lens2)
 
-    overlaps = []
-    for c1, c2, l1, l2 in zip(centers1, centers2, lens1, lens2):
-        if np.abs(c1 - c2) >= 0.5*(l1 + l2):
-            overlaps.append(0)
-        else:
-            # ensure whichever pixel has leftmost edge is c1
-            if (c1 - 0.5 * l1) > (c2 - 0.5 * l2):
-                c1, c2 = c2, c1
-                l1, l2 = l2, l1
-            # by construction left start of overlap is c2 - 0.5*l2
-            # end is either c2 + 0.5 * l2 OR c1 + 0.5 * l1
-            lstart = c2 - 0.5 * l2
-            lend = np.min([c2 + 0.5 * l2, c1 + 0.5 * l1])
-            overlaps.append(np.max([lend - lstart, 0]))
+    # compute overlaps
+    lower_edge = xp.max(xp.stack((centers1 - 0.5 * lens1, centers2 - 0.5 * lens2), axis=0), axis=0)
+    upper_edge = xp.min(xp.stack((centers1 + 0.5 * lens1, centers2 + 0.5 * lens2), axis=0), axis=0)
+    overlaps = upper_edge - lower_edge
+    overlaps[overlaps < 0] = 0
+    volume_overlap = xp.prod(overlaps, axis=-1)
 
-    return np.prod(overlaps)
+    return volume_overlap
 
 
 # translating images
-def translate_pix(img: np.ndarray,
+def translate_pix(img: array,
                   shifts: tuple[float],
                   dr: tuple[float] = (1, 1),
                   axes: tuple[int] = (-2, -1),
                   wrap: bool = True,
-                  pad_val: float = 0) -> (np.ndarray, list[int]):
+                  pad_val: float = 0) -> (array, list[int]):
     """
     Translate image by given number of pixels with several different boundary conditions. If the shifts are sx, sy,
     then the image will be shifted by sx/dx and sy/dy. If these are not integers, they will be rounded to the closest
@@ -271,8 +280,13 @@ def translate_pix(img: np.ndarray,
     :return img_shifted, pix_shifts:
     """
 
+    if isinstance(img, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
     # make sure axes positive
-    axes = np.mod(axes, img.ndim)
+    axes = np.mod(np.array(axes), img.ndim)
 
     # convert pixel shifts to integers
     shifts_pix = np.array([int(np.round(-s / d)) for s, d in zip(shifts, dr)])
@@ -281,7 +295,7 @@ def translate_pix(img: np.ndarray,
     if np.any(shifts_pix != 0):
         # roll arrays. If wrap is True, this is all we need to do
         for s, axis in zip(shifts_pix, axes):
-            img = np.roll(img, s, axis=axis)
+            img = xp.roll(img, s, axis=axis)
 
         if wrap:
             pass
@@ -300,28 +314,25 @@ def translate_pix(img: np.ndarray,
     return img, shifts_pix
 
 
-def translate_im(img: np.ndarray,
+def translate_im(img: array,
                  shift: tuple[float],
-                 drs: tuple[float] = (1, 1),
-                 use_gpu: bool = _cupy_available) -> np.ndarray:
+                 drs: tuple[float] = (1, 1)) -> array:
     """
     Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
 
     e.g. suppose the pixel spacing dx = 0.05 um and we want to shift the image by 0.0366 um,
     then dx = 0.05 and shift = [0, 0.0366]
 
-    :param img: NumPy array, size ny x nx
+    :param img: NumPy or CuPy array, size ny x nx. If CuPy array will run on GPU
     :param shift: [yo, xo], in same units as pixels
     :param drs: (dy, dx) pixel size of image along y- and x-directions
-    :param use_gpu: run on GPU using CuPy. NOTE: result will be returned as a CuPy array and caller must
-    convert to NumPy array with get() method or etc.
     :return img_shifted:
     """
 
     if img.ndim != 2:
         raise ValueError("img must be 2D")
 
-    if use_gpu:
+    if isinstance(img, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -350,8 +361,7 @@ def translate_im(img: np.ndarray,
 def translate_ft(img_ft: np.ndarray,
                  fx: np.ndarray,
                  fy: np.ndarray,
-                 drs: list[float, float] = None,
-                 use_gpu: bool = _cupy_available) -> np.ndarray:
+                 drs: list[float, float] = None) -> np.ndarray:
     """
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
@@ -362,10 +372,11 @@ def translate_ft(img_ft: np.ndarray,
 
     If an array with more than 2 dimensions is passed in, then the shift will be applied to the last two dimensions
 
-    :param img_ft: array representing the fourier transform of an image with frequency origin centered as if using fftshift.
-    Shape n1 x n2 x ... x n_{-2} x n_{-1}. Shifting is done along the last two axes.
+    :param img_ft: NumPy or CuPy array representing the fourier transform of an image with
+     frequency origin centered as if using fftshift. Shape n1 x n2 x ... x n_{-2} x n_{-1}.
+      Shifting is done along the last two axes. If this is a CuPy array, routine will be run on the GPU
     :param fx: array of x-shift frequencies
-    fx and fy should either be broadcastable to the same szie as img_ft, or they should be of size
+    fx and fy should either be broadcastable to the same size as img_ft, or they should be of size
     n_{-m} x ... x n_{-3} x 2 where images along dimensions -m, ..., -3 are shifted in parallel
     :param fy:
     :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
@@ -374,7 +385,7 @@ def translate_ft(img_ft: np.ndarray,
     :return img_ft_shifted: shifted images, same size as img_ft
     """
 
-    if use_gpu:
+    if isinstance(img_ft, cp.ndarray):
         xp = cp
     else:
         xp = np

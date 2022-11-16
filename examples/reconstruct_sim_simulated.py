@@ -14,6 +14,8 @@ import mcsim.analysis.sim_reconstruction as sim
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 root_dir = Path("data")
 
+use_gpu = False
+
 # ############################################
 # physical parameters
 # ############################################
@@ -133,7 +135,7 @@ imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength}
                          background=100,
                          gain=2,
                          min_p2nr=0.5,
-                         use_gpu=False,
+                         use_gpu=use_gpu,
                          save_dir=root_dir / f"{tstamp:s}_sim_reconstruction_simulated",
                          interactive_plotting=False,
                          figsize=(22.85, 10))
