@@ -3859,14 +3859,13 @@ def get_simulated_sim_imgs(ground_truth: array,
                            frqs: np.ndarray,
                            phases: np.ndarray,
                            mod_depths: list[float],
-                           gains: Union[float, np.ndarray],
-                           offsets: Union[float, np.ndarray],
-                           readout_noise_sds: Union[float, np.ndarray],
+                           gains: Union[float, array],
+                           offsets: Union[float, array],
+                           readout_noise_sds: Union[float, array],
                            pix_size: float,
                            amps: Optional[np.ndarray] = None,
                            coherent_projection: bool = True,
                            otf: Optional[np.ndarray] = None,
-                           use_gpu: bool = False,
                            nbin: int = 1,
                            **kwargs) -> (array, array, array):
     """
@@ -3895,12 +3894,15 @@ def get_simulated_sim_imgs(ground_truth: array,
     """
 
     # if isinstance(ground_truth, cp.ndarray):
-    if use_gpu:
+    if isinstance(ground_truth, cp.ndarray):
         xp = cp
     else:
         xp = np
 
     ground_truth = xp.array(ground_truth)
+    gains = xp.array(gains)
+    offsets = xp.array(offsets)
+    readout_noise_sds = xp.array(readout_noise_sds)
 
     # ensure ground truth is 3D
     if ground_truth.ndim == 2:
@@ -3933,7 +3935,7 @@ def get_simulated_sim_imgs(ground_truth: array,
         amps = xp.array(amps)
 
     if otf is not None:
-        psf, _ = fit_psf.otf2psf(otf, use_gpu=use_gpu)
+        psf, _ = fit_psf.otf2psf(otf)
     else:
         psf = None
 
@@ -4001,21 +4003,13 @@ def get_simulated_sim_imgs(ground_truth: array,
             pattern = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
 
             if not coherent_projection:
-                pattern = fit_psf.blur_img_otf(pattern, otf, use_gpu=use_gpu).real
+                pattern = fit_psf.blur_img_otf(pattern, otf).real
 
-            patterns[ii, jj], _ = camera.simulated_img(pattern, 1, 0, 0,
-                                                    psf=None,
-                                                    photon_shot_noise=False,
-                                                    bin_size=nbin)
+            patterns[ii, jj], _ = camera.simulated_img(pattern, 1, 0, 0, psf=None, photon_shot_noise=False,
+                                                       bin_size=nbin)
 
-            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * pattern,
-                                                                  gains,
-                                                                  offsets,
-                                                                  readout_noise_sds,
-                                                                  psf=psf,
-                                                                  use_gpu=use_gpu,
-                                                                  bin_size=nbin,
-                                                                  **kwargs)
+            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * pattern, gains, offsets,
+                                                                  readout_noise_sds, psf=psf, bin_size=nbin, **kwargs)
             # todo: compute mcnr
             mcnrs[ii, jj] = 0
 
