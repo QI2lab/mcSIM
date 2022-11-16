@@ -1,6 +1,8 @@
 """
 Reconstruct synthetic SIM image of closely spaced line pairs.
 """
+import time
+
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -108,12 +110,12 @@ imgs, snrs, patterns = sim.get_simulated_sim_imgs(gt,
                                                   frqs_gt,
                                                   phases_gt,
                                                   mod_depths=mod_depths_gt,
-                                                  amps=amps_gt,
                                                   gains=2,
                                                   offsets=100,
                                                   readout_noise_sds=5,
-                                                  otf=otf,
                                                   pix_size=dxy_gt,
+                                                  amps=amps_gt,
+                                                  otf=otf,
                                                   nbin=nbin)
 imgs = imgs[:, :, 0]
 patterns = patterns[:, :, 0]
@@ -121,6 +123,8 @@ patterns = patterns[:, :, 0]
 # ############################################
 # SIM reconstruction
 # ############################################
+tstart = time.perf_counter()
+
 imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength},
                          imgs,
                          frq_estimation_mode="band-correlation",
@@ -146,3 +150,5 @@ imgset.reconstruct()
 imgset.plot_figs()
 # save reconstruction results
 imgset.save_imgs(use_zarr=True)
+
+print(f"reconstructing images, plotting diagnostics, and saving results took {time.perf_counter() - tstart:.2f}s")
