@@ -2,9 +2,8 @@
 Code for controlling data acquisition cards (DAQ).
 
 Different models of DAQ card should inherit from the class daq (think of this like a java interface).
-
-todo: could split different implementations to different files to avoid dependency issues
 """
+from typing import Optional
 import datetime
 import re
 import json
@@ -47,9 +46,15 @@ class nidaq(daq):
     # todo: so maybe better to store dictionary with direct mappings between line names and addresses?
     """
 
-    def __init__(self, dev_name: str = "Dev1", digital_lines: str = "port0/line0:15", analog_lines: list = ["ao0", "ao1", "ao2"],
-                 digital_line_names: dict = None, analog_line_names: dict = None, presets: dict = None,
-                 config_file: str = None, initialize=True):
+    def __init__(self,
+                 dev_name: str = "Dev1",
+                 digital_lines: str = "port0/line0:15",
+                 analog_lines: list = ["ao0", "ao1", "ao2"],
+                 digital_line_names: Optional[dict] = None,
+                 analog_line_names: Optional[dict] = None,
+                 presets: Optional[dict] = None,
+                 config_file: str = None,
+                 initialize: bool = True):
         """
         Initialize DAQ. Note that DAQ can be instantiated before the actual DAQ is present
 
@@ -155,7 +160,8 @@ class nidaq(daq):
         return address_block
 
 
-    def set_digital_once(self, array):
+    def set_digital_once(self,
+                         array: np.ndarray):
         """
         Set digital lines as a block
 
@@ -175,7 +181,9 @@ class nidaq(daq):
         self.last_known_digital_val[:] = array
 
 
-    def set_digital_lines_by_address(self, array: np.ndarray, addresses: list):
+    def set_digital_lines_by_address(self,
+                                     array: np.ndarray,
+                                     addresses: list):
         if array.shape != (len(addresses),):
             raise ValueError(f"array must have shape {len(addresses):d}, but had shape {array.shape}")
 
@@ -205,9 +213,9 @@ class nidaq(daq):
             self._task_do.ClearTask()
 
 
-
-
-    def set_digital_lines_by_index(self, array: np.ndarray, lines: list = None):
+    def set_digital_lines_by_index(self,
+                                   array: np.ndarray,
+                                   lines: Optional[list] = None):
         """
         Set digital lines
 
@@ -225,7 +233,9 @@ class nidaq(daq):
         return self.set_digital_lines_by_address(array, addresses)
 
 
-    def set_digital_lines_by_name(self, array: np.ndarray, line_names: list):
+    def set_digital_lines_by_name(self,
+                                  array: np.ndarray,
+                                  line_names: list):
         """
         Set digital lines by name
 
@@ -245,7 +255,10 @@ class nidaq(daq):
         raise NotImplementedError("todo: this should be main function for setting analog lines once")
 
 
-    def set_analog_once(self, array: np.ndarray, lines: list = None, lower_lims_volts=-5.0, upper_lims_volts=5.0):
+    def set_analog_once(self, array: np.ndarray,
+                        lines: Optional[list] = None,
+                        lower_lims_volts: float = -5.0,
+                        upper_lims_volts: float = 5.0):
         """
         Set analog lines once
 
@@ -277,9 +290,10 @@ class nidaq(daq):
 
         # program DAQ
             for ii, l in enumerate(lines):
-                try: # ensure we dispose of task properly even if write fails because out of range
+                try:  # ensure we dispose of task properly even if write fails because out of range
                     self._task_ao = daqmx.Task()
-                    self._task_ao.CreateAOVoltageChan(self.analog_lines[l], "", lower_lims_volts[ii], upper_lims_volts[ii], daqmx.DAQmx_Val_Volts, None)
+                    self._task_ao.CreateAOVoltageChan(self.analog_lines[l], "", lower_lims_volts[ii],
+                                                      upper_lims_volts[ii], daqmx.DAQmx_Val_Volts, None)
                     self._task_ao.WriteAnalogScalarF64(True, daqmx.DAQmx_Val_WaitInfinitely, array[ii], None)
                     self.last_known_analog_val[l] = array[ii]
                 except daqmx.InvalidAODataWriteError as e:
@@ -290,7 +304,11 @@ class nidaq(daq):
 
 
 
-    def set_analog_lines_by_name(self, array, line_names, lower_lims_volts=-5.0, upper_lims_volts=5.0):
+    def set_analog_lines_by_name(self,
+                                 array: np.ndarray,
+                                 line_names: list,
+                                 lower_lims_volts: float = -5.0,
+                                 upper_lims_volts: float = 5.0):
         """
 
         @param array:
@@ -309,7 +327,8 @@ class nidaq(daq):
         return self.set_analog_once(array, lines, lower_lims_volts, upper_lims_volts)
 
 
-    def set_preset(self, preset_name):
+    def set_preset(self,
+                   preset_name: str):
         """
         Set DAQ to preset value
 
@@ -334,8 +353,15 @@ class nidaq(daq):
             self.set_analog_lines_by_name(np.array(a_arr), a_lines)
 
 
-    def set_sequence(self, digital_array, analog_array, sample_rate_hz, digital_clock_source="OnBoardClock",
-                     analog_clock_source="OnBoardClock", digital_input_source=None, di_export_line=None, continuous=True):
+    def set_sequence(self,
+                     digital_array: np.ndarray,
+                     analog_array: np.ndarray,
+                     sample_rate_hz: float,
+                     digital_clock_source: str = "OnBoardClock",
+                     analog_clock_source: str = "OnBoardClock",
+                     digital_input_source: Optional[str] = None,
+                     di_export_line: Optional[str] = None,
+                     continuous: bool = True):
         """
         Set a sequence of digital (and optionally also analog) commands to the DAQ.
 
@@ -491,7 +517,10 @@ class nidaq(daq):
 # helper functions for working with line mappings and program arrays
 # ###########################
 
-def plot_daq_program(arr: np.ndarray, line_map: dict = None, title: str = "", **kwargs):
+def plot_daq_program(arr: np.ndarray,
+                     line_map: dict = None,
+                     title: str = "",
+                     **kwargs):
     """
     Plot DAQ program as an array
 
@@ -501,13 +530,6 @@ def plot_daq_program(arr: np.ndarray, line_map: dict = None, title: str = "", **
     @param kwargs:
     @return figh:
     """
-    # if line_names is None:
-    #     line_names = [str(ii) for ii in range(arr.shape[1])]
-
-    # ind_max = len(line_names)  # + 1
-    # ticks = []
-    # for ii in range(ind_max):
-    #     ticks.append(matplotlib.text.Text(float(ii), 0, line_names[ii]))
 
     if line_map is None:
         line_names = {}
@@ -573,7 +595,11 @@ def get_line_names(map: dict) -> list:
     return line_names
 
 
-def preset_to_array(preset: dict, do_map: dict, ao_map: dict, n_digital_channels: int = None, n_analog_channels: int = None):
+def preset_to_array(preset: dict,
+                    do_map: dict,
+                    ao_map: dict,
+                    n_digital_channels: Optional[int] = None,
+                    n_analog_channels: Optional[int] = None):
     """
     Get arrays to program daq from presets
 
@@ -606,7 +632,10 @@ def preset_to_array(preset: dict, do_map: dict, ao_map: dict, n_digital_channels
     return digital_array, analog_array
 
 
-def save_config_file(fname, digital_map, analog_map, presets):
+def save_config_file(fname: str,
+                     digital_map: dict,
+                     analog_map: dict,
+                     presets: dict):
     """
     Save configuration data to json file
 
@@ -623,7 +652,7 @@ def save_config_file(fname, digital_map, analog_map, presets):
         json.dump({"timestamp": tstamp, "analog_map": analog_map, "digital_map": digital_map, "presets": presets}, f, indent="\t")
 
 
-def load_config_file(fname):
+def load_config_file(fname: str) -> (dict, dict, dict, str):
     """
     load configuration data from json file
     @param fname:
