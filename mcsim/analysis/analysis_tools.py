@@ -18,7 +18,7 @@ array = Union[np.ndarray, cp.ndarray]
 def azimuthal_avg(img: np.ndarray,
                   dist_grid: np.ndarray,
                   bin_edges: np.ndarray,
-                  weights: np.ndarray = None):
+                  weights: Optional[np.ndarray] = None):
     """
     Take azimuthal average of img. All points which have a dist_grid value lying
     between successive bin_edges will be averaged. Points are considered to lie within a bin
@@ -202,8 +202,7 @@ def get_peak_value(img: array,
     weights = pixel_overlap(xp.array([[py, px]]),
                             xp.stack((yy_roi.ravel(), xx_roi.ravel()), axis=1),
                             [peak_pixel_size * dy, peak_pixel_size * dx],
-                            [dy, dx]
-                            ) / (dx * dy)
+                            [dy, dx]) / (dx * dy)
 
     _, weights = xp.broadcast_arrays(img_roi, weights.reshape(xx_roi.shape))
 
@@ -215,7 +214,7 @@ def get_peak_value(img: array,
 def pixel_overlap(centers1: array,
                   centers2: array,
                   lens1: list[float],
-                  lens2: list[float] = None) -> array:
+                  lens2: Optional[list[float]] = None) -> array:
     """
     Calculate overlap of two nd-square pixels. The pixels go from coordinates
     centers[ii] - 0.5 * lens[ii] to centers[ii] + 0.5 * lens[ii].
@@ -329,6 +328,8 @@ def translate_im(img: array,
     :return img_shifted:
     """
 
+    # todo: use same approach as translate_ft() to make this work with nD arrays only operating along last two dims
+
     if img.ndim != 2:
         raise ValueError("img must be 2D")
 
@@ -358,10 +359,10 @@ def translate_im(img: array,
     return img_shifted
 
 
-def translate_ft(img_ft: np.ndarray,
+def translate_ft(img_ft: array,
                  fx: np.ndarray,
                  fy: np.ndarray,
-                 drs: list[float, float] = None) -> np.ndarray:
+                 drs: Optional[list[float, float]] = None) -> array:
     """
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
@@ -380,7 +381,6 @@ def translate_ft(img_ft: np.ndarray,
     n_{-m} x ... x n_{-3} x 2 where images along dimensions -m, ..., -3 are shifted in parallel
     :param fy:
     :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
-    :param use_gpu: perform Fourier transforms on GPU
 
     :return img_ft_shifted: shifted images, same size as img_ft
     """
@@ -396,6 +396,7 @@ def translate_ft(img_ft: np.ndarray,
     n_extra_dims = img_ft.ndim - 2
     ny, nx = img_ft.shape[-2:]
 
+    # todo: don't think I need to copy
     fx = xp.array(fx, copy=True)
     fy = xp.array(fy, copy=True)
 
