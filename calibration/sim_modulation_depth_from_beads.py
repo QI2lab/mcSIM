@@ -21,11 +21,11 @@ import localize_psf.affine as affine
 import localize_psf.rois as roi_fns
 import localize_psf.localize as localize
 
-
+use_gpu = False
 tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
 # data files
-data_dirs = [Path(r"G:\2022_07_07\07_sim_calibration_0.2um_beads")]
+data_dirs = [Path(r"I:\2022_07_07\07_sim_calibration_0.2um_beads")]
 
 # color channel information
 ignore_color = [False, False, False]
@@ -138,11 +138,18 @@ for d in data_dirs:
 
         # identify beads in first image
         coords, fit_results, imgs_filtered = \
-            localize.localize_beads(img_middle_wf, dxy, dz, min_fit_amp[ic], roi_size=roi_size,
-                                    filter_sigma_small=filters_small_sigma, filter_sigma_large=filters_large_sigma,
+            localize.localize_beads(img_middle_wf,
+                                    dxy,
+                                    dz,
+                                    min_fit_amp[ic],
+                                    roi_size=roi_size,
+                                    filter_sigma_small=filters_small_sigma,
+                                    filter_sigma_large=filters_large_sigma,
                                     min_spot_sep=min_spot_sep,
-                                    dist_boundary_min=min_boundary_distance, sigma_bounds=sigma_bounds,
-                                    fit_amp_min=min_fit_amp[ic])
+                                    dist_boundary_min=min_boundary_distance,
+                                    sigma_bounds=sigma_bounds,
+                                    fit_amp_min=min_fit_amp[ic],
+                                    use_gpu_fit=use_gpu)
 
         fps_temp = fit_results["fit_params"]
         ips_temp = fit_results["init_params"]
@@ -237,13 +244,37 @@ for d in data_dirs:
 
                         # do fitting
                         # todo: fitting on gpu not working ... not sure if the problem is the fixed parameters or something else
-                        fps[ic][:, it, iz, ia, ip, :], fit_states, chi_sqrs, niters, fit_t = \
-                            localize.fit_rois(img_rois, coords_rois, fps_start[ic], fixed_params=fixed_params, use_gpu=False) #, use_gpu=False #, debug=True)
+                        fit_results = localize.fit_rois(img_rois,
+                                                        coords_rois,
+                                                        fps_start[ic],
+                                                        fixed_params=fixed_params,
+                                                        use_gpu=use_gpu)
+
+                        fps[ic][:, it, iz, ia, ip, :] = fit_results["fit_params"]
+                        chi_sqrs = fit_results["chi_sqrs"]
+                        niters = fit_results["niters"]
+                        fit_states = fit_results["fit_states"]
+                        fit_states_key = fit_results["fit_states_key"]
+
+                        def get_key(code):
+                            msg = "message not found"
+                            for k, v in fit_states_key.items():
+                                if code == v:
+                                    msg = k
+                                    break
+                            return msg
 
                         for aaa in range(np.min([nrois_to_plot, len(fps_start[ic])])):
-                            localize.plot_gauss_roi(fps[ic][aaa, it, iz, ia, ip], rois[ic][aaa], imgs_now,
+                            str = f"fit iters={niters[aaa]:d}" \
+                                  f" with result '{get_key(fit_states[aaa]):s}', and " \
+                                  f"chi squared = {chi_sqrs[aaa]:.1g}"
+
+                            localize.plot_gauss_roi(fps[ic][aaa, it, iz, ia, ip],
+                                                    rois[ic][aaa],
+                                                    imgs_now,
                                                     coords,
                                                     init_params=fps_start[ic][aaa],
+                                                    string=str,
                                                     prefix=f"roi={aaa:d}_ic={ic:d}_iz={iz:d}_it={it:d}_ia={ia:d}_ip={ip:d}_",
                                                     save_dir=roi_save_dir)
 

@@ -1,22 +1,24 @@
 """
-Miscellaneous helper functions
+Miscellaneous helper functions. Many are written to run on the GPU if the array passed to them are CuPy arrays
 """
 
 import numpy as np
-import scipy.sparse as sp
+from typing import Union, Optional
 import localize_psf.rois as rois
 
 _cupy_available = True
 try:
     import cupy as cp
 except ImportError:
+    cp = np
     _cupy_available = False
 
+array = Union[np.ndarray, cp.ndarray]
 
 def azimuthal_avg(img: np.ndarray,
                   dist_grid: np.ndarray,
                   bin_edges: np.ndarray,
-                  weights: np.ndarray = None):
+                  weights: Optional[np.ndarray] = None):
     """
     Take azimuthal average of img. All points which have a dist_grid value lying
     between successive bin_edges will be averaged. Points are considered to lie within a bin
@@ -34,9 +36,11 @@ def azimuthal_avg(img: np.ndarray,
     :return masks:
     """
 
-    # there are many possible approaches for doing azimuthal averaging. Naive way: for each mask az_avg = np.mean(img[mask])
-    # also can do using scipy.ndimage.mean(img, labels=masks, index=np.arange(0, n_bins). scipy approach is slightly slower
-    # than np.bincount. Naive approach ~ factor of 2 slower.
+    # there are many possible approaches for doing azimuthal averaging.
+    # Naive way: for each mask az_avg = np.mean(img[mask])
+    # also can do using scipy.ndimage.mean(img, labels=masks, index=np.arange(0, n_bins)
+    # scipy approach is slightly slower than np.bincount.
+    # Naive approach ~ factor of 2 slower.
 
     if weights is None:
         weights = np.ones(img.shape)
@@ -131,248 +135,51 @@ def elliptical_grid(params: np.ndarray,
 
     if aspect_ratio < 1:
         if units == 'minor':
-            pass # if aspect ratio < 1 we are already in 'minor' units.
+            pass  # if aspect ratio < 1 we are already in 'minor' units.
         elif units == 'major':
             distance_grid = distance_grid / aspect_ratio
         elif units == 'mean':
             distance_grid = distance_grid / np.sqrt(aspect_ratio)
         else:
-            raise ValueError("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
+            raise ValueError(f"'units' must be 'minor', 'major', or 'mean', but was '{units:s}'")
     else:
         if units == 'minor':
             distance_grid = distance_grid / aspect_ratio
         elif units == 'major':
-            pass # if aspect ratio > 1 we are already in 'major' units
+            pass  # if aspect ratio > 1 we are already in 'major' units
         elif units == 'mean':
             distance_grid = distance_grid / np.sqrt(aspect_ratio)
         else:
-            raise ValueError("'units' must be 'minor', 'major', or 'mean', but was '%s'" % units)
+            raise ValueError(f"'units' must be 'minor', 'major', or 'mean', but was '{units:s}'")
 
     return distance_grid
 
 
-def bin(img: np.ndarray,
-        bin_size: list[int],
-        mode: str = 'sum') -> np.ndarray:
-    """
-    bin image by combining adjacent pixels
-
-    In 1D, this is a straightforward problem. The image is a vector,
-    I = (I[0], I[1], ..., I[nx-1])
-    and the binning operator is a nx/nx_bin x nx matrix
-    M = [[1, 1, ..., 1, 0, ..., 0, 0, ..., 0]
-         [0, 0, ..., 0, 1, ..., 1, 0, ..., 0]
-         ...
-         [0, ...,              0,  1, ..., 1]]
-    which has a tensor product structure, which is intuitive because we are operating on each run of x points independently.
-    M = identity(nx/nx_bin) \prod ones(1, nx_bin)
-    the binned image is obtained from matrix multiplication
-    Ib = M * I
-
-    In 2D, this situation is very similar. Here we take the image to be a row stacked vector
-    I = (I[0, 0], I[0, 1], ..., I[0, nx-1], I[1, 0], ..., I[ny-1, nx-1])
-    the binning operator is a (nx/nx_bin)*(ny/ny_bin) x nx*ny matrix which has a tensor product structure.
-
-    This time the binning matrix has dimension (nx/nx_bin * ny/ny_bin) x (nx * ny)
-    The top row starts with nx_bin 1's, then zero until position nx, and then ones until position nx + nx_bin.
-    This pattern continues, with nx_bin 1's starting at jj*nx for jj = 0,...,ny_bin-1. The second row follows a similar
-    pattern, but shifted by nx_bin pixels
-    M = [[1, ..., 1, 0, ..., 0, 1, ..., 1, 0,...]
-         [0, ..., 0, 1, ..., 1, ...
-    Again, this has tensor product structure. Notice that the first (nx/nx_bin) x nx entries are the same as the 1D case
-    and the whole matrix is constructed from blocks of these.
-    M = [identity(ny/ny_bin) \prod ones(1, ny_bin)] \prod  [identity(nx/nx_bin) \prod ones(1, nx_bin)]
-
-    Again, Ib = M*I
-
-    Probably this pattern generalizes to higher dimensions!
-
-    :param img: image to be binned
-    :param bin_size: [ny_bin, nx_bin] where these must evenly divide the size of the image
-    :param mode: either 'sum' or 'mean'
-    :return:
-    """
-    # todo: could also add ability to bin in this direction. Maybe could simplify function by allowing binning in
-    # arbitrary dimension (one mode), with another mode to bin only certain dimensions and leave others untouched.
-    # actually probably don't need to distinguish modes, this can be done by looking at bin_size.
-    # still may need different implementation for the cases, as no reason to flatten entire array to vector if not
-    # binning. But maybe this is not really a performance hit anyways with the sparse matrices?
-
-    # if three dimensional, bin each image
-    if img.ndim == 3:
-        ny_bin, nx_bin = bin_size
-        nz, ny, nx = img.shape
-
-        # size of image after binning
-        nx_s = int(nx / nx_bin)
-        ny_s = int(ny / ny_bin)
-
-        m_binned = np.zeros((nz, ny_s, nx_s))
-        for ii in range(nz):
-            m_binned[ii, :] = bin(img[ii], bin_size, mode=mode)
-
-    # bin 2D image
-    elif img.ndim == 2:
-        ny_bin, nx_bin = bin_size
-        ny, nx = img.shape
-
-        if ny % ny_bin != 0 or nx % nx_bin != 0:
-            raise ValueError('bin size must evenly divide image size.')
-
-        # size of image after binning
-        nx_s = int(nx/nx_bin)
-        ny_s = int(ny/ny_bin)
-
-        # matrix which performs binning operation on row stacked matrix
-        # need to use sparse matrices to bin even moderately sized images
-        bin_mat_x = sp.kron(sp.identity(nx_s), np.ones((1, nx_bin)))
-        bin_mat_y = sp.kron(sp.identity(ny_s), np.ones((1, ny_bin)))
-        bin_mat_xy = sp.kron(bin_mat_y, bin_mat_x)
-
-        # row stack img. img.ravel() = [img[0, 0], img[0, 1], ..., img[0, nx-1], img[1, 0], ...]
-        m_binned = bin_mat_xy.dot(img.ravel()).reshape([ny_s, nx_s])
-
-        if mode == 'sum':
-            pass
-        elif mode == 'mean':
-            m_binned = m_binned / (nx_bin * ny_bin)
-        else:
-            raise ValueError("mode must be either 'sum' or 'mean' but was '%s'" % mode)
-
-    # 1D "image"
-    elif img.ndim == 1:
-
-        nx_bin = bin_size[0]
-        nx = img.size
-
-        if nx % nx_bin != 0:
-            raise ValueError('bin size must evenly divide image size.')
-        nx_s = int(nx / nx_bin)
-
-        bin_mat_x = sp.kron(sp.identity(nx_s), np.ones((1, nx_bin)))
-        m_binned = bin_mat_x.dot(img)
-
-        if mode == 'sum':
-            pass
-        elif mode == 'mean':
-            m_binned = m_binned / nx_bin
-        else:
-            raise ValueError("mode must be either 'sum' or 'mean' but was '%s'" % mode)
-
-    else:
-        raise ValueError("Only 1D, 2D, or 3D arrays allowed")
-
-    return m_binned
-
-
-def resample_bandlimited_ft(img_ft: np.ndarray,
-                            mag: tuple[int] = (2, 2)):
-    """
-    Expand image by factors of mx and my while keeping Fourier content constant.
-
-    Let the initial (real space) array be a_{ij} and the final be b_{ij}.
-    If a has odd sizes, b_{2i-1,2j-1} = a_{i,j}
-    If a has even sizes, b_{2i, 2j} = a_{i,j}
-    This choice is dictated by the ``natural'' FFT position values, and it ensures that the zero positions of b and a
-    give the same value.
-
-    NOTE: the expanded FT function is normalized so that the realspace values will match after an inverse FFT,
-    thus the corresponding Fourier space components will have the relationship b_k = a_k * b.size / a.size
-
-    :param img_ft: frequency space representation of image, arranged according to the natural FFT representation.
-    e.g. img_ft = fftshift(fft2(ifftshift(img))).
-    :param mag: (my, mx)
-
-    :return img_ft_expanded:
-    """
-    # todo: add axes argument, so will only resample some axes
-    # todo: move to sim_reconstruction.py
-
-    if isinstance(mag, int):
-        mag = [mag]
-
-    if not np.all([isinstance(m, int) for m in mag]):
-        raise ValueError("mx and my must both be integers")
-
-    if np.all([m == 1 for m in mag]):
-        return img_ft
-
-    if not np.all([m == 2 for m in mag]):
-        raise NotImplementedError("not implemented for any expansion except factor of 2")
-
-    # new method, works for arbitrary sized array
-    # don't need frequencies, but useful for checking using proper points in arrays
-    # frq_old = [get_fft_frqs(n) for n in img_ft.shape]
-    # frq_new = [get_fft_frqs(n * m, dt=1/m) for n, m in zip(img_ft.shape, mag)]
-    # center frequency for FFT of odd or even size is at position n//2
-    ind_start = [(m * n) // 2 - n // 2 for n, m in zip(img_ft.shape, mag)]
-
-    slice_obj = tuple([slice(istart, istart + n, 1) for istart, n in zip(ind_start, img_ft.shape)])
-    img_ft_exp = np.zeros([n * m for n, m in zip(img_ft.shape, mag)], dtype=complex)
-    img_ft_exp[slice_obj] = img_ft
-
-    # if initial array was even it had an unpaired negative frequency, but its pair is present in the larger array
-    # this negative frequency was at -N/2, so this enters the IFT for a_n as a_(k=-N/2) * exp(2*np.pi*i * -n/2)
-    # not that exp(2*np.pi*i * -k/2) = exp(2*np.pi*i * k/2), so this missing frequency doesn't matter for a
-    # however, when we construct b, in the IFT for b_n we now have b_(k=-N/2) * exp(2*np.pi*i * -n/4)
-    # Since we are supposing N is even, we must satisfy
-    # b_(2n) = a_n -> b_(k=-L/2) + b_(k=L/2) = a_(k=-L/2)
-    # Further, we want to ensure that b is real if a is real, which implies
-    # b_(k=-N/2) = 0.5 * a(k=-N/2)
-    # b_(k= N/2) = 0.5 * a(k=-N/2)
-    # no complex conjugate is required for b_(k=N/2). If a_n is real, then a(k=-N/2) must also be real.
-    #
-    # consider the 2D case. We have an unfamiliar condition required to make a real
-    # a_(ky=-N/2, kx) = conj(a_(ky=-N/2, -kx))
-    # recall -N/2 <-> N/2 to make this more familiar
-    # for b_(n, m) we have b_(ky=-N/2, kx) * exp(2*np.pi*i * -n/4) * exp(2*np.pi*i * kx*m/(fx*N))
-    # to ensure all b_(n, m) are real we must enforce
-    # b_(ky=N/2, kx) = conj(b(ky=-N/2, -kx))
-    # b_(ky, kx=N/2) = conj(b(-ky, kx=-N/2))
-    # on the other hand, to enforce b_(2n, 2m) = a_(n, m)
-    # a(ky=-N/2,  kx) = b(ky=-N/2,  kx) + b(ky=N/2,  kx)
-    # a(ky=-N/2, -kx) = b(ky=-N/2, -kx) + b(ky=N/2, -kx) = b^*(ky=-N/2, kx) + b^*(ky=N/2, kx)
-    # but this second equation doesn't give us any more information than the real condition above
-    # the easiest way to do this is...
-    # b(ky=+/- N/2, kx) = 0.5 * a(ky=-N/2, kx)
-    # for the edges, the conditions are
-    # b(ky=+/- N/2, kx=+/- N/2) = 0.25 * a(ky=kx=-N/2)
-    # b(ky=+/- N/2, kx=-/+ N/2) = 0.25 * a(ky=kx=-N/2)
-
-    for ii in range(img_ft.ndim):
-        slice_obj = [slice(None, None)] * img_ft.ndim
-        slice_obj[ii] = slice(ind_start[ii], ind_start[ii] + 1)
-
-        val = img_ft_exp[tuple(slice_obj)]
-        img_ft_exp[tuple(slice_obj)] *= 0.5
-
-        slice_obj[ii] = slice(ind_start[ii] + img_ft.shape[ii], ind_start[ii] + img_ft.shape[ii] + 1)
-        img_ft_exp[tuple(slice_obj)] = val
-
-    # correct normalization so real-space values of expanded array match real-space values of initial array
-    img_ft_exp = np.prod(mag) * img_ft_exp
-
-    return img_ft_exp
-
-
 # geometry tools
-def get_peak_value(img: np.ndarray,
-                   x: np.ndarray,
-                   y: np.ndarray,
+def get_peak_value(img: array,
+                   x: array,
+                   y: array,
                    peak_coord: np.ndarray,
-                   peak_pixel_size: int = 1):
+                   peak_pixel_size: int = 1) -> array:
     """
     Estimate value for a peak that is not precisely aligned to the pixel grid by performing a weighted average
     over neighboring pixels, based on how much these overlap with a rectangular area surrounding the peak.
     The size of this rectangular area is set by peak_pixel_size, given in integer multiples of a pixel.
 
-    :param img: image containing peak
-    :param x: x-coordinates of image
-    :param y: y-coordinates of image
-    :param peak_coord: peak coordinate [px, py]
+    :param img: array of size n0 x n1 ... x ny x nx. This function operates on the last two dimensions of the array
+    :param x: 1D array representing x-coordinates of images.
+    :param y: 1D array representing y-coordinates of image
+    :param peak_coord: peak coordinates [px, py]
     :param peak_pixel_size: number of pixels (along each direction) to sum to get peak value
+
     :return peak_value: estimated value of the peak
     """
+
+    if isinstance(img, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
     px, py = peak_coord
 
     # frequency coordinates
@@ -386,100 +193,72 @@ def get_peak_value(img: np.ndarray,
 
     # get ROI around pixel for weighted averaging
     roi = rois.get_centered_roi([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])
-    img_roi = img[roi[0]:roi[1], roi[2]:roi[3]]
-    xx_roi = xx[roi[0]:roi[1], roi[2]:roi[3]]
-    yy_roi = yy[roi[0]:roi[1], roi[2]:roi[3]]
+    img_roi = rois.cut_roi(roi, img)
 
-    # estimate value from weighted average of pixels in ROI, based on overlap with pixel area centered at [px, py]
-    weights = np.zeros(xx_roi.shape)
-    for ii in range(xx_roi.shape[0]):
-        for jj in range(xx_roi.shape[1]):
-            weights[ii, jj] = pixel_overlap([py, px], [yy_roi[ii, jj], xx_roi[ii, jj]],
-                                            [peak_pixel_size * dy, peak_pixel_size * dx], [dy, dx]) / (dx * dy)
+    xx_roi = xp.expand_dims(rois.cut_roi(roi, xx), axis=tuple(range(img_roi.ndim - 2)))
+    yy_roi = xp.expand_dims(rois.cut_roi(roi, yy), axis=tuple(range(img_roi.ndim - 2)))
 
-    peak_value = np.average(img_roi, weights=weights)
+
+    weights = pixel_overlap(xp.array([[py, px]]),
+                            xp.stack((yy_roi.ravel(), xx_roi.ravel()), axis=1),
+                            [peak_pixel_size * dy, peak_pixel_size * dx],
+                            [dy, dx]) / (dx * dy)
+
+    _, weights = xp.broadcast_arrays(img_roi, weights.reshape(xx_roi.shape))
+
+    peak_value = xp.average(img_roi, weights=weights, axis=(-1, -2))
 
     return peak_value
 
 
-def pixel_overlap(centers1: np.ndarray,
-                  centers2: np.ndarray,
-                  lens1: np.ndarray,
-                  lens2: np.ndarray=None):
+def pixel_overlap(centers1: array,
+                  centers2: array,
+                  lens1: list[float],
+                  lens2: Optional[list[float]] = None) -> array:
     """
     Calculate overlap of two nd-square pixels. The pixels go from coordinates
     centers[ii] - 0.5 * lens[ii] to centers[ii] + 0.5 * lens[ii].
 
-    :param centers1: list of coordinates defining centers of first pixel along each dimension
-    :param centers2: list of coordinates defining centers of second pixel along each dimension
+    :param centers1: Array of size ncenters x ndims. coordinates define centers of first pixel along each dimension.
+    :param centers2: Broadcastable to same size as centers1
     :param lens1: list of pixel 1 sizes along each dimension
     :param lens2: list of pixel 2 sizes along each dimension
     :return overlaps: overlap area of pixels
     """
 
-    centers1 = np.atleast_1d(centers1).ravel()
-    centers2 = np.atleast_1d(centers2).ravel()
-    lens1 = np.atleast_1d(lens1).ravel()
+    if isinstance(centers1, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
+    centers1 = xp.array(centers1)
+    centers2 = xp.array(centers2)
+    centers1, centers2 = xp.broadcast_arrays(centers1, centers2)
+
+    lens1 = np.expand_dims(xp.array(lens1), axis=tuple(range(centers1.ndim - 1)))
 
     if lens2 is None:
         lens2 = lens1
 
-    lens2 = np.atleast_1d(lens2).ravel()
+    lens2 = xp.array(lens2)
 
-    overlaps = []
-    for c1, c2, l1, l2 in zip(centers1, centers2, lens1, lens2):
-        if np.abs(c1 - c2) >= 0.5*(l1 + l2):
-            overlaps.append(0)
-        else:
-            # ensure whichever pixel has leftmost edge is c1
-            if (c1 - 0.5 * l1) > (c2 - 0.5 * l2):
-                c1, c2 = c2, c1
-                l1, l2 = l2, l1
-            # by construction left start of overlap is c2 - 0.5*l2
-            # end is either c2 + 0.5 * l2 OR c1 + 0.5 * l1
-            lstart = c2 - 0.5 * l2
-            lend = np.min([c2 + 0.5 * l2, c1 + 0.5 * l1])
-            overlaps.append(np.max([lend - lstart, 0]))
+    # compute overlaps
+    lower_edge = xp.max(xp.stack((centers1 - 0.5 * lens1, centers2 - 0.5 * lens2), axis=0), axis=0)
+    upper_edge = xp.min(xp.stack((centers1 + 0.5 * lens1, centers2 + 0.5 * lens2), axis=0), axis=0)
+    overlaps = upper_edge - lower_edge
+    overlaps[overlaps < 0] = 0
+    volume_overlap = xp.prod(overlaps, axis=-1)
 
-    return np.prod(overlaps)
-
-
-# working with regions of interest
-def get_extent(y: np.ndarray,
-               x: np.ndarray,
-               origin: str = "lower") -> list[float]:
-    """
-    Get extent required for plotting arrays using imshow in real coordinates. The resulting list can be
-    passed directly to imshow using the extent keyword.
-
-    Here we assume the values y and x are equally spaced and describe the center coordinates of each pixel
-
-    :param y: equally spaced y-coordinates
-    :param x: equally spaced x-coordinates
-    :param origin: "lower" or "upper" depending on if the y-origin is at the lower or upper edge of the image
-    :return extent: [xstart, xend, ystart, yend]
-    """
-    dy = y[1] - y[0]
-    dx = x[1] - x[0]
-    if origin == "lower":
-        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx,
-                  y[-1] + 0.5 * dy, y[0] - 0.5 * dy]
-    elif origin == "upper":
-        extent = [x[0] - 0.5 * dx, x[-1] + 0.5 * dx,
-                  y[0] - 0.5 * dy, y[-1] + 0.5 * dy]
-    else:
-        raise ValueError("origin must be 'lower' or 'upper' but was '%s'" % origin)
-
-    return extent
+    return volume_overlap
 
 
 # translating images
-def translate_pix(img: np.ndarray,
+def translate_pix(img: array,
                   shifts: tuple[float],
                   dr: tuple[float] = (1, 1),
                   axes: tuple[int] = (-2, -1),
                   wrap: bool = True,
-                  pad_val: float = 0):
+                  pad_val: float = 0) -> (array, list[int]):
     """
     Translate image by given number of pixels with several different boundary conditions. If the shifts are sx, sy,
     then the image will be shifted by sx/dx and sy/dy. If these are not integers, they will be rounded to the closest
@@ -500,8 +279,13 @@ def translate_pix(img: np.ndarray,
     :return img_shifted, pix_shifts:
     """
 
+    if isinstance(img, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
     # make sure axes positive
-    axes = np.mod(axes, img.ndim)
+    axes = np.mod(np.array(axes), img.ndim)
 
     # convert pixel shifts to integers
     shifts_pix = np.array([int(np.round(-s / d)) for s, d in zip(shifts, dr)])
@@ -510,7 +294,7 @@ def translate_pix(img: np.ndarray,
     if np.any(shifts_pix != 0):
         # roll arrays. If wrap is True, this is all we need to do
         for s, axis in zip(shifts_pix, axes):
-            img = np.roll(img, s, axis=axis)
+            img = xp.roll(img, s, axis=axis)
 
         if wrap:
             pass
@@ -529,28 +313,27 @@ def translate_pix(img: np.ndarray,
     return img, shifts_pix
 
 
-def translate_im(img: np.ndarray,
+def translate_im(img: array,
                  shift: tuple[float],
-                 drs: tuple[float] = (1, 1),
-                 use_gpu: bool = _cupy_available) -> np.ndarray:
+                 drs: tuple[float] = (1, 1)) -> array:
     """
     Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
 
     e.g. suppose the pixel spacing dx = 0.05 um and we want to shift the image by 0.0366 um,
     then dx = 0.05 and shift = [0, 0.0366]
 
-    :param img: NumPy array, size ny x nx
+    :param img: NumPy or CuPy array, size ny x nx. If CuPy array will run on GPU
     :param shift: [yo, xo], in same units as pixels
     :param drs: (dy, dx) pixel size of image along y- and x-directions
-    :param use_gpu: run on GPU using CuPy. NOTE: result will be returned as a CuPy array and caller must
-    convert to NumPy array with get() method or etc.
     :return img_shifted:
     """
+
+    # todo: use same approach as translate_ft() to make this work with nD arrays only operating along last two dims
 
     if img.ndim != 2:
         raise ValueError("img must be 2D")
 
-    if use_gpu:
+    if isinstance(img, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -576,11 +359,10 @@ def translate_im(img: np.ndarray,
     return img_shifted
 
 
-def translate_ft(img_ft: np.ndarray,
+def translate_ft(img_ft: array,
                  fx: np.ndarray,
                  fy: np.ndarray,
-                 drs: list[float, float] = None,
-                 use_gpu: bool = _cupy_available) -> np.ndarray:
+                 drs: Optional[list[float, float]] = None) -> array:
     """
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
@@ -591,19 +373,19 @@ def translate_ft(img_ft: np.ndarray,
 
     If an array with more than 2 dimensions is passed in, then the shift will be applied to the last two dimensions
 
-    :param img_ft: array representing the fourier transform of an image with frequency origin centered as if using fftshift.
-    Shape n1 x n2 x ... x n_{-2} x n_{-1}. Shifting is done along the last two axes.
+    :param img_ft: NumPy or CuPy array representing the fourier transform of an image with
+     frequency origin centered as if using fftshift. Shape n1 x n2 x ... x n_{-2} x n_{-1}.
+      Shifting is done along the last two axes. If this is a CuPy array, routine will be run on the GPU
     :param fx: array of x-shift frequencies
-    fx and fy should either be broadcastable to the same szie as img_ft, or they should be of size
+    fx and fy should either be broadcastable to the same size as img_ft, or they should be of size
     n_{-m} x ... x n_{-3} x 2 where images along dimensions -m, ..., -3 are shifted in parallel
     :param fy:
     :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
-    :param use_gpu: perform Fourier transforms on GPU
 
     :return img_ft_shifted: shifted images, same size as img_ft
     """
 
-    if use_gpu:
+    if isinstance(img_ft, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -614,6 +396,7 @@ def translate_ft(img_ft: np.ndarray,
     n_extra_dims = img_ft.ndim - 2
     ny, nx = img_ft.shape[-2:]
 
+    # todo: don't think I need to copy
     fx = xp.array(fx, copy=True)
     fy = xp.array(fy, copy=True)
 
@@ -671,30 +454,3 @@ def translate_ft(img_ft: np.ndarray,
                                       axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
         return img_ft_shifted
-
-
-def conj_transpose_fft(img_ft: np.ndarray,
-                       axes: tuple[int] = (-1, -2)) -> np.ndarray:
-    """
-    Given img_ft(f), return a new array
-    img_new_ft(f) := conj(img_ft(-f))
-
-    :param img_ft:
-    :param axes: axes on which to perform the transformation
-    """
-
-    # convert axes to positive number
-    axes = np.mod(axes, img_ft.ndim)
-
-    # flip and conjugate
-    img_ft_ct = np.flip(np.conj(img_ft), axis=axes)
-
-    # for odd FFT size, can simply flip the array to take f -> -f
-    # for even FFT size, have on more negative frequency than positive frequency component.
-    # by flipping array, have put the negative frequency components on the wrong side of the array
-    # (i.e. where the positive frequency components are)
-    # so must roll array to put them back on the right side
-    to_roll = [a for a in axes if np.mod(img_ft.shape[a], 2) == 0]
-    img_ft_ct = np.roll(img_ft_ct, shift=[1] * len(to_roll), axis=to_roll)
-
-    return img_ft_ct

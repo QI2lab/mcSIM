@@ -10,11 +10,13 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("TkAgg")
 import mcsim.analysis.sim_reconstruction as sim
-import localize_psf.fit_psf as psf
-import localize_psf.affine as affine
-import localize_psf.rois as rois
+from localize_psf import fit_psf, affine, rois
 
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
+root_dir = Path("data")
+fname_raw_data = root_dir / "argosim_line_pairs.tif"
+
+use_gpu = False
 
 # ############################################
 # load image data, channel/angle/phase
@@ -24,7 +26,7 @@ nangles = 3
 nphases = 3
 nx = 2048
 ny = 2048
-imgs = tifffile.imread(Path("data", "argosim_line_pairs.tif")).reshape([ncolors, nangles, nphases, ny, nx])
+imgs = tifffile.imread(fname_raw_data).reshape([ncolors, nangles, nphases, ny, nx])
 
 # ############################################
 # set ROI to reconstruction, [cy, cx]
@@ -44,19 +46,19 @@ excitation_wavelengths = [0.465, 0.532]
 # ############################################
 # load OTF data
 # ############################################
-otf_data_path = Path("data", "2020_05_19_otf_fit_blue.pkl")
+otf_data_path = root_dir / "2020_05_19_otf_fit_blue.pkl"
 
 with open(otf_data_path, 'rb') as f:
     otf_data = pickle.load(f)
 otf_p = otf_data['fit_params']
 
-def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_p[0]) ** 2) * psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
+def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_p[0]) ** 2) * fit_psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
 
 # ############################################
 # load affine transformations from DMD to camera
 # ############################################
-affine_fnames = [Path("data", "2021-02-03_09;43;06_affine_xform_blue_z=0.pkl"),
-                 Path("data", "2021-02-03_09;43;06_affine_xform_green_z=0.pkl")]
+affine_fnames = [root_dir / "2021-02-03_09;43;06_affine_xform_blue_z=0.pkl",
+                 root_dir / "2021-02-03_09;43;06_affine_xform_green_z=0.pkl"]
 
 affine_xforms = []
 for p in affine_fnames:
@@ -64,10 +66,10 @@ for p in affine_fnames:
         affine_xforms.append(pickle.load(f)['affine_xform'])
 
 # ############################################
-# load DMD patterns frequency and phase data
+# load DMD pattern information
 # ############################################
-dmd_pattern_data_fpath = [Path("data", "sim_patterns_period=6.01_nangles=3.pkl"),
-                          Path("data", "sim_patterns_period=6.82_nangles=3.pkl")]
+dmd_pattern_data_fpath = [root_dir / "sim_patterns_period=6.01_nangles=3.pkl",
+                          root_dir / "sim_patterns_period=6.82_nangles=3.pkl"]
 
 frqs_dmd = np.zeros((2, 3, 2))
 phases_dmd = np.zeros((ncolors, nangles, nphases))
@@ -84,8 +86,11 @@ for kk in range(ncolors):
     dmd_nx = pattern_data['nx']
     dmd_ny = pattern_data['ny']
 
+# ############################################
+# do SIM reconstruction for each color
+# ############################################
 for kk in range(ncolors):
-    # otf matrix
+    # construct otf matrix
     fmax = 1 / (0.5 * emission_wavelengths[kk] / na)
     fx = fft.fftshift(fft.fftfreq(nx_roi, pixel_size))
     fy = fft.fftshift(fft.fftfreq(ny_roi, pixel_size))
@@ -100,20 +105,26 @@ for kk in range(ncolors):
     for ii in range(nangles):
         for jj in range(nphases):
             # estimate frequencies based on affine_xform
-            frqs_guess[ii, 0], frqs_guess[ii, 1], phases_guess[ii, jj] = \
-                affine.xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0], frqs_dmd[kk, ii, 1],
-                                                 phases_dmd[kk, ii, jj], [dmd_ny, dmd_nx], roi, xform)
+            frqs_guess[ii, 0],\
+            frqs_guess[ii, 1],\
+            phases_guess[ii, jj] = \
+                affine.xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0],
+                                                 frqs_dmd[kk, ii, 1],
+                                                 phases_dmd[kk, ii, jj],
+                                                 [dmd_ny, dmd_nx],
+                                                 roi,
+                                                 xform)
 
-    # convert from 1/mirrors to 1/um
+    # convert frequencies from 1/mirrors to 1/um
     frqs_guess = frqs_guess / pixel_size
 
-
+    # initialize SIM reconstruction
     imgset = sim.SimImageSet({"pixel_size": pixel_size, "na": na, "wavelength": emission_wavelengths[kk]},
                              imgs[kk, :, :, roi[0]:roi[1], roi[2]:roi[3]],
                              frq_estimation_mode="band-correlation",
                              frq_guess=frqs_guess,
                              phases_guess=phases_guess,
-                             phase_estimation_mode="wicker-iterative", #,
+                             phase_estimation_mode="wicker-iterative",
                              combine_bands_mode="fairSIM",
                              fmax_exclude_band0=0.4,
                              normalize_histograms=False,
@@ -122,10 +133,13 @@ for kk in range(ncolors):
                              background=100,
                              gain=2,
                              min_p2nr=0.5,
-                             save_dir="data/%s_sim_reconstruction_%.0fnm" % (tstamp, excitation_wavelengths[kk] * 1e3),
+                             use_gpu=use_gpu,
+                             save_dir=root_dir / f"{tstamp:s}_sim_reconstruction_{excitation_wavelengths[kk] * 1e3:.0f}nm",
                              interactive_plotting=False,
                              figsize=(22.85, 10))
+    # run reconstruction
     imgset.reconstruct()
+    # plot results
     imgset.plot_figs()
+    # save reconstruction results
     imgset.save_imgs()
-    imgset.save_result()

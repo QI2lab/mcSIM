@@ -12,13 +12,18 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-import localize_psf.affine as affine
-import localize_psf.rois as rois
-import localize_psf.fit as fit
+from localize_psf import affine, rois, fit
 
 # helper functions for dealing with an array of dots projected on a flat background
-def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_squared_relative_max=1.5,
-                      max_position_err=0.1, img_sd=None, debug=False):
+def fit_pattern_peaks(img,
+                      centers,
+                      centers_init,
+                      indices_init,
+                      roi_size,
+                      chi_squared_relative_max=1.5,
+                      max_position_err=0.1,
+                      img_sd=None,
+                      debug: bool = False):
     """
     Fit peak of fluorescence pattern
 
@@ -223,7 +228,9 @@ def fit_pattern_peaks(img, centers, centers_init, indices_init, roi_size, chi_sq
     return fps, chisqs, successful_fits
 
 
-def get_affine_xform(fps, succesful_fits, dmd_centers):
+def get_affine_xform(fps,
+                     succesful_fits,
+                     dmd_centers):
     """
     Determine affine transformation from DMD to image space using the results of fit_pattern_peaks
     :param fps: fit parameters
@@ -251,8 +258,15 @@ def get_affine_xform(fps, succesful_fits, dmd_centers):
     return affine_xform
 
 
-def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
-                        affine_xform, options, **kwargs):
+def plot_affine_summary(img,
+                        mask,
+                        fps,
+                        chisqs,
+                        succesful_fits,
+                        dmd_centers,
+                        affine_xform,
+                        options,
+                        **kwargs):
     """
     Plot results of DMD affine transformation fitting using results of fit_pattern_peaks and get_affine_xform
 
@@ -431,9 +445,18 @@ def plot_affine_summary(img, mask, fps, chisqs, succesful_fits, dmd_centers,
 
 
 # main function for estimating affine transform
-def estimate_xform(img, mask, pattern_centers, centers_init, indices_init, options, roi_size=25,
-                   export_fname="affine_xform", plot=True, export_dir=None,
-                   figsize=(16, 12), **kwargs):
+def estimate_xform(img,
+                   mask,
+                   pattern_centers,
+                   centers_init,
+                   indices_init,
+                   options,
+                   roi_size: int = 25,
+                   export_fname: str = "affine_xform",
+                   plot: bool = True,
+                   export_dir=None,
+                   figsize=(16, 12),
+                   **kwargs):
     """
     Estimate affine transformation from DMD space to camera image space from an image.
 

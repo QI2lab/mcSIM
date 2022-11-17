@@ -4,6 +4,7 @@ Tools for reconstructiong optical diffraction tomography (ODT) data
 import time
 import datetime
 from pathlib import Path
+from typing import Union, Optional
 import numpy as np
 from numpy import fft
 import scipy.sparse as sp
@@ -47,9 +48,9 @@ class tomography:
                  dxy: float,
                  reference_frq_guess,
                  hologram_frqs_guess,
-                 imgs_raw_bg=None,
-                 phase_offsets=None,
-                 axes_names: list[str] = None):
+                 imgs_raw_bg: Optional[np.ndarray] = None,
+                 phase_offsets: Optional[np.ndarray] = None,
+                 axes_names: Optional[list[str]] = None):
         """
         Object to reconstruct optical diffraction tomography data
 
@@ -123,9 +124,9 @@ class tomography:
 
 
     def estimate_hologram_frqs(self,
-                               roi_size_pix,
-                               roi_size_pix_small=5,
-                               save_dir=None):
+                               roi_size_pix: int,
+                               roi_size_pix_small: int = 5,
+                               save_dir: Optional[str] = None):
         """
         Estimate hologram frequencies from raw images
         @param save_dir:
@@ -194,14 +195,17 @@ class tomography:
             init_params = [np.max(np.abs(ft2)),
                            fx_ip_guess,
                            fy_ip_guess,
-                           self.dfx * 3, self.dfy * 3, 0, 0]
+                           self.dfx * 3,
+                           self.dfy * 3,
+                           0,
+                           0]
             fixed_params = [False, False, False, False, False, False, True]
 
-            rgauss, fit_fn = fit.fit_gauss2d(np.abs(ft2),
-                                             init_params=init_params,
-                                             fixed_params=fixed_params,
-                                             xx=fxfx_roi,
-                                             yy=fyfy_roi)
+            rgauss = fit.gauss2dm().fit(np.abs(ft2),
+                                        (fyfy_roi, fxfx_roi),
+                                        init_params=init_params,
+                                        fixed_params=fixed_params,
+                                        guess_bounds=True)
 
             frq_holo = np.expand_dims(rgauss["fit_params"][1:3],
                                       axis=list(range(fx_guess.ndim)))
@@ -277,8 +281,8 @@ class tomography:
 
 
     def estimate_reference_frq(self,
-                               mode="fit",
-                               save_dir=None):
+                               mode: str = "fit",
+                               save_dir: Optional[str] = None):
         """
         Estimate hologram reference frequency
         @param mode: if "fit" fit the residual speckle pattern to try and estimate the reference frequency.
@@ -337,10 +341,10 @@ class tomography:
 
 
     def unmix_holograms(self,
-                        bg_average_axes,
-                        mask=None,
+                        bg_average_axes: tuple[int],
+                        mask: Optional[np.ndarray] = None,
                         fit_phases: bool = False,
-                        apodization=None,
+                        apodization: Optional[np.ndarray] = None,
                         use_gpu: bool = False):
         """
         Unmix and preprocess holograms
@@ -448,9 +452,16 @@ class tomography:
             phase_offsets_bg = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
 
         self.phase_offsets_bg = phase_offsets_bg
-        self.holograms_ft_bg = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
-                                       axis=bg_average_axes,
-                                       keepdims=True)
+        # self.holograms_ft_bg = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+        #                                axis=bg_average_axes,
+        #                                keepdims=True)
+
+        with ProgressBar():
+            holograms_ft_bg_comp = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+                                           axis=bg_average_axes,
+                                           keepdims=True).compute()
+
+        self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp, chunks=holograms_ft_bg.chunksize)
 
         # #########################
         # determine phase offsets
@@ -490,8 +501,8 @@ class tomography:
 
 
     def set_scattered_field(self,
-                            scattered_field_regularization,
-                            mask=None,
+                            scattered_field_regularization: float,
+                            mask: Optional[np.ndarray] = None,
                             use_gpu: bool = False):
         """
         The scattered field is only used directly in the Born reconstruction.
@@ -546,7 +557,7 @@ class tomography:
                            dxy_sampling_factor: float = 1.,
                            dz_sampling_factor: float = 1.,
                            z_fov: float = 20,
-                           mask=None,
+                           mask: Optional[np.ndarray] = None,
                            tau_tv: float = 0,
                            tau_lasso: float = 0,
                            use_imaginary_constraint: bool = True,
@@ -578,7 +589,6 @@ class tomography:
         # todo: use this later
         beam_frqs_da = da.from_array(self.get_beam_frqs(), chunks=(1,) * (self.hologram_frqs.ndim - 3) + (self.npatterns, 1, 1, 3))
 
-        # rechunk erecon_ft since must operate on all patterns at once
         # get sampling so can determine new chunk sizes
         drs_v, v_size = get_reconstruction_sampling(self.no,
                                                     self.na_detection,
@@ -597,6 +607,7 @@ class tomography:
         # compute scattered field
         # ############################
 
+        # rechunk efields since must operate on all patterns at once to get 3D volume
         if mode == "born":
             self.set_scattered_field(scattered_field_regularization=scattered_field_regularization, mask=mask)
             eraw_start = da.rechunk(self.efield_scattered_ft, chunks=new_chunks)
@@ -780,9 +791,9 @@ class tomography:
 
 
     def plot_interferograms(self,
-                            nmax_to_plot,
-                            save_dir=None,
-                            scattered_field_regularization=10):
+                            nmax_to_plot: int,
+                            save_dir: Optional[str] = None,
+                            scattered_field_regularization: float = 10.):
         """
         Plot nmax interferograms
 
@@ -846,7 +857,9 @@ class tomography:
             dask.compute(*results_interferograms)
 
 
-    def show_image(self, index, figsize=(24, 10)):
+    def show_image(self,
+                   index,
+                   figsize=(24, 10)):
         """
         display raw image
         @param index:
@@ -903,16 +916,16 @@ def soft_threshold(t, x):
 
 def grad_descent(v_ft_start,
                  e_measured_ft,
-                 model,
-                 step,
+                 model: str,
+                 step: float,
                  niters: int = 100,
                  use_fista: bool = True,
                  use_gpu: bool = True,
-                 tau_tv: float = 0,
-                 tau_lasso: float = 0,
+                 tau_tv: float = 0.,
+                 tau_lasso: float = 0.,
                  use_imaginary_constraint: bool = True,
                  use_real_constraint: bool = False,
-                 masks=None,
+                 masks: Optional[np.ndarray] = None,
                  debug: bool = False):
     """
     Perform gradient descent using a linear model
@@ -1211,7 +1224,7 @@ def angles2frqs(no: float,
 
 def get_global_phase_shifts(imgs,
                             ref_imgs,
-                            thresh=None,
+                            thresh: Optional[float] = None,
                             use_gpu: bool = False):
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
@@ -1220,6 +1233,7 @@ def get_global_phase_shifts(imgs,
     @param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
     @param ref_imgs: n_{-m} x ... x n_{-2} x n_{-1} array
     @param thresh: only consider points in images where both abs(imgs) and abs(ref_imgs) > thresh
+    @param use_gpu:
     @return phase_shifts:
     """
 
@@ -1227,11 +1241,6 @@ def get_global_phase_shifts(imgs,
         xp = cp
     else:
         xp = np
-
-    # xx, yy = xp.meshgrid(xp.arange(imgs.shape[-1]),
-    #                      xp.arange(imgs.shape[-2]))
-    # xx = xp.expand_dims(xx, axis=tuple(range(imgs.ndim - 2)))
-    # yy = xp.expand_dims(yy, axis=tuple(range(imgs.ndim - 2)))
 
     # broadcast images and references images to same shapes
     # imgs, ref_imgs, xx, yy = xp.broadcast_arrays(imgs, ref_imgs, xx, yy)
@@ -1268,6 +1277,7 @@ def get_n(scattering_pot,
     @param scattering_pot: F(r) = - (2*np.pi / lambda)^2 * (n(r)^2 - no^2)
     @param no: background index of refraction
     @param wavelength: wavelength
+    @param use_gpu:
     @return n:
     """
     if use_gpu:
@@ -1312,6 +1322,7 @@ def get_rytov_phase(eimgs_ft: np.ndarray,
     @param eimgs: 1 x 1 ... x 1 x ny x nx
     @param eimgs_bg: same size as eimgs
     @param float regularization: regularization value
+    @param use_gpu:
     @return psi_rytov:
     """
     if use_gpu:
@@ -1366,6 +1377,14 @@ def get_scattered_field(eimgs_ft: np.ndarray,
                         eimgs_bg_ft: np.ndarray,
                         regularization: float,
                         use_gpu: bool = False):
+    """
+
+    @param eimgs_ft:
+    @param eimgs_bg_ft:
+    @param regularization:
+    @param use_gpu:
+    @return efield_scattered_ft:
+    """
 
     if use_gpu:
         xp = cp
@@ -1419,8 +1438,10 @@ def unmix_hologram(img: np.ndarray,
     @param dxy: pixel size
     @param fmax_int: maximum frequency where intensity OTF has support
     @param fx_ref:
-    @param ry_ref:
-    @return:
+    @param fy_ref:
+    @param use_gpu:
+    @param apodization:
+    @return efield_ft:
     """
 
     if use_gpu:
@@ -1443,7 +1464,7 @@ def unmix_hologram(img: np.ndarray,
     ff_perp = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
     # compute efield
-    efield_ft = tools.translate_ft(img_ft, fx_ref, fy_ref, drs=(dxy, dxy), use_gpu=use_gpu)
+    efield_ft = tools.translate_ft(img_ft, fx_ref, fy_ref, drs=(dxy, dxy))
     efield_ft[..., ff_perp > fmax_int / 2] = 0
 
     return efield_ft
@@ -1482,7 +1503,7 @@ def get_reconstruction_sampling(no: float,
                                 img_size: tuple[int],
                                 z_fov: float,
                                 dz_sampling_factor: float = 1.,
-                                dxy_sampling_factor: float = 1.):
+                                dxy_sampling_factor: float = 1.) -> (tuple[float], tuple[int]):
     """
     Get information about pixel grid scattering potential will be reconstructed on
 
@@ -1500,10 +1521,7 @@ def get_reconstruction_sampling(no: float,
     """
     ny, nx = img_size
 
-    # todo: let's just use beta based on na ... can always provide an effective na if desired
-    # theta, _ = get_angles(beam_frqs, no, wavelength)
     alpha = np.arcsin(na_det / no)
-    # beta = np.max(theta)
     beta = np.arcsin(na_exc / no)
 
     # maximum frequencies present in ODT
@@ -1541,7 +1559,7 @@ def get_reconstruction_sampling(no: float,
 
 def get_coords(drs: list[float],
                nrs: list[int],
-               expand: bool = False):
+               expand: bool = False) -> tuple[np.ndarray]:
     """
     Compute spatial coordinates
 
@@ -1789,7 +1807,7 @@ def reconstruction(efield_fts,
                    regularization: float = 0.1,
                    mode: str = "rytov",
                    no_data_value: float = np.nan,
-                   use_gpu=False):
+                   use_gpu: bool = False):
     """
     Given a set of holograms obtained using ODT, put the hologram information back in the correct locations in
     Fourier space
@@ -1903,7 +1921,7 @@ def apply_n_constraints(v_ft: np.ndarray,
     """
     Apply constraints on the scattering potential and the index of refraction using iterative projection
 
-    constraint 1: scattering potential FT must match data at points where we information
+    constraint 1: scattering potential FT must match data at points where we have information
     constraint 2: real(n) >= no and imag(n) >= 0
 
     @param v_ft: 3D fourier transform of scattering potential. This array should have nan values where the array
@@ -1912,6 +1930,8 @@ def apply_n_constraints(v_ft: np.ndarray,
     @param wavelength: wavelength in um
     @param n_iterations: number of iterations
     @param beta:
+    @param use_raar:
+    @param require_real_part_greater_bg:
     @param bool use_raar: whether or not to use the Relaxed-Averaged-Alternating Reflection algorithm
     @return scattering_pot_ft:
     """
@@ -2034,11 +2054,13 @@ def fit_ref_frq(img_ft: np.ndarray,
     @param fmax_int:
     @param search_rad_fraction:
     @param npercentiles:
+    @param filter_size:
+    @param dilate_erode_footprint_size:
+    @param show_figure:
     @return results, circ_dbl_fn, figh: results["fit_params"] = [cx, cy, radius]
     """
     ny, nx = img_ft.shape
-    # fourier transforms
-    # img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img)))
+
     # filter image
     img_ft = gaussian_filter(img_ft, (filter_size, filter_size))
 
@@ -2186,8 +2208,6 @@ def plot_scattered_angle(img_efield_ft,
 
     # real-space coordinates
     ny, nx = img_efield_ft.shape
-    # x = (np.arange(nx) - (nx // 2)) * dxy
-    # y = (np.arange(ny) - (ny // 2)) * dxy
     x, y = get_coords((dxy, dxy), (nx, ny))
     extent_xy = [x[0] - 0.5 * dxy, x[-1] + 0.5 * dxy,
                  y[-1] + 0.5 * dxy, y[0] - 0.5 * dxy]
@@ -2435,17 +2455,10 @@ def plot_odt_sampling(frqs: np.ndarray,
     fyfy[ff > fmax] = np.nan
     fzfz = np.sqrt((ni / wavelength)**2 - fxfx**2 - fyfy**2)
 
-    # pp, tt = np.meshgrid(np.linspace(0, 2*np.pi, 30), np.linspace(0, alpha_det, 30))
-    # pp = pp.ravel()
-    # tt = tt.ravel()
 
     # kx0, ky0, kz0
-    # fxyz0 = np.stack((np.cos(pp) * np.sin(tt), np.sin(pp) * np.sin(tt), np.cos(tt)), axis=1) * ni / wavelength
     fxyz0 = np.stack((fxfx, fyfy, fzfz), axis=-1)
-
-    # ax.plot(fxyz0[:, 0], fxyz0[:, 1], 'r', zs=fxyz0[:, 2] - ni/wavelength)
     for ii in range(len(frqs_3d)):
-        # ax.plot(fxyz0[..., 0] - frqs_3d[ii, 0], fxyz0[..., 1] - frqs_3d[ii, 1], 'k', zs=fxyz0[..., 2] - frqs_3d[ii, 2], alpha=0.3)
         ax.plot_surface(fxyz0[..., 0] - frqs_3d[ii, 0], fxyz0[..., 1] - frqs_3d[ii, 1], fxyz0[..., 2] - frqs_3d[ii, 2], alpha=0.3)
 
 
@@ -2462,14 +2475,15 @@ def plot_odt_sampling(frqs: np.ndarray,
 
 def plot_n3d(n: np.ndarray,
              no: float,
-             coords: tuple[np.ndarray] = None,
+             coords: Optional[tuple[np.ndarray]] = None,
              title: str = ""):
     """
     Plot 3D index of refraction
     @param v_ft: 3D Fourier transform of scattering potential
     @param no: background index of refraction
     @param coords: (x, y, z)
-    @return:
+    @param title:
+    @return figh:
     """
 
     nz_v, ny_v, nx_v = n.shape
@@ -2769,6 +2783,7 @@ def compare_escatt(e: np.ndarray,
                    figsize: tuple[float] = (35, 20),
                    gamma: float = 0.1):
     """
+    Compare two scattered electric field arrays
 
     @param e:
     @param e_gt:
@@ -2776,13 +2791,11 @@ def compare_escatt(e: np.ndarray,
     @param dxy:
     @param ttl:
     @param figsize:
-    @return:
+    @return figh, figh_ft:
     """
     nbeams, ny, nx = e.shape
 
     x, y  = get_coords((dxy, dxy), (nx, ny))
-    # x, y = np.meshgrid((np.arange(nx) - nx // 2) * dxy,
-    #                    (np.arange(ny) - ny // 2) * dxy)
 
     e_gt_ft = fft.fftshift(fft.fft2(fft.fftshift(e_gt, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
     e_ft = fft.fftshift(fft.fft2(fft.fftshift(e, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
@@ -2917,8 +2930,8 @@ def compare_escatt(e: np.ndarray,
     return figh, figh_ft
 
 
-def display_tomography_recon(recon_fname,
-                             raw_data_fname=None,
+def display_tomography_recon(recon_fname: str,
+                             raw_data_fname: Optional[str] = None,
                              show_raw: bool = True,
                              show_raw_ft: bool = False,
                              show_v_fft: bool = False,
@@ -2927,11 +2940,13 @@ def display_tomography_recon(recon_fname,
     """
     Display reconstruction results and (optionally) raw data in Napari
 
-    @param recon_fname:
-    @param raw_data_fname:
+    @param recon_fname: refractive index reconstruction stored in zarr file
+    @param raw_data_fname: raw data stored in zar file
     @param show_raw:
+    @param show_raw_ft:
     @param show_v_fft:
     @param show_efields:
+    @param block_while_display:
     @return:
     """
     img_z = zarr.open(recon_fname, "r")
@@ -3151,7 +3166,6 @@ def display_tomography_recon(recon_fname,
     viewer.dims.axis_labels = ["position", "time", "", "", "pattern", "z", "y", "x"]
 
     # block until closed by user
-    if block_while_display:
-        viewer.show(block=True)
+    viewer.show(block=block_while_display)
 
     return viewer

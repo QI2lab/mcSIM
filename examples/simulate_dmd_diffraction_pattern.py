@@ -42,13 +42,32 @@ pattern[pattern > 0] = 1
 # pattern[pattern == 0] = 1
 
 # sample 1D simulation
-data1d = dmd.simulate_1d(pattern, wavelengths, gamma_on, rot_axis, gamma_off,
-                         rot_axis, dx, dy, wx, wy, tm_ins)
+data1d = dmd.simulate_1d(pattern,
+                         wavelengths,
+                         gamma_on,
+                         rot_axis,
+                         gamma_off,
+                         rot_axis,
+                         dx,
+                         dy,
+                         wx,
+                         wy,
+                         tm_ins)
 dmd.plot_1d_sim(data1d, colors, save_dir=None)
 
 # sample 2D simulation
-data2d = dmd.simulate_2d(pattern, wavelengths, gamma_on, rot_axis, gamma_off,
-                         rot_axis, dx, dy, wx, wy, tx_ins, ty_ins,
+data2d = dmd.simulate_2d(pattern,
+                         wavelengths,
+                         gamma_on,
+                         rot_axis,
+                         gamma_off,
+                         rot_axis,
+                         dx,
+                         dy,
+                         wx,
+                         wy,
+                         tx_ins,
+                         ty_ins,
                          tout_offsets=np.linspace(-10, 10, 201) * np.pi / 180)
 dmd.plot_2d_sim(data2d, save_dir=None)
 

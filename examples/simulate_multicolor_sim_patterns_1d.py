@@ -81,7 +81,11 @@ for ii in range(len(wlens)):
 
     # for other wavelength, make sure the output direction is the same
     else:
-        uvecs_in_exact[ii] = sdmd.solve_diffraction_input(uvec_out, dx, dy, wlens[ii], (diff_orders[ii], -diff_orders[ii]))
+        uvecs_in_exact[ii] = sdmd.solve_diffraction_input(uvec_out,
+                                                          dx,
+                                                          dy,
+                                                          wlens[ii],
+                                                          (diff_orders[ii], -diff_orders[ii]))
         tx_in, ty_in = sdmd.uvector2txty(*uvecs_in_exact[ii])
         tp_in, tm_in = sdmd.angle2pm(tx_in, ty_in)
         tins_exact[ii] = tm_in
@@ -100,8 +104,17 @@ for ii in range(len(wlens)):
     pattern[sinusoid >= 0] = 1
 
     # do 1D DMD simulations
-    data_temp = sdmd.simulate_1d(pattern, [wlens[ii]], gon, rot_axis, goff,
-                                 rot_axis, dx, dy, wx, wy, tins_exact[ii],
+    data_temp = sdmd.simulate_1d(pattern,
+                                 [wlens[ii]],
+                                 gon,
+                                 rot_axis,
+                                 goff,
+                                 rot_axis,
+                                 dx,
+                                 dy,
+                                 wx,
+                                 wy,
+                                 tins_exact[ii],
                                  tm_out_offsets=tout_offsets)
     simulation_data.append(data_temp)
 
@@ -114,9 +127,13 @@ str = r"Diffraction orders and blaze envelopes for beams diffracted along the $\
       r"($\theta_x$, $\theta_y$)" + " = (%0.2f, %0.2f) deg;" + \
       " $(b_x, b_y, b_z)$ = (%0.4f, %0.4f, %0.4f)"
 figh.suptitle(str %
-             (tm_out * 180/np.pi, tp_out * 180/np.pi,
-              tx_out * 180/np.pi, ty_out * 180/np.pi,
-              uvec_out[0], uvec_out[1], uvec_out[2]))
+             (tm_out * 180/np.pi,
+              tp_out * 180/np.pi,
+              tx_out * 180/np.pi,
+              ty_out * 180/np.pi,
+              uvec_out[0],
+              uvec_out[1],
+              uvec_out[2]))
 ax = figh.add_subplot(1, 1, 1)
 
 leg = []
@@ -137,8 +154,13 @@ for ii in range(len(wlens)):
     int = int / int[imax] * sinc[imax]
 
     label = ("%.0fnm, $(n_x, n_y)$ = (%d, %d); " + r"$\theta_-$" + " = %0.2fdeg" + "\na=(%0.3f, %0.3f, %0.3f)") % \
-            (wlens[ii]*1e9, diff_orders[ii], -diff_orders[ii], tins_exact[ii] * 180/np.pi,
-             uvecs_in_exact[ii][0], uvecs_in_exact[ii][1], uvecs_in_exact[ii][2])
+            (wlens[ii]*1e9,
+             diff_orders[ii],
+             -diff_orders[ii],
+             tins_exact[ii] * 180/np.pi,
+             uvecs_in_exact[ii][0],
+             uvecs_in_exact[ii][1],
+             uvecs_in_exact[ii][2])
 
     h, = ax.plot(tout * 180/np.pi, int, color=display_colors[ii], label=label)
     hs.append(h)
