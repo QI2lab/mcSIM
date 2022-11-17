@@ -17,42 +17,55 @@ import scipy.optimize
 import zarr
 
 import mcsim.analysis.sim_reconstruction as sim
-import localize_psf.affine as affine
+from localize_psf import affine, localize, fit_psf
 import localize_psf.rois as roi_fns
-import localize_psf.localize as localize
 
-use_gpu = False
-tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
+# ################################
+# data files and options
+# ################################
+data_dirs = [Path(r"G:\2022_11_17\003_0.1um_505_515_beads")]
 
-# data files
-data_dirs = [Path(r"I:\2022_07_07\07_sim_calibration_0.2um_beads")]
+# channel dependent settings
+# ignore_color = [False, False, False]
+# min_fit_amp = [100, 30, 100]
+# bead_radii = 0.5 * np.array([0.2, 0.2, 0.2])
 
-# color channel information
-ignore_color = [False, False, False]
-min_fit_amp = [100, 30, 100]
-bead_radii = 0.5 * np.array([0.2, 0.2, 0.2])
-nrois_to_plot = 2
+ignore_color = [False, False]
+min_fit_amp = [1000, 30]
+bead_radii = 0.5 * np.array([0.1, 0.1])
 
-# ignore_color = [False, False]
-# min_fit_amp = [1000, 100]
-# bead_radii = 0.5 * np.array([0.1, 0.1])
-# nrois_to_plot = 5
-
-# set parameters
+# channel independent setings
+use_gpu = True
 figsize = (30, 9)
 save_results = True
-close_fig_after_saving = True
-# roi/filtering parameters in um
+nrois_to_plot = 5 # 5
+
+# localization filtering parameters
 roi_size = (0, 1.5, 1.5)  # (sz, sy, sx) in um
 filters_small_sigma = (0.1, 0.1, 0.1)  # (sz, sy, sx) in um
 filters_large_sigma = (5, 5, 5)  # (sz, sy, sx) in um
-min_boundary_distance = (1, 1)  # (dz, dxy) in um
-sigma_bounds = ((0, 0.05), (3, 0.3))
+min_boundary_distance = (0, 1)  # (dz, dxy) in um
+sigma_bounds = ((0, 0.05), (3, 0.2))
 min_spot_sep = (0, 1) # (dz, dxy) in um
+
+
+# ################################
+# start processing
+# ################################
+tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
 # turn off interactive plotting
 plt.ioff()
 plt.switch_backend("agg")
+
+# helper function
+def get_key(code, fit_states_key):
+    msg = "message not found"
+    for k, v in fit_states_key.items():
+        if code == v:
+            msg = k
+            break
+    return msg
 
 # ################################
 # loop over data dirs and estimate modulation depth
@@ -60,9 +73,13 @@ plt.switch_backend("agg")
 for d in data_dirs:
     file_path = list(d.glob("*.zarr"))[0]
     data = zarr.open(file_path, "r")
-    _, ntimes, nz, _, ncolors, npatterns, ny, nx = data.cam1.sim.shape
-    nphases = data.cam1.sim.attrs["nphases"][0]
-    nangles = data.cam1.sim.attrs["nangles"][0]
+
+    arrs = [a for name, a in data.cam1.arrays() if name[:3] == "sim"]
+    ncolors = len(arrs)
+    _, ntimes, nz, _, npatterns, ny, nx = arrs[0].shape
+
+    nphases = arrs[0].attrs["nphases"]
+    nangles = arrs[0].attrs["nangles"]
 
     dxy = data.cam1.attrs["dx_um"]
 
@@ -70,24 +87,24 @@ for d in data_dirs:
     affine_xforms = [np.array(xform) for xform in data.cam1.attrs["affine_transformations"]]
 
     # load pattern data
-    # periods = []
     frqs = np.zeros((ncolors, nangles, 2))
     phases = np.zeros((ncolors, nangles, nphases))
     for ii in range(ncolors):
-        frqs_raw = np.array(data.cam1.sim.attrs["frqs"][ii])[::nphases]
-        phases_raw = np.array(data.cam1.sim.attrs["phases"][ii]).reshape((nangles, nphases))
-        fxt, fyt, phit = affine.xform_sinusoid_params(frqs_raw[:, 0], frqs_raw[:, 1],
-                                                      phases_raw, affine_xforms[ii])
+        frqs_raw = np.array(arrs[ii].attrs["frqs"])[::nphases]
+        phases_raw = np.array(arrs[ii].attrs["phases"]).reshape((nangles, nphases))
+        fxt, fyt, phit = affine.xform_sinusoid_params(frqs_raw[:, 0],
+                                                      frqs_raw[:, 1],
+                                                      phases_raw,
+                                                      affine_xforms[ii])
         frqs[ii, ..., 0] = 2 * fxt / dxy
         frqs[ii, ..., 1] = 2 * fyt / dxy
         phases[ii] = 2 * phit
 
-        # xformed_angles.append(np.angle(fxt + 1j * fyt))
-        # periods.append(0.5 / np.sqrt(fxt**2 + fyt**2) * dxy)
     periods = 1 / np.linalg.norm(frqs, axis=-1)
 
     # load images
-    imgs = np.array(data.cam1.sim[0, :, :, 0])
+    # imgs = np.array(data.cam1.sim[0, :, :, 0])
+    imgs = np.stack([a[0, :, :, 0] for a in arrs], axis=2)
     imgs = imgs.reshape([ntimes, nz, ncolors, nangles, nphases, ny, nx])
     dz = data.attrs["dz_um"]
     zs = np.array(data.attrs["z_position_um"])
@@ -95,10 +112,6 @@ for d in data_dirs:
     channels = data.cam1.attrs["channels"]
 
     iz_center = nz // 2
-    # if len(zs) > 1:
-    #     dz = zs[1] - zs[0]
-    # else:
-    #     dz = 1.
 
     # make save directory
     if save_results:
@@ -117,6 +130,7 @@ for d in data_dirs:
     fps = [[]] * ncolors
     # fit parameters for central z-index and first time, each entry size nfits x nangles
     fps_start = [[]] * ncolors
+    ips_start = [[]] * ncolors
 
     tstart = time.perf_counter()
     for ic in range(ncolors):
@@ -125,31 +139,34 @@ for d in data_dirs:
         # #################################################
         if ignore_color[ic]:
             continue
-        print("started initial fitting for channel %d" % ic)
-
-        # img_inds = list(range(nignored_frames, nignored_frames + 9))
-        # # grab first image and average over angles/phases to get all beads
-        # img_first = np.mean(mm_io.read_mm_dataset(metadata, time_indices=0, z_indices=iz_center,
-        #                                           user_indices={"UserChannelIndex": ic, "UserSimIndex": img_inds}),
-        #                     axis=0)
+        print(f"started initial fitting for channel {ic:d}")
 
         # take widefield image
         img_middle_wf = np.mean(imgs[0, nz//2, ic], axis=(0, 1))
 
+        coords = localize.get_coords((1,) + img_middle_wf.shape, (1, dxy, dxy), broadcast=True)
+        zz, yy, xx = coords
+        filter = localize.get_param_filter(coords,
+                                           fit_dist_max_err=(np.inf, np.inf),
+                                           min_spot_sep=min_spot_sep,
+                                           sigma_bounds=sigma_bounds,
+                                           amp_bounds=(min_fit_amp[ic], np.inf),
+                                           dist_boundary_min=min_boundary_distance)
+        # filter = localize.no_filter()
+        model = fit_psf.gaussian3d_psf_model()
+
         # identify beads in first image
-        coords, fit_results, imgs_filtered = \
-            localize.localize_beads(img_middle_wf,
-                                    dxy,
-                                    dz,
-                                    min_fit_amp[ic],
-                                    roi_size=roi_size,
-                                    filter_sigma_small=filters_small_sigma,
-                                    filter_sigma_large=filters_large_sigma,
-                                    min_spot_sep=min_spot_sep,
-                                    dist_boundary_min=min_boundary_distance,
-                                    sigma_bounds=sigma_bounds,
-                                    fit_amp_min=min_fit_amp[ic],
-                                    use_gpu_fit=use_gpu)
+        _, fit_results, imgs_filtered = \
+            localize.localize_beads_generic(img_middle_wf,
+                                            (dz, dxy, dxy),
+                                            min_fit_amp[ic],
+                                            roi_size=roi_size,
+                                            filter_sigma_small=filters_small_sigma,
+                                            filter_sigma_large=filters_large_sigma,
+                                            min_spot_sep=min_spot_sep,
+                                            filter=filter,
+                                            model=model,
+                                            use_gpu_fit=use_gpu)
 
         fps_temp = fit_results["fit_params"]
         ips_temp = fit_results["init_params"]
@@ -159,11 +176,9 @@ for d in data_dirs:
         condition_names = fit_results["condition_names"]
         filter_settings = fit_results["filter_settings"]
         fit_states = fit_results["fit_states"]
+        fit_states_key = fit_results["fit_states_key"]
         chi_sqrs = fit_results["chi_sqrs"]
         niters = fit_results["niters"]
-
-        z, y, x = coords
-        zz, yy, xx = np.broadcast_arrays(*(z, y, x))
 
         if not np.any(to_keep):
             raise ValueError("no beads found...")
@@ -181,6 +196,7 @@ for d in data_dirs:
         # ROIs we will use going forward
         rois[ic] = rois_temp[np.logical_and(to_keep, in_dmd_area)]
         fps_start[ic] = fps_temp[np.logical_and(to_keep, in_dmd_area)]
+        ips_start[ic] = ips_temp[np.logical_and(to_keep, in_dmd_area)]
 
         # define array to hold later fit results
         fps[ic] = np.zeros((len(rois[ic]), ntimes, nz, nangles, nphases, 7))
@@ -192,6 +208,7 @@ for d in data_dirs:
         centers_temp_pix = np.stack((fps_start[ic][:, 3],
                                      fps_start[ic][:, 2],
                                      fps_start[ic][:, 1]), axis=-1)
+
         figh1 = localize.plot_bead_locations(img_middle_wf, [centers_temp_all_pix, centers_temp_pix],
                                              coords=(yy[0], xx[0]),
                                              legend_labels=["all fits", "reliable fits"],
@@ -204,14 +221,15 @@ for d in data_dirs:
 
         if save_results:
             figh1.savefig(Path(save_dir, f"bead_centers_channel={ic:d}.png"))
-        if close_fig_after_saving:
             plt.close(figh1)
 
         # plot fits if desired
         for aaa in range(np.min([nrois_to_plot, len(fps_start[ic])])):
-            localize.plot_gauss_roi(fps_start[ic][aaa], rois[ic][aaa], np.expand_dims(img_middle_wf, axis=0),
+            localize.plot_gauss_roi(fps_start[ic][aaa],
+                                    rois[ic][aaa],
+                                    np.expand_dims(img_middle_wf, axis=0),
                                     coords,
-                                    #init_params=fps_start[ic][aaa],
+                                    init_params=ips_start[ic][aaa],
                                     prefix=f"reference_roi={aaa:d}_ic={ic:d}_iz={iz_center:d}_it={0:d}_",
                                     save_dir=roi_save_dir)
 
@@ -221,52 +239,45 @@ for d in data_dirs:
         for iz in range(nz):
             for it in range(ntimes):
                 for ia in range(nangles):
-                    #sim_inds = list(range(nignored_frames + ia * nphases, nignored_frames + (ia + 1) * nphases))
                     for ip in range(nphases):
-                        print(f"{it+1:d}/{ntimes:d} times,"
-                              f" {iz + 1:d}/{nz:d} zs,"
-                              f" {ic + 1:d}/{ncolors:d} colors,"
-                              f"{ia+1:d}/{nangles:d} angles,"
-                              f" {ip+1:d}/{nphases:d} phases,"
-                              f" t elapsed={time.perf_counter() - tstart:.2f}")
-
-                        imgs_now = np.expand_dims(imgs[it, iz, ic, ia, ip], axis=0)
+                        print(f"{it+1:d}/{ntimes:d} times, "
+                              f"{iz + 1:d}/{nz:d} zs, "
+                              f"{ic + 1:d}/{ncolors:d} colors, "
+                              f"{ia+1:d}/{nangles:d} angles, "
+                              f"{ip+1:d}/{nphases:d} phases, "
+                              f"elapsed time = {time.perf_counter() - tstart:.2f}s")
 
                         # get ROI's to fit spots
+                        imgs_now = np.expand_dims(imgs[it, iz, ic, ia, ip], axis=0)
                         img_rois = [roi_fns.cut_roi(r, imgs_now) for r in rois[ic]]
-                        coords_rois = [[roi_fns.cut_roi(r, z), roi_fns.cut_roi(r, y), roi_fns.cut_roi(r, x)]
-                                       for r in rois[ic]]
+
+                        coords_rois = [[roi_fns.cut_roi(r, c) for c in coords] for r in rois[ic]]
                         coords_rois = list(zip(*coords_rois))
-                        fixed_params = np.zeros((7), dtype=bool)
-                        fixed_params[1:4] = True
-                        fixed_params[-1] = True
-                        # fixed_params[1:-1] = True
+
+                        # fix parameters to match initial fits
+                        fixed_params = np.zeros(model.nparams, dtype=bool)
+                        fixed_params[1:] = True
 
                         # do fitting
-                        # todo: fitting on gpu not working ... not sure if the problem is the fixed parameters or something else
                         fit_results = localize.fit_rois(img_rois,
                                                         coords_rois,
                                                         fps_start[ic],
                                                         fixed_params=fixed_params,
-                                                        use_gpu=use_gpu)
+                                                        use_gpu=use_gpu,
+                                                        model=model)
 
+                        # unpack results
                         fps[ic][:, it, iz, ia, ip, :] = fit_results["fit_params"]
                         chi_sqrs = fit_results["chi_sqrs"]
                         niters = fit_results["niters"]
                         fit_states = fit_results["fit_states"]
                         fit_states_key = fit_results["fit_states_key"]
 
-                        def get_key(code):
-                            msg = "message not found"
-                            for k, v in fit_states_key.items():
-                                if code == v:
-                                    msg = k
-                                    break
-                            return msg
-
+                        # plot ROI's as diagnostics
                         for aaa in range(np.min([nrois_to_plot, len(fps_start[ic])])):
-                            str = f"fit iters={niters[aaa]:d}" \
-                                  f" with result '{get_key(fit_states[aaa]):s}', and " \
+                            str = f"ROI={aaa:d}, ic={ic:d}, iz={iz:d}, it={it:d}, ia={ia:d}, ip={ip:d}\n" \
+                                  f"fit iters={niters[aaa]:d} " \
+                                  f"with result '{get_key(fit_states[aaa], fit_states_key):s}', and " \
                                   f"chi squared = {chi_sqrs[aaa]:.1g}"
 
                             localize.plot_gauss_roi(fps[ic][aaa, it, iz, ia, ip],
@@ -301,9 +312,6 @@ for d in data_dirs:
         amp_is_neg = fps[ic][..., 0] < 0
         m_ests[ic][np.any(amp_is_neg, axis=-1)] = np.nan
 
-        # cos phis
-        # cos_phis[ic] = (fps_mean[ic][..., 0] / np.expand_dims(fps_mean[ic][..., 0], axis=-1) - 1) /\
-        #                np.expand_dims(m_ests[ic], axis=-1)
 
     # ####################################
     # plot results for each z/t/angle
@@ -368,7 +376,6 @@ for d in data_dirs:
 
                     if save_results:
                         figh2.savefig(Path(save_dir, f"beads_ic={ic:d}_angle={ia:d}_time={it:d}_z={iz:d}.png"))
-                    if close_fig_after_saving:
                         plt.close(figh2)
 
                     # make paramter distribution figure active again...
@@ -417,7 +424,6 @@ for d in data_dirs:
 
             if save_results:
                 figh.savefig(Path(save_dir, f"modulation_estimate_z={iz:d}_time={it:d}.png"))
-            if close_fig_after_saving:
                 plt.close(figh)
 
     # ###############################
@@ -574,9 +580,7 @@ for d in data_dirs:
                             ax.set_xlabel("z ($\mu$m)")
 
                             if save_results:
-
                                 figh_diagnostic.savefig(Path(save_dir, f"focus_diagnostic_color={ic:d}_angle={ia:d}_roi={ii:d}.png"))
-                            if close_fig_after_saving:
                                 plt.close(figh_diagnostic)
 
                     # ############################################
@@ -667,23 +671,5 @@ for d in data_dirs:
 
                 if save_results:
                     figh.savefig(Path(save_dir, f"focus_color={ic:d}_time={it:d}.png"))
-                if close_fig_after_saving:
                     plt.close(figh)
 
-                # ############################################
-                # plot peak modulation and amplitude
-                # ############################################
-
-                # todo:
-                # figh = plt.figure()
-                # ax = plt.subplot(1, 2, 1)
-
-                # todo: calculate modulation depth for each
-                # c = 0
-                # ax.scatter(cx, cy, marker='o', facecolor=c)
-                #
-                # cb1 = plt.colorbar(plt.cm.ScalarMappable(norm=matplotlib.colors.Normalize(vmin=0, vmax=1), cmap=cmap))
-                # ax.set_ylim(ax.get_ylim()[::-1])
-                # ax.set_yticks([])
-                # ax.set_xticks([])
-                # ax.set_title("modulation maximum")
