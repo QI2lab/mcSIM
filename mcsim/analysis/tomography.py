@@ -4,6 +4,7 @@ Tools for reconstructiong optical diffraction tomography (ODT) data
 import time
 import datetime
 from pathlib import Path
+from typing import Union, Optional
 import numpy as np
 from numpy import fft
 import scipy.sparse as sp
@@ -47,9 +48,9 @@ class tomography:
                  dxy: float,
                  reference_frq_guess,
                  hologram_frqs_guess,
-                 imgs_raw_bg=None,
-                 phase_offsets=None,
-                 axes_names: list[str] = None):
+                 imgs_raw_bg: Optional[np.ndarray] = None,
+                 phase_offsets: Optional[np.ndarray] = None,
+                 axes_names: Optional[list[str]] = None):
         """
         Object to reconstruct optical diffraction tomography data
 
@@ -123,9 +124,9 @@ class tomography:
 
 
     def estimate_hologram_frqs(self,
-                               roi_size_pix,
-                               roi_size_pix_small=5,
-                               save_dir=None):
+                               roi_size_pix: int,
+                               roi_size_pix_small: int = 5,
+                               save_dir: Optional[str] = None):
         """
         Estimate hologram frequencies from raw images
         @param save_dir:
@@ -280,8 +281,8 @@ class tomography:
 
 
     def estimate_reference_frq(self,
-                               mode="fit",
-                               save_dir=None):
+                               mode: str = "fit",
+                               save_dir: Optional[str] = None):
         """
         Estimate hologram reference frequency
         @param mode: if "fit" fit the residual speckle pattern to try and estimate the reference frequency.
@@ -340,10 +341,10 @@ class tomography:
 
 
     def unmix_holograms(self,
-                        bg_average_axes,
-                        mask=None,
+                        bg_average_axes: tuple[int],
+                        mask: Optional[np.ndarray] = None,
                         fit_phases: bool = False,
-                        apodization=None,
+                        apodization: Optional[np.ndarray] = None,
                         use_gpu: bool = False):
         """
         Unmix and preprocess holograms
@@ -500,8 +501,8 @@ class tomography:
 
 
     def set_scattered_field(self,
-                            scattered_field_regularization,
-                            mask=None,
+                            scattered_field_regularization: float,
+                            mask: Optional[np.ndarray] = None,
                             use_gpu: bool = False):
         """
         The scattered field is only used directly in the Born reconstruction.
@@ -556,7 +557,7 @@ class tomography:
                            dxy_sampling_factor: float = 1.,
                            dz_sampling_factor: float = 1.,
                            z_fov: float = 20,
-                           mask=None,
+                           mask: Optional[np.ndarray] = None,
                            tau_tv: float = 0,
                            tau_lasso: float = 0,
                            use_imaginary_constraint: bool = True,
@@ -790,9 +791,9 @@ class tomography:
 
 
     def plot_interferograms(self,
-                            nmax_to_plot,
-                            save_dir=None,
-                            scattered_field_regularization=10):
+                            nmax_to_plot: int,
+                            save_dir: Optional[str] = None,
+                            scattered_field_regularization: float = 10.):
         """
         Plot nmax interferograms
 
@@ -856,7 +857,9 @@ class tomography:
             dask.compute(*results_interferograms)
 
 
-    def show_image(self, index, figsize=(24, 10)):
+    def show_image(self,
+                   index,
+                   figsize=(24, 10)):
         """
         display raw image
         @param index:
@@ -913,16 +916,16 @@ def soft_threshold(t, x):
 
 def grad_descent(v_ft_start,
                  e_measured_ft,
-                 model,
-                 step,
+                 model: str,
+                 step: float,
                  niters: int = 100,
                  use_fista: bool = True,
                  use_gpu: bool = True,
-                 tau_tv: float = 0,
-                 tau_lasso: float = 0,
+                 tau_tv: float = 0.,
+                 tau_lasso: float = 0.,
                  use_imaginary_constraint: bool = True,
                  use_real_constraint: bool = False,
-                 masks=None,
+                 masks: Optional[np.ndarray] = None,
                  debug: bool = False):
     """
     Perform gradient descent using a linear model
@@ -1221,7 +1224,7 @@ def angles2frqs(no: float,
 
 def get_global_phase_shifts(imgs,
                             ref_imgs,
-                            thresh=None,
+                            thresh: Optional[float] = None,
                             use_gpu: bool = False):
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
@@ -1461,7 +1464,7 @@ def unmix_hologram(img: np.ndarray,
     ff_perp = np.sqrt(fxfx ** 2 + fyfy ** 2)
 
     # compute efield
-    efield_ft = tools.translate_ft(img_ft, fx_ref, fy_ref, drs=(dxy, dxy), use_gpu=use_gpu)
+    efield_ft = tools.translate_ft(img_ft, fx_ref, fy_ref, drs=(dxy, dxy))
     efield_ft[..., ff_perp > fmax_int / 2] = 0
 
     return efield_ft
@@ -1500,7 +1503,7 @@ def get_reconstruction_sampling(no: float,
                                 img_size: tuple[int],
                                 z_fov: float,
                                 dz_sampling_factor: float = 1.,
-                                dxy_sampling_factor: float = 1.):
+                                dxy_sampling_factor: float = 1.) -> (tuple[float], tuple[int]):
     """
     Get information about pixel grid scattering potential will be reconstructed on
 
@@ -1556,7 +1559,7 @@ def get_reconstruction_sampling(no: float,
 
 def get_coords(drs: list[float],
                nrs: list[int],
-               expand: bool = False):
+               expand: bool = False) -> tuple[np.ndarray]:
     """
     Compute spatial coordinates
 
@@ -1804,7 +1807,7 @@ def reconstruction(efield_fts,
                    regularization: float = 0.1,
                    mode: str = "rytov",
                    no_data_value: float = np.nan,
-                   use_gpu=False):
+                   use_gpu: bool = False):
     """
     Given a set of holograms obtained using ODT, put the hologram information back in the correct locations in
     Fourier space
@@ -2472,7 +2475,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
 def plot_n3d(n: np.ndarray,
              no: float,
-             coords: tuple[np.ndarray] = None,
+             coords: Optional[tuple[np.ndarray]] = None,
              title: str = ""):
     """
     Plot 3D index of refraction
@@ -2927,8 +2930,8 @@ def compare_escatt(e: np.ndarray,
     return figh, figh_ft
 
 
-def display_tomography_recon(recon_fname,
-                             raw_data_fname=None,
+def display_tomography_recon(recon_fname: str,
+                             raw_data_fname: Optional[str] = None,
                              show_raw: bool = True,
                              show_raw_ft: bool = False,
                              show_v_fft: bool = False,
