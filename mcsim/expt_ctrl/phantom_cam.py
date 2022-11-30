@@ -1419,7 +1419,7 @@ def imread_cine(fname):
         setup_info["f_chroma"] = struct.unpack("f", f.read(4))[0]
 
         tone_label_bytes = struct.unpack("c" * 256, f.read(256))
-        setup_info["tone_label"] = "".join(c.decode() for c in tone_label if c != b"\x00")
+        setup_info["tone_label"] = "".join(c.decode() for c in tone_label_bytes if c != b"\x00")
 
         setup_info["tone_points"] = struct.unpack("<i", f.read(4))[0]
         setup_info["f_tone"] = struct.unpack("f" * 32 * 2, f.read(4 * 32 * 2))
