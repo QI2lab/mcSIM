@@ -87,6 +87,7 @@ def get_lines_test_pattern(img_size, angles=(15,), line_center_sep = np.arange(2
 gt, seps = get_lines_test_pattern((nxy_gt, nxy_gt))
 gt *= max_photons_per_pix / nbin**2
 
+
 # ############################################
 # PSF
 # ############################################
@@ -141,14 +142,14 @@ imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength}
                          min_p2nr=0.5,
                          use_gpu=use_gpu,
                          save_dir=root_dir / f"{tstamp:s}_sim_reconstruction_simulated",
-                         interactive_plotting=False,
-                         figsize=(22.85, 10))
+                         interactive_plotting=False)
 
 # run reconstruction
 imgset.reconstruct()
-# plot results
-imgset.plot_figs()
 # save reconstruction results
 imgset.save_imgs(use_zarr=True)
+# plot results
+imgset.plot_figs(figsize=(20, 10),
+                 imgs_dpi=300)
 
 print(f"reconstructing images, plotting diagnostics, and saving results took {time.perf_counter() - tstart:.2f}s")
