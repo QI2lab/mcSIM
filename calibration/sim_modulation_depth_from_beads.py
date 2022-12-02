@@ -23,16 +23,26 @@ import localize_psf.rois as roi_fns
 # ################################
 # data files and options
 # ################################
-data_dirs = [Path(r"G:\2022_11_17\003_0.1um_505_515_beads")]
+# data_dirs = [Path(r"G:\2022_11_17\003_0.1um_505_515_beads")]
+data_dirs = [Path(r"H:\2022_12_01\001_200nm_beads")]
 
 # channel dependent settings
+
+# red/blue/green with 0.2um beads
 # ignore_color = [False, False, False]
 # min_fit_amp = [100, 30, 100]
 # bead_radii = 0.5 * np.array([0.2, 0.2, 0.2])
 
+# red/green with 0.2um beads
 ignore_color = [False, False]
-min_fit_amp = [1000, 30]
-bead_radii = 0.5 * np.array([0.1, 0.1])
+min_fit_amp = [100, 100]
+bead_radii = 0.5 * np.array([0.2, 0.2])
+
+
+# blue/green with 505/515nm 0.1um beads
+# ignore_color = [False, False]
+# min_fit_amp = [1000, 30]
+# bead_radii = 0.5 * np.array([0.1, 0.1])
 
 # channel independent setings
 use_gpu = True
@@ -225,13 +235,13 @@ for d in data_dirs:
 
         # plot fits if desired
         for aaa in range(np.min([nrois_to_plot, len(fps_start[ic])])):
-            localize.plot_gauss_roi(fps_start[ic][aaa],
-                                    rois[ic][aaa],
-                                    np.expand_dims(img_middle_wf, axis=0),
-                                    coords,
-                                    init_params=ips_start[ic][aaa],
-                                    prefix=f"reference_roi={aaa:d}_ic={ic:d}_iz={iz_center:d}_it={0:d}_",
-                                    save_dir=roi_save_dir)
+            localize.plot_fit_roi(fps_start[ic][aaa],
+                                  rois[ic][aaa],
+                                  np.expand_dims(img_middle_wf, axis=0),
+                                  coords,
+                                  init_params=ips_start[ic][aaa],
+                                  prefix=f"reference_roi={aaa:d}_ic={ic:d}_iz={iz_center:d}_it={0:d}_",
+                                  save_dir=roi_save_dir)
 
         # #################################################
         # do fitting for all other z-slices/times/angles/phases using same ROI's with fixed centers
@@ -245,7 +255,7 @@ for d in data_dirs:
                               f"{ic + 1:d}/{ncolors:d} colors, "
                               f"{ia+1:d}/{nangles:d} angles, "
                               f"{ip+1:d}/{nphases:d} phases, "
-                              f"elapsed time = {time.perf_counter() - tstart:.2f}s")
+                              f"elapsed time = {time.perf_counter() - tstart:.2f}s", end="\r")
 
                         # get ROI's to fit spots
                         imgs_now = np.expand_dims(imgs[it, iz, ic, ia, ip], axis=0)
@@ -280,15 +290,16 @@ for d in data_dirs:
                                   f"with result '{get_key(fit_states[aaa], fit_states_key):s}', and " \
                                   f"chi squared = {chi_sqrs[aaa]:.1g}"
 
-                            localize.plot_gauss_roi(fps[ic][aaa, it, iz, ia, ip],
-                                                    rois[ic][aaa],
-                                                    imgs_now,
-                                                    coords,
-                                                    init_params=fps_start[ic][aaa],
-                                                    string=str,
-                                                    prefix=f"roi={aaa:d}_ic={ic:d}_iz={iz:d}_it={it:d}_ia={ia:d}_ip={ip:d}_",
-                                                    save_dir=roi_save_dir)
+                            localize.plot_fit_roi(fps[ic][aaa, it, iz, ia, ip],
+                                                  rois[ic][aaa],
+                                                  imgs_now,
+                                                  coords,
+                                                  init_params=fps_start[ic][aaa],
+                                                  string=str,
+                                                  prefix=f"roi={aaa:d}_ic={ic:d}_iz={iz:d}_it={it:d}_ia={ia:d}_ip={ip:d}_",
+                                                  save_dir=roi_save_dir)
 
+        print("")
     # ####################################
     # compute modulation depth statistics
     # ####################################

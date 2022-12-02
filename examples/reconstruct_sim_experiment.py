@@ -90,7 +90,9 @@ for kk in range(ncolors):
 # do SIM reconstruction for each color
 # ############################################
 for kk in range(ncolors):
+    # ###########################################
     # construct otf matrix
+    # ###########################################
     fmax = 1 / (0.5 * emission_wavelengths[kk] / na)
     fx = fft.fftshift(fft.fftfreq(nx_roi, pixel_size))
     fy = fft.fftshift(fft.fftfreq(ny_roi, pixel_size))
@@ -99,7 +101,9 @@ for kk in range(ncolors):
     otf = otf_fn(ff, fmax)
     otf[ff >= fmax] = 0
 
+    # ###########################################
     # guess frequencies/phases
+    # ###########################################
     frqs_guess = np.zeros((nangles, 2))
     phases_guess = np.zeros((nangles, nphases))
     for ii in range(nangles):
@@ -118,7 +122,11 @@ for kk in range(ncolors):
     # convert frequencies from 1/mirrors to 1/um
     frqs_guess = frqs_guess / pixel_size
 
+    # ###########################################
     # initialize SIM reconstruction
+    # ###########################################
+    save_dir = root_dir / f"{tstamp:s}_sim_reconstruction_{excitation_wavelengths[kk] * 1e3:.0f}nm"
+
     imgset = sim.SimImageSet({"pixel_size": pixel_size, "na": na, "wavelength": emission_wavelengths[kk]},
                              imgs[kk, :, :, roi[0]:roi[1], roi[2]:roi[3]],
                              frq_estimation_mode="band-correlation",
@@ -134,12 +142,46 @@ for kk in range(ncolors):
                              gain=2,
                              min_p2nr=0.5,
                              use_gpu=use_gpu,
-                             save_dir=root_dir / f"{tstamp:s}_sim_reconstruction_{excitation_wavelengths[kk] * 1e3:.0f}nm",
-                             interactive_plotting=False,
-                             figsize=(22.85, 10))
+                             save_dir=save_dir,
+                             interactive_plotting=False)
+
+    # ###########################################
     # run reconstruction
+    # ###########################################
     imgset.reconstruct()
-    # plot results
-    imgset.plot_figs()
+
+    # ###########################################
     # save reconstruction results
+    # ###########################################
     imgset.save_imgs()
+
+    # ###########################################
+    # plot diagnostics
+    # ###########################################
+    imgset.plot_figs(figsize=(20, 10),
+                     imgs_dpi=300)
+
+    # ###########################################
+    # save pattern estimates
+    # ###########################################
+    real_phases = imgset.phases + np.expand_dims(imgset.phase_corrections, axis=1)
+
+    _, _, estimated_patterns = sim.get_simulated_sim_imgs(np.ones(imgset.imgs[0, 0].shape),
+                                                          frqs=imgset.frqs,
+                                                          phases=imgset.phases,
+                                                          mod_depths=imgset.mod_depths,
+                                                          gains=1,
+                                                          offsets=0,
+                                                          readout_noise_sds=0,
+                                                          pix_size=pixel_size,
+                                                          )
+    estimated_patterns = estimated_patterns[:, :, 0]
+
+    pattern_fname = save_dir / "patterns.tif"
+    tifffile.imwrite(pattern_fname,
+                     estimated_patterns.reshape((9,) + estimated_patterns.shape[-2:]).astype(np.float32),
+                     imagej=True,
+                     resolution=(1 / imgset.dx,) * 2,
+                     metadata={'Info': f"estimated patterns for frqs = {imgset.frqs.tolist()} and phases = {real_phases.tolist()}",
+                               'unit': 'um'},
+                     )

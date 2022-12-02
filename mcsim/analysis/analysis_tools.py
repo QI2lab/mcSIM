@@ -390,6 +390,10 @@ def translate_ft(img_ft: array,
     else:
         xp = np
 
+    # don't use cache
+    if xp == cp and _cupy_available:
+        cp.fft._cache.PlanCache(memsize=0)
+
     if img_ft.ndim < 2:
         raise ValueError("img_ft must be at least 2D")
 

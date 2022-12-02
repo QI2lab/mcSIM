@@ -201,11 +201,11 @@ class tomography:
                            0]
             fixed_params = [False, False, False, False, False, False, True]
 
-            rgauss = fit.gauss2dm().fit(np.abs(ft2),
-                                        (fyfy_roi, fxfx_roi),
-                                        init_params=init_params,
-                                        fixed_params=fixed_params,
-                                        guess_bounds=True)
+            rgauss = fit.gauss2d().fit(np.abs(ft2),
+                                       (fyfy_roi, fxfx_roi),
+                                       init_params=init_params,
+                                       fixed_params=fixed_params,
+                                       guess_bounds=True)
 
             frq_holo = np.expand_dims(rgauss["fit_params"][1:3],
                                       axis=list(range(fx_guess.ndim)))
