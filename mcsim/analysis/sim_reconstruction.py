@@ -3695,7 +3695,7 @@ def get_simulated_sim_imgs(ground_truth: array,
                            coherent_projection: bool = True,
                            otf: Optional[np.ndarray] = None,
                            nbin: int = 1,
-                           **kwargs) -> (array, array, array):
+                           **kwargs) -> (array, array, array, array):
     """
     Get simulated SIM images, including the effects of shot-noise and camera noise.
 
@@ -3718,7 +3718,7 @@ def get_simulated_sim_imgs(ground_truth: array,
     :return sim_imgs: nangles x nphases x nz x ny x nx array
     :return snrs: nangles x nphases x nz x ny x nx array giving an estimate of the signal-to-noise ratio which will be
     accurate as long as the photon number is large enough that the Poisson distribution is close to a normal distribution
-    :return patterns, snrs, patterns:
+    :return patterns, snrs, patterns, raw_patterns:
     """
 
     # if isinstance(ground_truth, cp.ndarray):
@@ -3727,10 +3727,10 @@ def get_simulated_sim_imgs(ground_truth: array,
     else:
         xp = np
 
-    ground_truth = xp.array(ground_truth)
-    gains = xp.array(gains)
-    offsets = xp.array(offsets)
-    readout_noise_sds = xp.array(readout_noise_sds)
+    ground_truth = xp.asarray(ground_truth)
+    gains = xp.asarray(gains)
+    offsets = xp.asarray(offsets)
+    readout_noise_sds = xp.asarray(readout_noise_sds)
 
     # ensure ground truth is 3D
     if ground_truth.ndim == 2:
@@ -3767,74 +3767,51 @@ def get_simulated_sim_imgs(ground_truth: array,
     else:
         psf = None
 
-    # get coordinates
-    x = (xp.arange(nx) - (nx // 2)) * pix_size
-    y = (xp.arange(ny) - (ny // 2)) * pix_size
-    z = (xp.arange(nz) - (nz // 2)) # do not need dz, so don't have pixel size for it
-    _, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
-
+    # get binned sizes
     nxb = nx / nbin
     nyb = ny / nbin
     if not nxb.is_integer() or not nyb.is_integer():
-        raise Exception("The image size was not evenly divisble by the bin size")
+        raise Exception("The image size was not evenly divisible by the bin size")
     nxb = int(nxb)
     nyb = int(nyb)
 
-    # phases will be the phase of the patterns in the binned coordinates
-    # need to compute the phases in the unbinned coordinates
-    # the effect of binning is to shift the center of the binned coordinates to the right/positive
-    # think of leftmost bin.
-    # For binned, this is at position -nbin x (n/nbin - 1) / 2 if n/nbin is odd, or -n/2 if n/nbin is even
-    # For unbinned, add up the leftmost nbins
-    # if nx and nx/nbin are even, shift = 0.5 * nbin - 0.5
-    # if nx is even and nx/nbin is odd, shift = 0.5 * nbin - 1
-    # if nx is odd and nx/nbin is odd, shift = 0
-    # if nx is odd, nx/nbin cannot be even
-    # relative to the unbinned coordinates
-    if np.mod(nx, 2) == 1:
-        xshift = 0
-    else:
-        if np.mod(nxb, 2) == 1:
-            xshift = -0.5
-        else:
-            xshift = 0.5 * nbin - 0.5
-    xshift = xshift * pix_size
+    # get binned coordinates
+    xb = (xp.arange(nxb) - (nxb // 2)) * (pix_size * nbin)
+    yb = (xp.arange(nyb) - (nyb // 2)) * (pix_size * nbin)
 
-    if np.mod(ny, 2) == 1:
-        yshift = 0
-    else:
-        if np.mod(nyb, 2) == 1:
-            yshift = -0.5
-        else:
-            yshift = 0.5 * nbin - 0.5
-    yshift = yshift * pix_size
+    # get unbinned coordinates
+    # these are not the "natural" coordinates of the unbinned pixel grid
+    # define them in terms of offsets from binned grid
+    subpix_offsets = np.arange(-(nbin - 1) / 2, (nbin - 1) / 2 + 1) * pix_size
 
-    bin2non_xform = affine.params2xform([1, 0, xshift, 1, 0, yshift])
-    phases_unbinned = np.zeros(phases.shape)
-    for ii in range(nangles):
-        for jj in range(nphases):
-            _, _, phases_unbinned[ii, jj] = affine.xform_sinusoid_params(frqs[ii, 0],
-                                                                         frqs[ii, 1],
-                                                                         phases[ii, jj],
-                                                                         bin2non_xform)
+    x = (np.expand_dims(xb, axis=1) + np.expand_dims(subpix_offsets, axis=0)).ravel()
+    y = (np.expand_dims(yb, axis=1) + np.expand_dims(subpix_offsets, axis=0)).ravel()
+    z = (xp.arange(nz) - (nz // 2)) # do not need dz, so don't have pixel size for it
+
+    _, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
+
+    # to ensure got coordinates right, can check that the binned coordinates agree with the values obtained
+    # from binning the other coordinates
+    assert np.max(np.abs(xb - camera.bin(xx, bin_sizes=(1, nbin, nbin), mode="mean")[0, 0, :])) < 1e-12
+    assert np.max(np.abs(yb - camera.bin(yy, bin_sizes=(1, nbin, nbin), mode="mean")[0, :, 0])) < 1e-12
 
     # generate images
     frqs = xp.array(frqs)
 
     sim_imgs = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
+    patterns_raw = xp.zeros((nangles, nphases, nz, ny, nx), dtype=float)
     patterns = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=float)
     snrs = xp.zeros(sim_imgs.shape)
     mcnrs = xp.zeros(sim_imgs.shape)
     for ii in range(nangles):
         for jj in range(nphases):
-
-            pattern = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
+            patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))
 
             if not coherent_projection:
-                pattern = fit_psf.blur_img_otf(pattern, otf).real
+                patterns_raw[ii, jj] = fit_psf.blur_img_otf(patterns_raw[ii, jj], otf).real
 
-            # bin pattern
-            patterns[ii, jj], _ = camera.simulated_img(pattern,
+            # bin pattern, for reference
+            patterns[ii, jj], _ = camera.simulated_img(patterns_raw[ii, jj],
                                                        gains=1,
                                                        offsets=0,
                                                        readout_noise_sds=0,
@@ -3843,7 +3820,8 @@ def get_simulated_sim_imgs(ground_truth: array,
                                                        bin_size=nbin,
                                                        image_is_integer=False)
 
-            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * pattern,
+            # forward SIM model
+            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * patterns_raw[ii, jj],
                                                                   gains=gains,
                                                                   offsets=offsets,
                                                                   readout_noise_sds=readout_noise_sds,
@@ -3853,4 +3831,4 @@ def get_simulated_sim_imgs(ground_truth: array,
             # todo: compute mcnr
             mcnrs[ii, jj] = 0
 
-    return sim_imgs, snrs, patterns
+    return sim_imgs, snrs, patterns, patterns_raw

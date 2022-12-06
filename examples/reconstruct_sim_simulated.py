@@ -107,17 +107,17 @@ phases_gt = np.stack([np.array([0, 2*np.pi/3, 4*np.pi/3])] * 3, axis=0)
 mod_depths_gt = np.ones((3))
 amps_gt = np.ones((3, 3))
 
-imgs, snrs, patterns = sim.get_simulated_sim_imgs(gt,
-                                                  frqs_gt,
-                                                  phases_gt,
-                                                  mod_depths=mod_depths_gt,
-                                                  gains=2,
-                                                  offsets=100,
-                                                  readout_noise_sds=5,
-                                                  pix_size=dxy_gt,
-                                                  amps=amps_gt,
-                                                  otf=otf,
-                                                  nbin=nbin)
+imgs, snrs, patterns, _ = sim.get_simulated_sim_imgs(gt,
+                                                     frqs_gt,
+                                                     phases_gt,
+                                                     mod_depths=mod_depths_gt,
+                                                     gains=2,
+                                                     offsets=100,
+                                                     readout_noise_sds=5,
+                                                     pix_size=dxy_gt,
+                                                     amps=amps_gt,
+                                                     otf=otf,
+                                                     nbin=nbin)
 imgs = imgs[:, :, 0]
 patterns = patterns[:, :, 0]
 
