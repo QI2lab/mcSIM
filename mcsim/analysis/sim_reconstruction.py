@@ -93,6 +93,15 @@ class SimImageSet:
         coordinate the SIM parameter estimation and reconstruction of e.g. various channels, z-slices, time points
         or etc. For an example of this approach, see the function reconstruct_mm_sim_dataset()
 
+        Both the raw data and the SIM data use the same coordinates as the FFT with the origin in the center.
+        i.e. the coordinates in the raw image are x = (arange(nx) - (nx // 2)) * dxy
+        and for the SIM image they are            x = ((arange(2*nx) - (2*nx)//2) * 0.5 * dxy
+
+        Note that this means they cannot be overlaid by changing the scale for the SIM image by a factor of two.
+        There is an additional translation. The origin in the raw images is at pixel n//2 while those in the SIM
+        images are at (2*n) // 2 = n. This translation is due to the fact that for odd n,
+        n // 2 != (2*n) // 2 * 0.5 = n / 2
+
         :param physical_params: {'pixel_size', 'na', 'wavelength'}. Pixel size and emission wavelength in um
         :param imgs: n0 x n1 x ... nm x nangles x nphases x ny x nx raw data to be reconstructed. The first
         m-dimensions will be reconstructed in parallel. These may represent e.g. time-series and z-stack data.
