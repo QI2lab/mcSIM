@@ -2027,51 +2027,73 @@ class SimImageSet:
         self.print_log(f"saving SIM images took {time.perf_counter() - tstart_save:.2f}s")
 
 
-def show_sim_napari(fname_zarr):
+def show_sim_napari(fname_zarr, block=True):
     """
     Plot all images obtained from SIM reconstruction with correct scale/offset
     @param fname_zarr:
-    @return:
+    @return viewer:
     """
 
     import napari
 
     imgz = zarr.open(fname_zarr, "r")
     wf = imgz.widefield
-    sim_os = imgz.sim_os
-    decon = imgz.deconvolved
-    sim_sr = imgz.sim_sr
 
     dxy = wf.attrs["dx"]
-    # dxy_sim = sim_sr.attrs["dx"]
     dxy_sim = dxy * 0.5
+    translate_wf = (-(wf.shape[-2] // 2) * dxy, -(wf.shape[-1] // 2) * dxy)
+    translate_sim = (-((2 * wf.shape[-2]) // 2) * dxy_sim, -((2 * wf.shape[-1]) // 2) * dxy_sim)
 
     viewer = napari.Viewer()
 
     # translate to put FFT zero coordinates at origin
     viewer.add_image(wf,
                      scale=(dxy, dxy),
-                     translate=(-(wf.shape[-2] // 2) * dxy, -(wf.shape[-1] // 2) * dxy),
+                     translate=translate_wf,
                      name="widefield")
 
-    viewer.add_image(sim_os,
-                     scale=(dxy, dxy),
-                     translate=(-(wf.shape[-2] // 2) * dxy, -(wf.shape[-1] // 2) * dxy),
-                     name="SIM-OS")
+    if hasattr(imgz, "raw_imgs"):
+        viewer.add_image(imgz.raw_imgs,
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="raw images")
 
-    viewer.add_image(decon,
-                     scale=(dxy_sim, dxy_sim),
-                     translate=(-(sim_sr.shape[-2] // 2) * dxy_sim, -(sim_sr.shape[-1] // 2) * dxy_sim),
-                     name="wf deconvolved",
-                     visible=False)
+    if hasattr(imgz, "sim_os"):
+        viewer.add_image(imgz.sim_os,
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="SIM-OS")
 
-    viewer.add_image(sim_sr,
-                     scale=(dxy_sim, dxy_sim),
-                     translate=(-(sim_sr.shape[-2] // 2) * dxy_sim, -(sim_sr.shape[-1] // 2) * dxy_sim),
-                     name="SIM-SR",
-                     contrast_limits=[0, 5000])
+    if hasattr(imgz, "deconvolved"):
+        viewer.add_image(imgz.deconvolved,
+                         scale=(dxy_sim, dxy_sim),
+                         translate=translate_sim,
+                         name="wf deconvolved",
+                         visible=False)
 
-    viewer.show(block=True)
+    if hasattr(imgz, "sim_sr"):
+        viewer.add_image(imgz.sim_sr,
+                         scale=(dxy_sim, dxy_sim),
+                         translate=translate_sim,
+                         name="SIM-SR",
+                         contrast_limits=[0, 5000])
+
+    if hasattr(imgz, "patterns"):
+        viewer.add_image(imgz.patterns,
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="patterns")
+
+    if hasattr(imgz, "patterns_2x"):
+        viewer.add_image(imgz.patterns_2x,
+                         scale=(dxy_sim, dxy_sim),
+                         # translate=translate_sim,
+                         translate=[a - 0.25 * dxy for a in translate_wf],
+                         name="patterns upsampled")
+
+    viewer.show(block=block)
+
+    return viewer
 
 
 def reconstruct_mm_sim_dataset(data_dirs: list[str],
