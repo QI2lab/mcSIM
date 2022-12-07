@@ -135,7 +135,7 @@ class TestSIM(unittest.TestCase):
 
             freq = np.array([1 / 25.6346, 1 / 25.77772])
             phi = 0.23626
-            gt, _, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)), freq, phi, 1, 1, 0, 0, dxy, photon_shot_noise=False,
+            gt, _, _, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)), freq, phi, 1, 1, 0, 0, dxy, photon_shot_noise=False,
                                                bin_size=nbin)
             #gt = gt[0, 0]
             gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(gt)))

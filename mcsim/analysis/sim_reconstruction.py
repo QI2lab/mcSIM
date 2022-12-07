@@ -93,6 +93,15 @@ class SimImageSet:
         coordinate the SIM parameter estimation and reconstruction of e.g. various channels, z-slices, time points
         or etc. For an example of this approach, see the function reconstruct_mm_sim_dataset()
 
+        Both the raw data and the SIM data use the same coordinates as the FFT with the origin in the center.
+        i.e. the coordinates in the raw image are x = (arange(nx) - (nx // 2)) * dxy
+        and for the SIM image they are            x = ((arange(2*nx) - (2*nx)//2) * 0.5 * dxy
+
+        Note that this means they cannot be overlaid by changing the scale for the SIM image by a factor of two.
+        There is an additional translation. The origin in the raw images is at pixel n//2 while those in the SIM
+        images are at (2*n) // 2 = n. This translation is due to the fact that for odd n,
+        n // 2 != (2*n) // 2 * 0.5 = n / 2
+
         :param physical_params: {'pixel_size', 'na', 'wavelength'}. Pixel size and emission wavelength in um
         :param imgs: n0 x n1 x ... nm x nangles x nphases x ny x nx raw data to be reconstructed. The first
         m-dimensions will be reconstructed in parallel. These may represent e.g. time-series and z-stack data.
@@ -337,9 +346,9 @@ class SimImageSet:
         tstart = time.perf_counter()
 
         # real-space apodization is not so desirable because produces a roll off in the reconstruction. But seems ok.
-        apodization = np.expand_dims(tukey(self.imgs.shape[-1], alpha=0.1), axis=0) * \
-                      np.expand_dims(tukey(self.imgs.shape[-2], alpha=0.1), axis=1)
-        apodization = xp.expand_dims(xp.array(apodization), axis=tuple(range(self.imgs.ndim - 2)))
+        apodization = xp.array(np.outer(tukey(self.imgs.shape[-2], alpha=0.1),
+                                        tukey(self.imgs.shape[-1], alpha=0.1)))
+        # apodization = xp.expand_dims(xp.array(apodization), axis=tuple(range(self.imgs.ndim - 2)))
 
         # todo: when try to run fft on large arrays, much more memory than the final array is allocated
         # todo: and don't understand how to get rid of it. Possibly the individual worker processes
@@ -352,10 +361,6 @@ class SimImageSet:
 
             result = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-            # if use_gpu:
-            #     cache = cp.fft.config.get_plan_cache()
-            #     cache.clear()
-
             return result
 
         self.imgs_ft = da.map_blocks(ft, self.imgs * apodization, self.use_gpu, dtype=complex)
@@ -367,9 +372,8 @@ class SimImageSet:
         # #############################################
         tstart = time.perf_counter()
 
-        # self.widefield = xp.nanmean(self.imgs, axis=(-3, -4))
         self.widefield = da.nanmean(self.imgs, axis=(-3, -4))
-        self.widefield_ft = da.map_blocks(ft, self.widefield * apodization[0, 0], self.use_gpu, dtype=complex)
+        self.widefield_ft = da.map_blocks(ft, self.widefield * apodization, self.use_gpu, dtype=complex)
 
         self.print_log(f"Computing widefield image took {time.perf_counter() - tstart:.2f}s")
 
@@ -704,7 +708,10 @@ class SimImageSet:
         self.print_log(f"estimated global phases and modulation depths in {time.perf_counter() - tstart_mod_depth:.2f}s")
 
     def reconstruct(self,
-                    slices: Optional[tuple] = None):
+                    slices: Optional[tuple] = None,
+                    compute_os: bool = True,
+                    compute_deconvolved: bool = True,
+                    compute_mcnr: bool = True):
         """
         SIM reconstruction
         """
@@ -724,39 +731,41 @@ class SimImageSet:
         # #############################################
         # get optically sectioned image
         # #############################################
-        tstart = time.perf_counter()
+        if compute_os:
+            tstart = time.perf_counter()
 
-        os_imgs = da.stack([da.map_blocks(sim_optical_section,
-                                          self.imgs[..., ii, :, :, :],
-                                          phase_differences=self.phases[ii],
-                                          axis=-3,
-                                          drop_axis=-3,
-                                          dtype=float)
-                            for ii in range(self.nangles)],
-                           axis=-3)
-        self.sim_os = da.mean(os_imgs, axis=-3)
-        self.print_log(f"Computing SIM-OS image took {time.perf_counter() - tstart:.2f}s")
+            os_imgs = da.stack([da.map_blocks(sim_optical_section,
+                                              self.imgs[..., ii, :, :, :],
+                                              phase_differences=self.phases[ii],
+                                              axis=-3,
+                                              drop_axis=-3,
+                                              dtype=float)
+                                for ii in range(self.nangles)],
+                               axis=-3)
+            self.sim_os = da.mean(os_imgs, axis=-3)
+            self.print_log(f"Computing SIM-OS image took {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # estimate spatial-resolved MCNR
         # #############################################
-        # following the proposal of https://doi.org/10.1038/s41592-021-01167-7
-        # calculate as the ratio of the modulation size over the expected shot noise value
-        # note: this is the same as sim_os / sqrt(wf_angle) up to a factor
-        tstart = time.perf_counter()
+        if compute_mcnr:
+            # following the proposal of https://doi.org/10.1038/s41592-021-01167-7
+            # calculate as the ratio of the modulation size over the expected shot noise value
+            # note: this is the same as sim_os / sqrt(wf_angle) up to a factor
+            tstart = time.perf_counter()
 
-        # divide by nangles to remove ft normalization
-        def ft_mcnr(m, use_gpu):
-            if use_gpu:
-                cp.fft._cache.PlanCache(memsize=0)
+            # divide by nangles to remove ft normalization
+            def ft_mcnr(m, use_gpu):
+                if use_gpu:
+                    cp.fft._cache.PlanCache(memsize=0)
 
-            return xp.fft.fft(xp.fft.ifftshift(m, axes=-3), axis=-3) / self.nangles
+                return xp.fft.fft(xp.fft.ifftshift(m, axes=-3), axis=-3) / self.nangles
 
-        img_angle_ft = da.map_blocks(ft_mcnr, self.imgs, self.use_gpu, dtype=complex)
-        # if I_j = Io * m * cos(2*pi*j), then want numerator to be 2*m. FT gives us m/2, so multiply by 4
-        self.mcnr = (4 * da.abs(img_angle_ft[..., 1, :, :]) / da.sqrt(da.abs(img_angle_ft[..., 0, :, :])))
+            img_angle_ft = da.map_blocks(ft_mcnr, self.imgs, self.use_gpu, dtype=complex)
+            # if I_j = Io * m * cos(2*pi*j), then want numerator to be 2*m. FT gives us m/2, so multiply by 4
+            self.mcnr = (4 * da.abs(img_angle_ft[..., 1, :, :]) / da.sqrt(da.abs(img_angle_ft[..., 0, :, :])))
 
-        self.print_log(f"estimated modulation-contrast-to-noise ratio in {time.perf_counter() - tstart:.2f}s")
+            self.print_log(f"estimated modulation-contrast-to-noise ratio in {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # do band separation
@@ -849,6 +858,7 @@ class SimImageSet:
                                    xp.expand_dims(np.exp(-1j * self.phase_corrections) / self.mod_depths, axis=1)),
                                    axis=1)
         # expand for extra dims and xy
+        # todo: think don't need last expansion bc of numpy broadcasting rules
         corr_mat = xp.expand_dims(corr_mat, axis=tuple(range(self.n_extra_dims)) + (-1, -2))
 
         # put in modulation depth and global phase corrections
@@ -858,8 +868,8 @@ class SimImageSet:
         self.sim_sr_ft = da.nansum(self.sim_sr_ft_components, axis=(-3, -4))
 
         # inverse FFT to get real-space reconstructed image
-        apodization = np.expand_dims(tukey(self.sim_sr_ft.shape[-1], alpha=0.1), axis=0) * \
-                      np.expand_dims(tukey(self.sim_sr_ft.shape[-2], alpha=0.1), axis=1)
+        apodization = np.outer(tukey(self.sim_sr_ft.shape[-2], alpha=0.1),
+                               tukey(self.sim_sr_ft.shape[-1], alpha=0.1))
         apodization = xp.array(apodization)
 
         # irfft2 ~2X faster than ifft2. But have to slice out only half the frequencies
@@ -878,16 +888,15 @@ class SimImageSet:
         # #############################################
         # widefield deconvolution
         # #############################################
-        tstart = time.perf_counter()
+        if compute_deconvolved:
+            tstart = time.perf_counter()
 
-        self.widefield_deconvolution_ft = da.nansum(weights_decon[..., 0, :, :] * self.bands_shifted_ft[..., 0, :, :], axis=-3) / \
-                                              (self.wiener_parameter**2 + da.nansum(np.abs(weights_decon[..., 0, :, :])**2, axis=-3))
+            self.widefield_deconvolution_ft = da.nansum(weights_decon[..., 0, :, :] * self.bands_shifted_ft[..., 0, :, :], axis=-3) / \
+                                                  (self.wiener_parameter**2 + da.nansum(np.abs(weights_decon[..., 0, :, :])**2, axis=-3))
 
-        # wf_decon_ft_one_sided = xp.fft.ifftshift(self.widefield_deconvolution_ft * apodization, axes=(-1, -2))[:, :self.widefield_deconvolution_ft.shape[1] // 2 + 1]
-        # self.widefield_deconvolution = xp.fft.fftshift(xp.fft.irfft2(wf_decon_ft_one_sided, axes=(-1, -2)), axes=(-1, -2)).real
-        self.widefield_deconvolution = da.map_blocks(ift, self.widefield_deconvolution_ft * apodization, dtype=float)
+            self.widefield_deconvolution = da.map_blocks(ift, self.widefield_deconvolution_ft * apodization, dtype=float)
 
-        self.print_log(f"Deconvolved widefield in {time.perf_counter() - tstart:.2f}s")
+            self.print_log(f"Deconvolved widefield in {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # move arrays off GPU
@@ -911,9 +920,14 @@ class SimImageSet:
             self.mcnr = da.map_blocks(tocpu, self.mcnr, dtype=self.mcnr.dtype)
             self.widefield = da.map_blocks(tocpu, self.widefield, dtype=self.widefield.dtype)
             self.widefield_ft = da.map_blocks(tocpu, self.widefield_ft, dtype=self.widefield_ft.dtype)
-            self.widefield_deconvolution = da.map_blocks(tocpu, self.widefield_deconvolution, dtype=self.widefield_deconvolution.dtype)
-            self.widefield_deconvolution_ft = da.map_blocks(tocpu, self.widefield_deconvolution_ft, dtype=self.widefield_deconvolution.dtype)
-            self.sim_os = da.map_blocks(tocpu, self.sim_os, dtype=self.sim_os.dtype)
+
+            if hasattr(self, "widefield_deconvolution"):
+                self.widefield_deconvolution = da.map_blocks(tocpu, self.widefield_deconvolution, dtype=self.widefield_deconvolution.dtype)
+                self.widefield_deconvolution_ft = da.map_blocks(tocpu, self.widefield_deconvolution_ft, dtype=self.widefield_deconvolution.dtype)
+
+            if hasattr(self, "sim_os"):
+                self.sim_os = da.map_blocks(tocpu, self.sim_os, dtype=self.sim_os.dtype)
+
             self.sim_sr = da.map_blocks(tocpu, self.sim_sr, dtype=self.sim_sr.dtype)
             self.sim_sr_ft = da.map_blocks(tocpu, self.sim_sr_ft, dtype=self.sim_sr_ft.dtype)
             self.bands_unmixed_ft = da.map_blocks(tocpu, self.bands_unmixed_ft, dtype=self.bands_unmixed_ft.dtype)
@@ -1868,6 +1882,9 @@ class SimImageSet:
         # ###############################n
         # processing metadata
         # ###############################
+        metadata["dx"] = self.dx
+        metadata["dy"] = self.dy
+        metadata["upsample_factor"] = self.upsample_fact
         metadata["na"] = self.na
         metadata["wavelength"] = self.wavelength
         metadata["fmax"] = self.fmax
@@ -1917,29 +1934,22 @@ class SimImageSet:
             # ###############################
 
             with ProgressBar():
-                future = [self.widefield.to_zarr(fname, component="widefield", compute=False),
-                          self.widefield_deconvolution.to_zarr(fname, component="deconvolved", compute=False),
-                          self.mcnr.to_zarr(fname, component="mcnr", compute=False),
-                          self.sim_os.to_zarr(fname, component="sim_os", compute=False),
-                          self.sim_sr.to_zarr(fname, component="sim_sr", compute=False)]
+                future = [self.sim_sr.to_zarr(fname, component="sim_sr", compute=False)]
+
+                for attr in ["widefield", "widefield_deconvolution", "mcnr", "sim_os"]:
+                    if hasattr(self, attr):
+                        future += [getattr(self, attr).to_zarr(fname, component=attr, compute=False)]
+
+                # if hasattr(self, "widefield"):
+                #     future += [self.widefield.to_zarr(fname, component="widefield", compute=False)]
+                #     ,
+                #           self.widefield_deconvolution.to_zarr(fname, component="deconvolved", compute=False),
+                #           self.mcnr.to_zarr(fname, component="mcnr", compute=False),
+                #           self.sim_os.to_zarr(fname, component="sim_os", compute=False),
+                #           ]
 
                 # dask.compute(future, num_workers=nmax_cores)
                 dask.compute(future)
-
-            img_z.widefield.attrs["dx"] = dxy_wf
-            img_z.widefield.attrs["dy"] = dxy_wf
-
-            img_z.deconvolved.attrs["dx"] = dxy_wf
-            img_z.deconvolved.attrs["dy"] = dxy_wf
-
-            img_z.mcnr.attrs["dx"] = self.dx
-            img_z.mcnr.attrs["dy"] = self.dy
-
-            img_z.sim_os.attrs["dx"] = dxy_wf
-            img_z.sim_os.attrs["dy"] = dxy_wf
-
-            img_z.sim_sr.attrs["dx"] = self.dx / self.upsample_fact
-            img_z.sim_sr.attrs["dy"] = self.dy / self.upsample_fact
 
         else:
             # todo: want to save without loading all data...
@@ -1950,6 +1960,27 @@ class SimImageSet:
                                        self.sim_os,
                                        self.sim_sr)
                 widefield, widefield_deconvolution, mcnr, sim_os, sim_sr = results
+
+            # todo: rewrite in this format
+            # todo: ultimately want to save e.g. plane by plane instead of all at once
+            # delayed = []
+            # components = ["widefield", "widefield_deconvolution", "mcnr", "sim_os"]
+            # for attr in components:
+            #     fname = save_dir / f"{save_prefix:s}{attr:s}{save_suffix:s}.tif"
+            #
+            #     if getattr(self, attr).shape[0] == self.nx:
+            #         factor = 1
+            #     else:
+            #         factor = self.upsample_fact
+            #
+            #     dask.delayed(tifffile.imwrite)(fname,
+            #                                    getattr(self, attr).astype(np.float32),
+            #                                    imagej=True,
+            #                                    resolution=(1/self.dy * factor, 1/self.dx * factor),
+            #                                    metadata={"Info": attr,
+            #                                              "unit": "um"}
+            #                                    )
+
 
             # save metadata to json file
             fname = save_dir / f"{save_prefix:s}sim_reconstruction{save_suffix:s}.json"
@@ -2018,51 +2049,73 @@ class SimImageSet:
         self.print_log(f"saving SIM images took {time.perf_counter() - tstart_save:.2f}s")
 
 
-def show_sim_napari(fname_zarr):
+def show_sim_napari(fname_zarr, block=True):
     """
     Plot all images obtained from SIM reconstruction with correct scale/offset
     @param fname_zarr:
-    @return:
+    @return viewer:
     """
 
     import napari
 
     imgz = zarr.open(fname_zarr, "r")
     wf = imgz.widefield
-    sim_os = imgz.sim_os
-    decon = imgz.deconvolved
-    sim_sr = imgz.sim_sr
 
-    dxy = wf.attrs["dx"]
-    # dxy_sim = sim_sr.attrs["dx"]
-    dxy_sim = dxy * 0.5
+    dxy = imgz.attrs["dx"]
+    dxy_sim = dxy / imgz.attrs["upsample_factor"]
+    translate_wf = (-(wf.shape[-2] // 2) * dxy, -(wf.shape[-1] // 2) * dxy)
+    translate_sim = (-((2 * wf.shape[-2]) // 2) * dxy_sim, -((2 * wf.shape[-1]) // 2) * dxy_sim)
 
     viewer = napari.Viewer()
 
     # translate to put FFT zero coordinates at origin
     viewer.add_image(wf,
                      scale=(dxy, dxy),
-                     translate=(-(wf.shape[-2] // 2) * dxy, -(wf.shape[-1] // 2) * dxy),
+                     translate=translate_wf,
                      name="widefield")
 
-    viewer.add_image(sim_os,
-                     scale=(dxy, dxy),
-                     translate=(-(wf.shape[-2] // 2) * dxy, -(wf.shape[-1] // 2) * dxy),
-                     name="SIM-OS")
+    if hasattr(imgz, "raw_imgs"):
+        viewer.add_image(imgz.raw_imgs,
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="raw images")
 
-    viewer.add_image(decon,
-                     scale=(dxy_sim, dxy_sim),
-                     translate=(-(sim_sr.shape[-2] // 2) * dxy_sim, -(sim_sr.shape[-1] // 2) * dxy_sim),
-                     name="wf deconvolved",
-                     visible=False)
+    if hasattr(imgz, "sim_os"):
+        viewer.add_image(imgz.sim_os,
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="SIM-OS")
 
-    viewer.add_image(sim_sr,
-                     scale=(dxy_sim, dxy_sim),
-                     translate=(-(sim_sr.shape[-2] // 2) * dxy_sim, -(sim_sr.shape[-1] // 2) * dxy_sim),
-                     name="SIM-SR",
-                     contrast_limits=[0, 5000])
+    if hasattr(imgz, "deconvolved"):
+        viewer.add_image(imgz.deconvolved,
+                         scale=(dxy_sim, dxy_sim),
+                         translate=translate_sim,
+                         name="wf deconvolved",
+                         visible=False)
 
-    viewer.show(block=True)
+    if hasattr(imgz, "sim_sr"):
+        viewer.add_image(imgz.sim_sr,
+                         scale=(dxy_sim, dxy_sim),
+                         translate=translate_sim,
+                         name="SIM-SR",
+                         contrast_limits=[0, 5000])
+
+    if hasattr(imgz, "patterns"):
+        viewer.add_image(imgz.patterns,
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="patterns")
+
+    if hasattr(imgz, "patterns_2x"):
+        viewer.add_image(imgz.patterns_2x,
+                         scale=(dxy_sim, dxy_sim),
+                         # translate=translate_sim,
+                         translate=[a - 0.25 * dxy for a in translate_wf],
+                         name="patterns upsampled")
+
+    viewer.show(block=block)
+
+    return viewer
 
 
 def reconstruct_mm_sim_dataset(data_dirs: list[str],
@@ -3664,7 +3717,7 @@ def get_simulated_sim_imgs(ground_truth: array,
                            coherent_projection: bool = True,
                            otf: Optional[np.ndarray] = None,
                            nbin: int = 1,
-                           **kwargs) -> (array, array, array):
+                           **kwargs) -> (array, array, array, array):
     """
     Get simulated SIM images, including the effects of shot-noise and camera noise.
 
@@ -3687,7 +3740,7 @@ def get_simulated_sim_imgs(ground_truth: array,
     :return sim_imgs: nangles x nphases x nz x ny x nx array
     :return snrs: nangles x nphases x nz x ny x nx array giving an estimate of the signal-to-noise ratio which will be
     accurate as long as the photon number is large enough that the Poisson distribution is close to a normal distribution
-    :return patterns, snrs, patterns:
+    :return patterns, snrs, patterns, raw_patterns:
     """
 
     # if isinstance(ground_truth, cp.ndarray):
@@ -3696,10 +3749,10 @@ def get_simulated_sim_imgs(ground_truth: array,
     else:
         xp = np
 
-    ground_truth = xp.array(ground_truth)
-    gains = xp.array(gains)
-    offsets = xp.array(offsets)
-    readout_noise_sds = xp.array(readout_noise_sds)
+    ground_truth = xp.asarray(ground_truth)
+    gains = xp.asarray(gains)
+    offsets = xp.asarray(offsets)
+    readout_noise_sds = xp.asarray(readout_noise_sds)
 
     # ensure ground truth is 3D
     if ground_truth.ndim == 2:
@@ -3736,74 +3789,51 @@ def get_simulated_sim_imgs(ground_truth: array,
     else:
         psf = None
 
-    # get coordinates
-    x = (xp.arange(nx) - (nx // 2)) * pix_size
-    y = (xp.arange(ny) - (ny // 2)) * pix_size
-    z = (xp.arange(nz) - (nz // 2)) # do not need dz, so don't have pixel size for it
-    _, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
-
+    # get binned sizes
     nxb = nx / nbin
     nyb = ny / nbin
     if not nxb.is_integer() or not nyb.is_integer():
-        raise Exception("The image size was not evenly divisble by the bin size")
+        raise Exception("The image size was not evenly divisible by the bin size")
     nxb = int(nxb)
     nyb = int(nyb)
 
-    # phases will be the phase of the patterns in the binned coordinates
-    # need to compute the phases in the unbinned coordinates
-    # the effect of binning is to shift the center of the binned coordinates to the right/positive
-    # think of leftmost bin.
-    # For binned, this is at position -nbin x (n/nbin - 1) / 2 if n/nbin is odd, or -n/2 if n/nbin is even
-    # For unbinned, add up the leftmost nbins
-    # if nx and nx/nbin are even, shift = 0.5 * nbin - 0.5
-    # if nx is even and nx/nbin is odd, shift = 0.5 * nbin - 1
-    # if nx is odd and nx/nbin is odd, shift = 0
-    # if nx is odd, nx/nbin cannot be even
-    # relative to the unbinned coordinates
-    if np.mod(nx, 2) == 1:
-        xshift = 0
-    else:
-        if np.mod(nxb, 2) == 1:
-            xshift = -0.5
-        else:
-            xshift = 0.5 * nbin - 0.5
-    xshift = xshift * pix_size
+    # get binned coordinates
+    xb = (xp.arange(nxb) - (nxb // 2)) * (pix_size * nbin)
+    yb = (xp.arange(nyb) - (nyb // 2)) * (pix_size * nbin)
 
-    if np.mod(ny, 2) == 1:
-        yshift = 0
-    else:
-        if np.mod(nyb, 2) == 1:
-            yshift = -0.5
-        else:
-            yshift = 0.5 * nbin - 0.5
-    yshift = yshift * pix_size
+    # get unbinned coordinates
+    # these are not the "natural" coordinates of the unbinned pixel grid
+    # define them in terms of offsets from binned grid
+    subpix_offsets = np.arange(-(nbin - 1) / 2, (nbin - 1) / 2 + 1) * pix_size
 
-    bin2non_xform = affine.params2xform([1, 0, xshift, 1, 0, yshift])
-    phases_unbinned = np.zeros(phases.shape)
-    for ii in range(nangles):
-        for jj in range(nphases):
-            _, _, phases_unbinned[ii, jj] = affine.xform_sinusoid_params(frqs[ii, 0],
-                                                                         frqs[ii, 1],
-                                                                         phases[ii, jj],
-                                                                         bin2non_xform)
+    x = (np.expand_dims(xb, axis=1) + np.expand_dims(subpix_offsets, axis=0)).ravel()
+    y = (np.expand_dims(yb, axis=1) + np.expand_dims(subpix_offsets, axis=0)).ravel()
+    z = (xp.arange(nz) - (nz // 2)) # do not need dz, so don't have pixel size for it
+
+    _, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
+
+    # to ensure got coordinates right, can check that the binned coordinates agree with the values obtained
+    # from binning the other coordinates
+    assert np.max(np.abs(xb - camera.bin(xx, bin_sizes=(1, nbin, nbin), mode="mean")[0, 0, :])) < 1e-12
+    assert np.max(np.abs(yb - camera.bin(yy, bin_sizes=(1, nbin, nbin), mode="mean")[0, :, 0])) < 1e-12
 
     # generate images
     frqs = xp.array(frqs)
 
     sim_imgs = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
+    patterns_raw = xp.zeros((nangles, nphases, nz, ny, nx), dtype=float)
     patterns = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=float)
     snrs = xp.zeros(sim_imgs.shape)
     mcnrs = xp.zeros(sim_imgs.shape)
     for ii in range(nangles):
         for jj in range(nphases):
-
-            pattern = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases_unbinned[ii, jj]))
+            patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))
 
             if not coherent_projection:
-                pattern = fit_psf.blur_img_otf(pattern, otf).real
+                patterns_raw[ii, jj] = fit_psf.blur_img_otf(patterns_raw[ii, jj], otf).real
 
-            # bin pattern
-            patterns[ii, jj], _ = camera.simulated_img(pattern,
+            # bin pattern, for reference
+            patterns[ii, jj], _ = camera.simulated_img(patterns_raw[ii, jj],
                                                        gains=1,
                                                        offsets=0,
                                                        readout_noise_sds=0,
@@ -3812,7 +3842,8 @@ def get_simulated_sim_imgs(ground_truth: array,
                                                        bin_size=nbin,
                                                        image_is_integer=False)
 
-            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * pattern,
+            # forward SIM model
+            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * patterns_raw[ii, jj],
                                                                   gains=gains,
                                                                   offsets=offsets,
                                                                   readout_noise_sds=readout_noise_sds,
@@ -3822,4 +3853,4 @@ def get_simulated_sim_imgs(ground_truth: array,
             # todo: compute mcnr
             mcnrs[ii, jj] = 0
 
-    return sim_imgs, snrs, patterns
+    return sim_imgs, snrs, patterns, patterns_raw
