@@ -6,14 +6,28 @@ Relies on DAQ line mapping scheme used in daq.py and daq_map.py
 
 import numpy as np
 
-def get_sim_odt_sequence(daq_do_map, daq_ao_map, presets, channels, odt_exposure_time, sim_exposure_time,
-                         npatterns, dt=105e-6, interval=0,
-                         n_odt_per_sim=1, n_trig_width=1, dmd_delay=105e-6,
-                         odt_stabilize_t=0., min_odt_frame_time=8e-3,
-                         sim_readout_time=10e-3, sim_stabilize_t=200e-3, shutter_delay_time=50e-3,
-                         z_voltages=None,
-                         use_dmd_as_odt_shutter=False, n_digital_ch=16, n_analog_ch=4,
-                         acquisition_mode=None):
+def get_sim_odt_sequence(daq_do_map: dict,
+                         daq_ao_map: dict,
+                         presets: list[str],
+                         channels: list[str],
+                         odt_exposure_time: float,
+                         sim_exposure_time: float,
+                         npatterns: int,
+                         dt: float = 105e-6,
+                         interval: float = 0,
+                         n_odt_per_sim: int = 1,
+                         n_trig_width: int = 1,
+                         dmd_delay: float = 105e-6,
+                         odt_stabilize_t: float = 0.,
+                         min_odt_frame_time: float = 8e-3,
+                         sim_readout_time: float = 10e-3,
+                         sim_stabilize_t: float = 200e-3,
+                         shutter_delay_time: float = 50e-3,
+                         z_voltages: list[float] = None,
+                         use_dmd_as_odt_shutter: bool =False,
+                         n_digital_ch: int = 16,
+                         n_analog_ch: int = 4,
+                         acquisition_mode: str = None):
     """
     Create DAQ program for SIM/ODT experiment
 
@@ -57,27 +71,53 @@ def get_sim_odt_sequence(daq_do_map, daq_ao_map, presets, channels, odt_exposure
     info = ""
     for ch, acq_mode, npat in zip(channels, acquisition_mode, npatterns):
         if ch == "odt":
-            d, a, i = get_odt_sequence(daq_do_map, daq_ao_map, presets[ch], odt_exposure_time, npat,
-                                    dt=dt, interval=0, nrepeats=n_odt_per_sim, n_trig_width=n_trig_width,
-                                    dmd_delay=dmd_delay, stabilize_t=odt_stabilize_t, min_frame_time=min_odt_frame_time,
-                                    shutter_delay_time=shutter_delay_time, n_digital_ch=n_digital_ch,
-                                    n_analog_ch=n_analog_ch, use_dmd_as_shutter=use_dmd_as_odt_shutter)
+            d, a, i = get_odt_sequence(daq_do_map,
+                                       daq_ao_map,
+                                       presets[ch],
+                                       odt_exposure_time,
+                                       npat,
+                                       dt=dt,
+                                       interval=0,
+                                       nrepeats=n_odt_per_sim,
+                                       n_trig_width=n_trig_width,
+                                       dmd_delay=dmd_delay,
+                                       stabilize_t=odt_stabilize_t,
+                                       min_frame_time=min_odt_frame_time,
+                                       shutter_delay_time=shutter_delay_time,
+                                       n_digital_ch=n_digital_ch,
+                                       n_analog_ch=n_analog_ch,
+                                       use_dmd_as_shutter=use_dmd_as_odt_shutter)
 
             info += i
             digital_pgms.append(d)
             analog_pgms.append(a)
         else:
-            d, a, i = get_sim_sequence(daq_do_map, daq_ao_map, presets[ch], sim_exposure_time, npat,
-                                       dt=dt, interval=0, nrepeats=1, n_trig_width=n_trig_width, dmd_delay=dmd_delay,
-                                       stabilize_t=sim_stabilize_t, min_frame_time=0, cam_readout_time=sim_readout_time,
-                                       shutter_delay_time=shutter_delay_time, n_digital_ch=n_digital_ch, n_analog_ch=n_analog_ch,
-                                       use_dmd_as_shutter=True, acquisition_mode=acq_mode)
+            d, a, i = get_sim_sequence(daq_do_map,
+                                       daq_ao_map,
+                                       presets[ch],
+                                       sim_exposure_time,
+                                       npat,
+                                       dt=dt,
+                                       interval=0,
+                                       nrepeats=1,
+                                       n_trig_width=n_trig_width,
+                                       dmd_delay=dmd_delay,
+                                       stabilize_t=sim_stabilize_t,
+                                       min_frame_time=0,
+                                       cam_readout_time=sim_readout_time,
+                                       shutter_delay_time=shutter_delay_time,
+                                       n_digital_ch=n_digital_ch,
+                                       n_analog_ch=n_analog_ch,
+                                       use_dmd_as_shutter=True,
+                                       acquisition_mode=acq_mode)
+
+            # if there is only one mode, keep SIM shutter open
+            if len(channels) == 1:
+                d[:, daq_do_map["sim_shutter"]] = 1
 
             info += i
             digital_pgms.append(d)
             analog_pgms.append(a)
-
-
 
     # for z-stack, digital pgm are just repeated. We don't need to do anything at all
     digital_pgm_full = np.vstack(digital_pgms)
@@ -134,12 +174,22 @@ def get_sim_odt_sequence(daq_do_map, daq_ao_map, presets, channels, odt_exposure
     return digital_pgm_full, analog_pgm_full, info
 
 
-def get_odt_sequence(daq_do_map, daq_ao_map, preset,
-                     exposure_time, npatterns, dt=105e-6, interval=0,
-                     nrepeats=1, n_trig_width=1, dmd_delay=105e-6,
-                     stabilize_t=0., min_frame_time=8e-3,
-                     shutter_delay_time=50e-3, n_digital_ch=16, n_analog_ch=4,
-                     use_dmd_as_shutter=False):
+def get_odt_sequence(daq_do_map: dict,
+                     daq_ao_map: dict,
+                     preset,
+                     exposure_time: float,
+                     npatterns: int,
+                     dt: float = 105e-6,
+                     interval: float = 0,
+                     nrepeats: int = 1,
+                     n_trig_width: int = 1,
+                     dmd_delay: float = 105e-6,
+                     stabilize_t: float = 0.,
+                     min_frame_time: float = 8e-3,
+                     shutter_delay_time: float = 50e-3,
+                     n_digital_ch: int = 16,
+                     n_analog_ch: int = 4,
+                     use_dmd_as_shutter: bool = False):
     """
     Get DAQ ODT sequence
 
@@ -249,13 +299,25 @@ def get_odt_sequence(daq_do_map, daq_ao_map, preset,
     return do_odt, ao_odt, info
 
 
-def get_sim_sequence(daq_do_map, daq_ao_map, preset,
-                     exposure_time, npatterns, dt=105e-6, interval=0,
-                     nrepeats=1, n_trig_width=1, dmd_delay=105e-6,
-                     stabilize_t=200e-3, min_frame_time=0, cam_readout_time=10e-3,
-                     shutter_delay_time=50e-3, n_digital_ch=16, n_analog_ch=4,
-                     use_dmd_as_shutter=True, acquisition_mode="sim",
-                     force_equal_subpatterns=True):
+def get_sim_sequence(daq_do_map: dict,
+                     daq_ao_map: dict,
+                     preset,
+                     exposure_time: float,
+                     npatterns: int,
+                     dt: float = 105e-6,
+                     interval: float = 0,
+                     nrepeats: int = 1,
+                     n_trig_width: int = 1,
+                     dmd_delay: float = 105e-6,
+                     stabilize_t: float = 200e-3,
+                     min_frame_time: float = 0,
+                     cam_readout_time: float = 10e-3,
+                     shutter_delay_time: float = 50e-3,
+                     n_digital_ch: int = 16,
+                     n_analog_ch: int = 4,
+                     use_dmd_as_shutter: bool = True,
+                     acquisition_mode: str = "sim",
+                     force_equal_subpatterns: bool = True):
     """
     Generate DAQ array for running a SIM experiment. Also supports taking a pseudo-widefield image by
     running through all SIM patterns during one camera exposure
@@ -414,9 +476,17 @@ def get_sim_sequence(daq_do_map, daq_ao_map, preset,
     return do, ao, info
 
 
-def get_generic_sequence(daq_do_map, daq_ao_map, preset,
-                         exposure_time, npatterns, dt=105e-6, dmd_delay=105e-6, interval=0,
-                         n_trig_width=1, min_frame_time=0, cam_readout_time=0,
-                         use_dmd_as_shutter=True):
+def get_generic_sequence(daq_do_map: dict,
+                         daq_ao_map: dict,
+                         preset,
+                         exposure_time: float,
+                         npatterns: int,
+                         dt: float = 105e-6,
+                         dmd_delay: float = 105e-6,
+                         interval: float = 0,
+                         n_trig_width: int = 1,
+                         min_frame_time: float = 0,
+                         cam_readout_time: float = 0,
+                         use_dmd_as_shutter: bool = True):
     # todo: ...
     pass
