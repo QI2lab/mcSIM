@@ -1841,6 +1841,8 @@ class SimImageSet:
                   save_suffix: Optional[str] = None,
                   save_prefix: Optional[str] = None,
                   use_zarr: bool = False,
+                  save_patterns: bool = False,
+                  save_raw_data: bool = False,
                   nmax_cores: int = -1):
 
         tstart_save = time.perf_counter()
@@ -1936,20 +1938,37 @@ class SimImageSet:
             with ProgressBar():
                 future = [self.sim_sr.to_zarr(fname, component="sim_sr", compute=False)]
 
-                for attr in ["widefield", "widefield_deconvolution", "mcnr", "sim_os"]:
+                attrs = ["widefield", "widefield_deconvolution", "mcnr", "sim_os"]
+                if save_raw_data:
+                    attrs += ["imgs"]
+
+                for attr in attrs:
                     if hasattr(self, attr):
                         future += [getattr(self, attr).to_zarr(fname, component=attr, compute=False)]
 
-                # if hasattr(self, "widefield"):
-                #     future += [self.widefield.to_zarr(fname, component="widefield", compute=False)]
-                #     ,
-                #           self.widefield_deconvolution.to_zarr(fname, component="deconvolved", compute=False),
-                #           self.mcnr.to_zarr(fname, component="mcnr", compute=False),
-                #           self.sim_os.to_zarr(fname, component="sim_os", compute=False),
-                #           ]
-
                 # dask.compute(future, num_workers=nmax_cores)
                 dask.compute(future)
+
+            if save_patterns:
+                real_phases = self.phases - np.expand_dims(self.phase_corrections, axis=1)
+
+                # on same grid
+                _, _, estimated_patterns, estimated_patterns_2x = \
+                    get_simulated_sim_imgs(np.ones([self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
+                                           frqs=self.frqs,
+                                           phases=real_phases,
+                                           mod_depths=self.mod_depths,
+                                           gains=1,
+                                           offsets=0,
+                                           readout_noise_sds=0,
+                                           pix_size=self.dx / self.upsample_fact,
+                                           nbin=self.upsample_fact
+                                           )
+                img_z.array("patterns", estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx])
+                            , dtype=float, compressor="none")
+                img_z.array("patterns_2x",
+                            estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
+                            dtype=float, compressor="none")
 
         else:
             # todo: want to save without loading all data...
@@ -2049,7 +2068,8 @@ class SimImageSet:
         self.print_log(f"saving SIM images took {time.perf_counter() - tstart_save:.2f}s")
 
 
-def show_sim_napari(fname_zarr, block=True):
+def show_sim_napari(fname_zarr: str,
+                    block: bool = True):
     """
     Plot all images obtained from SIM reconstruction with correct scale/offset
     @param fname_zarr:
@@ -2069,36 +2089,39 @@ def show_sim_napari(fname_zarr, block=True):
     viewer = napari.Viewer()
 
     # translate to put FFT zero coordinates at origin
-    viewer.add_image(wf,
-                     scale=(dxy, dxy),
-                     translate=translate_wf,
-                     name="widefield")
-
-    if hasattr(imgz, "raw_imgs"):
-        viewer.add_image(imgz.raw_imgs,
-                         scale=(dxy, dxy),
-                         translate=translate_wf,
-                         name="raw images")
-
     if hasattr(imgz, "sim_os"):
-        viewer.add_image(imgz.sim_os,
+
+        viewer.add_image(np.expand_dims(imgz.sim_os, axis=-3),
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="SIM-OS")
 
     if hasattr(imgz, "deconvolved"):
-        viewer.add_image(imgz.deconvolved,
+        viewer.add_image(np.expand_dims(imgz.deconvolved, axis=-3),
                          scale=(dxy_sim, dxy_sim),
                          translate=translate_sim,
                          name="wf deconvolved",
                          visible=False)
 
     if hasattr(imgz, "sim_sr"):
-        viewer.add_image(imgz.sim_sr,
+        viewer.add_image(np.expand_dims(imgz.sim_sr, axis=-3),
                          scale=(dxy_sim, dxy_sim),
                          translate=translate_sim,
                          name="SIM-SR",
                          contrast_limits=[0, 5000])
+
+    viewer.add_image(np.expand_dims(wf, axis=-3),
+                     scale=(dxy, dxy),
+                     translate=translate_wf,
+                     name="widefield")
+
+    if hasattr(imgz, "imgs"):
+        shape = imgz.imgs.shape[:-4] + (9,) + imgz.imgs.shape[-2:]
+
+        viewer.add_image(np.reshape(imgz.imgs, shape),
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="raw images")
 
     if hasattr(imgz, "patterns"):
         viewer.add_image(imgz.patterns,
