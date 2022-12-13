@@ -148,7 +148,7 @@ for kk in range(ncolors):
     # ###########################################
     # run reconstruction
     # ###########################################
-    imgset.reconstruct()
+    imgset.reconstruct(compute_os=False)
 
     # ###########################################
     # save reconstruction results
@@ -166,15 +166,15 @@ for kk in range(ncolors):
     # ###########################################
     real_phases = imgset.phases + np.expand_dims(imgset.phase_corrections, axis=1)
 
-    _, _, estimated_patterns = sim.get_simulated_sim_imgs(np.ones(imgset.imgs[0, 0].shape),
-                                                          frqs=imgset.frqs,
-                                                          phases=imgset.phases,
-                                                          mod_depths=imgset.mod_depths,
-                                                          gains=1,
-                                                          offsets=0,
-                                                          readout_noise_sds=0,
-                                                          pix_size=pixel_size,
-                                                          )
+    _, _, estimated_patterns, _ = sim.get_simulated_sim_imgs(np.ones(imgset.imgs[0, 0].shape),
+                                                             frqs=imgset.frqs,
+                                                             phases=imgset.phases,
+                                                             mod_depths=imgset.mod_depths,
+                                                             gains=1,
+                                                             offsets=0,
+                                                             readout_noise_sds=0,
+                                                             pix_size=pixel_size,
+                                                             )
     estimated_patterns = estimated_patterns[:, :, 0]
 
     pattern_fname = save_dir / "patterns.tif"

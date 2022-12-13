@@ -506,7 +506,7 @@ class SimImageSet:
             if np.min(p2nr[ii]) < self.min_p2nr and self.frqs_guess is not None:
                 self.frqs[ii] = self.frqs_guess[ii]
                 self.print_log(f"SIM peak-to-noise ratio for angle={ii:d} is"
-                               f" {np.min(p2nr[ii]):.2f} < {self.min_p2nr:.2f}, the so frequency fit will be ignored"
+                               f" {np.min(p2nr[ii]):.2f} < {self.min_p2nr:.2f}, the so frequency fit will be ignored "
                                f"and the guess value will be used instead.")
 
                 peak_val = tools.get_peak_value(imgs_ft[ii],
@@ -1841,6 +1841,8 @@ class SimImageSet:
                   save_suffix: Optional[str] = None,
                   save_prefix: Optional[str] = None,
                   use_zarr: bool = False,
+                  save_patterns: bool = False,
+                  save_raw_data: bool = False,
                   nmax_cores: int = -1):
 
         tstart_save = time.perf_counter()
@@ -1936,20 +1938,37 @@ class SimImageSet:
             with ProgressBar():
                 future = [self.sim_sr.to_zarr(fname, component="sim_sr", compute=False)]
 
-                for attr in ["widefield", "widefield_deconvolution", "mcnr", "sim_os"]:
+                attrs = ["widefield", "widefield_deconvolution", "mcnr", "sim_os"]
+                if save_raw_data:
+                    attrs += ["imgs"]
+
+                for attr in attrs:
                     if hasattr(self, attr):
                         future += [getattr(self, attr).to_zarr(fname, component=attr, compute=False)]
 
-                # if hasattr(self, "widefield"):
-                #     future += [self.widefield.to_zarr(fname, component="widefield", compute=False)]
-                #     ,
-                #           self.widefield_deconvolution.to_zarr(fname, component="deconvolved", compute=False),
-                #           self.mcnr.to_zarr(fname, component="mcnr", compute=False),
-                #           self.sim_os.to_zarr(fname, component="sim_os", compute=False),
-                #           ]
-
                 # dask.compute(future, num_workers=nmax_cores)
                 dask.compute(future)
+
+            if save_patterns:
+                real_phases = self.phases - np.expand_dims(self.phase_corrections, axis=1)
+
+                # on same grid
+                _, _, estimated_patterns, estimated_patterns_2x = \
+                    get_simulated_sim_imgs(np.ones([self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
+                                           frqs=self.frqs,
+                                           phases=real_phases,
+                                           mod_depths=self.mod_depths,
+                                           gains=1,
+                                           offsets=0,
+                                           readout_noise_sds=0,
+                                           pix_size=self.dx / self.upsample_fact,
+                                           nbin=self.upsample_fact
+                                           )
+                img_z.array("patterns", estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx])
+                            , dtype=float, compressor="none")
+                img_z.array("patterns_2x",
+                            estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
+                            dtype=float, compressor="none")
 
         else:
             # todo: want to save without loading all data...
@@ -2049,7 +2068,8 @@ class SimImageSet:
         self.print_log(f"saving SIM images took {time.perf_counter() - tstart_save:.2f}s")
 
 
-def show_sim_napari(fname_zarr, block=True):
+def show_sim_napari(fname_zarr: str,
+                    block: bool = True):
     """
     Plot all images obtained from SIM reconstruction with correct scale/offset
     @param fname_zarr:
@@ -2069,36 +2089,39 @@ def show_sim_napari(fname_zarr, block=True):
     viewer = napari.Viewer()
 
     # translate to put FFT zero coordinates at origin
-    viewer.add_image(wf,
-                     scale=(dxy, dxy),
-                     translate=translate_wf,
-                     name="widefield")
-
-    if hasattr(imgz, "raw_imgs"):
-        viewer.add_image(imgz.raw_imgs,
-                         scale=(dxy, dxy),
-                         translate=translate_wf,
-                         name="raw images")
-
     if hasattr(imgz, "sim_os"):
-        viewer.add_image(imgz.sim_os,
+
+        viewer.add_image(np.expand_dims(imgz.sim_os, axis=-3),
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="SIM-OS")
 
     if hasattr(imgz, "deconvolved"):
-        viewer.add_image(imgz.deconvolved,
+        viewer.add_image(np.expand_dims(imgz.deconvolved, axis=-3),
                          scale=(dxy_sim, dxy_sim),
                          translate=translate_sim,
                          name="wf deconvolved",
                          visible=False)
 
     if hasattr(imgz, "sim_sr"):
-        viewer.add_image(imgz.sim_sr,
+        viewer.add_image(np.expand_dims(imgz.sim_sr, axis=-3),
                          scale=(dxy_sim, dxy_sim),
                          translate=translate_sim,
                          name="SIM-SR",
                          contrast_limits=[0, 5000])
+
+    viewer.add_image(np.expand_dims(wf, axis=-3),
+                     scale=(dxy, dxy),
+                     translate=translate_wf,
+                     name="widefield")
+
+    if hasattr(imgz, "imgs"):
+        shape = imgz.imgs.shape[:-4] + (9,) + imgz.imgs.shape[-2:]
+
+        viewer.add_image(np.reshape(imgz.imgs, shape),
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="raw images")
 
     if hasattr(imgz, "patterns"):
         viewer.add_image(imgz.patterns,
@@ -3715,7 +3738,7 @@ def get_simulated_sim_imgs(ground_truth: array,
                            pix_size: float,
                            amps: Optional[np.ndarray] = None,
                            coherent_projection: bool = True,
-                           otf: Optional[np.ndarray] = None,
+                           psf: Optional[np.ndarray] = None,
                            nbin: int = 1,
                            **kwargs) -> (array, array, array, array):
     """
@@ -3729,11 +3752,11 @@ def get_simulated_sim_imgs(ground_truth: array,
     :param gains: gain of each pixel (or single value for all pixels)
     :param offsets: offset of each pixel (or single value for all pixels)
     :param readout_noise_sds: noise standard deviation for each pixel (or single value for all pixels)
-    :param pix_size: pixel size of the input image (i.e. BEFORE binning). The pixel size of the output image
-    will be pix_size * nbin
-    :param amps:
+    :param pix_size: pixel size of the input image (i.e. before binning). The pixel size of the output image
+    will be (pix_size * nbin)
+    :param amps: Amplitudes of the final image after binning.
     :param coherent_projection:
-    :param otf: the optical transfer function evaluated at the frequencies points of the FFT of ground_truth. The
+    :param psf: the point-spread function. Must have same dimensions as ground_truth, but may be different size
     proper frequency points can be obtained using fft.fftshift(fft.fftfreq(nx, dx)) and etc.
     :param kwargs: keyword arguments which will be passed through to simulated_img()
 
@@ -3773,7 +3796,7 @@ def get_simulated_sim_imgs(ground_truth: array,
     nangles = len(frqs)
     nphases = len(phases)
 
-    if otf is None and not coherent_projection:
+    if psf is None and not coherent_projection:
         raise ValueError("If coherent_projection is false, OTF must be provided")
 
     if len(mod_depths) != nangles:
@@ -3783,11 +3806,6 @@ def get_simulated_sim_imgs(ground_truth: array,
         amps = xp.ones((nangles, nphases))
     else:
         amps = xp.array(amps)
-
-    if otf is not None:
-        psf, _ = fit_psf.otf2psf(otf)
-    else:
-        psf = None
 
     # get binned sizes
     nxb = nx / nbin
@@ -3804,10 +3822,10 @@ def get_simulated_sim_imgs(ground_truth: array,
     # get unbinned coordinates
     # these are not the "natural" coordinates of the unbinned pixel grid
     # define them in terms of offsets from binned grid
-    subpix_offsets = np.arange(-(nbin - 1) / 2, (nbin - 1) / 2 + 1) * pix_size
+    subpix_offsets = xp.arange(-(nbin - 1) / 2, (nbin - 1) / 2 + 1) * pix_size
 
-    x = (np.expand_dims(xb, axis=1) + np.expand_dims(subpix_offsets, axis=0)).ravel()
-    y = (np.expand_dims(yb, axis=1) + np.expand_dims(subpix_offsets, axis=0)).ravel()
+    x = (xp.expand_dims(xb, axis=1) + xp.expand_dims(subpix_offsets, axis=0)).ravel()
+    y = (xp.expand_dims(yb, axis=1) + xp.expand_dims(subpix_offsets, axis=0)).ravel()
     z = (xp.arange(nz) - (nz // 2)) # do not need dz, so don't have pixel size for it
 
     _, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
@@ -3821,16 +3839,17 @@ def get_simulated_sim_imgs(ground_truth: array,
     frqs = xp.array(frqs)
 
     sim_imgs = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
-    patterns_raw = xp.zeros((nangles, nphases, nz, ny, nx), dtype=float)
-    patterns = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=float)
+    patterns_raw = xp.zeros((nangles, nphases, 1, ny, nx), dtype=float)
+    patterns = xp.zeros((nangles, nphases, 1, nyb, nxb), dtype=float)
     snrs = xp.zeros(sim_imgs.shape)
-    mcnrs = xp.zeros(sim_imgs.shape)
+    # mcnrs = xp.zeros(sim_imgs.shape)
     for ii in range(nangles):
         for jj in range(nphases):
-            patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))
+            patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))[0]
 
             if not coherent_projection:
-                patterns_raw[ii, jj] = fit_psf.blur_img_otf(patterns_raw[ii, jj], otf).real
+                # patterns_raw[ii, jj] = fit_psf.blur_img_otf(patterns_raw[ii, jj], otf).real
+                patterns_raw[ii, jj] = fit_psf.blur_img_psf(patterns_raw[ii, jj], psf).real
 
             # bin pattern, for reference
             patterns[ii, jj], _ = camera.simulated_img(patterns_raw[ii, jj],
@@ -3843,7 +3862,8 @@ def get_simulated_sim_imgs(ground_truth: array,
                                                        image_is_integer=False)
 
             # forward SIM model
-            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * patterns_raw[ii, jj],
+            # divide by nbin so e.g. for uniform sample would keep number of photons fixed in pixel of final image
+            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * patterns_raw[ii, jj] / nbin**2,
                                                                   gains=gains,
                                                                   offsets=offsets,
                                                                   readout_noise_sds=readout_noise_sds,
@@ -3851,6 +3871,6 @@ def get_simulated_sim_imgs(ground_truth: array,
                                                                   bin_size=nbin,
                                                                   **kwargs)
             # todo: compute mcnr
-            mcnrs[ii, jj] = 0
+            # mcnrs[ii, jj] = 0
 
     return sim_imgs, snrs, patterns, patterns_raw
