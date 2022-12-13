@@ -506,7 +506,7 @@ class SimImageSet:
             if np.min(p2nr[ii]) < self.min_p2nr and self.frqs_guess is not None:
                 self.frqs[ii] = self.frqs_guess[ii]
                 self.print_log(f"SIM peak-to-noise ratio for angle={ii:d} is"
-                               f" {np.min(p2nr[ii]):.2f} < {self.min_p2nr:.2f}, the so frequency fit will be ignored"
+                               f" {np.min(p2nr[ii]):.2f} < {self.min_p2nr:.2f}, the so frequency fit will be ignored "
                                f"and the guess value will be used instead.")
 
                 peak_val = tools.get_peak_value(imgs_ft[ii],
@@ -3738,7 +3738,7 @@ def get_simulated_sim_imgs(ground_truth: array,
                            pix_size: float,
                            amps: Optional[np.ndarray] = None,
                            coherent_projection: bool = True,
-                           otf: Optional[np.ndarray] = None,
+                           psf: Optional[np.ndarray] = None,
                            nbin: int = 1,
                            **kwargs) -> (array, array, array, array):
     """
@@ -3752,11 +3752,11 @@ def get_simulated_sim_imgs(ground_truth: array,
     :param gains: gain of each pixel (or single value for all pixels)
     :param offsets: offset of each pixel (or single value for all pixels)
     :param readout_noise_sds: noise standard deviation for each pixel (or single value for all pixels)
-    :param pix_size: pixel size of the input image (i.e. BEFORE binning). The pixel size of the output image
-    will be pix_size * nbin
-    :param amps:
+    :param pix_size: pixel size of the input image (i.e. before binning). The pixel size of the output image
+    will be (pix_size * nbin)
+    :param amps: Amplitudes of the final image after binning.
     :param coherent_projection:
-    :param otf: the optical transfer function evaluated at the frequencies points of the FFT of ground_truth. The
+    :param psf: the point-spread function. Must have same dimensions as ground_truth, but may be different size
     proper frequency points can be obtained using fft.fftshift(fft.fftfreq(nx, dx)) and etc.
     :param kwargs: keyword arguments which will be passed through to simulated_img()
 
@@ -3796,7 +3796,7 @@ def get_simulated_sim_imgs(ground_truth: array,
     nangles = len(frqs)
     nphases = len(phases)
 
-    if otf is None and not coherent_projection:
+    if psf is None and not coherent_projection:
         raise ValueError("If coherent_projection is false, OTF must be provided")
 
     if len(mod_depths) != nangles:
@@ -3806,11 +3806,6 @@ def get_simulated_sim_imgs(ground_truth: array,
         amps = xp.ones((nangles, nphases))
     else:
         amps = xp.array(amps)
-
-    if otf is not None:
-        psf, _ = fit_psf.otf2psf(otf)
-    else:
-        psf = None
 
     # get binned sizes
     nxb = nx / nbin
@@ -3827,10 +3822,10 @@ def get_simulated_sim_imgs(ground_truth: array,
     # get unbinned coordinates
     # these are not the "natural" coordinates of the unbinned pixel grid
     # define them in terms of offsets from binned grid
-    subpix_offsets = np.arange(-(nbin - 1) / 2, (nbin - 1) / 2 + 1) * pix_size
+    subpix_offsets = xp.arange(-(nbin - 1) / 2, (nbin - 1) / 2 + 1) * pix_size
 
-    x = (np.expand_dims(xb, axis=1) + np.expand_dims(subpix_offsets, axis=0)).ravel()
-    y = (np.expand_dims(yb, axis=1) + np.expand_dims(subpix_offsets, axis=0)).ravel()
+    x = (xp.expand_dims(xb, axis=1) + xp.expand_dims(subpix_offsets, axis=0)).ravel()
+    y = (xp.expand_dims(yb, axis=1) + xp.expand_dims(subpix_offsets, axis=0)).ravel()
     z = (xp.arange(nz) - (nz // 2)) # do not need dz, so don't have pixel size for it
 
     _, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
@@ -3844,16 +3839,17 @@ def get_simulated_sim_imgs(ground_truth: array,
     frqs = xp.array(frqs)
 
     sim_imgs = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
-    patterns_raw = xp.zeros((nangles, nphases, nz, ny, nx), dtype=float)
-    patterns = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=float)
+    patterns_raw = xp.zeros((nangles, nphases, 1, ny, nx), dtype=float)
+    patterns = xp.zeros((nangles, nphases, 1, nyb, nxb), dtype=float)
     snrs = xp.zeros(sim_imgs.shape)
-    mcnrs = xp.zeros(sim_imgs.shape)
+    # mcnrs = xp.zeros(sim_imgs.shape)
     for ii in range(nangles):
         for jj in range(nphases):
-            patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))
+            patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))[0]
 
             if not coherent_projection:
-                patterns_raw[ii, jj] = fit_psf.blur_img_otf(patterns_raw[ii, jj], otf).real
+                # patterns_raw[ii, jj] = fit_psf.blur_img_otf(patterns_raw[ii, jj], otf).real
+                patterns_raw[ii, jj] = fit_psf.blur_img_psf(patterns_raw[ii, jj], psf).real
 
             # bin pattern, for reference
             patterns[ii, jj], _ = camera.simulated_img(patterns_raw[ii, jj],
@@ -3866,7 +3862,8 @@ def get_simulated_sim_imgs(ground_truth: array,
                                                        image_is_integer=False)
 
             # forward SIM model
-            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * patterns_raw[ii, jj],
+            # divide by nbin so e.g. for uniform sample would keep number of photons fixed in pixel of final image
+            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * patterns_raw[ii, jj] / nbin**2,
                                                                   gains=gains,
                                                                   offsets=offsets,
                                                                   readout_noise_sds=readout_noise_sds,
@@ -3874,6 +3871,6 @@ def get_simulated_sim_imgs(ground_truth: array,
                                                                   bin_size=nbin,
                                                                   **kwargs)
             # todo: compute mcnr
-            mcnrs[ii, jj] = 0
+            # mcnrs[ii, jj] = 0
 
     return sim_imgs, snrs, patterns, patterns_raw
