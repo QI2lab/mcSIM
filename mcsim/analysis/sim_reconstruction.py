@@ -213,6 +213,9 @@ class SimImageSet:
         # GPU
         # #############################################
         if self.use_gpu:
+            if not _cupy_available:
+                raise ValueError("'use_gpu' was true, but CuPy could not be imported")
+
             # need to disable fft plane cache, otherwise quickly run out of memory
             cp.fft._cache.PlanCache(memsize=0)
 
@@ -229,6 +232,8 @@ class SimImageSet:
         self.nangles, self.nphases, self.ny, self.nx = imgs.shape[-4:]
         self.n_extra_dims = imgs.ndim - 4
 
+
+
         # ensures imgs dask array with chunksize = 1 raw image
         chunk_size = (1,) * (self.n_extra_dims + 2) + imgs.shape[-2:]
         if not isinstance(imgs, da.core.Array):
@@ -237,7 +242,8 @@ class SimImageSet:
             imgs = imgs.rechunk(chunk_size)
 
         # ensure on CPU/GPU as appropriate
-        self.imgs = da.map_blocks(lambda x: xp.array(x.astype(float)), imgs, dtype=float)
+        self.imgs = da.map_blocks(lambda x: xp.array(x.astype(float)), imgs, dtype=float,
+                                  meta=xp.array((), dtype=float))
 
         # hardcoded for 2D SIM
         self.nbands = 3
@@ -349,7 +355,6 @@ class SimImageSet:
         # real-space apodization is not so desirable because produces a roll off in the reconstruction. But seems ok.
         apodization = xp.array(np.outer(tukey(self.imgs.shape[-2], alpha=0.1),
                                         tukey(self.imgs.shape[-1], alpha=0.1)))
-        # apodization = xp.expand_dims(xp.array(apodization), axis=tuple(range(self.imgs.ndim - 2)))
 
         # todo: when try to run fft on large arrays, much more memory than the final array is allocated
         # todo: and don't understand how to get rid of it. Possibly the individual worker processes
@@ -364,7 +369,8 @@ class SimImageSet:
 
             return result
 
-        self.imgs_ft = da.map_blocks(ft, self.imgs * apodization, self.use_gpu, dtype=complex)
+        self.imgs_ft = da.map_blocks(ft, self.imgs * apodization, self.use_gpu,
+                                     dtype=complex, meta=xp.array((), dtype=self.imgs.dtype))
 
         self.print_log(f"FT images took {time.perf_counter() - tstart:.2f}s")
 
@@ -374,7 +380,8 @@ class SimImageSet:
         tstart = time.perf_counter()
 
         self.widefield = da.nanmean(self.imgs, axis=(-3, -4))
-        self.widefield_ft = da.map_blocks(ft, self.widefield * apodization, self.use_gpu, dtype=complex)
+        self.widefield_ft = da.map_blocks(ft, self.widefield * apodization, self.use_gpu,
+                                          dtype=complex, meta=xp.array((), dtype=complex))
 
         self.print_log(f"Computing widefield image took {time.perf_counter() - tstart:.2f}s")
 
@@ -710,14 +717,14 @@ class SimImageSet:
 
     def reconstruct(self,
                     slices: Optional[tuple] = None,
-                    compute_os: bool = True,
-                    compute_deconvolved: bool = True,
-                    compute_mcnr: bool = True):
+                    compute_os: bool = False,
+                    compute_deconvolved: bool = False,
+                    compute_mcnr: bool = False):
         """
         SIM reconstruction
         """
 
-        if self.use_gpu:
+        if self.use_gpu and _cupy_available:
             xp = cp
         else:
             xp = np
@@ -740,7 +747,8 @@ class SimImageSet:
                                               phase_differences=self.phases[ii],
                                               axis=-3,
                                               drop_axis=-3,
-                                              dtype=float)
+                                              dtype=float,
+                                              meta=xp.array((), dtype=self.imgs.dtype))
                                 for ii in range(self.nangles)],
                                axis=-3)
             self.sim_os = da.mean(os_imgs, axis=-3)
@@ -762,7 +770,8 @@ class SimImageSet:
 
                 return xp.fft.fft(xp.fft.ifftshift(m, axes=-3), axis=-3) / self.nangles
 
-            img_angle_ft = da.map_blocks(ft_mcnr, self.imgs, self.use_gpu, dtype=complex)
+            img_angle_ft = da.map_blocks(ft_mcnr, self.imgs, self.use_gpu,
+                                         dtype=complex, meta=xp.array((), dtype=complex))
             # if I_j = Io * m * cos(2*pi*j), then want numerator to be 2*m. FT gives us m/2, so multiply by 4
             self.mcnr = (4 * da.abs(img_angle_ft[..., 1, :, :]) / da.sqrt(da.abs(img_angle_ft[..., 0, :, :])))
 
@@ -778,7 +787,8 @@ class SimImageSet:
                                               self.imgs_ft,
                                               self.phases,
                                               amps=self.amps,
-                                              dtype=complex)
+                                              dtype=complex,
+                                              meta=xp.array((), dtype=complex))
 
         self.print_log(f"separated bands in {time.perf_counter() - tstart:.2f}s")
 
@@ -797,7 +807,8 @@ class SimImageSet:
                                               (self.dy, self.dx),
                                               self.upsample_fact,
                                               dtype=complex,
-                                              chunks=exp_chunks
+                                              chunks=exp_chunks,
+                                              meta=xp.array((), dtype=complex)
                                               )
 
         self.print_log(f"shifted bands in {time.perf_counter() - tstart:.2f}s")
@@ -878,7 +889,8 @@ class SimImageSet:
         # self.sim_sr = xp.fft.fftshift(xp.fft.irfft2(sim_sr_ft_one_side, axes=(-1, -2)), axes=(-1, -2))
         def ift(m): return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2)).real
 
-        self.sim_sr = da.map_blocks(ift, self.sim_sr_ft * apodization, dtype=float)
+        self.sim_sr = da.map_blocks(ift, self.sim_sr_ft * apodization,
+                                    dtype=float, meta=xp.array((), dtype=float))
         if self.trim_negative_values:
             self.sim_sr[self.sim_sr < 0] = 0
 
@@ -895,7 +907,8 @@ class SimImageSet:
             self.widefield_deconvolution_ft = da.nansum(weights_decon[..., 0, :, :] * self.bands_shifted_ft[..., 0, :, :], axis=-3) / \
                                                   (self.wiener_parameter**2 + da.nansum(np.abs(weights_decon[..., 0, :, :])**2, axis=-3))
 
-            self.widefield_deconvolution = da.map_blocks(ift, self.widefield_deconvolution_ft * apodization, dtype=float)
+            self.widefield_deconvolution = da.map_blocks(ift, self.widefield_deconvolution_ft * apodization,
+                                                         dtype=float, meta=xp.array((), dtype=float))
 
             self.print_log(f"Deconvolved widefield in {time.perf_counter() - tstart:.2f}s")
 
@@ -903,40 +916,19 @@ class SimImageSet:
         # move arrays off GPU
         # #############################################
         if self.use_gpu:
-            self.fx = self.fx.get()
-            self.fy = self.fy.get()
-            self.fx_us = self.fx_us.get()
-            self.fy_us = self.fy_us.get()
-            self.x = self.x.get()
-            self.y = self.y.get()
-            self.x_us = self.x_us.get()
-            self.y_us = self.y_us.get()
-
             def tocpu(c: cp.ndarray): return c.get()
 
-            self.imgs = da.map_blocks(tocpu, self.imgs, dtype=self.imgs.dtype)
-            self.imgs_ft = da.map_blocks(tocpu, self.imgs_ft, dtype=self.imgs_ft.dtype)
-            self.otf = self.otf.get()
+            for attr_name in dir(self):
+                attr = getattr(self, attr_name)
 
-            self.mcnr = da.map_blocks(tocpu, self.mcnr, dtype=self.mcnr.dtype)
-            self.widefield = da.map_blocks(tocpu, self.widefield, dtype=self.widefield.dtype)
-            self.widefield_ft = da.map_blocks(tocpu, self.widefield_ft, dtype=self.widefield_ft.dtype)
+                # if cupy array, move off GPU
+                if isinstance(attr, cp.ndarray):
+                    setattr(self, attr_name, attr.get())
 
-            if hasattr(self, "widefield_deconvolution"):
-                self.widefield_deconvolution = da.map_blocks(tocpu, self.widefield_deconvolution, dtype=self.widefield_deconvolution.dtype)
-                self.widefield_deconvolution_ft = da.map_blocks(tocpu, self.widefield_deconvolution_ft, dtype=self.widefield_deconvolution.dtype)
-
-            if hasattr(self, "sim_os"):
-                self.sim_os = da.map_blocks(tocpu, self.sim_os, dtype=self.sim_os.dtype)
-
-            self.sim_sr = da.map_blocks(tocpu, self.sim_sr, dtype=self.sim_sr.dtype)
-            self.sim_sr_ft = da.map_blocks(tocpu, self.sim_sr_ft, dtype=self.sim_sr_ft.dtype)
-            self.bands_unmixed_ft = da.map_blocks(tocpu, self.bands_unmixed_ft, dtype=self.bands_unmixed_ft.dtype)
-            self.bands_shifted_ft = da.map_blocks(tocpu, self.bands_shifted_ft, dtype=self.bands_shifted_ft.dtype)
-            self.weights = self.weights.get()
-            self.weights_norm = self.weights_norm.get()
-            self.sim_sr_ft_components = da.map_blocks(tocpu, self.sim_sr_ft_components, dtype=self.sim_sr_ft_components.dtype)
-
+                # if dask array, move off GPU delayed
+                if isinstance(attr, da.core.Array) and isinstance(attr._meta, cp.ndarray):
+                    on_cpu = da.map_blocks(tocpu, attr, dtype=attr.dtype)
+                    setattr(self, attr_name, on_cpu)
 
         # #############################################
         # print parameters
@@ -1180,9 +1172,7 @@ class SimImageSet:
 
             vmax_mcnr = np.percentile(mcnr, 99)
 
-        #
         extent = get_extent(self.y, self.x)
-        extentk = get_extent(self.fx, self.fy)
 
         # parameters for real space plot
         vmin = np.percentile(imgs.ravel(), 0.1)
@@ -1279,42 +1269,15 @@ class SimImageSet:
             norm = PowerNorm(vmin=0, vmax=vmax_mcnr, gamma=1)
             plt.colorbar(ScalarMappable(norm=norm, cmap="inferno"), cax=ax, label="MCNR")
 
-        # # ########################################
-        # # plot k-space
-        # # ########################################
-        # fighk = plt.figure(figsize=figsize)
-        # fighk.suptitle(f"SIM k-space diagnostic, index={[s.start for s in slices[:-4]]}")
-        #
-        # gridk = fighk.add_gridspec(self.nangles, self.nphases)
-        #
-        # norm = PowerNorm(vmin=0, vmax=np.nanmax(np.abs(imgs_ft)), gamma=0.1)
-        # for ii in range(self.nangles):
-        #     for jj in range(self.nphases):
-        #
-        #         ax = fighk.add_subplot(gridk[ii, jj])
-        #         ax.imshow(np.abs(imgs_ft[ii, jj]), norm=norm, extent=extentk, cmap="bone")
-        #
-        #         # plot any frequency data already available
-        #         if hasattr(self, "frqs_guess") and self.frqs_guess is not None:
-        #             ax.scatter(-self.frqs_guess[ii, 0], -self.frqs_guess[ii, 1], edgecolor='m', facecolor='none')
-        #
-        #         if hasattr(self, "frqs"):
-        #             ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
-        #
-        #         ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
-        #
-        #         if jj == 0:
-        #             ax.set_ylabel(f"angle = {ii:d}\n $f_y$ (1/um)")
-        #         if ii == (self.nphases - 1):
-        #             ax.set_xlabel("$f_x$ (1/um)")
-
         return [figh], ["mcnr_diagnostic"]
 
 
     def plot_reconstruction(self,
                             slices: Optional[tuple[slice]] = None,
                             figsize=(20, 10),
-                            gamma=0.1):
+                            gamma: float = 0.1,
+                            min_percentile: float = 0.1,
+                            max_percentile: float = 99.9):
         """
         Plot SIM image and compare with 'widefield' image
         :return:
@@ -1325,115 +1288,110 @@ class SimImageSet:
 
         wf_slice_list = slices + (slice(None),) * 2
 
-        widefield = self.widefield[wf_slice_list].squeeze()
-        widefield_ft = self.widefield_ft[wf_slice_list].squeeze()
-        widefield_deconvolution = self.widefield_deconvolution[wf_slice_list].squeeze()
-        widefield_deconvolution_ft = self.widefield_deconvolution_ft[wf_slice_list].squeeze()
-        sim_sr = self.sim_sr[slices].squeeze()
-        sim_sr_ft = self.sim_sr_ft[slices].squeeze()
-        sim_os = self.sim_os[slices].squeeze()
-
+        # extents for plots
         extent_wf = get_extent(self.fy, self.fx)
         extent_rec = get_extent(self.fy_us, self.fx_us)
         extent_wf_real = get_extent(self.y, self.x)
         extent_us_real = get_extent(self.y_us, self.x_us)
 
-        min_percentile = 0.1
-        max_percentile = 99.9
-
         # create plot
         figh = plt.figure(figsize=figsize)
-        grid = figh.add_gridspec(2, 4)
-        figh.suptitle("SIM reconstruction, NA=%0.2f, wavelength=%.0fnm\n"
-                      "wiener parameter=%0.2f, phase estimation mode '%s', frq estimation mode '%s'\n"
-                      "band combination mode '%s', band replacement using %0.2f of fmax" %
-                      (self.na, self.wavelength * 1e3,
-                       self.wiener_parameter, self.phase_estimation_mode, self.frq_estimation_mode,
-                       self.combine_bands_mode, self.fmax_exclude_band0))
+        grid = figh.add_gridspec(nrows=2, ncols=3)
+        figh.suptitle(f"SIM reconstruction, NA={self.na:.2f}, "
+                      f"wavelength={self.wavelength * 1e3:.0f}nm\n"
+                      f"wiener parameter{self.wiener_parameter:.2f}, "
+                      f"phase estimation mode '{self.phase_estimation_mode:s}', "
+                      f"frq estimation mode '{self.frq_estimation_mode}'\n"
+                      f"band combination mode '{self.combine_bands_mode:s}', "
+                      f"band replacement using {self.fmax_exclude_band0:.2f} of fmax")
 
-        # widefield, real space
-        ax = figh.add_subplot(grid[0, 0])
+        # widefield
+        if hasattr(self, "widefield"):
+            widefield = self.widefield[wf_slice_list].squeeze()
+            widefield_ft = self.widefield_ft[wf_slice_list].squeeze()
 
-        vmin = np.percentile(widefield.ravel(), min_percentile)
-        vmax = np.percentile(widefield.ravel(), max_percentile)
-        if vmax <= vmin:
-            vmax += 1e-12
-        ax.imshow(widefield, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_wf_real)
-        ax.set_title('widefield')
-        ax.set_xlabel('x-position ($\mu m$)')
-        ax.set_ylabel('y-position ($\mu m$)')
+            # real space
+            ax = figh.add_subplot(grid[0, 0])
 
-        # deconvolved, real space
-        ax = figh.add_subplot(grid[0, 1])
+            vmin = np.percentile(widefield.ravel(), min_percentile)
+            vmax = np.percentile(widefield.ravel(), max_percentile)
+            if vmax <= vmin:
+                vmax += 1e-12
+            ax.imshow(widefield, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_wf_real)
+            ax.set_title('widefield')
+            ax.set_xlabel('x-position ($\mu m$)')
+            ax.set_ylabel('y-position ($\mu m$)')
 
-        vmin = np.percentile(widefield_deconvolution.ravel(), min_percentile)
-        vmax = np.percentile(widefield_deconvolution.ravel(), max_percentile)
-        if vmax <= vmin:
-            vmax += 1e-12
-        ax.imshow(widefield_deconvolution, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_us_real)
-        ax.set_title('widefield deconvolved')
-        ax.set_xlabel('x-position ($\mu m$)')
+            # fourier space
+            ax = figh.add_subplot(grid[1, 0])
+            ax.imshow(np.abs(widefield_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_wf, cmap="bone")
 
-        # SIM, realspace
-        ax = figh.add_subplot(grid[0, 2])
-        vmin = np.percentile(sim_sr.ravel()[sim_sr.ravel() >= 0], min_percentile)
-        vmax = np.percentile(sim_sr.ravel()[sim_sr.ravel() >= 0], max_percentile)
-        if vmax <= vmin:
-            vmax += 1e-12
-        ax.imshow(sim_sr, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_us_real)
-        ax.set_title('SR-SIM')
-        ax.set_xlabel('x-position ($\mu m$)')
+            ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
+            ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
 
-        #
-        ax = figh.add_subplot(grid[0, 3])
-        vmin = np.percentile(sim_os.ravel(), min_percentile)
-        vmax = np.percentile(sim_os.ravel(), max_percentile)
-        if vmax <= vmin:
-            vmax += 1e-12
-        ax.imshow(sim_os, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_wf_real)
-        ax.set_title('OS-SIM')
-        ax.set_xlabel('x-position ($\mu m$)')
+            ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
+            ax.set_ylim([2 * self.fmax, -2 * self.fmax])
+            ax.set_xlabel("$f_x (1/\mu m)$")
+            ax.set_ylabel("$f_y (1/\mu m)$")
 
-        # widefield Fourier space
-        ax = figh.add_subplot(grid[1, 0])
-        ax.imshow(np.abs(widefield_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_wf, cmap="bone")
+        # deconvolved
+        if hasattr(self, "widefield_deconvolution"):
+            widefield_deconvolution = self.widefield_deconvolution[wf_slice_list].squeeze()
+            widefield_deconvolution_ft = self.widefield_deconvolution_ft[wf_slice_list].squeeze()
 
-        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
-        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
+            ax = figh.add_subplot(grid[0, 2])
 
-        ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
-        ax.set_ylim([2 * self.fmax, -2 * self.fmax])
-        ax.set_xlabel("$f_x (1/\mu m)$")
-        ax.set_ylabel("$f_y (1/\mu m)$")
+            vmin = np.percentile(widefield_deconvolution.ravel(), min_percentile)
+            vmax = np.percentile(widefield_deconvolution.ravel(), max_percentile)
+            if vmax <= vmin:
+                vmax += 1e-12
+            ax.imshow(widefield_deconvolution, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_us_real)
+            ax.set_title('widefield deconvolved')
+            ax.set_xlabel('x-position ($\mu m$)')
 
-        # deconvolution Fourier space
-        ax = figh.add_subplot(grid[1, 1])
-        ax.imshow(np.abs(widefield_deconvolution_ft) ** 2,
-                  norm=PowerNorm(gamma=gamma),
-                  extent=extent_rec,
-                  cmap="bone")
+            # deconvolution Fourier space
+            ax = figh.add_subplot(grid[1, 2])
+            ax.imshow(np.abs(widefield_deconvolution_ft) ** 2,
+                      norm=PowerNorm(gamma=gamma),
+                      extent=extent_rec,
+                      cmap="bone")
 
-        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
-        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
+            ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
+            ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
 
-        ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
-        ax.set_ylim([2 * self.fmax, -2 * self.fmax])
-        ax.set_xlabel("$f_x (1/\mu m)$")
+            ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
+            ax.set_ylim([2 * self.fmax, -2 * self.fmax])
+            ax.set_xlabel("$f_x (1/\mu m)$")
 
-        # SIM fourier space
-        ax = figh.add_subplot(grid[1, 2])
-        ax.imshow(np.abs(sim_sr_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
+        # SIM
+        if hasattr(self, "sim_sr"):
+            sim_sr = self.sim_sr[slices].squeeze()
+            sim_sr_ft = self.sim_sr_ft[slices].squeeze()
 
-        ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
-        ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
+            # real-space
+            ax = figh.add_subplot(grid[0, 1])
+            vmin = np.percentile(sim_sr.ravel()[sim_sr.ravel() >= 0], min_percentile)
+            vmax = np.percentile(sim_sr.ravel()[sim_sr.ravel() >= 0], max_percentile)
+            if vmax <= vmin:
+                vmax += 1e-12
+            ax.imshow(sim_sr, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_us_real)
+            ax.set_title('SR-SIM')
+            ax.set_xlabel('x-position ($\mu m$)')
 
-        # actual maximum frequency based on real SIM frequencies
-        for ii in range(self.nangles):
-            ax.add_artist(Circle((0, 0), radius=self.fmax + 1/self.periods[ii], color='g', fill=False, ls='--'))
+            # SIM fourier space
+            ax = figh.add_subplot(grid[1, 1])
+            ax.imshow(np.abs(sim_sr_ft) ** 2, norm=PowerNorm(gamma=gamma), extent=extent_rec, cmap="bone")
 
-        ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
-        ax.set_ylim([2 * self.fmax, -2 * self.fmax])
-        ax.set_xlabel("$f_x (1/\mu m)$")
+            ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
+            ax.add_artist(Circle((0, 0), radius=2 * self.fmax, color='r', fill=False, ls='--'))
+
+            # actual maximum frequency based on real SIM frequencies
+            for ii in range(self.nangles):
+                ax.add_artist(Circle((0, 0), radius=self.fmax + 1 / self.periods[ii], color='g', fill=False, ls='--'))
+
+            ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
+            ax.set_ylim([2 * self.fmax, -2 * self.fmax])
+            ax.set_xlabel("$f_x (1/\mu m)$")
 
         return figh
 
@@ -1845,6 +1803,7 @@ class SimImageSet:
                   save_patterns: bool = False,
                   save_raw_data: bool = False):
         """
+        Save SIM results and metadata to file
 
         @param save_dir: directory to save results
         @param start_time:
