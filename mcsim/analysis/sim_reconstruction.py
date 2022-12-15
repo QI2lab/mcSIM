@@ -31,6 +31,7 @@ import pickle # todo: remove
 import json
 import tifffile
 import zarr
+import h5py
 # plotting
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
@@ -1840,10 +1841,21 @@ class SimImageSet:
                   start_time: Optional[str] = None,
                   save_suffix: Optional[str] = None,
                   save_prefix: Optional[str] = None,
-                  use_zarr: bool = False,
+                  format: str = "tiff",
                   save_patterns: bool = False,
-                  save_raw_data: bool = False,
-                  nmax_cores: int = -1):
+                  save_raw_data: bool = False):
+        """
+
+        @param save_dir: directory to save results
+        @param start_time:
+        @param save_suffix:
+        @param save_prefix:
+        @param format: "tiff", "zarr" or "hdf5". If tiff is used, metadata will be saved in a .json file
+        @param save_patterns:
+        @param save_raw_data:
+        @param nmax_cores:
+        @return:
+        """
 
         tstart_save = time.perf_counter()
 
@@ -1872,18 +1884,15 @@ class SimImageSet:
 
         # metadata want to save
         metadata = {}
-        if start_time is not None:
-            metadata["data timestemp"] = start_time
-        else:
-            metadata["data timestemp"] = ""
-
-        metadata["processing timestamp"] = self.tstamp
-        metadata["log"] = self.log.getvalue()
-
+        if start_time is None:
+            start_time = ""
 
         # ###############################n
-        # processing metadata
+        # metadata
         # ###############################
+        metadata["data timestamp"] = start_time
+        metadata["processing timestamp"] = self.tstamp
+        metadata["log"] = self.log.getvalue()
         metadata["dx"] = self.dx
         metadata["dy"] = self.dy
         metadata["upsample_factor"] = self.upsample_fact
@@ -1923,7 +1932,7 @@ class SimImageSet:
         metadata["modulation_depths_guess"] = self.mod_depths_guess.tolist()
 
         # save results
-        if use_zarr:
+        if format == "zarr":
             fname = save_dir / f"{save_prefix:s}sim_results{save_suffix:s}.zarr"
 
             img_z = zarr.open(fname, mode="w")
@@ -1931,139 +1940,81 @@ class SimImageSet:
             for k, v in metadata.items():
                 img_z.attrs[k] = v
 
-            # ###############################
-            # images
-            # ###############################
+            def save_delayed(attr):
+                d = getattr(self, attr).to_zarr(fname, component=attr, compute=False)
+                return d
 
-            with ProgressBar():
-                future = [self.sim_sr.to_zarr(fname, component="sim_sr", compute=False)]
+        elif format == "hdf5":
+            fname = save_dir / f"{save_prefix:s}sim_results{save_suffix:s}.hd5f"
+            img_z = h5py.File(fname, "w")
 
-                attrs = ["widefield", "widefield_deconvolution", "mcnr", "sim_os"]
-                if save_raw_data:
-                    attrs += ["imgs"]
+            for k, v in metadata.items():
+                img_z.attrs[k] = v
+            def save_delayed(attr):
+                d = getattr(self, attr).to_hdf5(fname, f"/{attr:s}") #, compute=False)
+                return d
 
-                for attr in attrs:
-                    if hasattr(self, attr):
-                        future += [getattr(self, attr).to_zarr(fname, component=attr, compute=False)]
-
-                # dask.compute(future, num_workers=nmax_cores)
-                dask.compute(future)
-
-            if save_patterns:
-                real_phases = self.phases - np.expand_dims(self.phase_corrections, axis=1)
-
-                # on same grid
-                _, _, estimated_patterns, estimated_patterns_2x = \
-                    get_simulated_sim_imgs(np.ones([self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
-                                           frqs=self.frqs,
-                                           phases=real_phases,
-                                           mod_depths=self.mod_depths,
-                                           gains=1,
-                                           offsets=0,
-                                           readout_noise_sds=0,
-                                           pix_size=self.dx / self.upsample_fact,
-                                           nbin=self.upsample_fact
-                                           )
-                img_z.array("patterns", estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx])
-                            , dtype=float, compressor="none")
-                img_z.array("patterns_2x",
-                            estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
-                            dtype=float, compressor="none")
-
-        else:
-            # todo: want to save without loading all data...
-            with ProgressBar():
-                results = dask.compute(self.widefield,
-                                       self.widefield_deconvolution,
-                                       self.mcnr,
-                                       self.sim_os,
-                                       self.sim_sr)
-                widefield, widefield_deconvolution, mcnr, sim_os, sim_sr = results
-
-            # todo: rewrite in this format
-            # todo: ultimately want to save e.g. plane by plane instead of all at once
-            # delayed = []
-            # components = ["widefield", "widefield_deconvolution", "mcnr", "sim_os"]
-            # for attr in components:
-            #     fname = save_dir / f"{save_prefix:s}{attr:s}{save_suffix:s}.tif"
-            #
-            #     if getattr(self, attr).shape[0] == self.nx:
-            #         factor = 1
-            #     else:
-            #         factor = self.upsample_fact
-            #
-            #     dask.delayed(tifffile.imwrite)(fname,
-            #                                    getattr(self, attr).astype(np.float32),
-            #                                    imagej=True,
-            #                                    resolution=(1/self.dy * factor, 1/self.dx * factor),
-            #                                    metadata={"Info": attr,
-            #                                              "unit": "um"}
-            #                                    )
-
-
+        elif format == "tiff":
             # save metadata to json file
             fname = save_dir / f"{save_prefix:s}sim_reconstruction{save_suffix:s}.json"
             with open(fname, "w") as f:
                 json.dump(metadata, f, indent="\t")
+            def save_delayed(attr):
+                fname = save_dir / f"{save_prefix:s}{attr:s}{save_suffix:s}.tif"
 
-            # save images
+                if getattr(self, attr).shape[0] == self.nx:
+                    factor = 1
+                else:
+                    factor = self.upsample_fact
 
-            # mcnr
-            fname = save_dir / f"{save_prefix:s}mcnr{save_suffix:s}.tif"
-            tifffile.imwrite(fname,
-                             mcnr.astype(np.float32),
-                             imagej=True,
-                             resolution=(1/self.dx,)*2,
-                             metadata={'Info': 'modulation-contrast to noise ratio',
-                                       'unit': 'um'},
-                             **kwargs)
+                d = dask.delayed(tifffile.imwrite)(fname,
+                                                   getattr(self, attr).astype(np.float32),
+                                                   imagej=True,
+                                                   resolution=(1 / self.dy * factor, 1 / self.dx * factor),
+                                                    metadata={"Info": attr,
+                                                              "unit": "um",
+                                                              'min': 0,
+                                                              'max': np.max(getattr(self, attr))
+                                                              }
+                                                              #np.percentile(getattr(self, attr), 99.9)}
+                                                  )
+                return d
+        else:
+            raise ValueError(f"format was {format:s}, but the allowed values are {['tiff', 'zarr', 'hd5f']}")
 
-            # SIM OS
-            fname = save_dir / f"{save_prefix:s}sim_os{save_suffix:s}.tif"
+        # select attributes
+        attrs = ["sim_sr", "widefield", "widefield_deconvolution", "mcnr", "sim_os"]
 
-            tifffile.imwrite(fname,
-                             sim_os.astype(np.float32),
-                             imagej=True,
-                             resolution=(1 / dxy_wf,)*2,
-                             metadata={'Info': 'SIM optical-sectioning',
-                                       'unit': 'um'},
-                             **kwargs)
+        if save_raw_data:
+            attrs += ["imgs"]
+        if save_patterns:
+            real_phases = self.phases - np.expand_dims(self.phase_corrections, axis=1)
+            # on same grid
+            _, _, estimated_patterns, estimated_patterns_2x = \
+                get_simulated_sim_imgs(np.ones([self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
+                                       frqs=self.frqs,
+                                       phases=real_phases,
+                                       mod_depths=self.mod_depths,
+                                       gains=1,
+                                       offsets=0,
+                                       readout_noise_sds=0,
+                                       pix_size=self.dx / self.upsample_fact,
+                                       nbin=self.upsample_fact
+                                       )
+            self.patterns = estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx])
+            self.patterns_2x = estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx])
 
-            # widefield
-            fname = save_dir / f"{save_prefix:s}widefield{save_suffix:s}.tif"
+            attrs += ["patterns", "patterns_2x"]
 
-            tifffile.imwrite(fname,
-                             widefield.astype(np.float32),
-                             imagej=True,
-                             resolution=(1 / dxy_wf,)*2,
-                             metadata={'Info': 'widefield',
-                                       'unit': 'um'},
-                             **kwargs)
+        attrs = [a for a in attrs if hasattr(self, a)]
 
-            # SIM SR
-            fname = save_dir / f"{save_prefix:s}sim_sr{save_suffix:s}.tif"
+        # ###############################
+        # save results
+        # ###############################
+        future = [save_delayed(a) for a in attrs]
 
-            tifffile.imwrite(fname,
-                             sim_sr.astype(np.float32),
-                             imagej=True,
-                             resolution=(1/(self.dx / self.upsample_fact),)*2,
-                             metadata={'Info': 'SIM super-resolution',
-                                       'unit': 'um',
-                                       'min': 0,
-                                       'max': np.percentile(sim_sr, 99.9)},
-                             **kwargs)
-
-            # deconvolution
-            fname = save_dir / f"{save_prefix:s}deconvolved{save_suffix:s}.tif"
-
-            tifffile.imwrite(fname,
-                             widefield_deconvolution.astype(np.float32),
-                             imagej=True,
-                             resolution=(1/(self.dx / self.upsample_fact),
-                                         1/(self.dx / self.upsample_fact)),
-                             metadata={'Info': 'Wiener deconvolved',
-                                       'unit': 'um'},
-                             **kwargs)
+        with ProgressBar():
+            dask.compute(future)
 
         self.print_log(f"saving SIM images took {time.perf_counter() - tstart_save:.2f}s")
 
@@ -2458,8 +2409,7 @@ def reconstruct_mm_sim_dataset(data_dirs: list[str],
 
                         # save reconstruction summary data
                         img_set.save_result(diagnostics_dir / "sim_reconstruction_params.json")
-                        img_set.save_imgs(individual_image_save_dir,
-                                          start_time, f"_{file_identifier:s}")
+                        img_set.save_imgs(individual_image_save_dir, start_time, f"_{file_identifier:s}")
 
                         tend = time.perf_counter()
                         img_set.print_log("Reconstructed %d/%d from %s in %0.2fs" %
