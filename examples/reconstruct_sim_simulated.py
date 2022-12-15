@@ -85,7 +85,7 @@ def get_lines_test_pattern(img_size, angles=(15,), line_center_sep = np.arange(2
 
 
 gt, seps = get_lines_test_pattern((nxy_gt, nxy_gt))
-gt *= max_photons_per_pix / nbin**2
+gt *= max_photons_per_pix
 
 
 # ############################################
@@ -94,7 +94,6 @@ gt *= max_photons_per_pix / nbin**2
 coords = get_psf_coords(gt.shape, (1, dxy_gt, dxy_gt))
 psf = gridded_psf_model(wavelength, 1.5, "vectorial").model(coords, [1, 0, 0, 0, na, 0])
 psf /= np.sum(psf)
-otf, _ = psf2otf(psf[0], (dxy_gt, dxy_gt))
 
 # ############################################
 # synthetic SIM images
@@ -116,7 +115,7 @@ imgs, snrs, patterns, _ = sim.get_simulated_sim_imgs(gt,
                                                      readout_noise_sds=5,
                                                      pix_size=dxy_gt,
                                                      amps=amps_gt,
-                                                     otf=otf,
+                                                     psf=psf,
                                                      nbin=nbin)
 imgs = imgs[:, :, 0]
 patterns = patterns[:, :, 0]
@@ -147,7 +146,7 @@ imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength}
 # run reconstruction
 imgset.reconstruct()
 # save reconstruction results
-imgset.save_imgs(use_zarr=True)
+imgset.save_imgs(format="hdf5")
 # plot results
 imgset.plot_figs(figsize=(20, 10),
                  imgs_dpi=300)
