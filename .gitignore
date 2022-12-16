@@ -299,3 +299,7 @@ dask-worker-space/
 examples/data/**
 # temporary files
 expt_ctrl/temp*.cfg
+
+# data files
+*.zarr
+*.hdf5
