@@ -85,7 +85,7 @@ def get_lines_test_pattern(img_size, angles=(15,), line_center_sep = np.arange(2
 
 
 gt, seps = get_lines_test_pattern((nxy_gt, nxy_gt))
-gt *= max_photons_per_pix / nbin**2
+gt *= max_photons_per_pix
 
 
 # ############################################
@@ -94,7 +94,6 @@ gt *= max_photons_per_pix / nbin**2
 coords = get_psf_coords(gt.shape, (1, dxy_gt, dxy_gt))
 psf = gridded_psf_model(wavelength, 1.5, "vectorial").model(coords, [1, 0, 0, 0, na, 0])
 psf /= np.sum(psf)
-otf, _ = psf2otf(psf[0], (dxy_gt, dxy_gt))
 
 # ############################################
 # synthetic SIM images
@@ -116,7 +115,7 @@ imgs, snrs, patterns, _ = sim.get_simulated_sim_imgs(gt,
                                                      readout_noise_sds=5,
                                                      pix_size=dxy_gt,
                                                      amps=amps_gt,
-                                                     otf=otf,
+                                                     psf=psf,
                                                      nbin=nbin)
 imgs = imgs[:, :, 0]
 patterns = patterns[:, :, 0]
@@ -128,26 +127,26 @@ tstart = time.perf_counter()
 
 imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength},
                          imgs,
+                         otf=None,
+                         wiener_parameter=0.3,
                          frq_estimation_mode="band-correlation",
                          frq_guess=frqs_gt,
-                         phases_guess=phases_gt,
                          phase_estimation_mode="wicker-iterative",
+                         phases_guess=phases_gt,
                          combine_bands_mode="fairSIM",
                          fmax_exclude_band0=0.4,
                          normalize_histograms=False,
-                         otf=None,
-                         wiener_parameter=0.3,
                          background=100,
                          gain=2,
                          min_p2nr=0.5,
-                         use_gpu=use_gpu,
                          save_dir=root_dir / f"{tstamp:s}_sim_reconstruction_simulated",
-                         interactive_plotting=False)
+                         use_gpu=use_gpu)
 
 # run reconstruction
 imgset.reconstruct()
+
 # save reconstruction results
-imgset.save_imgs(use_zarr=True)
+imgset.save_imgs(format="hdf5")
 # plot results
 imgset.plot_figs(figsize=(20, 10),
                  imgs_dpi=300)

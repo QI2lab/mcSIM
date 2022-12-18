@@ -24,7 +24,13 @@ import localize_psf.rois as roi_fns
 # data files and options
 # ################################
 # data_dirs = [Path(r"G:\2022_11_17\003_0.1um_505_515_beads")]
-data_dirs = [Path(r"H:\2022_12_01\001_200nm_beads")]
+# data_dirs = [Path(r"H:\2022_12_01\001_200nm_beads")]
+# data_dirs = [Path(r"H:\2022_12_07\001_515_0.1um_beads")]
+# data_dirs = [Path(r"H:\2022_12_07\002_515_0.1um_beads")]
+# data_dirs = [Path(r"H:\2022_12_07\003_515_0.1um_beads")]
+# data_dirs = [Path(r"H:\2022_12_07\004_660_680_0.2um_beads")]
+# data_dirs = [Path(r"H:\2022_12_08\014_515_0.1um_beads_sim")]
+data_dirs = [Path(r"H:\2022_12_08\020_515_0.1um_beads_sim")]
 
 # channel dependent settings
 
@@ -34,15 +40,19 @@ data_dirs = [Path(r"H:\2022_12_01\001_200nm_beads")]
 # bead_radii = 0.5 * np.array([0.2, 0.2, 0.2])
 
 # red/green with 0.2um beads
-ignore_color = [False, False]
-min_fit_amp = [100, 100]
-bead_radii = 0.5 * np.array([0.2, 0.2])
+# ignore_color = [False, False]
+# min_fit_amp = [100, 100]
+# bead_radii = 0.5 * np.array([0.2, 0.2])
 
 
 # blue/green with 505/515nm 0.1um beads
 # ignore_color = [False, False]
 # min_fit_amp = [1000, 30]
 # bead_radii = 0.5 * np.array([0.1, 0.1])
+
+ignore_color = [False]
+min_fit_amp = [100]
+bead_radii = 0.5 * np.array([0.1])
 
 # channel independent setings
 use_gpu = True
@@ -250,8 +260,8 @@ for d in data_dirs:
             for it in range(ntimes):
                 for ia in range(nangles):
                     for ip in range(nphases):
-                        print(f"{it+1:d}/{ntimes:d} times, "
-                              f"{iz + 1:d}/{nz:d} zs, "
+                        print(f"{iz + 1:d}/{nz:d} zs, ",
+                              f"{it+1:d}/{ntimes:d} times, "                              
                               f"{ic + 1:d}/{ncolors:d} colors, "
                               f"{ia+1:d}/{nangles:d} angles, "
                               f"{ip+1:d}/{nphases:d} phases, "

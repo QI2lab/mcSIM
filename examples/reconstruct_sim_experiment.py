@@ -129,59 +129,35 @@ for kk in range(ncolors):
 
     imgset = sim.SimImageSet({"pixel_size": pixel_size, "na": na, "wavelength": emission_wavelengths[kk]},
                              imgs[kk, :, :, roi[0]:roi[1], roi[2]:roi[3]],
+                             otf=otf,
+                             wiener_parameter=0.1,
                              frq_estimation_mode="band-correlation",
                              frq_guess=frqs_guess,
-                             phases_guess=phases_guess,
                              phase_estimation_mode="wicker-iterative",
+                             phases_guess=phases_guess,
                              combine_bands_mode="fairSIM",
                              fmax_exclude_band0=0.4,
                              normalize_histograms=False,
-                             otf=otf,
-                             wiener_parameter=0.1,
                              background=100,
                              gain=2,
                              min_p2nr=0.5,
-                             use_gpu=use_gpu,
                              save_dir=save_dir,
-                             interactive_plotting=False)
+                             use_gpu=use_gpu)
 
     # ###########################################
     # run reconstruction
     # ###########################################
-    imgset.reconstruct(compute_os=False)
+    imgset.reconstruct()
 
     # ###########################################
     # save reconstruction results
     # ###########################################
-    imgset.save_imgs()
+    imgset.save_imgs(format="tiff",
+                     save_raw_data=False,
+                     save_patterns=False)
 
     # ###########################################
     # plot diagnostics
     # ###########################################
     imgset.plot_figs(figsize=(20, 10),
                      imgs_dpi=300)
-
-    # ###########################################
-    # save pattern estimates
-    # ###########################################
-    real_phases = imgset.phases + np.expand_dims(imgset.phase_corrections, axis=1)
-
-    _, _, estimated_patterns, _ = sim.get_simulated_sim_imgs(np.ones(imgset.imgs[0, 0].shape),
-                                                             frqs=imgset.frqs,
-                                                             phases=imgset.phases,
-                                                             mod_depths=imgset.mod_depths,
-                                                             gains=1,
-                                                             offsets=0,
-                                                             readout_noise_sds=0,
-                                                             pix_size=pixel_size,
-                                                             )
-    estimated_patterns = estimated_patterns[:, :, 0]
-
-    pattern_fname = save_dir / "patterns.tif"
-    tifffile.imwrite(pattern_fname,
-                     estimated_patterns.reshape((9,) + estimated_patterns.shape[-2:]).astype(np.float32),
-                     imagej=True,
-                     resolution=(1 / imgset.dx,) * 2,
-                     metadata={'Info': f"estimated patterns for frqs = {imgset.frqs.tolist()} and phases = {real_phases.tolist()}",
-                               'unit': 'um'},
-                     )
