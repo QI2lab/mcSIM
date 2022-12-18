@@ -127,24 +127,24 @@ tstart = time.perf_counter()
 
 imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength},
                          imgs,
+                         otf=None,
+                         wiener_parameter=0.3,
                          frq_estimation_mode="band-correlation",
                          frq_guess=frqs_gt,
-                         phases_guess=phases_gt,
                          phase_estimation_mode="wicker-iterative",
+                         phases_guess=phases_gt,
                          combine_bands_mode="fairSIM",
                          fmax_exclude_band0=0.4,
                          normalize_histograms=False,
-                         otf=None,
-                         wiener_parameter=0.3,
                          background=100,
                          gain=2,
                          min_p2nr=0.5,
-                         use_gpu=use_gpu,
                          save_dir=root_dir / f"{tstamp:s}_sim_reconstruction_simulated",
-                         interactive_plotting=False)
+                         use_gpu=use_gpu)
 
 # run reconstruction
 imgset.reconstruct()
+
 # save reconstruction results
 imgset.save_imgs(format="hdf5")
 # plot results

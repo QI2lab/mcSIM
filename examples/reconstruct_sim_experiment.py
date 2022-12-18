@@ -129,21 +129,20 @@ for kk in range(ncolors):
 
     imgset = sim.SimImageSet({"pixel_size": pixel_size, "na": na, "wavelength": emission_wavelengths[kk]},
                              imgs[kk, :, :, roi[0]:roi[1], roi[2]:roi[3]],
+                             otf=otf,
+                             wiener_parameter=0.1,
                              frq_estimation_mode="band-correlation",
                              frq_guess=frqs_guess,
-                             phases_guess=phases_guess,
                              phase_estimation_mode="wicker-iterative",
+                             phases_guess=phases_guess,
                              combine_bands_mode="fairSIM",
                              fmax_exclude_band0=0.4,
                              normalize_histograms=False,
-                             otf=otf,
-                             wiener_parameter=0.1,
                              background=100,
                              gain=2,
                              min_p2nr=0.5,
-                             use_gpu=use_gpu,
                              save_dir=save_dir,
-                             interactive_plotting=False)
+                             use_gpu=use_gpu)
 
     # ###########################################
     # run reconstruction
