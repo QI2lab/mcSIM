@@ -1,5 +1,7 @@
 """
-Determine affine transformation mapping DMD space (object space) to camera space (image space).
+Determine affine transformation mapping DMD space (object space) to camera space (image space) by projecting
+an array of spots onto a relatively flat fluorescent background (e.g. a thin layer of fluorescent dye)
+
 The affine transformation (in homogeneous coordinates) is represented by a matrix,
 [[xi], [yi], [1]] = T * [[xo], [yo], [1]]
 
@@ -7,32 +9,132 @@ Given a function defined on object space, g(xo, yo), we can define a correspondi
 gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
 """
 
+from typing import Optional
 import json
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from matplotlib.colors import PowerNorm
 from localize_psf import affine, rois, fit
 
-# helper functions for dealing with an array of dots projected on a flat background
-def fit_pattern_peaks(img,
-                      centers,
-                      centers_init,
-                      indices_init,
-                      roi_size,
-                      chi_squared_relative_max=1.5,
-                      max_position_err=0.1,
-                      img_sd=None,
-                      debug: bool = False):
-    """
-    Fit peak of fluorescence pattern
 
-    :param np.array img:
-    :param centers:
-    :param list[list[float]] centers_init: [[cy1, cx1], [cy2, cx2], ...] must supply at least three centers.
-    Given one initial center, the other two should be shifted by one index along each direction of the DMD
-    :param indices_init: indices corresponding to centers init
-    :param int roi_size:
+def get_affine_fit_pattern(dmd_size: list[int],
+                           radii: tuple[float] = (1., 1.5, 2.),
+                           corner_size: int = 4,
+                           point_spacing: int = 61,
+                           mark_sep: int = 15):
+    """
+    Create DMD patterns of a sparse 2D grid of points all with the same radius. This is useful for determining the
+    affine transformation between the DMD and the camera
+
+    :param dmd_size: [nx, ny]
+    :param radii: list of radii of spots for affine patterns.
+     If more than one, more than one pattern will be generated.
+    :param corner_size: size of blcosk indicating corners
+    :param point_spacing: spacing between points
+    :param mark_sep: separation between inversion/flip markers near center
+
+    :return patterns, radii, centers:
+    centers in format [[cx, cy]]
+    """
+    if isinstance(radii, (float, int)):
+        radii = [radii]
+
+    nx, ny = dmd_size
+
+    # set spacing between points. Does not necessarily need to divide Nx and Ny
+    xc = (point_spacing - 1) / 2
+    yc = (point_spacing - 1) / 2
+
+    cxs = np.arange(xc, nx, point_spacing)
+    cys = np.arange(yc, ny, point_spacing)
+
+    cxcx, cycy = np.meshgrid(cxs, cys)
+    centers = np.concatenate((cxcx[:, :, None], cycy[:, :, None]), axis=2)
+
+    patterns = []
+    for r in radii:
+        one_pt = np.zeros((point_spacing, point_spacing))
+        xx, yy = np.meshgrid(range(one_pt.shape[1]), range(one_pt.shape[0]))
+        rr = np.sqrt(np.square(xx - xc) + np.square(yy - yc))
+        one_pt[rr < r] = 1
+
+        mask = np.tile(one_pt, [int(np.ceil(ny / one_pt.shape[0])), int(np.ceil(nx / one_pt.shape[1]))])
+        mask = mask[:ny, :nx]
+
+        # add corners
+        mask[:corner_size, :corner_size] = 1
+        mask[:corner_size, -corner_size:] = 1
+        mask[-corner_size:, :corner_size] = 1
+        mask[-corner_size:, -corner_size:] = 1
+
+        # add various markers to fix orientation
+
+        # two edges
+        mask[:1, :] = 1
+        mask[:, :1] = 1
+
+        # marks near center
+        cx = nx // 2
+        cy = ny // 2
+
+        # block displaced along x-axis
+        xstart1 = cx - mark_sep
+        xend1 = xstart1 + corner_size
+        ystart1 = cy - corner_size//2
+        yend1 = ystart1 + corner_size
+        mask[ystart1:yend1, xstart1:xend1] = 1
+
+        # second block along x-axis
+        xstart4 = cx - 2 * mark_sep
+        xend4 = xstart4 + corner_size
+        ystart4 = ystart1
+        yend4 = yend1
+        mask[ystart4:yend4, xstart4:xend4] = 1
+
+        # central block
+        xstart2 = cx - corner_size//2
+        xend2 = xstart2 + corner_size
+        ystart2 = cy - mark_sep
+        yend2 = ystart2 + corner_size
+        mask[ystart2:yend2, xstart2:xend2] = 1
+
+        # block displaced along y-axis
+        xstart3 = cx - corner_size//2
+        xend3 = xstart3 + corner_size
+        ystart3 = cy - corner_size//2
+        yend3 = ystart3 + corner_size
+        mask[ystart3:yend3, xstart3:xend3] = 1
+
+        patterns.append(mask)
+
+    patterns = np.asarray(patterns)
+
+    return patterns, radii, centers
+
+
+def fit_pattern_peaks(img: np.ndarray,
+                      centers,
+                      centers_init: list[list[float]],
+                      indices_init: list[list[int]],
+                      roi_size: int,
+                      chi_squared_relative_max: float = np.inf, #1.5,
+                      max_position_err: float = 0.1,
+                      img_sd: Optional[np.ndarray] = None,
+                      debug: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
+    """
+    Fit peaks of fluorescence image corresponding to affine calibration pattern.
+
+    Affine calibration pattern can be obtained with dmd.get_affine_fit_pattern() function
+
+    :param img: Fluorescence image of calibration pattern
+    :param centers: spot positions on DMD
+    :param centers_init: [[cy1, cx1], [cy2, cx2], ...] guess position of centers in the fluorescence image.
+    Must supply at least three centers. Given one initial center, the other two should be shifted by one index
+     along each direction of the DMD
+    :param indices_init: indices corresponding to centers init in the calibration pattern
+    :param roi_size: ROI size in pixels used in fitting
     :param chi_squared_relative_max: fits with chi squared values larger than this factor * the chi squared of the
      initial guess points will be ignored
     :param max_position_err: points where fits have larger relative position error than this value will be ignored
@@ -54,7 +156,9 @@ def fit_pattern_peaks(img,
     fps = np.zeros((centers.shape[0], centers.shape[1], 7))
     chisqs = np.zeros((centers.shape[0], centers.shape[1]))
 
-    # fit initial dmd_centers
+    # #############################
+    # fit initial centers
+    # #############################
     for ii in range(len(centers_init)):
         roi = rois.get_centered_roi(centers_init[ii], [roi_size, roi_size])
 
@@ -63,10 +167,8 @@ def fit_pattern_peaks(img,
         xx, yy = np.meshgrid(range(roi[2], roi[3]), range(roi[0], roi[1]))
 
         gauss_model = fit.gauss2d()
-        # init_params = gauss_model.estimate_parameters(cell, (yy, xx))
         result = gauss_model.fit(cell, (yy, xx), init_params=None, sd=cell_sd)
         def fit_fn(x, y): return gauss_model.model((y, x), result["fit_params"])
-        # result, fit_fn = fit.fit_gauss2d(cell, sd=cell_sd, xx=xx, yy=yy)
         pfit = result['fit_params']
         chi_sq = result['chi_squared']
 
@@ -92,7 +194,9 @@ def fit_pattern_peaks(img,
             ax4.add_artist(rec)
             fig.suptitle('(ia, ib) = (%d, %d), chi sq=%0.2f' % (indices_init[ii][0], indices_init[ii][1], chi_sq))
 
-    # guess initial vec_a, vec_b
+    # #############################
+    # guess spacing between spots, i.e. vec_a, vec_b, from initial fits
+    # #############################
     #iia = np.array(indices_init)
     ias1, ias2 = np.meshgrid(indices_init[:, 0], indices_init[:, 0])
     adiffs = ias1 - ias2
@@ -108,7 +212,6 @@ def fit_pattern_peaks(img,
     vec_b_ref = np.array([np.mean(xdiffs[to_use_b] / bdiffs[to_use_b]), np.mean(ydiffs[to_use_b] / bdiffs[to_use_b])])
 
     # set maximum chi-square value that we will consider a 'good fit'
-    # chi_sq_max = np.nanmean(chisqs[chisqs != 0]) * 1.5
     # the first three fits must succeed
     chi_sq_max = np.nanmax(chisqs[chisqs != 0]) * chi_squared_relative_max
 
@@ -237,59 +340,37 @@ def fit_pattern_peaks(img,
     return fps, chisqs, successful_fits
 
 
-def get_affine_xform(fps,
-                     succesful_fits,
-                     dmd_centers):
-    """
-    Determine affine transformation from DMD to image space using the results of fit_pattern_peaks
-    :param fps: fit parameters
-    :param succesful_fits:
-    :param dmd_centers:
-    :return affine_xform:
-    """
-    # points to use for estimating affine transformation. Only include good fits.
-    # using pixels as coordinates, instead of real distance
-    xcam = fps[:, :, 1]
-    ycam = fps[:, :, 2]
-    xcam = xcam[succesful_fits]
-    ycam = ycam[succesful_fits]
-
-    xdmd = dmd_centers[:, :, 0]
-    ydmd = dmd_centers[:, :, 1]
-    xdmd = xdmd[succesful_fits]
-    ydmd = ydmd[succesful_fits]
-
-    # estimate affine transformation
-    out_pts = [(x, y) for x, y in zip(xcam, ycam)]
-    in_pts = [(x, y) for x, y in zip(xdmd, ydmd)]
-    affine_xform, _ = affine.fit_xform_points(in_pts, out_pts)
-
-    return affine_xform
-
-
-def plot_affine_summary(img,
-                        mask,
-                        fps,
-                        chisqs,
-                        succesful_fits,
-                        dmd_centers,
-                        affine_xform,
-                        options,
+def plot_affine_summary(img: np.ndarray,
+                        mask: np.ndarray,
+                        fps: np.ndarray,
+                        chisqs: np.ndarray,
+                        succesful_fits: np.ndarray,
+                        dmd_centers: np.ndarray,
+                        affine_xform: np.ndarray,
+                        options: dict,
+                        indices_init: Optional[list[list[int]]] = None,
+                        vmin_percentile: float = 5,
+                        vmax_percentile: float = 99.9,
+                        gamma: float = 1.,
                         **kwargs):
     """
-    Plot results of DMD affine transformation fitting using results of fit_pattern_peaks and get_affine_xform
+    Plot results of DMD affine transformation fitting using results of fit_pattern_peaks()
 
-    :param np.array img:
-    :param np.array mask:
-    :param np.array fps: fit parameters for each peak ny x nx x 7 array
+    :param img:
+    :param mask:
+    :param fps: fit parameters for each peak ny x nx x 7 array
     :param chisqs: chi squared statistic for each peak
     :param bool succesful_fits: boolean giving which fits we consider successful
     :param dmd_centers: ny x nx x 2, center positiosn on DMD
     :param affine_xform: affine transformation
     :param options: {'cam_pix', 'dmd_pix', 'dmd2cam_mag_expected', 'cam_mag'}
+    :param vmin_percentile:
+    :param vmax_percentile:
+    :param gamma: gamma used in displaying image
     :param kwargs: passed through to figure
     :return fig: figure handle to summary figure
     """
+
     if "cam_mag" not in options.keys():
         options.update({"cam_mag": np.nan})
 
@@ -306,44 +387,41 @@ def plot_affine_summary(img,
     fps[to_swap, 6] += np.pi / 2
 
     # extract useful info from fits
-    xcam = fps[:, :, 1]
-    ycam = fps[:, :, 2]
-    xcam = xcam[succesful_fits]
-    ycam = ycam[succesful_fits]
+    xcam = fps[succesful_fits, 1]
+    ycam = fps[succesful_fits, 2]
     amps = fps[:, :, 0]
     bgs = fps[:, :, 5]
-    sigma_mean_cam = np.sqrt(fps[:, :, 3] * fps[:, :, 4])
-    sigma_asymmetry_cam = np.abs(fps[:, :, 3] - fps[:, :, 4]) / (0.5 * (fps[:, :, 3] + fps[:, :, 4]))
     with np.errstate(invalid="ignore"):
+        sigma_mean_cam = np.sqrt(fps[:, :, 3] * fps[:, :, 4])
+        sigma_asymmetry_cam = np.abs(fps[:, :, 3] - fps[:, :, 4]) / (0.5 * (fps[:, :, 3] + fps[:, :, 4]))
         # angles differing by pi represent same ellipse
         angles = np.mod(fps[:, :, 6], np.pi)
-
-    xdmd = dmd_centers[:, :, 0]
-    ydmd = dmd_centers[:, :, 1]
-    xdmd = xdmd[succesful_fits]
-    ydmd = ydmd[succesful_fits]
 
     # extract parameters from options
     pixel_correction_factor = options['cam_pix'] / options['dmd_pix']
     expected_mag = options['dmd2cam_mag_expected']
 
-    # get affine paramaters from xform
+    # get affine parematers from xform
     affine_params = affine.xform2params(affine_xform)
 
     # transform DMD points and mask to image space
-    homog_coords = np.concatenate((xdmd[None, :], ydmd[None, :], np.ones((1, xdmd.size))), axis=0)
-    dmd_coords_xformed = affine_xform.dot(homog_coords)
-    xdmd_xform = dmd_coords_xformed[0, :]
-    ydmd_xform = dmd_coords_xformed[1, :]
+    dmd_coords_xform = affine.xform_points(dmd_centers[succesful_fits, :], affine_xform)
+    xdmd_xform = dmd_coords_xform[:, 0]
+    ydmd_xform = dmd_coords_xform[:, 1]
 
-    ny, nx = mask.shape
-    xc_dmd = nx / 2
-    yc_dmd = ny / 2
-    xc_dmd_cam, yc_dmd_cam, _ = affine_xform.dot(np.array([[xc_dmd], [yc_dmd], [1]]))
-
+    # DMD axes image space
     nvec = 100
-    x_xvec, y_xvec, _ = affine_xform.dot(np.array([[xc_dmd + nvec], [yc_dmd], [1]]))
-    x_yvec, y_yvec, _ = affine_xform.dot(np.array([[xc_dmd], [yc_dmd + nvec], [1]]))
+    ny, nx = mask.shape
+    xc_dmd = nx // 2
+    yc_dmd = ny // 2
+
+    dmd_axes = np.array([[xc_dmd, yc_dmd],
+                         [xc_dmd + nvec, yc_dmd],
+                         [xc_dmd, yc_dmd],
+                         [xc_dmd, yc_dmd + nvec]])
+
+    dmd_axes_cam = affine.xform_points(dmd_axes,
+                                   affine_xform)
 
     # residual position error
     residual_dist_err = np.zeros((fps.shape[0], fps.shape[1])) * np.nan
@@ -353,13 +431,12 @@ def plot_affine_summary(img,
     img_coords = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
     mask_xformed = affine.xform_mat(mask, affine_xform, img_coords, mode='nearest')
 
-    # summarize results
-    vmin_img = np.min(bgs[succesful_fits])
-    vmax_img = vmin_img + np.max(amps[succesful_fits]) * 1.2
-
+    # #####################################
     # plot results
+    # #####################################
     fig = plt.figure(**kwargs)
-    grid = fig.add_gridspec(6, 4)
+    grid = fig.add_gridspec(nrows=6,
+                            ncols=5, width_ratios=[1, 1, 1, 1, 1])
     cmap = "inferno"
 
     # chi squareds
@@ -421,25 +498,47 @@ def plot_affine_summary(img,
     plt.colorbar(im)
 
     # raw image with fit points overlayed
-    ax = fig.add_subplot(grid[:3, 2:])
+    ax = fig.add_subplot(grid[:3, 2:4])
     ax.set_title('raw image and fits')
-    im = ax.imshow(img, vmin=vmin_img, vmax=vmax_img)
+
+    im = ax.imshow(img, norm=PowerNorm(vmin=np.percentile(img, vmin_percentile), vmax=np.percentile(img, vmax_percentile), gamma=gamma),
+                   cmap="bone")
     ax.plot(xcam, ycam, 'rx', label="fit points")
     ax.plot(xdmd_xform, ydmd_xform, 'y1', label="affine xform")
-    ax.plot(xc_dmd_cam, yc_dmd_cam, 'mx')
-    ax.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm', label="dmd axes")
-    ax.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
+    # ax.plot(xc_dmd_cam, yc_dmd_cam, 'mx')
+    # ax.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm', label="dmd axes")
+    # ax.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
+    ax.plot(dmd_axes_cam[:2, 0], dmd_axes_cam[:2, 1], 'm', label="dmd axes")
+    ax.plot(dmd_axes_cam[2:, 0], dmd_axes_cam[2:, 1], 'm')
     ax.legend()
     ax.set_xticks([])
     ax.set_yticks([])
+    plt.colorbar(im)
+
+    # ax = fig.add_subplot(grid[:3, 4])
+    # plt.colorbar(im, cax=ax)
 
     # dmd image transformed
-    ax = fig.add_subplot(grid[3:, 2:])
-    ax.set_title('DMD pattern xformed to img space')
-    im = ax.imshow(mask_xformed)
-    ax.plot(xc_dmd_cam, yc_dmd_cam, c='m', marker='x')
-    ax.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm')
-    ax.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
+    ax = fig.add_subplot(grid[3:, 2:4])
+    ax.set_title('DMD pattern (camera space)')
+    im = ax.imshow(mask_xformed, cmap="bone")
+    # ax.plot(xc_dmd_cam, yc_dmd_cam, c='m', marker='x')
+    ax.plot(dmd_axes_cam[:2, 0], dmd_axes_cam[:2, 1], 'm')
+    ax.plot(dmd_axes_cam[2:, 0], dmd_axes_cam[2:, 1], 'm')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    plt.colorbar(im)
+
+    # dmd image
+    ax = fig.add_subplot(grid[3:, 4])
+    ax.set_title("DMD pattern (DMD space)")
+    im = ax.imshow(mask, cmap="bone")
+    ax.plot(dmd_axes[:2, 0], dmd_axes[:2, 1], 'm')
+    ax.plot(dmd_axes[2:, 0], dmd_axes[2:, 1], 'm')
+    if indices_init is not None:
+        dmd_centers_init = np.array([dmd_centers[ind[0], ind[1], :] for ind in indices_init])
+        ax.plot(dmd_centers_init[:, 0], dmd_centers_init[:, 1], 'gx', label="centers init")
+        ax.legend()
     ax.set_xticks([])
     ax.set_yticks([])
 
@@ -454,16 +553,20 @@ def plot_affine_summary(img,
 
 
 # main function for estimating affine transform
-def estimate_xform(img,
-                   mask,
+def estimate_xform(img: np.ndarray,
+                   mask: np.ndarray,
                    pattern_centers,
-                   centers_init,
-                   indices_init,
-                   options,
+                   centers_init: list[list[float]],
+                   indices_init: list[list[float]],
+                   options: dict,
                    roi_size: int = 25,
                    export_fname: str = "affine_xform",
                    plot: bool = True,
-                   export_dir=None,
+                   export_dir: Optional[str] = None,
+                   debug: bool = False,
+                   vmin_percentile: float = 5.,
+                   vmax_percentile: float = 99.,
+                   gamma: float = 1.,
                    figsize=(16, 12),
                    **kwargs):
     """
@@ -486,10 +589,21 @@ def estimate_xform(img,
     """
 
     # fit points
-    fps, chisqs, succesful_fits = fit_pattern_peaks(img, pattern_centers, centers_init, indices_init,
-                                                    roi_size, img_sd=None, debug=False, **kwargs)
-    # get affine xforms
-    affine_xform = get_affine_xform(fps, succesful_fits, pattern_centers)
+    fps, chisqs, succesful_fits = fit_pattern_peaks(img,
+                                                    pattern_centers,
+                                                    centers_init,
+                                                    indices_init,
+                                                    roi_size,
+                                                    img_sd=None,
+                                                    debug=debug,
+                                                    **kwargs)
+
+    # affine_xform = get_affine_xform(fps, succesful_fits, pattern_centers)
+    # get affine xform
+    # using pixels as coordinates, instead of real distance
+    out_pts = fps[succesful_fits, 1:3]
+    in_pts = pattern_centers[succesful_fits, 0:2]
+    affine_xform, _ = affine.fit_xform_points(in_pts, out_pts)
 
     # export data
     data = {'affine_xform': affine_xform.tolist(),
@@ -511,12 +625,22 @@ def estimate_xform(img,
     if not plot:
         fig = None
     else:
-        fig = plot_affine_summary(img, mask, fps, chisqs, succesful_fits, pattern_centers, affine_xform,
-                                  options, figsize=figsize)
+        fig = plot_affine_summary(img,
+                                  mask,
+                                  fps,
+                                  chisqs,
+                                  succesful_fits,
+                                  pattern_centers,
+                                  affine_xform,
+                                  options,
+                                  indices_init=indices_init,
+                                  vmin_percentile=vmin_percentile,
+                                  vmax_percentile=vmax_percentile,
+                                  gamma=gamma,
+                                  figsize=figsize)
 
         if export_dir is not None:
-            fig_fpath = Path(export_dir) / f"{export_fname:s}.png"
-            fig.savefig(fig_fpath)
+            fig.savefig(Path(export_dir) / f"{export_fname:s}.png")
 
         plt.show()
 
