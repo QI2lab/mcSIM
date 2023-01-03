@@ -940,6 +940,7 @@ class SimImageSet:
 
             self.widefield_deconvolution = da.map_blocks(ift,
                                                          self.widefield_deconvolution_ft * apodization,
+                                                         self.use_gpu,
                                                          dtype=float,
                                                          meta=xp.array((), dtype=float)
                                                          )

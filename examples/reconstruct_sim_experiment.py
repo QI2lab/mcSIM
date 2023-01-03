@@ -141,23 +141,27 @@ for kk in range(ncolors):
                              background=100,
                              gain=2,
                              min_p2nr=0.5,
-                             save_dir=save_dir,
                              use_gpu=use_gpu)
 
     # ###########################################
     # run reconstruction
     # ###########################################
-    imgset.reconstruct()
+    imgset.reconstruct(compute_widefield=True,
+                       compute_os=True,
+                       compute_deconvolved=True,
+                       compute_mcnr=True)
 
     # ###########################################
     # save reconstruction results
     # ###########################################
-    imgset.save_imgs(format="tiff",
+    imgset.save_imgs(save_dir,
+                     format="tiff",
                      save_raw_data=False,
                      save_patterns=False)
 
     # ###########################################
     # plot diagnostics
     # ###########################################
-    imgset.plot_figs(figsize=(20, 10),
+    imgset.plot_figs(save_dir,
+                     figsize=(20, 10),
                      imgs_dpi=300)
