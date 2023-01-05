@@ -220,11 +220,11 @@ class SimImageSet:
             imgs = imgs.rechunk(chunk_size)
 
         # ensure on CPU/GPU as appropriate
-        self.imgs = da.map_blocks(lambda x: xp.array(x.astype(float)),
-                                  imgs,
-                                  dtype=float,
-                                  meta=xp.array((), dtype=float)
-                                  )
+        self.imgs_raw = da.map_blocks(lambda x: xp.array(x.astype(float)),
+                                      imgs,
+                                      dtype=float,
+                                      meta=xp.array((), dtype=float)
+                                      )
 
         # #############################################
         # real space parameters
@@ -292,14 +292,14 @@ class SimImageSet:
 
         self.otf = otf
 
-        if self.otf.shape[-2:] != self.imgs.shape[-2:]:
-            raise ValueError(f"OTF shape {self.otf.shape} and image shape {self.img.shape} are not compatible")
+        if self.otf.shape[-2:] != self.imgs_raw.shape[-2:]:
+            raise ValueError(f"OTF shape {self.otf.shape} and image shape {self.img_raw.shape} are not compatible")
 
         # #############################################
         # remove background and convert from ADU to photons
         # #############################################
         # todo: this should probably be users responsibility before here?
-        self.imgs = (self.imgs - background) / gain
+        self.imgs = (self.imgs_raw - background) / gain
         self.imgs[self.imgs <= 0] = 1e-12
 
         # #############################################
@@ -762,8 +762,7 @@ class SimImageSet:
                                               drop_axis=-3,
                                               dtype=float,
                                               meta=xp.array((), dtype=self.imgs.dtype))
-                                for ii in range(self.nangles)],
-                               axis=-3)
+                                for ii in range(self.nangles)], axis=-3)
             self.sim_os = da.mean(os_imgs, axis=-3)
             self.print_log(f"Computing SIM-OS image took {time.perf_counter() - tstart:.2f}s")
 
@@ -1085,9 +1084,14 @@ class SimImageSet:
         """
         Automate plotting and saving of figures
 
+        @param save_dir:
+        @param save_prefix:
+        @param save_suffix:
         @param slices: tuple of slices indicating which image to plot. len(slices) = self.imgs.ndim - 4
         @param figsize:
-        @param reconstruct_dpi: Set to 400 for high resolution, but long saving
+        @param diagnostics_only:
+        @param interactive_plotting:
+        @param imgs_dpi: Set to 400 for high resolution, but slower saving
         @return:
         """
 
@@ -1864,7 +1868,8 @@ class SimImageSet:
                   save_prefix: str = "",
                   format: str = "tiff",
                   save_patterns: bool = False,
-                  save_raw_data: bool = False):
+                  save_raw_data: bool = False,
+                  save_processed_data: bool = False):
         """
         Save SIM results and metadata to file
 
@@ -1875,7 +1880,7 @@ class SimImageSet:
         @param format: "tiff", "zarr" or "hdf5". If tiff is used, metadata will be saved in a .json file
         @param save_patterns:
         @param save_raw_data:
-        @param nmax_cores:
+        @param save_processed_data:
         @return:
         """
 
@@ -1992,7 +1997,11 @@ class SimImageSet:
         attrs = ["sim_sr", "widefield", "widefield_deconvolution", "mcnr", "sim_os"]
 
         if save_raw_data:
+            attrs += ["imgs_raw"]
+
+        if save_processed_data:
             attrs += ["imgs"]
+
         if save_patterns:
             real_phases = self.phases - np.expand_dims(self.phase_corrections, axis=1)
             # on same grid
@@ -2007,8 +2016,8 @@ class SimImageSet:
                                        pix_size=self.dx / self.upsample_fact,
                                        nbin=self.upsample_fact
                                        )
-            self.patterns = estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx])
-            self.patterns_2x = estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx])
+            self.patterns = da.from_array(estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx]))
+            self.patterns_2x = da.from_array(estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx]))
 
             attrs += ["patterns", "patterns_2x"]
 
