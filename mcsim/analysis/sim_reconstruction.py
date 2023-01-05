@@ -1,14 +1,8 @@
 """
 Tools for reconstructing 2D SIM images from raw data.
-
-The primary reconstruction code is contained in the class SimImageSet, which operates on a single 2D plane at a time.
-
-reconstruct_sim_dataset() provides an example of using SimImageSet to reconstruct a larger dataset, in this case
-implemented for a MicroManager dataset containing multiple z-positions, color channels, and time points.
+The primary reconstruction code is contained in the class SimImageSet
 """
 import time
-import datetime
-import copy
 import warnings
 from typing import Union, Optional
 # parallelization
@@ -24,10 +18,8 @@ from scipy.signal.windows import tukey
 from skimage.exposure import match_histograms as match_histograms_cpu
 # working with external files
 from pathlib import Path
-import shutil
 from io import StringIO
 # loading and exporting data
-import pickle # todo: remove
 import json
 import tifffile
 import zarr
@@ -39,8 +31,7 @@ from matplotlib.colors import PowerNorm, LogNorm
 from matplotlib.patches import Circle, Rectangle
 # code from our projects
 import mcsim.analysis.analysis_tools as tools
-from mcsim.analysis import mm_io
-from localize_psf import fit, affine, rois, fit_psf, camera
+from localize_psf import rois, fit_psf, camera
 
 # GPU
 _cupy_available = True
@@ -378,12 +369,7 @@ class SimImageSet:
         if self.use_gpu:
             for attr_name in dir(self):
                 if attr_name in self.__dict__.keys():
-                    # if cupy array, move off GPU
-                    # if isinstance(self.__dict__[attr_name], cp.ndarray):
-                    #     print(attr_name)
-                    #     del self.__dict__[attr_name]
                     del self.__dict__[attr_name]
-
 
     def estimate_parameters(self,
                             slices: Optional[tuple] = None):
@@ -479,7 +465,6 @@ class SimImageSet:
                                             self.fx,
                                             self.fy,
                                             self.fmax))
-
 
             peak_phases = xp.zeros((self.nangles, self.nphases))
             peak_heights = xp.zeros((self.nangles, self.nphases))
@@ -681,7 +666,6 @@ class SimImageSet:
 
             self.print_log(f"estimated global phases and modulation depths in {time.perf_counter() - tstart_mod_depth:.2f}s")
 
-
         if self.phase_estimation_mode == "fixed":
             self.phase_corrections = xp.zeros(self.nangles)
         else:
@@ -698,7 +682,6 @@ class SimImageSet:
                                    f" was less than allowed minimum,"
                                    f" {self.mod_depths[ii]:.3f} < {self.minimum_mod_depth:.3f}")
                     self.mod_depths[ii] = self.minimum_mod_depth
-
 
     def reconstruct(self,
                     slices: Optional[tuple] = None,
@@ -729,6 +712,7 @@ class SimImageSet:
         if compute_widefield:
             apodization = xp.array(np.outer(tukey(self.ny, alpha=0.1),
                                             tukey(self.nx, alpha=0.1)))
+
             def ft(m):
                 # avoid issues like https://github.com/cupy/cupy/issues/6355
                 if self.use_gpu:
@@ -862,7 +846,6 @@ class SimImageSet:
             #         # gaussian smoothing for weight
             #         self.weights[ii, jj] *= (1 - xp.exp(-0.5 * ff_us**2 / (self.fmax * self.fmax_exclude_band0)**2))
 
-        tstart_weights_sum = time.perf_counter()
         self.weights_norm = self.wiener_parameter**2 + xp.nansum(xp.abs(self.weights) ** 2, axis=(0, 1), keepdims=True)
 
         # #############################################
@@ -932,7 +915,6 @@ class SimImageSet:
         if compute_deconvolved:
             tstart = time.perf_counter()
             weights_decon = self.otf_shifted.conj()[..., 0, :, :]
-
 
             self.widefield_deconvolution_ft = da.nansum(weights_decon * self.bands_shifted_ft[..., 0, :, :], axis=-3) / \
                                                   (self.wiener_parameter**2 + da.nansum(np.abs(weights_decon)**2, axis=-3))
@@ -1053,7 +1035,6 @@ class SimImageSet:
                     self.print_log("%07.2fdeg, " % (np.mod(self.phases_guess[ii, jj] - self.phases_guess[ii, 0], 2*np.pi) * 180/np.pi), end="")
                 self.print_log("%07.2fdeg" % (np.mod(self.phases_guess[ii, self.nphases - 1] - self.phases_guess[ii, 0], 2*np.pi) * 180/np.pi))
 
-
     def print_log(self,
                   string: str,
                   **kwargs):
@@ -1069,10 +1050,9 @@ class SimImageSet:
 
         print(string, **kwargs, file=self.log)
 
-
     # plotting utility functions
     def plot_figs(self,
-                  save_dir = None,
+                  save_dir: str = None,
                   save_prefix: str = "",
                   save_suffix: str = "",
                   slices: Optional[tuple[slice]] = None,
@@ -1133,7 +1113,6 @@ class SimImageSet:
         if not interactive_plotting:
             plt.close(figh)
 
-
         # plot frequency fits
         fighs, fig_names_now = self.plot_frequency_fits(figsize=figsize)
 
@@ -1145,7 +1124,6 @@ class SimImageSet:
                 fh.savefig(save_dir / f"{save_prefix:s}{fn:s}{save_suffix:s}.png")
             if not interactive_plotting:
                 plt.close(fh)
-
 
         # plot filters used in reconstruction
         fighs, fig_names_now = self.plot_reconstruction_diagnostics(slices, figsize=figsize)
@@ -1159,7 +1137,6 @@ class SimImageSet:
                            dpi=imgs_dpi)
             if not interactive_plotting:
                 plt.close(fh)
-
 
         # plot otf
         fig = self.plot_otf(figsize=figsize)
@@ -1191,7 +1168,6 @@ class SimImageSet:
         self.print_log(f"plotting results took {tend - tstart:.2f}s")
 
         return figs, fig_names
-
 
     def plot_mcnr_diagnostic(self,
                              slices: Optional[tuple[slice]] = None,
@@ -1326,7 +1302,6 @@ class SimImageSet:
 
         return [figh], ["mcnr_diagnostic"]
 
-
     def plot_reconstruction(self,
                             slices: Optional[tuple[slice]] = None,
                             figsize=(20, 10),
@@ -1449,7 +1424,6 @@ class SimImageSet:
             ax.set_xlabel("$f_x (1/\mu m)$")
 
         return figh
-
 
     def plot_reconstruction_diagnostics(self,
                                         slices: Optional[tuple[slice]] = None,
@@ -1753,7 +1727,6 @@ class SimImageSet:
 
         return figs, fig_names
 
-
     def plot_frequency_fits(self,
                             figsize=(20, 10)):
         """
@@ -1787,7 +1760,6 @@ class SimImageSet:
             fig_names.append(f"frq_fit_angle={ii:d}")
 
         return figs, fig_names
-
 
     def plot_otf(self,
                  figsize=(20, 10)):
@@ -1860,7 +1832,6 @@ class SimImageSet:
 
         return figh
 
-
     # saving utility functions
     def save_imgs(self,
                   save_dir: str,
@@ -1874,7 +1845,6 @@ class SimImageSet:
         Save SIM results and metadata to file
 
         @param save_dir: directory to save results
-        @param start_time:
         @param save_suffix:
         @param save_prefix:
         @param format: "tiff", "zarr" or "hdf5". If tiff is used, metadata will be saved in a .json file
@@ -1961,8 +1931,9 @@ class SimImageSet:
 
             for k, v in metadata.items():
                 img_z.attrs[k] = v
+
             def save_delayed(attr):
-                d = getattr(self, attr).to_hdf5(fname, f"/{attr:s}") #, compute=False)
+                d = getattr(self, attr).to_hdf5(fname, f"/{attr:s}")
                 return d
 
         elif format == "tiff":
@@ -1970,6 +1941,7 @@ class SimImageSet:
             fname = save_dir / f"{save_prefix:s}sim_reconstruction{save_suffix:s}.json"
             with open(fname, "w") as f:
                 json.dump(metadata, f, indent="\t")
+
             def save_delayed(attr):
                 fname = save_dir / f"{save_prefix:s}{attr:s}{save_suffix:s}.tif"
 
@@ -1987,7 +1959,6 @@ class SimImageSet:
                                                               'min': 0,
                                                               'max': np.max(getattr(self, attr))
                                                               }
-                                                              #np.percentile(getattr(self, attr), 99.9)}
                                                   )
                 return d
         else:
@@ -2039,6 +2010,7 @@ def show_sim_napari(fname_zarr: str,
     """
     Plot all images obtained from SIM reconstruction with correct scale/offset
     @param fname_zarr:
+    @param block:
     @return viewer:
     """
 
@@ -2659,7 +2631,6 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
     fy = fft.fftshift(fft.fftfreq(ny, dxy))
     dfy = fy[1] - fy[0]
 
-
     # compute cross correlations of data
     band_inds = [0, 1, -1]
     nbands = len(band_inds)
@@ -3176,7 +3147,6 @@ def resample_bandlimited_ft(img_ft: array,
     else:
         xp = np
 
-
     # make axes to operate on positive
     axes = tuple([a if a >= 0 else img_ft.ndim + a for a in axes])
 
@@ -3311,6 +3281,7 @@ def get_simulated_sim_imgs(ground_truth: array,
     :param coherent_projection:
     :param psf: the point-spread function. Must have same dimensions as ground_truth, but may be different size
     proper frequency points can be obtained using fft.fftshift(fft.fftfreq(nx, dx)) and etc.
+    :param nbin:
     :param kwargs: keyword arguments which will be passed through to simulated_img()
 
     :return sim_imgs: nangles x nphases x nz x ny x nx array
@@ -3379,7 +3350,7 @@ def get_simulated_sim_imgs(ground_truth: array,
 
     x = (xp.expand_dims(xb, axis=1) + xp.expand_dims(subpix_offsets, axis=0)).ravel()
     y = (xp.expand_dims(yb, axis=1) + xp.expand_dims(subpix_offsets, axis=0)).ravel()
-    z = (xp.arange(nz) - (nz // 2)) # do not need dz, so don't have pixel size for it
+    z = (xp.arange(nz) - (nz // 2))  # do not need dz, so don't have pixel size for it
 
     _, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
 
