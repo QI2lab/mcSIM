@@ -2944,8 +2944,6 @@ def unmix_bands(imgs_ft: array,
     Do noisy inversion of SIM data, i.e. determine
     [[S(f)H(k)], [S(f-p)H(f)], [S(f+p)H(f)]] = M^{-1} * [[D_1(f)], [D_2(f)], [D_3(f)]]
 
-    # todo: generalize for case with more than 3 phases or angles
-
     :param imgs_ft: n0 x ... x nm x nangles x nphases x ny x nx.
      Fourier transform of SIM image data with DC frequency information in middle. i.e. as obtained from fftshift
     :param phases: array nangles x nphases listing phases
@@ -2954,6 +2952,8 @@ def unmix_bands(imgs_ft: array,
     :return components_ft: nangles x nphases x ny x nx array, where the first index corresponds to the bands
     S(f)H(f), S(f-p)H(f), or S(f+p)H(f)
     """
+    # todo: could generalize for case with more than 3 phases or angles
+
     if isinstance(imgs_ft, cp.ndarray) and _cupy_available:
         xp = cp
     else:
@@ -2984,7 +2984,6 @@ def unmix_bands(imgs_ft: array,
     bands_ft = xp.zeros(imgs_ft.shape, dtype=complex) * np.nan
     for ii in range(nangles):
         mixing_mat_inv = xp.asarray(get_band_mixing_inv(phases[ii], mod_depths[ii], amps[ii]))
-        # bands_ft[ii] = image_times_matrix(imgs_ft[ii], mixing_mat_inv)
 
         # todo: plenty of ways to write this more generally ... but for now this is fine
         for jj in range(nphases):
@@ -3000,12 +2999,13 @@ def shift_bands(bands_unmixed_ft: array,
                 drs: tuple[float],
                 upsample_factor: int) -> array:
     """
+    Shift separated SIM bands to correct locations in Fourier space
 
     @param bands_unmixed_ft: n0 x ... x nm x 3 x ny x nx
     @param frqs: n0 x ... x nm x 2
     @param drs: (dy, dx)
     @param upsample_factor:
-    @return:
+    @return shifted_bands_ft:
     """
 
     if isinstance(bands_unmixed_ft, cp.ndarray) and _cupy_available:
@@ -3250,7 +3250,6 @@ def conj_transpose_fft(img_ft: np.ndarray,
 
 
 # create test data/SIM forward model
-# todo: could think about giving a 3D stack and converting this ...
 def get_simulated_sim_imgs(ground_truth: array,
                            frqs: np.ndarray,
                            phases: np.ndarray,
