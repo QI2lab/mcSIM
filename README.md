@@ -47,7 +47,12 @@ git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .[gpu]
 ```
-If you are using another version of CUDA, manually install the appropriate versions of [CuPy](https://cupy.dev/) and [cuCIM](https://pypi.org/project/cucim/) installed. Actually, only a subset of the cuCIM project is required. See [setup.py](setup.py) for hints on how to install only this portion.
+Otherwise, you must manually install the appropriate versions of [CuPy](https://cupy.dev/) and [cuCIM](https://pypi.org/project/cucim/) installed.
+Actually only the scikit-image portion of cuCIM is required. Note that the entire package cannot be installed on Windows,
+but the scikit-image portion can. This portion of cuCIM can be installed manually using
+```
+pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
+```
 
 # SIM reconstruction code
 ### [sim_reconstruction.py](mcsim/analysis/sim_reconstruction.py)

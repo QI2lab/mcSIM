@@ -21,6 +21,7 @@ required_pkgs = ['numpy',
                  ]
 
 # extras
+# to install cucim manually pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
 extras = {'expt_ctrl': ['PyDAQmx'],
           'gpu': ['cupy-cuda11x', # assuming CUDA 11.2 or later. Otherwise, manually install
                   'cucim @ git+https://github.com/rapidsai/cucim.git@v22.04.00#egg=cucim&subdirectory=python/cucim'
