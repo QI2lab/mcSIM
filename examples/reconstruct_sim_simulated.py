@@ -1,16 +1,15 @@
 """
 Reconstruct synthetic SIM image of closely spaced line pairs.
 """
-import time
-
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import datetime
+import time
 from PIL import Image
 from pathlib import Path
 import numpy as np
-from localize_psf.fit_psf import gridded_psf_model, get_psf_coords, psf2otf
+from localize_psf.fit_psf import gridded_psf_model, get_psf_coords
 import mcsim.analysis.sim_reconstruction as sim
 
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
@@ -125,6 +124,8 @@ patterns = patterns[:, :, 0]
 # ############################################
 tstart = time.perf_counter()
 
+save_dir = root_dir / f"{tstamp:s}_sim_reconstruction_simulated"
+
 imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength},
                          imgs,
                          otf=None,
@@ -139,16 +140,20 @@ imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength}
                          background=100,
                          gain=2,
                          min_p2nr=0.5,
-                         save_dir=root_dir / f"{tstamp:s}_sim_reconstruction_simulated",
                          use_gpu=use_gpu)
 
 # run reconstruction
-imgset.reconstruct()
+imgset.reconstruct(compute_widefield=True,
+                   compute_os=True,
+                   compute_deconvolved=True,
+                   compute_mcnr=True)
 
 # save reconstruction results
-imgset.save_imgs(format="hdf5")
+imgset.save_imgs(save_dir,
+                 format="hdf5")
 # plot results
-imgset.plot_figs(figsize=(20, 10),
+imgset.plot_figs(save_dir,
+                 figsize=(20, 10),
                  imgs_dpi=300)
 
 print(f"reconstructing images, plotting diagnostics, and saving results took {time.perf_counter() - tstart:.2f}s")

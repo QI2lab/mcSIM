@@ -338,7 +338,7 @@ def translate_im(img: array,
     else:
         xp = np
 
-    img = xp.array(img)
+    img = xp.asarray(img)
     ny, nx = img.shape
 
     dy, dx = drs
@@ -346,15 +346,15 @@ def translate_im(img: array,
     # must use symmetric frequency representation to do correctly!
     # we are using the FT shift theorem to approximate the Nyquist-Whittaker interpolation formula,
     # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
-    fx = xp.array(xp.fft.fftfreq(nx, dx))
-    fy = xp.array(xp.fft.fftfreq(ny, dy))
+    fx = xp.asarray(xp.fft.fftfreq(nx, dx))
+    fy = xp.asarray(xp.fft.fftfreq(ny, dy))
     fxfx, fyfy = xp.meshgrid(fx, fy)
 
     # 1. ft
     # 2. multiply by exponential factor
     # 3. inverse ft
     exp_factor = xp.exp(1j * 2 * np.pi * (shift[0] * fyfy + shift[1] * fxfx))
-    img_shifted = xp.fft.fftshift(xp.fft.ifft2(xp.array(exp_factor) * xp.fft.fft2(xp.fft.ifftshift(img))))
+    img_shifted = xp.fft.fftshift(xp.fft.ifft2(xp.asarray(exp_factor) * xp.fft.fft2(xp.fft.ifftshift(img))))
 
     return img_shifted
 
@@ -385,14 +385,15 @@ def translate_ft(img_ft: array,
     :return img_ft_shifted: shifted images, same size as img_ft
     """
 
-    if isinstance(img_ft, cp.ndarray):
+    use_gpu = isinstance(img_ft, cp.ndarray) and _cupy_available
+
+    if use_gpu:
         xp = cp
+        # avoid issues like https://github.com/cupy/cupy/issues/6355
+        cp.fft._cache.PlanCache(memsize=0)
     else:
         xp = np
 
-    # don't use cache
-    if xp == cp and _cupy_available:
-        cp.fft._cache.PlanCache(memsize=0)
 
     if img_ft.ndim < 2:
         raise ValueError("img_ft must be at least 2D")
@@ -400,9 +401,8 @@ def translate_ft(img_ft: array,
     n_extra_dims = img_ft.ndim - 2
     ny, nx = img_ft.shape[-2:]
 
-    # todo: don't think I need to copy
-    fx = xp.array(fx, copy=True)
-    fy = xp.array(fy, copy=True)
+    fx = xp.asarray(fx)
+    fy = xp.asarray(fy)
 
     if fx.shape != fy.shape:
         raise ValueError(f"fx and fy must have same shape, but had shapes {fx.shape} and {fy.shape}")
@@ -453,8 +453,12 @@ def translate_ft(img_ft: array,
         exp_factor = xp.exp(-1j * 2 * np.pi * (fx * x + fy * y))
 
         img_ft_shifted = xp.fft.fftshift(
-                         xp.fft.fft2(xp.array(exp_factor) *
+                         xp.fft.fft2(xp.asarray(exp_factor) *
                          xp.fft.ifft2(xp.fft.ifftshift(img_ft, axes=(-1, -2)),
                                       axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        if use_gpu:
+            cache = cp.fft.config.get_plan_cache()
+            cache.clear()
 
         return img_ft_shifted

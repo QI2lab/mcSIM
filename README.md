@@ -40,8 +40,19 @@ git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .[expt_ctrl]
 ```
-Some functions can be optionally run on a GPU. If this is desired, ensure your python environment
-has the appropriate versions of [CuPy](https://cupy.dev/) and [cuCIM](https://pypi.org/project/cucim/) installed
+Some functions can be optionally run on a GPU. This functionality has been tested with CUDA 11.2 and 11.8.  If GPU support is desired
+and you are using CUDA 11.2 or greater, install the package using
+```
+git clone https://github.com/QI2lab/mcSIM.git
+cd mcSIM
+pip install .[gpu]
+```
+Otherwise, you must manually install the appropriate versions of [CuPy](https://cupy.dev/) and [cuCIM](https://pypi.org/project/cucim/) installed.
+Actually only the scikit-image portion of cuCIM is required. Note that the entire package cannot be installed on Windows,
+but the scikit-image portion can. This portion of cuCIM can be installed manually using
+```
+pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
+```
 
 # SIM reconstruction code
 ### [sim_reconstruction.py](mcsim/analysis/sim_reconstruction.py)

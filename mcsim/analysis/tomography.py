@@ -1802,6 +1802,7 @@ def reconstruction(efield_fts: array,
     efield_fts = xp.asarray(efield_fts)
 
     n_leading_dims = efield_fts.ndim - 3
+    # todo: better to trim off first dims rather than squeeze
     efield_fts = efield_fts.squeeze()
     nimgs, ny, nx = efield_fts.shape
 

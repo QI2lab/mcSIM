@@ -9,7 +9,6 @@ import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from mcsim.analysis import fit_dmd_affine, mm_io
-import mcsim.analysis.dmd_patterns as dmd
 
 # ###########################
 # set image data location
@@ -23,14 +22,13 @@ save_dir = img_fname.parent / f"{time_stamp:s}_affine_calibration"
 # set guesses for three "spots" from DMD pattern
 # ###########################
 # all colors are close enough can use same center guesses
-centers_init = [[1039, 918], [982, 976], [1091, 979]]
-indices_init = [[10, 16], [9, 16], [10, 15]] #[dmd short axis, dmd long axis]
+centers_init = [[1039, 918], [982, 976], [1091, 979]] # [[cy, cx], ...]
+# indices start at zero
+indices_init = [[10, 16], [9, 16], [10, 15]] #[dmd short axis index, dmd long axis index]
 
 # ###########################
 # set other parameters for fitting
 # ###########################
-
-roi_size = 25
 options = {'cam_pix': 6.5e-6,
            'dmd_pix': 7.56e-6,
            'dmd2cam_mag_expected': 180 / 300 * 400 / 200,
@@ -41,7 +39,7 @@ def sigma_pix(wl1, wl2, na, cam_mag):
 
 # load DMD pattern and dmd_centers
 dmd_size = [1920, 1080]
-masks, radii, pattern_centers = dmd.get_affine_fit_pattern(dmd_size)
+masks, radii, pattern_centers = fit_dmd_affine.get_affine_fit_pattern(dmd_size)
 mask = masks[1]
 
 # ###########################
@@ -57,11 +55,14 @@ for nc in range(len(channel_labels)):
                                                             centers_init,
                                                             indices_init,
                                                             options,
-                                                            roi_size=roi_size,
+                                                            roi_size=25,
                                                             export_fname=f"affine_xform_{channel_labels[nc]:s}",
                                                             export_dir=save_dir,
                                                             chi_squared_relative_max=3,
-                                                            figsize=(20, 12))
+                                                            vmin_percentile=5,
+                                                            vmax_percentile=99,
+                                                            gamma=0.5,
+                                                            figsize=(25, 12))
 
     affine_summary[channel_labels[nc]] = affine_xform_data["affine_xform"]
 
