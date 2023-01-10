@@ -36,9 +36,12 @@ try:
     from cucim.skimage.restoration import denoise_tv_chambolle as denoise_tv_chambolle_gpu
     # from cucim.skimage.restoration import unwrap_phase as unwrap_phase_gpu # this not implemented ...
 except ImportError:
+    cp = np
+    sp_gpu = sp
     _gpu_available = False
 
 array = Union[np.ndarray, cp.ndarray]
+csr_matrix = Union[sp.csr_matrix, sp_gpu.csr_matrix]
 
 class tomography:
     def __init__(self,
@@ -888,7 +891,7 @@ def soft_threshold(t: float,
 
 def grad_descent(v_ft_start: array,
                  e_measured_ft: array,
-                 model: str,
+                 model: csr_matrix,
                  step: float,
                  niters: int = 100,
                  use_fista: bool = True,
@@ -903,8 +906,6 @@ def grad_descent(v_ft_start: array,
     """
     Perform gradient descent using a linear model
 
-    # todo: add mask to remove points which we don't want to consider
-
     @param v_ft_start:
     @param e_measured_ft:
     @param model:
@@ -915,6 +916,7 @@ def grad_descent(v_ft_start: array,
     @param tau_tv:
     @param use_imaginary_constraint:
     @param use_real_constraint:
+    @param masks: # todo: add mask to remove points which we don't want to consider
     @param debug:
     @return results: dict
     """
