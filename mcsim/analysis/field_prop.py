@@ -50,58 +50,44 @@ def get_angular_spectrum_kernel(dz: float,
     return kernel
 
 
-def propagate_homogeneous(efield: array,
+def propagate_homogeneous(efield_start: array,
                           zs: array,
                           no: float,
                           drs: list[float],
-                          wavelength: float,
-                          dz_final: float = 0.,
-                          atf: Optional[array] = None,
-                          apodization: Union[array, float] = 1.,
-                          axis=(-2, -1)) -> array:
+                          wavelength: float) -> array:
     """
     Propagate the Fourier transform of an optical field a distance z through a medium with homogeneous index
     of refraction n using the angular spectrum method
-    @param efield:
+    @param efield_start: n0 x ... x nm x ny x nx array
     @param zs:
     @param no:
     @param drs: (dy, dx)
     @param wavelength:
-    @param dz_final:
-    @param atf:
-    @param apodization:
-    @param axis: y and x dimension respectively
-    @return efield_ft_prop: coords = (fy, fx)
+    @return efield_prop: no x ... x nm x nz x ny x nx array
     """
-    use_gpu = isinstance(efield, cp.ndarray) and _gpu_available
 
+    use_gpu = isinstance(efield_start, cp.ndarray) and _gpu_available
     if use_gpu:
         xp = cp
     else:
         xp = np
 
-    def ft(m): return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=axis), axes=axis), axes=axis)
-    def ift(m): return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=axis), axes=axis), axes=axis)
+    def ft(m): return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    def ift(m): return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
     nz = len(zs)
-    ny = efield.shape[axis[0]]
-    nx = efield.shape[axis[1]]
+    ny, nx = efield_start.shape[-2:]
 
-    # find dimensions to expand kernel along
-    axs = [a % efield.ndim for a in axis]
-    dims_to_expand = tuple([d for d in range(efield.ndim) if d not in axs])
 
-    efield_ft = ft(efield * apodization)
-    efield_ft_prop = xp.zeros((nz + 1, ny, nx), dtype=complex)
+    efield_start_ft = ft(efield_start)
+
+    new_size = efield_start.shape[:-2] + (nz, ny, nx)
+    efield_ft_prop = xp.zeros(new_size, dtype=complex)
     for ii in range(len(zs)):
         # construct propagation kernel
         kernel = get_angular_spectrum_kernel(zs[ii], wavelength, no, (ny, nx), drs=drs, use_gpu=use_gpu)
         # propagate field with kernel
-        efield_ft_prop[ii] = efield_ft * xp.expand_dims(kernel, dims_to_expand)
-
-    # propagate to imaging plane
-    kernel_img = xp.asarray(get_angular_spectrum_kernel(dz_final, wavelength, no, (ny, nx), drs=drs, use_gpu=use_gpu))
-    efield_ft_prop[-1] = efield_ft_prop[-2] * kernel_img * atf
+        efield_ft_prop[..., ii, :, :] = efield_start_ft * kernel
 
     efield_prop = ift(efield_ft_prop)
 
@@ -116,7 +102,7 @@ def propagate_inhomogeneous(efield_start: array,
                             dz_final: float = 0.,
                             atf: Optional[array] = None,
                             apodization: Union[array, float] = 1.,
-                            model:str = "bpm") -> array:
+                            model: str = "bpm") -> array:
     """
     Propagate electric field through medium with index of refraction n(x, y, z) using the projection approximation,
     which is paraxial. That is, first propagate through the background medium using the angular spectrum method,
@@ -132,11 +118,8 @@ def propagate_inhomogeneous(efield_start: array,
     @param wavelength: wavelength in same units as drs
     @param apodization:
     @param model:
-    @return efield: nz x ny x nx electric field
+    @return efield: n0 x ... x nm x nz x ny x nx electric field
     """
-
-    if atf is None:
-        atf = 1.
 
     use_gpu = isinstance(efield_start, cp.ndarray) and _gpu_available
 
@@ -144,6 +127,9 @@ def propagate_inhomogeneous(efield_start: array,
         xp = cp
     else:
         xp = np
+
+    if atf is None:
+        atf = 1.
 
     efield_start = xp.asarray(efield_start)
     n = xp.asarray(n)
@@ -162,17 +148,18 @@ def propagate_inhomogeneous(efield_start: array,
     out_shape = efield_start.shape[:-2] + (nz + 2, ny, nx)
 
     efield = xp.zeros(out_shape, dtype=complex)
-    efield[0] = efield_start
+    efield[..., 0, :, :] = efield_start
     for ii in range(nz):
-        efield[ii + 1] = ift(ft(efield[ii]) * prop_kernel * apodization) * xp.exp(1j * k * dz * (n[ii] - no))
+        efield[..., ii + 1, :, :] = ift(ft(efield[..., ii, :, :]) * prop_kernel * apodization) * xp.exp(1j * k * dz * (n[ii] - no))
 
     # propagate to imaging plane
     kernel_img = xp.asarray(get_angular_spectrum_kernel(dz_final, wavelength, no, n.shape[1:], drs[1:], use_gpu))
-    efield[-1] = ift(ft(efield[-2]) * kernel_img * atf)
+    efield[..., -1, :, :] = ift(ft(efield[..., -2, :, :]) * kernel_img * atf)
 
     return efield
 
-def backpropagate_inhomogeneous(efield_imaged: array,
+
+def backpropagate_inhomogeneous(efield_end: array,
                                 n: array,
                                 no: float,
                                 drs: tuple[float],
@@ -186,27 +173,27 @@ def backpropagate_inhomogeneous(efield_imaged: array,
     a, b we have
     np.sum(a.conj() * propagate_inhomogeneous(b)) = np.sum(backpropagate_inhomogeneous(a).conj() * b)
 
-    @param efield_imaged: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
+    @param efield_end: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
     @param n: nz x ny x nx array
     @param no: background index of refraction
     @param drs: (dz, dy, dx)
     @param wavelength: wavelength in same units as drs
     @param apodization:
     @param model:
-    @return efield: nz x ny x nx electric field
+    @return efield: n0 x ... x nm x nz x ny x nx electric field
     """
 
     if atf is None:
         atf = 1.
 
-    use_gpu = isinstance(efield_imaged, cp.ndarray) and _gpu_available
+    use_gpu = isinstance(efield_end, cp.ndarray) and _gpu_available
 
     if use_gpu:
         xp = cp
     else:
         xp = np
 
-    efield_imaged = xp.asarray(efield_imaged)
+    efield_end = xp.asarray(efield_end)
     n = xp.asarray(n)
     atf = xp.asarray(atf)
 
@@ -220,19 +207,19 @@ def backpropagate_inhomogeneous(efield_imaged: array,
     def ift_adj(m): return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), norm="forward", axes=(-1, -2)), axes=(-1, -2))
 
     # propagate
-    out_shape = efield_imaged.shape[:-2] + (nz + 2, ny, nx)
+    out_shape = efield_end.shape[:-2] + (nz + 2, ny, nx)
 
     efield = xp.zeros(out_shape, dtype=complex)
-    efield[-1] = efield_imaged
+    efield[..., -1, :, :] = efield_end
 
     prop_kernel = xp.asarray(get_angular_spectrum_kernel(dz, wavelength, no, n.shape[1:], drs[1:], use_gpu))
 
     # propagate from imaging plane back to last plane
     kernel_img = xp.asarray(get_angular_spectrum_kernel(dz_final, wavelength, no, n.shape[1:], drs[1:], use_gpu))
     # efield[-1] = ift(ft(efield[-2]) * kernel_img * atf)
-    efield[-2] = ft_adj(ift_adj(efield[-1]) * kernel_img.conj() * xp.conj(atf))
+    efield[..., -2, :, :] = ft_adj(ift_adj(efield[..., -1, :, :]) * kernel_img.conj() * xp.conj(atf))
 
     for ii in range(nz - 1, -1, -1):
-        efield[ii] = ft_adj(ift_adj(efield[ii + 1] * xp.exp(1j * k * dz * (n[ii] - no)).conj()) * prop_kernel.conj() * xp.conj(apodization))
+        efield[..., ii, :, :] = ft_adj(ift_adj(efield[..., ii + 1, :, :] * xp.exp(1j * k * dz * (n[ii] - no)).conj()) * prop_kernel.conj() * xp.conj(apodization))
 
     return efield
