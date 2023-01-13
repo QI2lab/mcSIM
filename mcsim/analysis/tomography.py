@@ -23,22 +23,24 @@ from matplotlib.cm import ScalarMappable
 import napari
 import zarr
 #
-import localize_psf.fit as fit
-import localize_psf.rois as rois
+from localize_psf import fit, rois
 import mcsim.analysis.sim_reconstruction as sim
 import mcsim.analysis.analysis_tools as tools
-# from field_prop import prop_ft_medium
+from mcsim.analysis import field_prop
 
-_gpu_available = True
+_gupy_available = True
 try:
     import cupy as cp
     import cupyx.scipy.sparse as sp_gpu
     from cucim.skimage.restoration import denoise_tv_chambolle as denoise_tv_chambolle_gpu
     # from cucim.skimage.restoration import unwrap_phase as unwrap_phase_gpu # this not implemented ...
 except ImportError:
-    _gpu_available = False
+    cp = np
+    sp_gpu = sp
+    _gupy_available = False
 
 array = Union[np.ndarray, cp.ndarray]
+csr_matrix = Union[sp.csr_matrix, sp_gpu.csr_matrix]
 
 class tomography:
     def __init__(self,
@@ -574,6 +576,11 @@ class tomography:
                                                     dz_sampling_factor=dz_sampling_factor,
                                                     dxy_sampling_factor=dxy_sampling_factor)
 
+        # if using BPM, much easier if keep pixel size the same
+        if mode == "bpm":
+            drs_v = (drs_v[0], self.dxy, self.dxy)
+            v_size = (v_size[0], self.holograms_ft.shape[-2], self.holograms_ft.shape[-1])
+
         new_chunks = list(self.holograms_ft.chunksize)
         new_chunks[-3] = self.npatterns
 
@@ -582,14 +589,20 @@ class tomography:
         # ############################
 
         if use_gpu:
-            self.holograms_ft = da.map_blocks(cp.array, self.holograms_ft, meta=cp.array((), dtype=complex))
-            self.holograms_ft_bg = da.map_blocks(cp.array, self.holograms_ft_bg, meta=cp.array((), dtype=complex))
+            self.holograms_ft = da.map_blocks(cp.array,
+                                              self.holograms_ft,
+                                              dtype=complex,
+                                              meta=cp.array((), dtype=complex))
+            self.holograms_ft_bg = da.map_blocks(cp.array,
+                                                 self.holograms_ft_bg,
+                                                 dtype=complex,
+                                                 meta=cp.array((), dtype=complex))
 
         # rechunk efields since must operate on all patterns at once to get 3D volume
         if mode == "born":
             self.set_scattered_field(scattered_field_regularization=scattered_field_regularization)
             eraw_start = da.rechunk(self.efield_scattered_ft, chunks=new_chunks)
-        elif mode == "rytov":
+        elif mode == "rytov" or mode == "bpm":
             # ############################
             # compute rytov phase
             # ############################
@@ -600,147 +613,188 @@ class tomography:
                                          dtype=complex)
 
             eraw_start = da.rechunk(phi_rytov_ft, chunks=new_chunks)
+
+            if mode == "bpm":
+                self.holograms_ft = da.rechunk(self.holograms_ft, chunks=new_chunks)
+                self.holograms_ft_bg = da.rechunk(self.holograms_ft_bg, chunks=new_chunks)
+
         else:
-            raise ValueError(f"'mode' must be 'born' or 'rytov' but was '{mode:s}'")
+            raise ValueError(f"'mode' must be 'born', 'rytov', or 'bpm', but was '{mode:s}'")
 
         # ############################
         # scattering potential from measured data
         # ############################
+        # reconstruction starting point ... put info back in right place in Fourier space
+
+        if mode == "born" or mode == "rytov":
+            start_mode = mode
+        else:
+            start_mode = "rytov"
+
+
+        v_fts_start = da.map_blocks(reconstruction,
+                                    eraw_start,
+                                    mean_beam_frqs[..., 0],
+                                    mean_beam_frqs[..., 1],
+                                    mean_beam_frqs[..., 2],
+                                    self.no,
+                                    self.na_detection,
+                                    self.wavelength,
+                                    self.dxy,
+                                    drs_v,
+                                    v_size,
+                                    regularization=reconstruction_regularizer,
+                                    mode=start_mode,
+                                    no_data_value=0,
+                                    dtype=complex,
+                                    chunks=(1,) * self.nextra_dims + v_size)
+
         if solver == "fista":
-            # reconstruction starting point ... put info back in right place in Fourier space
-            v_fts_start = da.map_blocks(reconstruction,
-                                        eraw_start,
-                                        mean_beam_frqs[..., 0],
-                                        mean_beam_frqs[..., 1],
-                                        mean_beam_frqs[..., 2],
-                                        self.no,
-                                        self.na_detection,
-                                        self.wavelength,
-                                        self.dxy,
-                                        drs_v,
-                                        v_size,
-                                        regularization=reconstruction_regularizer,
-                                        mode=mode,
-                                        no_data_value=0,
-                                        dtype=complex,
-                                        chunks=(1,) * self.nextra_dims + v_size)
 
-            # define forward model
-            model, _ = fwd_model_linear(mean_beam_frqs[..., 0], # todo: should I use real beam frqs?
-                                        mean_beam_frqs[..., 1],
-                                        mean_beam_frqs[..., 2],
-                                        self.no,
-                                        self.na_detection,
-                                        self.wavelength,
-                                        (self.ny, self.nx),
-                                        (self.dxy, self.dxy),
-                                        v_size,
-                                        drs_v,
-                                        mode=mode,
-                                        interpolate=interpolate_model)
+            if mode == "born" or mode == "rytov":
+                # define forward model
+                model, _ = fwd_model_linear(mean_beam_frqs[..., 0], # todo: should I use real beam frqs?
+                                            mean_beam_frqs[..., 1],
+                                            mean_beam_frqs[..., 2],
+                                            self.no,
+                                            self.na_detection,
+                                            self.wavelength,
+                                            (self.ny, self.nx),
+                                            (self.dxy, self.dxy),
+                                            v_size,
+                                            drs_v,
+                                            mode=mode,
+                                            interpolate=interpolate_model)
 
-            # set step size. Lipschitz constant of \nabla cost is given by the largest singular value of linear model
-            # (also the square root of the largest eigenvalue of model^t * model)
-            u, s, vh = sp.linalg.svds(model, k=1, which='LM')
-            # todo: should also add a factor of 0.5 but maybe doesn't matter
-            lipschitz_estimate = s ** 2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
-            step = 1 / lipschitz_estimate
+                # set step size. Lipschitz constant of \nabla cost is given by the largest singular value of linear model
+                # (also the square root of the largest eigenvalue of model^t * model)
+                u, s, vh = sp.linalg.svds(model, k=1, which='LM')
+                # todo: should also add a factor of 0.5 but maybe doesn't matter
+                lipschitz_estimate = s ** 2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
+                step = 1 / lipschitz_estimate
 
-            # todo: add masks
-            def fista_recon(v_fts, efield_scattered_ft):
-                results = grad_descent(v_fts.squeeze(),
-                                       efield_scattered_ft.squeeze(),
-                                       model,
-                                       step,
-                                       niters=niters,
-                                       use_fista=True,
-                                       use_gpu=use_gpu,
-                                       tau_tv=tau_tv,
-                                       tv_3d=tv_3d,
-                                       tau_lasso=tau_lasso,
-                                       use_imaginary_constraint=use_imaginary_constraint,
-                                       use_real_constraint=use_real_constraint,
-                                       masks=None,
-                                       debug=False)
+                # todo: add masks
+                def fista_recon(v_fts, efield_scattered_ft, no, wavelength):
+                    results = grad_descent(v_fts.squeeze(),
+                                           efield_scattered_ft.squeeze(),
+                                           model,
+                                           step,
+                                           niters=niters,
+                                           use_fista=True,
+                                           use_gpu=use_gpu,
+                                           tau_tv=tau_tv,
+                                           tv_3d=tv_3d,
+                                           tau_lasso=tau_lasso,
+                                           use_imaginary_constraint=use_imaginary_constraint,
+                                           use_real_constraint=use_real_constraint,
+                                           masks=None,
+                                           debug=False)
 
-                v_ft = results["x"]
-                v_out_ft = v_ft.reshape((1,) * self.nextra_dims + v_size)
+                    v_out_ft = results["x"].reshape((1,) * self.nextra_dims + v_size)
 
-                return v_out_ft
+                    if isinstance(v_out_ft, cp.ndarray) and _gupy_available:
+                        xp = cp
+                    else:
+                        xp = np
 
-            v_ft_out = da.map_blocks(fista_recon,
-                                     v_fts_start, # initial guess
-                                     eraw_start, # data
-                                     #masks,
-                                     dtype=complex,
-                                     chunks=(1,) * self.nextra_dims + v_size)
+                        # inverse FFT
+                    v = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(v_out_ft, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
 
+                    return get_n(v, no, wavelength)
+
+                n = da.map_blocks(fista_recon,
+                                  v_fts_start, # initial guess
+                                  eraw_start, # data
+                                  #masks,
+                                  self.no,
+                                  self.wavelength,
+                                  dtype=complex,
+                                  chunks=(1,) * self.nextra_dims + v_size)
+
+            elif mode == "bpm":
+                def fista_recon(v_ft, efields_ft, efields_bg_ft, no, wavelength, dz_final):
+
+                    if isinstance(v_ft, cp.ndarray) and _gupy_available:
+                        xp = cp
+                    else:
+                        xp = np
+
+                    # expect v is array of size 1 x 1 x ... x 1 x nz x ny x nx
+                    v = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(v_ft, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
+                    # expect array of size 1 x 1 ... x 1 x npatterns x ny x nx
+                    efields = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(efields_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+                    efields_bg = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(efields_bg_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+                    nextra_dims = v.ndim - 3
+
+                    results = grad_descent_prop_model(v.squeeze(),
+                                                      efields.squeeze(),
+                                                      efields_bg.squeeze(),
+                                                      no,
+                                                      wavelength,
+                                                      dz_final,
+                                                      drs_v,
+                                                      model="bpm",
+                                                      step=1e-4,
+                                                      niters=niters,
+                                                      use_fista=True,
+                                                      tau_tv=tau_tv,
+                                                      tv_3d=tv_3d,
+                                                      tau_lasso=tau_lasso,
+                                                      use_imaginary_constraint=use_imaginary_constraint,
+                                                      use_real_constraint=use_real_constraint,
+                                                      masks=None,
+                                                      verbose=False)
+
+                    v = results["x"].reshape((1,) * nextra_dims + v_size)
+                    n = get_n(v, no, wavelength)
+
+                    return n
+
+                dz_final = -drs_v[0] * ((v_size[0] - 1) - v_size[0] // 2 + 0.5)
+                n = da.map_blocks(fista_recon,
+                                  v_fts_start,  # initial guess
+                                  self.holograms_ft,  # data
+                                  self.holograms_ft_bg, # background
+                                  self.no,
+                                  self.wavelength,
+                                  dz_final=dz_final,
+                                  dtype=complex,
+                                  chunks=(1,) * self.nextra_dims + v_size)
+            else:
+                raise ValueError(f"mode must be ..., but was {mode:s}")
 
         else:
-            # reconstruction starting point ... put info back in right place in Fourier space
-            v_fts_start = da.map_blocks(reconstruction,
-                                        eraw_start,
-                                        mean_beam_frqs[..., 0],
-                                        mean_beam_frqs[..., 1],
-                                        mean_beam_frqs[..., 2],
-                                        self.no,
-                                        self.na_detection,
-                                        self.wavelength,
-                                        self.dxy,
-                                        drs_v,
-                                        v_size,
-                                        regularization=reconstruction_regularizer,
-                                        mode=mode,
-                                        no_data_value=np.nan,
-                                        dtype=complex,
-                                        chunks=(1,) * self.nextra_dims + v_size)
-
-
+            if mode == "bpm":
+                raise ValueError(f"using mode='bpm' so must use FISTA, but constrain iteration selected")
             # ############################
             # fill in fourier space with constraint algorithm
             # ############################
-            v_ft_out = da.map_blocks(apply_n_constraints,
-                                     v_fts_start,
-                                     self.no,
-                                     self.wavelength,
-                                     n_iterations=niters,
-                                     beta=0.5,
-                                     use_raar=False,
-                                     require_real_part_greater_bg=use_real_constraint,
-                                     dtype=complex)
+            def recon(v_fts_start, no, wavelength):
+                v_out_ft = apply_n_constraints(v_fts_start,
+                                               no,
+                                               wavelength,
+                                               n_iterations=niters,
+                                               beta=0.5,
+                                               use_raar=False,
+                                               require_real_part_greater_bg=use_real_constraint)
 
-        # ############################
-        # convert results to index of refraction
-        # ############################
-        def ft3d(vft):
+                if isinstance(v_out_ft, cp.ndarray) and _gupy_available:
+                    xp = cp
+                else:
+                    xp = np
 
-            if isinstance(vft, cp.ndarray):
-                xp = cp
-            else:
-                xp = np
+                    # inverse FFT
+                v = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(v_out_ft, axes=(-1, -2, -3)), axes=(-1, -2, -3)),
+                                    axes=(-1, -2, -3))
 
-            # clip extra dimensions, but keep track of how many there were
-            ndim_start = vft.ndim
-            vft = vft.squeeze()
-            ndim_end = vft.ndim
+                return get_n(v, no, wavelength)
 
-            # inverse FFT
-            v = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(vft, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
-
-            # restore extra dimensions
-            v = xp.expand_dims(v, tuple(range(ndim_start - ndim_end)))
-
-            return v
-
-        v_out = da.map_blocks(ft3d,
-                              v_ft_out,
+            n = da.map_blocks(recon,
+                              v_fts_start,
+                              self.no,
+                              self.wavelength,
                               dtype=complex)
-
-        n = da.map_blocks(get_n,
-                          v_out,
-                          self.no,
-                          self.wavelength,
-                          dtype=complex)
 
         return n, v_fts_start, drs_v
 
@@ -888,7 +942,7 @@ def soft_threshold(t: float,
 
 def grad_descent(v_ft_start: array,
                  e_measured_ft: array,
-                 model: str,
+                 model: csr_matrix,
                  step: float,
                  niters: int = 100,
                  use_fista: bool = True,
@@ -903,23 +957,22 @@ def grad_descent(v_ft_start: array,
     """
     Perform gradient descent using a linear model
 
-    # todo: add mask to remove points which we don't want to consider
-
     @param v_ft_start:
-    @param e_measured_ft:
-    @param model:
-    @param step:
-    @param niters:
+    @param e_measured_ft: npatterns x ny x nx array
+    @param model: CSR matrix mapping from vft to electric field
+    @param step: step-size used in gradient descent
+    @param niters: number of iterations
     @param use_fista:
     @param use_gpu:
     @param tau_tv:
     @param use_imaginary_constraint:
     @param use_real_constraint:
+    @param masks: # todo: add mask to remove points which we don't want to consider
     @param debug:
     @return results: dict
     """
     # put on gpu optionally
-    if isinstance(v_ft_start, cp.ndarray):
+    if isinstance(v_ft_start, cp.ndarray) and _gupy_available:
         xp = cp
         model = sp_gpu.csr_matrix(model)
         denoise_tv = denoise_tv_chambolle_gpu
@@ -1108,6 +1161,255 @@ def grad_descent(v_ft_start: array,
     return results
 
 
+def grad_descent_prop_model(v_start: array,
+                            e_measured: array,
+                            e_measured_bg: array,
+                            no: float,
+                            wavelength: float,
+                            dz_final: float,
+                            drs: float,
+                            model: str,
+                            step: float,
+                            niters: int = 100,
+                            use_fista: bool = True,
+                            tau_tv: float = 0.,
+                            tv_3d: bool = True,
+                            tau_lasso: float = 0.,
+                            use_imaginary_constraint: bool = True,
+                            use_real_constraint: bool = False,
+                            masks: Optional[array] = None,
+                            verbose: bool = False,
+                            compute_cost: bool = False,
+                            iterate_over_angles: bool = False,
+                            atf: array = 1.) -> dict:
+    """
+    Suppose we have a 3D grid with nz voxels along the propagation direction. We define the electric field
+    at the points before and after each voxel, and in an additional plane to account for the imaging. So we have
+    nz + 2 electric field planes.
+
+    @param v_start:
+    @param e_measured:
+    @param e_measured_bg:
+    @param no:
+    @param wavelength:
+    @param dz_final:
+    @param drs:
+    @param model:
+    @param step:
+    @param niters:
+    @param use_fista:
+    @param tau_tv:
+    @param tv_3d:
+    @param tau_lasso:
+    @param use_imaginary_constraint:
+    @param use_real_constraint:
+    @param masks:
+    @param verbose: print iteration info
+    @param compute_cost:
+    @return:
+    """
+
+    # put on gpu optionally
+    use_gpu = isinstance(v_start, cp.ndarray) and _gupy_available
+    if use_gpu:
+        xp = cp
+        denoise_tv = denoise_tv_chambolle_gpu
+    else:
+        xp = np
+        denoise_tv = denoise_tv_chambolle
+
+    if tv_3d:
+        channel_axis = None
+    else:
+        channel_axis = -3
+
+    v_start = xp.asarray(v_start)
+    n_start = get_n(v_start, no, wavelength)
+    e_measured = xp.asarray(e_measured)
+    e_measured_bg = xp.asarray(e_measured_bg)
+    step = xp.asarray(step)
+
+    npatterns, ny, nx = e_measured.shape
+    # nz, ny, nx = v_start.shape[-3:]
+    nz = v_start.shape[-3]
+    dz = drs[0]
+    # backpropogate homogeneous
+    efield_start = field_prop.propagate_homogeneous(e_measured_bg,
+                                                    -np.array([float(dz_final) + float(dz) * nz]),
+                                                    no,
+                                                    drs[1:],
+                                                    wavelength)[..., 0, :, :]
+
+    def cost(n):
+        forward = field_prop.propagate_inhomogeneous(efield_start,
+                                                     n,
+                                                     no,
+                                                     drs,
+                                                     wavelength,
+                                                     dz_final,
+                                                     atf=atf,
+                                                     model=model)
+
+        costs = 0.5 * (abs(forward[:, -1, :, :] - e_measured) ** 2).mean(axis=(-1, -2))
+
+        if use_gpu:
+            costs = costs.get()
+
+        return costs
+
+    def grad(n):
+        # forward propagation
+        e_full = field_prop.propagate_inhomogeneous(efield_start,
+                                                    n,
+                                                    no,
+                                                    drs,
+                                                    wavelength,
+                                                    dz_final,
+                                                    atf=atf,
+                                                    model=model)
+        # back propagation
+        e_back = field_prop.backpropagate_inhomogeneous(e_full[:, -1, :, :] - e_measured,
+                                                        n,
+                                                        no,
+                                                        drs,
+                                                        wavelength,
+                                                        dz_final,
+                                                        atf=atf,
+                                                        model=model)
+
+        # cost function gradient
+        dc_dn = -(1j * (2 * np.pi / wavelength) * dz / (nx * ny) * e_back[:, 1:-1, :, :] * e_full[:, 1:-1, :, :].conj())
+
+        return dc_dn
+
+    # initialize
+    tstart = time.perf_counter()
+    costs = np.zeros((niters + 1, npatterns)) * np.nan
+    q_last = 1
+    n_start_preserved = xp.array(n_start, copy=True)
+    n = n_start
+
+    if compute_cost:
+        costs[0] = cost(n)
+
+    timing_names = ["iteration", "grad calculation", "TV", "L1", "positivity", "fista", "cost"]
+    timing = np.zeros((niters, len(timing_names)))
+
+    for ii in range(niters):
+        # gradient descent
+        tstart_grad = time.perf_counter()
+
+        if iterate_over_angles:
+            # todo: in this case I should not compute all gradients, but only the one I need
+            n -= step * grad(n)[ii % npatterns]
+        else:
+            n -= step * np.mean(grad(n), axis=0)
+
+        tend_grad = time.perf_counter()
+
+        # apply TV proximity operators
+        tstart_tv = time.perf_counter()
+        if tau_tv != 0:
+            n_real = denoise_tv(n.real, weight=tau_tv, channel_axis=channel_axis)
+            n_imag = denoise_tv(n.imag, weight=tau_tv, channel_axis=channel_axis)
+        else:
+            n_real = n.real
+            n_imag = n.imag
+
+        tend_tv = time.perf_counter()
+
+        # apply L1 proximity operators
+        tstart_l1 = time.perf_counter()
+
+        if tau_lasso != 0:
+            n_real = soft_threshold(tau_lasso, n_real)
+            n_imag = soft_threshold(tau_lasso, n_imag)
+
+        tend_l1 = time.perf_counter()
+
+        # apply projection onto constraints (proximity operators)
+        tstart_constraints = time.perf_counter()
+
+        if use_imaginary_constraint:
+            n_imag[n_imag < 0] = 0
+            # n_imag[:] = 0
+
+        if use_real_constraint:
+            # actually ... this is no longer right if there is any imaginary part
+            n_real[n_real < no] = no
+
+        tend_constraints = time.perf_counter()
+
+        # prox value
+        n_prox = n_real + 1j * n_imag
+
+        # update step
+        tstart_update = time.perf_counter()
+
+        q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
+
+        # todo: is it better to apply the proximal operator last or do FISTA as usual?
+        if ii == 0 or ii == (niters - 1) or not use_fista:
+            n = n_prox
+        else:
+            n = n_prox + (q_last - 1) / q_now * (n_prox - n_prox_last)
+
+        tend_update = time.perf_counter()
+
+        # todo: don't need to compute cost for iteration ... so might omit to save time depending on how costly it is
+        # compute cost
+        tstart_err = time.perf_counter()
+
+        if compute_cost:
+            costs[ii + 1] = cost(n)
+
+        tend_err = time.perf_counter()
+
+        # update for next gradient-descent/FISTA iteration
+        q_last = q_now
+        n_prox_last = n_prox
+
+        # print information
+        tend_iter = time.perf_counter()
+        timing[ii, 0] = tend_iter - tstart_grad
+        timing[ii, 1] = tend_grad - tstart_grad
+        timing[ii, 2] = tend_tv - tstart_tv
+        timing[ii, 3] = tend_l1 - tstart_l1
+        timing[ii, 4] = tend_constraints - tstart_constraints
+        timing[ii, 5] = tend_update - tstart_update
+        timing[ii, 6] = tend_err - tstart_err
+
+        if verbose:
+            print(
+                f"iteration {ii + 1:d}/{niters:d},"
+                f" cost={np.mean(costs[ii + 1]):.3g},"
+                f" grad={tend_grad - tstart_grad:.2f}s,"                
+                f" TV={tend_tv - tstart_tv:.2f}s,"
+                f" projection={tend_constraints - tstart_constraints:.2f}s,"                
+                f" update={tend_update - tstart_update:.2f}s,"
+                f" cost={tend_err - tstart_err:.2f}s,"
+                f" iter={tend_iter - tstart_grad:.2f}s,"
+                f" total={time.perf_counter() - tstart:.2f}s",
+                end="\r")
+
+    # store summary results
+    results = {"step_size": step,
+               "niterations": niters,
+               "use_fista": use_fista,
+               "use_gpu": use_gpu,
+               "tau_tv": tau_tv,
+               "tau_l1": tau_lasso,
+               "use_imaginary_constraint": use_imaginary_constraint,
+               "use_real_constraint": use_real_constraint,
+               "timing": timing,
+               "timing_column_names": timing_names,
+               "costs": costs,
+               "x_init": n_start_preserved,
+               "x": n
+               }
+
+    return results
+
 def cut_mask(img: array,
              mask: array,
              mask_val: float = 0) -> array:
@@ -1279,7 +1581,7 @@ def get_scattering_potential(n: array,
 def get_rytov_phase(eimgs_ft: array,
                     eimgs_bg_ft: array,
                     regularization: float,
-                    use_gpu: bool = _gpu_available) -> array:
+                    use_gpu: bool = _gupy_available) -> array:
     """
     Compute rytov phase from field and background field. The Rytov phase is \psi_s(r) where
     U_total(r) = exp[\psi_o(r) + \psi_s(r)]
@@ -1369,9 +1671,9 @@ def get_scattered_field(eimgs_ft: array,
     eimgs_ft = xp.asarray(eimgs_ft)
     eimgs_bg_ft = xp.asarray(eimgs_bg_ft)
 
-    def ift(m): xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    def ift(m): return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-    def ft(m): xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    def ft(m): return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
     # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
     # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
