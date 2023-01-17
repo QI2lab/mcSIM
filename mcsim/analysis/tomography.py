@@ -28,7 +28,7 @@ import mcsim.analysis.sim_reconstruction as sim
 import mcsim.analysis.analysis_tools as tools
 from mcsim.analysis import field_prop
 
-_gupy_available = True
+_gpu_available = True
 try:
     import cupy as cp
     import cupyx.scipy.sparse as sp_gpu
@@ -37,7 +37,7 @@ try:
 except ImportError:
     cp = np
     sp_gpu = sp
-    _gupy_available = False
+    _gpu_available = False
 
 array = Union[np.ndarray, cp.ndarray]
 csr_matrix = Union[sp.csr_matrix, sp_gpu.csr_matrix]
@@ -77,6 +77,7 @@ class tomography:
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 
         # image dimensions
+        # todo: ensure that are dask arrays
         self.imgs_raw = imgs_raw
         self.imgs_raw_bg = imgs_raw_bg
         self.npatterns, self.ny, self.nx = imgs_raw.shape[-3:]
@@ -124,7 +125,7 @@ class tomography:
                                     axis=tuple(range(self.nextra_dims)) + (-3,))
 
         # settings
-        self.reconstruction_settings = {} # keys will differ depending on recon mode
+        # self.reconstruction_settings = {} # keys will differ depending on recon mode
 
 
     def estimate_hologram_frqs(self,
@@ -357,12 +358,12 @@ class tomography:
         Unmix and preprocess holograms
         @param mask: area to be cut out of hologrms
         @param bg_average_axes: axes to average along when producing background images
-        @param fit_phases: whether or not to fit phase differences between image and background holograms
+        @param fit_phases: whether to fit phase differences between image and background holograms
         @param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         @return:
         """
 
-        if use_gpu:
+        if use_gpu and _gpu_available:
             xp = cp
         else:
             xp = np
@@ -491,58 +492,26 @@ class tomography:
         self.phase_offsets = phase_offsets
         self.holograms_ft = holograms_ft * da.exp(1j * self.phase_offsets)
 
-
-    # def refocus(self, dz):
-    #     self.holograms_ft = da.map_blocks(prop_ft_medium,
-    #                                       self.holograms_ft,
-    #                                       self.dxy, dz, self.wavelength, self.no,
-    #                                       axis=(-2, -1),
-    #                                       dtype=complex)
-    #
-    #     self.holograms_ft_bg = da.map_blocks(prop_ft_medium,
-    #                                          self.holograms_ft_bg,
-    #                                          self.dxy, dz, self.wavelength, self.no,
-    #                                          axis=(-2, -1),
-    #                                          dtype=complex)
-
-
-    def set_scattered_field(self,
-                            scattered_field_regularization: float):
-        """
-        The scattered field is only used directly in the Born reconstruction.
-
-        But separate the logic for computing it because can also be useful in displaying interferograms
-        @param scattered_field_regularization:
-        @return:
+    def reconstruct_n(self,
+                      mode: str,
+                      solver: str = "fista",
+                      scattered_field_regularization: float = 50,
+                      niters: int = 100,
+                      reconstruction_regularizer: float = 0.1,
+                      dxy_sampling_factor: float = 1.,
+                      dz_sampling_factor: float = 1.,
+                      z_fov: float = 20,
+                      mask: Optional[np.ndarray] = None,
+                      tau_tv: float = 0,
+                      tv_3d: bool = True,
+                      tau_lasso: float = 0,
+                      use_imaginary_constraint: bool = True,
+                      use_real_constraint: bool = False,
+                      interpolate_model: bool = True,
+                      use_gpu: bool = False):
         """
 
-        self.efield_scattered_ft = da.map_blocks(get_scattered_field,
-                                                 self.holograms_ft,
-                                                 self.holograms_ft_bg,
-                                                 scattered_field_regularization,
-                                                 dtype=complex
-                                                 )
-
-    def reconstruct_linear(self,
-                           mode: str,
-                           solver: str = "fista",
-                           scattered_field_regularization: float = 50,
-                           niters: int = 100,
-                           reconstruction_regularizer: float = 0.1,
-                           dxy_sampling_factor: float = 1.,
-                           dz_sampling_factor: float = 1.,
-                           z_fov: float = 20,
-                           mask: Optional[np.ndarray] = None,
-                           tau_tv: float = 0,
-                           tv_3d: bool = True,
-                           tau_lasso: float = 0,
-                           use_imaginary_constraint: bool = True,
-                           use_real_constraint: bool = False,
-                           interpolate_model: bool = True,
-                           use_gpu: bool = False):
-        """
-
-        @param mode: "born" or "rytov"
+        @param mode: "born", "rytov", or "bpm
         @param solver: "naive" or "fista"
         @param scattered_field_regularization:
         @param niters:
@@ -558,6 +527,12 @@ class tomography:
         @param interpolate_model:
         @return:
         """
+
+        if use_gpu and _gpu_available:
+            xp = cp
+        else:
+            xp = np
+
         # ############################
         # set grid sampling info
         # ############################
@@ -589,35 +564,41 @@ class tomography:
         # ############################
 
         if use_gpu:
-            self.holograms_ft = da.map_blocks(cp.array,
+            self.holograms_ft = da.map_blocks(xp.asarray,
                                               self.holograms_ft,
                                               dtype=complex,
-                                              meta=cp.array((), dtype=complex))
-            self.holograms_ft_bg = da.map_blocks(cp.array,
+                                              meta=xp.array((), dtype=complex)
+                                              )
+            self.holograms_ft_bg = da.map_blocks(xp.asarray,
                                                  self.holograms_ft_bg,
                                                  dtype=complex,
-                                                 meta=cp.array((), dtype=complex))
+                                                 meta=xp.array((), dtype=complex)
+                                                 )
+
+        # ############################
+        # define different scattered field options
+        # ############################
+        self.efield_scattered_ft = da.map_blocks(get_scattered_field,
+                                                 self.holograms_ft,
+                                                 self.holograms_ft_bg,
+                                                 scattered_field_regularization,
+                                                 dtype=complex,
+                                                 meta=xp.array(())
+                                                 )
+
+        self.phi_rytov_ft = da.map_blocks(get_rytov_phase,
+                                          self.holograms_ft,
+                                          self.holograms_ft_bg,
+                                          scattered_field_regularization,
+                                          dtype=complex,
+                                          meta=xp.array(())
+                                          )
 
         # rechunk efields since must operate on all patterns at once to get 3D volume
         if mode == "born":
-            self.set_scattered_field(scattered_field_regularization=scattered_field_regularization)
             eraw_start = da.rechunk(self.efield_scattered_ft, chunks=new_chunks)
         elif mode == "rytov" or mode == "bpm":
-            # ############################
-            # compute rytov phase
-            # ############################
-            phi_rytov_ft = da.map_blocks(get_rytov_phase,
-                                         self.holograms_ft,
-                                         self.holograms_ft_bg,
-                                         scattered_field_regularization,
-                                         dtype=complex)
-
-            eraw_start = da.rechunk(phi_rytov_ft, chunks=new_chunks)
-
-            if mode == "bpm":
-                self.holograms_ft = da.rechunk(self.holograms_ft, chunks=new_chunks)
-                self.holograms_ft_bg = da.rechunk(self.holograms_ft_bg, chunks=new_chunks)
-
+            eraw_start = da.rechunk(self.phi_rytov_ft, chunks=new_chunks)
         else:
             raise ValueError(f"'mode' must be 'born', 'rytov', or 'bpm', but was '{mode:s}'")
 
@@ -630,7 +611,6 @@ class tomography:
             start_mode = mode
         else:
             start_mode = "rytov"
-
 
         v_fts_start = da.map_blocks(reconstruction,
                                     eraw_start,
@@ -647,6 +627,7 @@ class tomography:
                                     mode=start_mode,
                                     no_data_value=0,
                                     dtype=complex,
+                                    meta=xp.array(()),
                                     chunks=(1,) * self.nextra_dims + v_size)
 
         if solver == "fista":
@@ -692,7 +673,7 @@ class tomography:
 
                     v_out_ft = results["x"].reshape((1,) * self.nextra_dims + v_size)
 
-                    if isinstance(v_out_ft, cp.ndarray) and _gupy_available:
+                    if isinstance(v_out_ft, cp.ndarray) and _gpu_available:
                         xp = cp
                     else:
                         xp = np
@@ -708,13 +689,15 @@ class tomography:
                                   #masks,
                                   self.no,
                                   self.wavelength,
+                                  chunks=(1,) * self.nextra_dims + v_size,
                                   dtype=complex,
-                                  chunks=(1,) * self.nextra_dims + v_size)
+                                  meta=xp.array(()),
+                                  )
 
             elif mode == "bpm":
-                def fista_recon(v_ft, efields_ft, efields_bg_ft, no, wavelength, dz_final):
+                def fista_recon_bpm(v_ft, efields_ft, efields_bg_ft, no, wavelength, dz_final):
 
-                    if isinstance(v_ft, cp.ndarray) and _gupy_available:
+                    if isinstance(v_ft, cp.ndarray) and _gpu_available:
                         xp = cp
                     else:
                         xp = np
@@ -722,8 +705,8 @@ class tomography:
                     # expect v is array of size 1 x 1 x ... x 1 x nz x ny x nx
                     v = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(v_ft, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
                     # expect array of size 1 x 1 ... x 1 x npatterns x ny x nx
-                    efields = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(efields_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-                    efields_bg = xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(efields_bg_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+                    efields = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(efields_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+                    efields_bg = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(efields_bg_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
                     nextra_dims = v.ndim - 3
 
@@ -744,23 +727,25 @@ class tomography:
                                                       use_imaginary_constraint=use_imaginary_constraint,
                                                       use_real_constraint=use_real_constraint,
                                                       masks=None,
-                                                      verbose=False)
+                                                      verbose=False,
+                                                      compute_cost=False)
 
-                    v = results["x"].reshape((1,) * nextra_dims + v_size)
-                    n = get_n(v, no, wavelength)
+                    n = results["x"].reshape((1,) * nextra_dims + v_size)
 
                     return n
 
-                dz_final = -drs_v[0] * ((v_size[0] - 1) - v_size[0] // 2 + 0.5)
-                n = da.map_blocks(fista_recon,
+                self.dz_final = -drs_v[0] * ((v_size[0] - 1) - v_size[0] // 2 + 0.5)
+                n = da.map_blocks(fista_recon_bpm,
                                   v_fts_start,  # initial guess
-                                  self.holograms_ft,  # data
-                                  self.holograms_ft_bg, # background
+                                  da.rechunk(self.holograms_ft, chunks=new_chunks),  # data
+                                  da.rechunk(self.holograms_ft_bg, chunks=new_chunks), # background
                                   self.no,
                                   self.wavelength,
-                                  dz_final=dz_final,
+                                  dz_final=self.dz_final,
+                                  chunks=(1,) * self.nextra_dims + v_size,
                                   dtype=complex,
-                                  chunks=(1,) * self.nextra_dims + v_size)
+                                  meta=xp.array(())
+                                  )
             else:
                 raise ValueError(f"mode must be ..., but was {mode:s}")
 
@@ -779,7 +764,7 @@ class tomography:
                                                use_raar=False,
                                                require_real_part_greater_bg=use_real_constraint)
 
-                if isinstance(v_out_ft, cp.ndarray) and _gupy_available:
+                if isinstance(v_out_ft, cp.ndarray) and _gpu_available:
                     xp = cp
                 else:
                     xp = np
@@ -794,7 +779,10 @@ class tomography:
                               v_fts_start,
                               self.no,
                               self.wavelength,
-                              dtype=complex)
+                              chunks=(1,) * self.nextra_dims + v_size,
+                              dtype=complex,
+                              meta=xp.array(()),
+                              )
 
         return n, v_fts_start, drs_v
 
@@ -817,8 +805,7 @@ class tomography:
 
     def plot_interferograms(self,
                             nmax_to_plot: int,
-                            save_dir: Optional[str] = None,
-                            scattered_field_regularization: float = 10.):
+                            save_dir: Optional[str] = None):
         """
         Plot nmax interferograms
 
@@ -828,7 +815,7 @@ class tomography:
         @return:
         """
         if not hasattr(self, "efield_scattered_ft"):
-            self.set_scattered_field(scattered_field_regularization=scattered_field_regularization)
+            raise ValueError()
 
         if save_dir is not None:
             save_dir = Path(save_dir)
@@ -953,7 +940,8 @@ def grad_descent(v_ft_start: array,
                  use_imaginary_constraint: bool = True,
                  use_real_constraint: bool = False,
                  masks: Optional[array] = None,
-                 debug: bool = False) -> dict:
+                 debug: bool = False,
+                 compute_cost: bool = True) -> dict:
     """
     Perform gradient descent using a linear model
 
@@ -972,7 +960,7 @@ def grad_descent(v_ft_start: array,
     @return results: dict
     """
     # put on gpu optionally
-    if isinstance(v_ft_start, cp.ndarray) and _gupy_available:
+    if isinstance(v_ft_start, cp.ndarray) and _gpu_available:
         xp = cp
         model = sp_gpu.csr_matrix(model)
         denoise_tv = denoise_tv_chambolle_gpu
@@ -1030,10 +1018,12 @@ def grad_descent(v_ft_start: array,
 
     # initialize
     tstart = time.perf_counter()
-    costs = np.zeros((niters + 1, npatterns))
+    costs = np.zeros((niters + 1, npatterns)) * np.nan
     v_ft = v_ft_start.ravel()
     q_last = 1
-    costs[0] = cost(v_ft)
+
+    if compute_cost:
+        costs[0] = cost(v_ft)
 
     timing_names = ["iteration", "grad calculation", "ifft", "TV", "L1", "positivity", "fft", "fista", "cost"]
     timing = np.zeros((niters, len(timing_names)))
@@ -1107,7 +1097,8 @@ def grad_descent(v_ft_start: array,
         # compute cost
         tstart_err = time.perf_counter()
 
-        costs[ii + 1] = cost(v_ft)
+        if compute_cost:
+            costs[ii + 1] = cost(v_ft)
 
         tend_err = time.perf_counter()
 
@@ -1210,7 +1201,7 @@ def grad_descent_prop_model(v_start: array,
     """
 
     # put on gpu optionally
-    use_gpu = isinstance(v_start, cp.ndarray) and _gupy_available
+    use_gpu = isinstance(v_start, cp.ndarray) and _gpu_available
     if use_gpu:
         xp = cp
         denoise_tv = denoise_tv_chambolle_gpu
@@ -1322,7 +1313,7 @@ def grad_descent_prop_model(v_start: array,
         tstart_l1 = time.perf_counter()
 
         if tau_lasso != 0:
-            n_real = soft_threshold(tau_lasso, n_real)
+            n_real = soft_threshold(tau_lasso, n_real - no) + no
             n_imag = soft_threshold(tau_lasso, n_imag)
 
         tend_l1 = time.perf_counter()
@@ -1332,7 +1323,6 @@ def grad_descent_prop_model(v_start: array,
 
         if use_imaginary_constraint:
             n_imag[n_imag < 0] = 0
-            # n_imag[:] = 0
 
         if use_real_constraint:
             # actually ... this is no longer right if there is any imaginary part
@@ -1356,7 +1346,6 @@ def grad_descent_prop_model(v_start: array,
 
         tend_update = time.perf_counter()
 
-        # todo: don't need to compute cost for iteration ... so might omit to save time depending on how costly it is
         # compute cost
         tstart_err = time.perf_counter()
 
@@ -1420,7 +1409,7 @@ def cut_mask(img: array,
     @param mask_val:
     @return:
     """
-    if isinstance(img, cp.ndarray):
+    if isinstance(img, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
@@ -1510,7 +1499,7 @@ def get_global_phase_shifts(imgs: array,
     @return phase_shifts:
     """
 
-    if isinstance(imgs, cp.ndarray):
+    if isinstance(imgs, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
@@ -1553,7 +1542,7 @@ def get_n(scattering_pot: array,
     @param use_gpu:
     @return n:
     """
-    if isinstance(scattering_pot, cp.ndarray):
+    if isinstance(scattering_pot, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
@@ -1581,7 +1570,7 @@ def get_scattering_potential(n: array,
 def get_rytov_phase(eimgs_ft: array,
                     eimgs_bg_ft: array,
                     regularization: float,
-                    use_gpu: bool = _gupy_available) -> array:
+                    use_gpu: bool = _gpu_available) -> array:
     """
     Compute rytov phase from field and background field. The Rytov phase is \psi_s(r) where
     U_total(r) = exp[\psi_o(r) + \psi_s(r)]
@@ -1595,7 +1584,7 @@ def get_rytov_phase(eimgs_ft: array,
     @param use_gpu:
     @return psi_rytov:
     """
-    if isinstance(eimgs_ft, cp.ndarray):
+    if isinstance(eimgs_ft, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
@@ -1653,7 +1642,7 @@ def get_scattered_field(eimgs_ft: array,
     @return efield_scattered_ft:
     """
 
-    if isinstance(eimgs_ft, cp.ndarray):
+    if isinstance(eimgs_ft, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
@@ -1710,7 +1699,7 @@ def unmix_hologram(img: array,
     @return efield_ft:
     """
 
-    if isinstance(img, cp.ndarray):
+    if isinstance(img, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
@@ -2096,7 +2085,7 @@ def reconstruction(efield_fts: array,
     @return drs: full coordinate grid can be obtained from get_coords
     """
 
-    if isinstance(efield_fts, cp.ndarray):
+    if isinstance(efield_fts, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
@@ -2197,7 +2186,7 @@ def apply_n_constraints(v_ft: array,
     @return v_ft_out:
     """
 
-    if isinstance(v_ft, cp.ndarray):
+    if isinstance(v_ft, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
