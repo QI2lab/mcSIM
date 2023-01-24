@@ -101,7 +101,7 @@ def propagate_inhomogeneous(efield_start: array,
                             wavelength: float,
                             dz_final: float = 0.,
                             atf: Optional[array] = None,
-                            apodization: Union[array, float] = 1.,
+                            apodization: Optional[array] = None,
                             model: str = "bpm") -> array:
     """
     Propagate electric field through medium with index of refraction n(x, y, z) using the projection approximation,
@@ -131,9 +131,16 @@ def propagate_inhomogeneous(efield_start: array,
     if atf is None:
         atf = 1.
 
+    if apodization is None:
+        apodization = 1.
+
+    if model != "bpm":
+        raise NotImplementedError(f"only model={model:s} is implemented")
+
     efield_start = xp.asarray(efield_start)
     n = xp.asarray(n)
     atf = xp.asarray(atf)
+    apodization = xp.asarray(apodization)
 
     k = 2*np.pi / wavelength
     dz, dy, dx = drs
@@ -166,7 +173,7 @@ def backpropagate_inhomogeneous(efield_end: array,
                                 wavelength: float,
                                 dz_final: float = 0.,
                                 atf: Optional[array] = None,
-                                apodization: Union[array, float] = 1.,
+                                apodization: Optional[array] = None,
                                 model: str = "bpm") -> array:
     """
     Apply the adjoint operation to propagate_inhomogeneous(). This is adjoint in the sense that for any pair of fields
@@ -186,8 +193,13 @@ def backpropagate_inhomogeneous(efield_end: array,
     if atf is None:
         atf = 1.
 
-    use_gpu = isinstance(efield_end, cp.ndarray) and _gpu_available
+    if apodization is None:
+        apodization = 1.
 
+    if model != "bpm":
+        raise NotImplementedError(f"only model={model:s} is implemented")
+
+    use_gpu = isinstance(efield_end, cp.ndarray) and _gpu_available
     if use_gpu:
         xp = cp
     else:
@@ -196,6 +208,7 @@ def backpropagate_inhomogeneous(efield_end: array,
     efield_end = xp.asarray(efield_end)
     n = xp.asarray(n)
     atf = xp.asarray(atf)
+    apodization = xp.asarray(apodization)
 
     k = 2*np.pi / wavelength
     dz, dy, dx = drs
