@@ -3561,6 +3561,42 @@ def display_tomography_recon(recon_fname: str,
                      affine=swap_xy.dot(affine_recon2cam.dot(swap_xy)),
                      contrast_limits=[0, 0.05])
 
+
+    # ######################
+    # display phase shifts and power on points layer
+    # ######################
+    # add (1, 1) for xy dimensions
+    coords = np.meshgrid(*[np.arange(d) for d in n_r_stack.shape[:-2] + (1, 1)], indexing="ij")
+    coords = [c.ravel() for c in coords]
+    points = np.stack(coords, axis=1)
+
+    dphi = da.from_zarr(img_z.phase_shifts)
+    dphi_stack = da.stack([dphi] * nz_sp, axis=-3)
+
+    viewer.add_points(points,
+                      features={"dphi": dphi_stack.compute().ravel(),
+                                "epower": efield_power_stack.compute().ravel()},
+                      text={"string": "phi={dphi:.3f}, epower={epower:.3f}",
+                            "size": 10,
+                            "color": "red"
+                            },
+                      scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
+                      )
+
+    # viewer.add_image(dphi_stack, scale=(dz_v / dxy_v, ny, nx),
+    #                  name="phase shifts",
+    #                  contrast_limits=[-np.pi, np.pi],
+    #                  colormap="PiYG",
+    #                  translate=(2*ny + ny / 2, nx_raw + nx / 2)
+    #                  )
+
+    # viewer.add_image(, scale=(dz_v / dxy_v, ny, nx),
+    #                  name="efield amp",
+    #                  contrast_limits=[0, 1000],
+    #                  colormap="fire",
+    #                  translate=(2 * ny + ny / 2, nx_raw + nx + nx / 2)
+    #                  )
+
     # ######################
     # show ROI in image
     # ######################
@@ -3636,28 +3672,15 @@ def display_tomography_recon(recon_fname: str,
         viewer.add_image(pd_even, scale=(dz_v / dxy_v, 1, 1),
                          name="angle(e) - angle(e bg)", contrast_limits=[-1, 1],
                          colormap="PiYG",
-                         translate=(2*ny, nx_raw + 2 * nx))
-
-        viewer.add_image(efield_power_stack, scale=(dz_v / dxy_v, ny, nx),
-                         name="efield amp",
-                         contrast_limits=[0, 1000],
-                         colormap="fire",
-                         translate=(2 * ny + ny / 2, nx_raw + nx + nx / 2)
+                         # translate=(2*ny, nx_raw + 2 * nx)
+                         translate=(ny, 0)
                          )
 
-    # ######################
-    # phase shifts
-    # ######################
-    dphi = da.from_zarr(img_z.phase_shifts)
-    dphi_stack = da.stack([dphi] * nz_sp, axis=-3)
-    viewer.add_image(dphi_stack, scale=(dz_v / dxy_v, ny, nx),
-                     name="phase shifts",
-                     contrast_limits=[-np.pi, np.pi],
-                     colormap="PiYG",
-                     translate=(2*ny + ny / 2, nx_raw + nx / 2)
-                     )
-
     viewer.dims.axis_labels = ["position", "time", "", "", "pattern", "z", "y", "x"]
+    # set to first position
+    viewer.dims.set_current_step(axis=0, value=0)
+    # set to first time
+    viewer.dims.set_current_step(axis=1, value=0)
 
     # block until closed by user
     viewer.show(block=block_while_display)
