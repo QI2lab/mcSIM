@@ -565,12 +565,15 @@ class tomography:
         if self.imgs_raw_bg is None:
             holograms_ft_bg = self.holograms_ft
         else:
+            # todo: should I fit the bg reference frequencies as well?
+            ref_frq_bg_da = da.mean(ref_frq_da, axis=1, keepdims=True)
+
             holograms_ft_raw_bg = da.map_blocks(unmix_hologram,
                                                 self.imgs_raw_bg,
                                                 self.dxy,
                                                 2*self.fmax,
-                                                ref_frq_da[..., 0],
-                                                ref_frq_da[..., 1],
+                                                ref_frq_bg_da[..., 0],
+                                                ref_frq_bg_da[..., 1],
                                                 apodization=apodization,
                                                 dtype=complex)
 
@@ -1100,11 +1103,83 @@ class tomography:
             dask.compute(*results_interferograms)
 
 
+    def plot_frqs(self,
+                  index: tuple[int],
+                  time_axis: int = 1,
+                  figsize: tuple[float] = (30., 8.),
+                  **kwargs):
+        """
+
+        @param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
+        axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
+        could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
+        @param time_axis:
+        @param figsize:
+        @param kwargs:
+        @return:
+        """
+
+        if len(index) != (self.nextra_dims - 1):
+            raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
+
+        # logic for slicing out desired index
+        slices = []
+        index_counter = 0
+        for ii in range(self.nextra_dims):
+            if ii != time_axis:
+                slices.append(slice(index[index_counter], index[index_counter] + 1))
+            else:
+                slices.append(slice(None))
+
+        slices = tuple(slices + [slice(None), slice(None)])
+        squeeze_axes = tuple([ii for ii in range(self.nextra_dims) if ii != time_axis])
+
+        ref_slices = slices[:-1]
+
+        # each element of list should have shape ntimes x nmultiplex x 2
+        hologram_frqs_mean = [np.mean(f, axis=1, keepdims=True) for f in self.hologram_frqs]
+        hgram_frq_diffs = [(f - g)[slices].squeeze(axis=squeeze_axes)
+                           for f, g in zip(self.hologram_frqs, hologram_frqs_mean)]
+        # stack all hologram frqs
+        hgram_frq_diffs = np.concatenate(hgram_frq_diffs, axis=1)
+
+        # shape = ntimes x 2
+        ref_frq_diffs = (self.reference_frq - np.mean(self.reference_frq, axis=1, keepdims=True))[ref_slices].squeeze(squeeze_axes)
+
+        # plot
+        figh = plt.figure(figsize=figsize, **kwargs)
+        figh.suptitle(f"index={index}\nfrequency variation versus time")
+
+        ax = figh.add_subplot(1, 3, 1)
+        ax.plot(np.linalg.norm(hgram_frq_diffs, axis=-1) / self.dfx)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("(frequency - mean) / dfx")
+        ax.set_title("hologram frequency deviation amplitude")
+        ax.legend([f"{ii:d}" for ii in range(self.npatterns)])
+
+        ax = figh.add_subplot(1, 3, 2)
+        ax.plot(np.angle(hgram_frq_diffs[..., 0] + 1j * hgram_frq_diffs[..., 1]))
+        ax.set_xlabel("time step")
+        ax.set_ylabel("angle (rad)")
+        ax.set_title("hologram frequency deviation rotation")
+
+        ax = figh.add_subplot(1, 3, 3)
+        ax.plot(np.linalg.norm(ref_frq_diffs, axis=-1) / self.dfx)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("(frequency norm - mean) / dfx")
+        ax.set_title("reference frequency deviation amplitude")
+
+        return figh
+
+
     def show_image(self,
-                   index,
-                   figsize=(24, 10)):
+                   index: tuple[int],
+                   figsize: tuple[float] = (24, 10),
+                   gamma: float = 0.1,
+                   **kwargs):
         """
         display raw image
+
         @param index:
         @param figsize:
         @return:
@@ -1115,13 +1190,16 @@ class tomography:
         extent_f = [self.fxs[0] - 0.5 * self.dfx, self.fxs[-1] + 0.5 * self.dxy,
                     self.fys[-1] + 0.5 * self.dfy, self.fys[0] - 0.5 * self.dfy]
 
-        figh = plt.figure(figsize=figsize)
+        # ######################
+        #
+        figh = plt.figure(figsize=figsize, **kwargs)
         figh.suptitle(f"{index}, {self.axes_names}")
-        grid = figh.add_gridspec(nrows=1, ncols=4, width_ratios=[1, 0.1, 1, 0.1])
+        grid = figh.add_gridspec(nrows=2, ncols=4, width_ratios=[1, 0.1, 1, 0.1])
 
         img_now = self.imgs_raw[index].compute()
         img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_now)))
 
+        # raw image
         ax = figh.add_subplot(grid[0, 0])
         im = ax.imshow(img_now, extent=extent, cmap="bone")
         ax.set_title("raw image")
@@ -1131,11 +1209,25 @@ class tomography:
 
         ax = figh.add_subplot(grid[0, 2])
         im = ax.imshow(np.abs(img_ft), extent=extent_f,
-                       norm=PowerNorm(gamma=0.1), cmap="bone")
+                       norm=PowerNorm(gamma=gamma), cmap="bone")
         ax.set_title("raw FT")
 
         ax = figh.add_subplot(grid[0, 3])
         plt.colorbar(im, cax=ax)
+
+        # hologram
+        try:
+            h_f = self.holograms_ft[index].compute()
+            if isinstance(h_f, cp.ndarray) and _gpu_available:
+                h_f = h_f.get()
+
+            ax = figh.add_subplot(grid[1, 2])
+            ax.set_title("hologram")
+            im = ax.imshow(np.abs(h_f), extent=extent_f,
+                           norm=PowerNorm(gamma=gamma), cmap="bone")
+        except Exception as e:
+            print(e)
+
 
         return figh
 
@@ -3452,9 +3544,13 @@ def display_tomography_recon(recon_fname: str,
     ny = proc_roi[1] - proc_roi[0]
     nx = proc_roi[3] - proc_roi[2]
 
-    cam_roi = img_z.attrs["camera_path_attributes"]["camera_roi"]
-    ny_raw = cam_roi[1] - cam_roi[0]
-    nx_raw = cam_roi[3] - cam_roi[2]
+    try:
+        cam_roi = img_z.attrs["camera_path_attributes"]["camera_roi"]
+        ny_raw = cam_roi[1] - cam_roi[0]
+        nx_raw = cam_roi[3] - cam_roi[2]
+    except KeyError:
+        ny_raw = ny
+        nx_raw = nx
 
     dz_v = img_z.attrs["dz"]
     dxy_v = img_z.attrs["dx"]
@@ -3573,9 +3669,14 @@ def display_tomography_recon(recon_fname: str,
     dphi = da.from_zarr(img_z.phase_shifts)
     dphi_stack = da.stack([dphi] * nz_sp, axis=-3)
 
+    if show_efields:
+        epower = efield_power_stack.compute().ravel()
+    else:
+        epower = np.zeros(dphi_stack.shape).ravel() * np.nan
+
     viewer.add_points(points,
                       features={"dphi": dphi_stack.compute().ravel(),
-                                "epower": efield_power_stack.compute().ravel()},
+                                "epower": epower},
                       text={"string": "phi={dphi:.3f}, epower={epower:.3f}",
                             "size": 10,
                             "color": "red"
