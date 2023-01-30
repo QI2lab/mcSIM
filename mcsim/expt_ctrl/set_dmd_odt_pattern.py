@@ -33,7 +33,7 @@ xx, yy = np.meshgrid(range(nx), range(ny))
 # pattern parameters
 ang = -45 * np.pi/180
 frq = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
-rad = 5
+rad = 10
 phase = 0
 
 # base pattern

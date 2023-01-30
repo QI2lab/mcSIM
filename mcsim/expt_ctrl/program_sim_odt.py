@@ -8,7 +8,7 @@ import numpy as np
 
 def get_sim_odt_sequence(daq_do_map: dict,
                          daq_ao_map: dict,
-                         presets: list[str],
+                         presets: dict,
                          channels: list[str],
                          odt_exposure_time: float,
                          sim_exposure_time: float,
@@ -31,28 +31,38 @@ def get_sim_odt_sequence(daq_do_map: dict,
     """
     Create DAQ program for SIM/ODT experiment
 
-    @param dict daq_do_map: e.g. from daq_map.py
-    @param dict daq_ao_map: e.g. from daq_map.py
-    @param list[str] channels:
-    @param float odt_exposure_time: odt exposure time in s
-    @param float sim_exposure_time: sim exposure time in s
-    @param int npatterns: list which should match size of channels
-    @param float dt: daq time step
-    @param float interval: interval between images
-    @param int n_odt_per_sim: number of ODT images to take per each SIM image set
-    @param int n_trig_width: width of triggers
-    @param float dmd_delay:
-    @param float odt_stabilize_t:
+    # todo: maybe should pass around dictionaries with all settings for SIM/ODT separately?
+
+    @param daq_do_map: e.g. from daq_map.py
+    @param daq_ao_map: e.g. from daq_map.py
+    @param channels:
+    @param presets:
+    @param odt_exposure_time: odt exposure time in s
+    @param sim_exposure_time: sim exposure time in s
+    @param npatterns: list which should match size of channels
+    @param dt: daq time step
+    @param interval: interval between images
+    @param n_odt_per_sim: number of ODT images to take per each SIM image set
+    @param n_trig_width: width of triggers
+    @param dmd_delay:
+    @param odt_stabilize_t:
+    @param min_odt_frame_time:
+    @param sim_readout_time:
+    @param sim_stabilize_t:
+    @param shutter_delay_time:
+    @param z_voltages:
     @param bool use_dmd_as_odt_shutter:
+    @param n_digital_ch:
+    @param n_analog_ch:
+    @param acquisition_mode: "sim", "both", or "average", applies only to SIM sequence
     @return:
     """
 
     if z_voltages is None:
         z_voltages = [0]
 
-    nsteps_interval = int(np.ceil(interval / dt))
-    if interval != 0:
-        raise NotImplementedError("Interval not implemented for non-zero value")
+    if interval != 0 and (len(channels) != 1 or len(z_voltages) != 1):
+        raise NotImplementedError("Interval is not implemented for more than one channel or for z-stacks")
     # todo: can easily implement interval if no z-stack, but otherwise difficult since don't have a way
     # to stop the daq after a certain number of repeats
 
@@ -77,7 +87,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        odt_exposure_time,
                                        npat,
                                        dt=dt,
-                                       interval=0,
+                                       interval=interval,
                                        nrepeats=n_odt_per_sim,
                                        n_trig_width=n_trig_width,
                                        dmd_delay=dmd_delay,
@@ -98,7 +108,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        sim_exposure_time,
                                        npat,
                                        dt=dt,
-                                       interval=0,
+                                       interval=interval,
                                        nrepeats=1,
                                        n_trig_width=n_trig_width,
                                        dmd_delay=dmd_delay,
@@ -176,7 +186,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
 
 def get_odt_sequence(daq_do_map: dict,
                      daq_ao_map: dict,
-                     preset,
+                     preset: dict,
                      exposure_time: float,
                      npatterns: int,
                      dt: float = 105e-6,
@@ -193,26 +203,27 @@ def get_odt_sequence(daq_do_map: dict,
     """
     Get DAQ ODT sequence
 
-    al times in seconds
+    all times in seconds
 
-    @param daq_do_map: dictionary with named lines as keys and line numbers as values. Must include lines
-
-    @param daq_ao_map: dictionary
-    @param preset:
+    @param daq_do_map: dictionary with named lines as keys and line numbers as values. Must include lines ...
+    @param daq_ao_map: dictionary with named lines as keys and line number as values.
+    @param preset: preset used to set analog information. Dictionary with keys "analog" and "digital", where values
+    are subentries. In this case, digital entries are ignored.
     @param exposure_time:
-    @param npatterns:
-    @param dt:
+    @param npatterns: number of patterns
+    @param dt: sampling time step
     @param interval:
-    @param nrepeats:
+    @param nrepeats: number of repeats. Typically used for time/z-stacks
     @param n_trig_width:
-    @param dmd_delay:
-    @param stabilize_t:
-    @param min_frame_time:
-    @param shutter_delay_time:
-    @param n_digital_ch:
-    @param n_analog_ch:
-    @param use_dmd_as_shutter:
-    @return: do_odt, ao_odt
+    @param dmd_delay: time to trigger DMD before triggering camera
+    @param stabilize_t: time to wait for laser to stabilize at the start of sequence
+    @param min_frame_time: minimum time before triggering the camera again
+    @param shutter_delay_time: delay time to allow shutter to open
+    @param n_digital_ch: number of digital lines
+    @param n_analog_ch: number of analog lines
+    @param use_dmd_as_shutter: whether to assume there are 2x as many DMD patterns with "off" pattern interleaved
+    between on patterns
+    @return: do_odt, ao_odt, info
     """
 
     info = ""
@@ -226,6 +237,9 @@ def get_odt_sequence(daq_do_map: dict,
     nsteps_interval = int(np.ceil(interval / dt))
     # minimum frame time
     nsteps_min_frame = int(np.ceil(min_frame_time / dt))
+
+    if n_trig_width >= nsteps_min_frame:
+        raise ValueError(f"n_trig_width={n_trig_width:d} cannot be longer than nsteps_min_frame={nsteps_min_frame:d}")
 
     if nsteps_min_frame == 1 and use_dmd_as_shutter:
         raise ValueError("nsteps_min_frame must be > 1 if use_dmd_as_odt_shutter=True")
@@ -263,9 +277,8 @@ def get_odt_sequence(daq_do_map: dict,
     do_odt[:, daq_do_map["odt_laser"]] = 1
     # DMD enable trigger always on
     do_odt[:, daq_do_map["dmd_enable"]] = 1
-    # master trigger
+    # camera enable trigger (must be high for advance trigger)
     do_odt[:, daq_do_map["odt_cam_enable"]] = 1 # photron/phantom camera
-
 
     # set camera trigger, which starts after delay time for DMD to display pattern
     do_odt[n_odt_stabilize:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
@@ -292,25 +305,25 @@ def get_odt_sequence(daq_do_map: dict,
 
     # useful information to print
     info += f"odt stabilize time = {stabilize_t * 1e3:.3f}ms = {n_odt_stabilize:d} clock cycles\n"
-    info += "odt exposure time = %0.3fms = %d clock cycles\n" % (exposure_time * 1e3, nsteps_exposure)
-    info += "odt one frame = %0.3fms = %d clock cycles\n" % (nsteps_frame * dt * 1e3, nsteps_frame)
-    info += "odt one sequence of %d volumes = %0.3fms = %d clock cycles\n" % (nrepeats, nsteps_active * dt * 1e3, nsteps_active)
+    info += f"odt exposure time = {exposure_time * 1e3:.3f}ms = {nsteps_exposure:d} clock cycles\n"
+    info += f"odt one frame = {nsteps_frame * dt * 1e3:.3f}ms = {nsteps_frame:d} clock cycles\n"
+    info += f"odt one sequence of {nrepeats:d} volumes = {nsteps_active * dt * 1e3:.3f}ms = {nsteps_active:d} clock cycles\n"
 
     return do_odt, ao_odt, info
 
 
 def get_sim_sequence(daq_do_map: dict,
                      daq_ao_map: dict,
-                     preset,
+                     preset: dict,
                      exposure_time: float,
                      npatterns: int,
                      dt: float = 105e-6,
-                     interval: float = 0,
+                     interval: float = 0.,
                      nrepeats: int = 1,
                      n_trig_width: int = 1,
                      dmd_delay: float = 105e-6,
                      stabilize_t: float = 200e-3,
-                     min_frame_time: float = 0,
+                     min_frame_time: float = 0.,
                      cam_readout_time: float = 10e-3,
                      shutter_delay_time: float = 50e-3,
                      n_digital_ch: int = 16,
@@ -359,6 +372,7 @@ def get_sim_sequence(daq_do_map: dict,
         npatterns_frame = 1
 
     # delay between frames
+    # todo: implement ... should be as simple as in ODT function
     nsteps_interval = int(np.ceil(interval / dt))
     if interval != 0:
         raise NotImplementedError("only nsteps_interval=0 is implemented")
@@ -468,10 +482,10 @@ def get_sim_sequence(daq_do_map: dict,
     for k in preset["analog"].keys():
         ao[:, daq_ao_map[k]] = preset["analog"][k]
 
-    info += "sim channel stabilize time = %0.3fms = %d clock cycles\n" % (n_stabilize * dt * 1e3, n_stabilize)
-    info += "sim exposure time = %0.3fms = %d clock cycles\n" % (nsteps_exposure * dt * 1e3, nsteps_exposure)
-    info += "sim one frame = %0.3fms = %d clock cycles\n" % (nsteps_frame * dt * 1e3, nsteps_frame)
-    info += "sim one channel= %0.3fms = %d clock cycles\n" % (nsteps * dt * 1e3, nsteps)
+    info += f"sim channel stabilize time = {n_stabilize * dt * 1e3:.3f}ms = {n_stabilize:d} clock cycles\n"
+    info += f"sim exposure time = {nsteps_exposure * dt * 1e3:.3f}ms = {nsteps_exposure:d} clock cycles\n"
+    info += f"sim one frame = {nsteps_frame * dt * 1e3:.3f}fms = {nsteps_frame:d} clock cycles\n"
+    info += f"sim one channel= {nsteps * dt * 1e3:.3f}fms = {nsteps:d} clock cycles\n"
 
     return do, ao, info
 
