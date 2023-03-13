@@ -24,6 +24,7 @@ from matplotlib.patches import Circle, Arc
 from matplotlib.cm import ScalarMappable
 import napari
 import zarr
+import tempfile
 #
 from localize_psf import fit, rois, camera, affine
 import mcsim.analysis.sim_reconstruction as sim
@@ -41,6 +42,12 @@ except ImportError:
     sp_gpu = sp
     _gpu_available = False
 
+_gpufit_available = True
+try:
+    import pygpufit as gf
+except ImportError:
+    _gpufit_available = False
+
 array = Union[np.ndarray, cp.ndarray]
 csr_matrix = Union[sp.csr_matrix, sp_gpu.csr_matrix]
 
@@ -56,7 +63,8 @@ class tomography:
                  hologram_frqs_guess: list[np.ndarray],
                  imgs_raw_bg: Optional[da.array] = None,
                  phase_offsets: Optional[np.ndarray] = None,
-                 axes_names: Optional[list[str]] = None):
+                 axes_names: Optional[list[str]] = None,
+                 verbose: bool = True):
         """
         Object to reconstruct optical diffraction tomography data
 
@@ -77,13 +85,15 @@ class tomography:
         @param phase_offsets: phase shifts between images and corresponding background images
         @param axes_names: names of first m + 1 axes
         """
-
+        self.verbose = verbose
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 
         # image dimensions
         # todo: ensure that are dask arrays
         self.imgs_raw = imgs_raw
         self.imgs_raw_bg = imgs_raw_bg
+        self.use_average_as_background = self.imgs_raw_bg is None
+
         self.npatterns, self.ny, self.nx = imgs_raw.shape[-3:]
         self.nextra_dims = imgs_raw.ndim - 3
 
@@ -140,12 +150,13 @@ class tomography:
 
 
     def estimate_hologram_frqs(self,
-                               roi_size_pix: int = 5,
+                               roi_size_pix: int = 10,
                                save_dir: Optional[str] = None):
         """
         Estimate hologram frequencies from raw images.
         Guess values need to be within a few pixels for this to succeed. Can easily achieve this accuracy by
         looking at FFT
+        @param roi_size_pix: ROI size (in pixels) to do frequency fitting on
         @param save_dir:
         @return:
         """
@@ -240,7 +251,8 @@ class tomography:
                 frqs_holo[..., ii, :] = np.expand_dims(frqs_now, axis=list(range(fx_guess.ndim)))
 
                 if saving and np.all(np.array(block_id) == 0):
-                    figh = sim.plot_correlation_fit(img_ref_ft, img_ref_ft,
+                    figh = sim.plot_correlation_fit(img_ref_ft,
+                                                    img_ref_ft,
                                                     frqs_now,
                                                     self.dxy,
                                                     roi_size=(roi2[1] - roi2[0], roi2[3] - roi2[2]),
@@ -255,6 +267,10 @@ class tomography:
         # ############################
         # fit hologram frequencies for ALL chunks
         # ############################
+
+        # todo: should do this with GPU fit instead
+        # todo: fit background images also
+
         delayed = []
         # loop over patterns
         for ii in range(self.npatterns):
@@ -263,9 +279,9 @@ class tomography:
                                          self.imgs_raw[..., ii, :, :],
                                          self.hologram_frqs[ii][:, 0],
                                          self.hologram_frqs[ii][:, 1],
-                                         False,
-                                         True,
-                                         roi_size_pix,
+                                         use_guess_init_params=False,
+                                         saving=True,
+                                         roi_size_pix=roi_size_pix,
                                          prefix=str(ii),
                                          dtype=float,
                                          chunks=(1,) * self.nextra_dims + (n_multiplex_this_pattern, 2),
@@ -276,9 +292,12 @@ class tomography:
         # do frequency calibration
         print(f"calibrating {self.npatterns:d} patterns,"
               f" each multiplexing {[f.shape[-2] for f in self.hologram_frqs]} plane waves")
-        with ProgressBar():
-            frqs_hologram = dask.compute(delayed)[0]
 
+        if self.verbose:
+            with ProgressBar():
+                frqs_hologram = dask.compute(delayed)[0]
+        else:
+            frqs_hologram = dask.compute(delayed)[0]
         # for hologram interference frequencies, use frequency closer to guess value
         # ref_frq_exp = np.expand_dims(self.reference_frq, axis=-1)
         # for ii in range(self.npatterns):
@@ -511,10 +530,13 @@ class tomography:
 
         Note that this only depends on reference frequencies, and not on determined hologram frequencies
 
-        @param mask: area to be cut out of hologrms
         @param bg_average_axes: axes to average along when producing background images
+        @param kernel_size: when averaging time points to generate a background image, this is the number of
+        time points that will be used
+        @param mask: area to be cut out of hologrms
         @param fit_phases: whether to fit phase differences between image and background holograms
         @param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
+        @param use_gpu:
         @return:
         """
 
@@ -527,13 +549,13 @@ class tomography:
             apodization = np.outer(tukey(self.ny, alpha=0.1), tukey(self.nx, alpha=0.1))
 
         # ref_frq_da = da.from_array(self.reference_frq, chunks=(1,) * (self.reference_frq.ndim - 1) + (2,))
-        # make ref_frq_da[..., ii] broadcastable to same size as raw images
+        # make ref_frq_da[..., ii] broadcastable to same size as raw images so can use with dask array
         ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
                                    chunks=(1,) * (self.nextra_dims + 3) + (2,)
                                    )
 
         # #########################
-        # unmix holograms
+        # get electric field from holograms
         # #########################
         holograms_ft_raw = da.map_blocks(unmix_hologram,
                                          self.imgs_raw,
@@ -544,7 +566,7 @@ class tomography:
                                          apodization=apodization,
                                          dtype=complex)
 
-
+        # cut off region using mask
         if mask is None:
             holograms_ft = holograms_ft_raw
         else:
@@ -560,13 +582,13 @@ class tomography:
                                          dtype=complex)
 
         # #########################
-        # background holograms
+        # get background electric field from holograms
         # #########################
-        if self.imgs_raw_bg is None:
-            holograms_ft_bg = self.holograms_ft
+        if self.use_average_as_background:
+            holograms_ft_bg = holograms_ft
         else:
-            # todo: should I fit the bg reference frequencies as well?
-            ref_frq_bg_da = da.mean(ref_frq_da, axis=1, keepdims=True)
+            # todo: I should fit the bg reference frequencies also and use them here
+            ref_frq_bg_da = da.mean(ref_frq_da, axis=bg_average_axes, keepdims=True)
 
             holograms_ft_raw_bg = da.map_blocks(unmix_hologram,
                                                 self.imgs_raw_bg,
@@ -591,23 +613,33 @@ class tomography:
                                                 dtype=complex)
 
         # #########################
-        # determine background phases
+        # determine phase offsets for background electric field, relative to initial slice
+        # for each angle, fit compared with reference slices
         # #########################
         if fit_phases:
             # optionally determine background phase offsets
             print("computing background phase offsets")
-            with ProgressBar():
-                # take one slice from all axes which will be averaged. Otherwise, must keep the dimensions
-                slices = tuple([slice(0, 1) if a in bg_average_axes else slice(None) for a in range(self.nextra_dims)] +
-                               [slice(None)] * 3)
 
-                fit_params = da.map_blocks(get_global_phase_shifts,
-                                           holograms_ft_bg,
-                                           holograms_ft_bg[slices], # reference slices
-                                           dtype=complex,
-                                           chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
+            # take one slice from all axes which will be averaged. Otherwise, must keep the dimensions
+            slices = tuple([slice(0, 1) if a in bg_average_axes else slice(None) for a in range(self.nextra_dims)] +
+                           [slice(None)] * 3)
 
-                phase_offsets_bg = xp.angle(fit_params)
+            fit_params_dask = da.map_blocks(get_global_phase_shifts,
+                                       holograms_ft_bg,
+                                       holograms_ft_bg[slices],  # reference slices
+                                       dtype=complex,
+                                       chunks=(1,) * self.nextra_dims + (1, 1, 1))
+
+            if self.verbose:
+                with ProgressBar():
+                    fit_params = fit_params_dask.compute()
+            else:
+                fit_params = fit_params_dask.compute()
+
+
+
+            phase_offsets_bg = xp.angle(fit_params)
+
         else:
             phase_offsets_bg = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
 
@@ -616,38 +648,72 @@ class tomography:
         # #########################
         # determine background electric field
         # #########################
-        with ProgressBar():
-            if kernel_size is None:
-                # average all available
-                holograms_ft_bg_comp = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
-                                               axis=bg_average_axes,
-                                               keepdims=True).compute()
+        print("Computing background electric field")
+        if kernel_size is None:
+            # average all available
+            holograms_ft_bg_comp = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+                                           axis=bg_average_axes,
+                                           keepdims=True)
+
+        else:
+            # rolling average
+            # # todo: when I do this I run out of memory later ...
+            convolve_kernel = da.ones(tuple([kernel_size if ii in bg_average_axes else 1 for ii in range(holograms_ft_bg.ndim)]))
+
+            numerator = dconvolve(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+                                  convolve_kernel,
+                                  mode="constant",
+                                  cval=0).rechunk(holograms_ft_bg.chunksize)
+
+            # todo: should be able to compute denominator much more efficiently...
+            # denominator = dconvolve(da.ones(holograms_ft_bg.shape), convolve_kernel, mode="constant", cval=0)
+            other_shape = da.ones(tuple([holograms_ft_bg.shape[ii] if ii in bg_average_axes else 1 for ii in range(holograms_ft_bg.ndim)]))
+
+            denominator = dconvolve(other_shape,
+                                    convolve_kernel,
+                                    mode="constant",
+                                    cval=0)
+
+            holograms_ft_bg_comp = (numerator / denominator)
+
+            # temporary file approach
+            # tdir = tempfile.TemporaryDirectory()
+            # fname_z = Path(tdir.name) / "bg.zarr"
+            ## temp_zarr = zarr.open(fname_z, "r+")
+            # holograms_ft_bg_comp.to_zarr(fname_z, component="holograms_ft_bg", compute=True)
+            ## holograms_ft_bg_comp = numerator.compute() / denominator
+            # self.holograms_ft_bg = da.from_zarr(fname_z, "holograms_ft_bg", chunks=holograms_ft_bg.chunksize)
+
+            # compute all approach
+
+            if self.verbose:
+                with ProgressBar():
+                    self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(), chunks=holograms_ft_bg.chunksize)
             else:
-                # rolling average
-                # todo: when I do this I run out of memory later ...
-                convolve_kernel = da.ones(tuple([kernel_size if ii in bg_average_axes else 1 for ii in range(holograms_ft_bg.ndim)]))
+                self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(), chunks=holograms_ft_bg.chunksize)
 
-                numerator = dconvolve(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg), convolve_kernel, mode="constant", cval=0)
-                denominator = dconvolve(da.ones(holograms_ft_bg.shape), convolve_kernel, mode="constant", cval=0)
-                holograms_ft_bg_comp = (numerator / denominator).compute()
-
-        self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp, chunks=holograms_ft_bg.chunksize)
 
         # #########################
-        # determine phase offsets compared to background
+        # determine phase offsets of electric field compared to background
         # #########################
-        if self.imgs_raw_bg is None:
+        if self.use_average_as_background:
             phase_offsets = self.phase_offsets_bg
         else:
             if fit_phases:
                 print("computing phase offsets")
-                with ProgressBar():
-                    fit_params = da.map_blocks(get_global_phase_shifts,
-                                               holograms_ft,
-                                               self.holograms_ft_bg,
-                                               dtype=complex,
-                                               chunks=(1,) * self.nextra_dims + (1, 1, 1)).compute()
-                    phase_offsets = xp.angle(fit_params)
+                fit_params_dask = da.map_blocks(get_global_phase_shifts,
+                                           holograms_ft,
+                                           self.holograms_ft_bg,
+                                           dtype=complex,
+                                           chunks=(1,) * self.nextra_dims + (1, 1, 1))
+
+                if self.verbose:
+                    with ProgressBar():
+                        fit_params = fit_params_dask.compute()
+                else:
+                    fit_params = fit_params_dask.compute()
+
+                phase_offsets = xp.angle(fit_params)
             else:
                 phase_offsets = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
 
@@ -1150,6 +1216,7 @@ class tomography:
         figh = plt.figure(figsize=figsize, **kwargs)
         figh.suptitle(f"index={index}\nfrequency variation versus time")
 
+        # plot frequency differences
         ax = figh.add_subplot(1, 3, 1)
         ax.plot(np.linalg.norm(hgram_frq_diffs, axis=-1) / self.dfx)
         ax.set_xlabel("time step")
@@ -1157,12 +1224,16 @@ class tomography:
         ax.set_title("hologram frequency deviation amplitude")
         ax.legend([f"{ii:d}" for ii in range(self.npatterns)])
 
+        # plot angles
+        angles_unwrapped = np.unwrap(np.angle(hgram_frq_diffs[..., 0] + 1j * hgram_frq_diffs[..., 1]))
+
         ax = figh.add_subplot(1, 3, 2)
-        ax.plot(np.angle(hgram_frq_diffs[..., 0] + 1j * hgram_frq_diffs[..., 1]))
+        ax.plot(angles_unwrapped)
         ax.set_xlabel("time step")
         ax.set_ylabel("angle (rad)")
         ax.set_title("hologram frequency deviation rotation")
 
+        # plot mean frequency differences
         ax = figh.add_subplot(1, 3, 3)
         ax.plot(np.linalg.norm(ref_frq_diffs, axis=-1) / self.dfx)
         ax.set_xlabel("time step")
@@ -1905,8 +1976,7 @@ def get_scattering_potential(n: array,
 
 def get_rytov_phase(eimgs_ft: array,
                     eimgs_bg_ft: array,
-                    regularization: float,
-                    use_gpu: bool = _gpu_available) -> array:
+                    regularization: float) -> array:
     """
     Compute rytov phase from field and background field. The Rytov phase is \psi_s(r) where
     U_total(r) = exp[\psi_o(r) + \psi_s(r)]
@@ -1920,7 +1990,9 @@ def get_rytov_phase(eimgs_ft: array,
     @param use_gpu:
     @return psi_rytov:
     """
-    if isinstance(eimgs_ft, cp.ndarray) and _gpu_available:
+
+    use_gpu = isinstance(eimgs_ft, cp.ndarray) and _gpu_available
+    if use_gpu:
         xp = cp
     else:
         xp = np
@@ -1953,7 +2025,7 @@ def get_rytov_phase(eimgs_ft: array,
     psi_rytov = xp.log(abs(eimgs) / (abs(eimgs_bg))) + 1j * 0
     # set imaginary parts
     if use_gpu:
-        psi_rytov += 1j * cp.array(unwrap_phase(phase_diff.get()))
+        psi_rytov += 1j * xp.array(unwrap_phase(phase_diff.get()))
     else:
         psi_rytov += 1j * unwrap_phase(phase_diff)
 
