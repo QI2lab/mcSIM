@@ -42,7 +42,7 @@ except ImportError:
 
 _gpufit_available = True
 try:
-    import pygpufit as gf
+    import pygpufit.gpufit as gf
 except ImportError:
     _gpufit_available = False
 
@@ -149,7 +149,8 @@ class tomography:
 
     def estimate_hologram_frqs(self,
                                roi_size_pix: int = 10,
-                               save_dir: Optional[str] = None):
+                               save_dir: Optional[str] = None,
+                               use_gpufit: bool = False):
         """
         Estimate hologram frequencies from raw images.
         Guess values need to be within a few pixels for this to succeed. Can easily achieve this accuracy by
@@ -248,6 +249,7 @@ class tomography:
                 frqs_now = rgauss["fit_params"][1:3]
                 frqs_holo[..., ii, :] = np.expand_dims(frqs_now, axis=list(range(fx_guess.ndim)))
 
+                # todo: split this to another function
                 if saving and np.all(np.array(block_id) == 0):
                     figh = sim.plot_correlation_fit(img_ref_ft,
                                                     img_ref_ft,
@@ -266,36 +268,128 @@ class tomography:
         # fit hologram frequencies for ALL chunks
         # ############################
 
-        # todo: should do this with GPU fit instead
         # todo: fit background images also
+        if not use_gpufit or not _gpufit_available:
+            delayed = []
+            # loop over patterns
+            for ii in range(self.npatterns):
+                n_multiplex_this_pattern = len(self.hologram_frqs[ii])
+                delayed.append(da.map_blocks(get_hologram_frqs,
+                                             self.imgs_raw[..., ii, :, :],
+                                             self.hologram_frqs[ii][:, 0],
+                                             self.hologram_frqs[ii][:, 1],
+                                             use_guess_init_params=False,
+                                             saving=saving,
+                                             roi_size_pix=roi_size_pix,
+                                             prefix=str(ii),
+                                             dtype=float,
+                                             chunks=(1,) * self.nextra_dims + (n_multiplex_this_pattern, 2),
+                                             drop_axis=(-1, -2),
+                                             new_axis=(-1, -2)
+                                             ))
 
-        delayed = []
-        # loop over patterns
-        for ii in range(self.npatterns):
-            n_multiplex_this_pattern = len(self.hologram_frqs[ii])
-            delayed.append(da.map_blocks(get_hologram_frqs,
-                                         self.imgs_raw[..., ii, :, :],
-                                         self.hologram_frqs[ii][:, 0],
-                                         self.hologram_frqs[ii][:, 1],
-                                         use_guess_init_params=False,
-                                         saving=True,
-                                         roi_size_pix=roi_size_pix,
-                                         prefix=str(ii),
-                                         dtype=float,
-                                         chunks=(1,) * self.nextra_dims + (n_multiplex_this_pattern, 2),
-                                         drop_axis=(-1, -2),
-                                         new_axis=(-1, -2)
-                                         ))
+            # do frequency calibration
+            print(f"calibrating {self.npatterns:d} patterns,"
+                  f" each multiplexing {[f.shape[-2] for f in self.hologram_frqs]} plane waves")
 
-        # do frequency calibration
-        print(f"calibrating {self.npatterns:d} patterns,"
-              f" each multiplexing {[f.shape[-2] for f in self.hologram_frqs]} plane waves")
-
-        if self.verbose:
-            with ProgressBar():
+            if self.verbose:
+                with ProgressBar():
+                    frqs_hologram = dask.compute(delayed)[0]
+            else:
                 frqs_hologram = dask.compute(delayed)[0]
+
         else:
-            frqs_hologram = dask.compute(delayed)[0]
+            
+            raise NotImplementedError("fitting frequencies with gpufit is not yet fully implemented")
+            
+            tstart = time.perf_counter()
+
+            apodization = np.outer(hann(self.ny), hann(self.nx))
+            def ft_abs(img): return np.abs(fft.fftshift(fft.fft2(fft.ifftshift(img * apodization))))
+            xp = np
+
+            dfx = self.fxs[1] - self.fxs[0]
+            dfy = self.fys[1] - self.fys[0]
+
+            frqs_hologram = [np.zeros(self.imgs_raw.shape[:self.nextra_dims] + (len(f), 2)) for f in self.hologram_frqs]
+            for ii in range(self.npatterns):
+
+                imgs_ft_now = da.map_blocks(ft_abs,
+                                            self.imgs_raw[..., ii, :, :],
+                                            dtype=float,
+                                            meta=xp.array([])
+                                            )
+
+                n_multiplex_this_pattern = len(self.hologram_frqs[ii])
+                for jj in range(n_multiplex_this_pattern):
+                    fx_guess = self.hologram_frqs[ii][jj, 0]
+                    fy_guess = self.hologram_frqs[ii][jj, 1]
+
+                    nx_center = np.argmin(np.abs(np.squeeze(fx_guess) - self.fxs))
+                    ny_center = np.argmin(np.abs(np.squeeze(fy_guess) - self.fys))
+                    roi = rois.get_centered_roi([ny_center, nx_center],
+                                                 [roi_size_pix, roi_size_pix],
+                                                 min_vals=[0, 0],
+                                                 max_vals=(self.ny, self.nx))
+
+                    nfits = np.prod(self.imgs_raw.shape[:self.nextra_dims])
+
+                    data = imgs_ft_now[..., roi[0]:roi[1], roi[2]:roi[3]].compute().reshape([nfits, roi_size_pix**2]).astype(np.float32)
+
+                    # for fitting, take coordinate of maximum pixel value as guess
+                    max_ind = np.unravel_index(np.argmax(data, axis=1), (roi_size_pix, roi_size_pix))
+                    fx_fit_guess = self.fxs[roi[2]:roi[3]][max_ind[1]]
+                    fy_fit_guess = self.fys[roi[0]:roi[1]][max_ind[0]]
+
+                    # symmetric 2D gaussian
+                    nparams = 5
+                    init_params = np.zeros((nfits, nparams), dtype=np.float32)
+                    init_params[:, 0] = np.max(data, axis=1) - np.mean(data, axis=1)
+                    init_params[:, 1] = (fx_fit_guess - self.fxs[roi[2]]) / dfx
+                    init_params[:, 2] = (fy_fit_guess - self.fys[roi[0]]) / dfy
+                    init_params[:, 3] = 3
+                    init_params[:, 4] = np.mean(data, axis=1)
+
+                    # 2D rotated
+                    # nparams = 7
+                    # init_params = np.zeros((nfits, nparams), dtype=np.float32)
+                    # init_params[:, 0] = np.max(data, axis=1) - np.mean(data, axis=1)
+                    # init_params[:, 1] = (fx_fit_guess - self.fxs[roi[2]]) / dfx
+                    # init_params[:, 2] = (fy_fit_guess - self.fys[roi[0]]) / dfy
+                    # init_params[:, 3] = 3
+                    # init_params[:, 4] = 3
+                    # init_params[:, 5] = np.mean(data, axis=1)
+                    # init_params[:, 6] = 0
+
+                    if init_params.ndim != 2 or init_params.shape != (nfits, nparams):
+                        raise ValueError(f"init_params should have shape ({nfits:d}, {nparams:d}), but had shape {init_params.shape}")
+
+                    # do fitting
+                    fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data,
+                                                                             None,
+                                                                             gf.ModelID.GAUSS_2D,
+                                                                             # gf.ModelID.GAUSS_2D_ROTATED,
+                                                                             init_params,
+                                                                             tolerance=1e-8,
+                                                                             max_number_iterations=100,
+                                                                             estimator_id=gf.EstimatorID.LSE,
+                                                                             parameters_to_fit=np.ones(nparams, dtype=np.int32),
+                                                                             user_info=None)
+
+                    # defined in Gpufit/constants.h
+                    # fit_states_key = {"converged": 0,
+                    #                   "max_iteration": 1,
+                    #                   "singular_hessian": 2,
+                    #                   "neg_curvature_mle": 3,
+                    #                   "gpu_not_ready": 4}
+
+                    # convert fit centers to real units
+                    frqs_hologram[ii][..., 0] = fit_params[:, 1].reshape(frqs_hologram[ii].shape[:-1]) * dfx + self.fxs[roi[2]]
+                    frqs_hologram[ii][..., 1] = fit_params[:, 2].reshape(frqs_hologram[ii].shape[:-1]) * dfy + self.fys[roi[0]]
+
+
+            print(f"fit frequencies in {time.perf_counter() - tstart:.2f}s")
+
         # for hologram interference frequencies, use frequency closer to guess value
         # ref_frq_exp = np.expand_dims(self.reference_frq, axis=-1)
         # for ii in range(self.npatterns):
