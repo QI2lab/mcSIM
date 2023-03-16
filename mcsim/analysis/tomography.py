@@ -3701,8 +3701,16 @@ def display_tomography_recon(recon_fname: str,
     npatterns = len(img_z.attrs["beam_frqs"])
     wavelength = img_z.attrs["wavelength"]
     no = img_z.attrs["no"]
-    tau_tv = img_z.attrs["tv_tau"]
-    tau_lasso = img_z.attrs["l1_tau"]
+
+    try:
+        tau_tv = img_z.attrs["tv_tau"]
+    except KeyError:
+        tau_tv = img_z.attrs["reconstruction_settings"]["tau_tv"]
+
+    try:
+        tau_lasso = img_z.attrs["l1_tau"]
+    except KeyError:
+        tau_lasso = img_z.attrs["reconstruction_settings"]["tau_lasso"]
 
     # load affine xforms
     # Napari is using convention (y, x) whereas I'm using (x, y), so need to swap these dimensions in affine xforms
