@@ -17,14 +17,21 @@ required_pkgs = ['numpy',
                  'zarr',
                  'h5py',
                  'dask',
+                 'dask-image',
                  'localize_psf @ git+https://git@github.com/qi2lab/localize-psf@master#egg=localize_psf'
                  ]
 
 # extras
-# to install cucim manually pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
 extras = {'expt_ctrl': ['PyDAQmx'],
-          'gpu': ['cupy-cuda11x', # assuming CUDA 11.2 or later. Otherwise, manually install
-                  'cucim @ git+https://github.com/rapidsai/cucim.git@v22.04.00#egg=cucim&subdirectory=python/cucim'
+          'gpu': [# assuming 11.2 <= CUDA version < 12. Otherwise, manually install with
+                  # conda install -c conda-forge cupy cudatoolkit=11.8
+                  'cupy-cuda11x',
+                  # periodically update version of cucim checkout by hand. The symbol following @ should be
+                  # the release tag name
+                  # to install cucim manually
+                  # pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
+                  'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim'
+                  # 'cucim @ git+https://github.com/rapidsai/cucim.git@v22.04.00#egg=cucim&subdirectory=python/cucim'
                   ]
           }
 
