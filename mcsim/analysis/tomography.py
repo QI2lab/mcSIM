@@ -1983,19 +1983,6 @@ def get_rytov_phase(eimgs_ft: array,
     else:
         xp = np
 
-    # if xp.any(xp.array(eimgs_ft.shape[:-2]) != 1):
-    #     raise ValueError()
-
-    # if xp.any(xp.array(eimgs_bg_ft.shape[:-2]) != 1):
-    #     raise ValueError()
-
-    nextra_dims = eimgs_ft.ndim - 2
-    nextra_shape = eimgs_ft.shape[:-2]
-
-    # todo: why need to squeeze at all?
-    # eimgs_ft = xp.asarray(eimgs_ft.squeeze(axis=tuple(range(nextra_dims))))
-    # eimgs_bg_ft = xp.asarray(eimgs_bg_ft.squeeze(axis=tuple(range(nextra_dims))))
-
     eimgs_ft = xp.asarray(eimgs_ft)
     eimgs_bg_ft = xp.asarray(eimgs_bg_ft)
 
@@ -2017,11 +2004,11 @@ def get_rytov_phase(eimgs_ft: array,
     # set imaginary parts
     if use_gpu:
         def uwrap(m): return xp.array(unwrap_phase(m.get()))
-        # psi_rytov += 1j * xp.array(unwrap_phase(phase_diff.get()))
     else:
         def uwrap(m): return unwrap_phase(m)
-        # psi_rytov += 1j * unwrap_phase(phase_diff)
 
+    # loop over all dimensions except the last two
+    nextra_shape = eimgs_ft.shape[:-2]
     nextra = np.prod(nextra_shape)
     for ii in range(nextra):
         ind = np.unravel_index(ii, nextra_shape)
@@ -2031,7 +2018,6 @@ def get_rytov_phase(eimgs_ft: array,
     psi_rytov[abs(eimgs_bg) < regularization] = 0
 
     # Fourier transform
-    # psi_rytov_ft = xp.expand_dims(ft(psi_rytov), axis=tuple(range(nextra_dims)))
     psi_rytov_ft = ft(psi_rytov)
 
     return psi_rytov_ft
