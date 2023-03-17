@@ -49,6 +49,7 @@ except ImportError:
 array = Union[np.ndarray, cp.ndarray]
 csr_matrix = Union[sp.csr_matrix, sp_gpu.csr_matrix]
 
+
 class tomography:
     def __init__(self,
                  imgs_raw: da.array,
@@ -146,7 +147,6 @@ class tomography:
         # settings
         # self.reconstruction_settings = {} # keys will differ depending on recon mode
 
-
     def estimate_hologram_frqs(self,
                                roi_size_pix: int = 10,
                                save_dir: Optional[str] = None,
@@ -157,6 +157,7 @@ class tomography:
         looking at FFT
         @param roi_size_pix: ROI size (in pixels) to do frequency fitting on
         @param save_dir:
+        @param use_gpufit:
         @return:
         """
         saving = save_dir is not None
@@ -174,7 +175,7 @@ class tomography:
                               use_guess_init_params,
                               saving: bool,
                               roi_size_pix: int,
-                              prefix: str="",
+                              prefix: str = "",
                               block_id=None):
             """
 
@@ -185,6 +186,7 @@ class tomography:
             guess in the fit
             @param saving:
             @param roi_size_pix:
+            @param prefix:
             @param block_id: can use this to figure out what blcok we are in when running with dask.array map_blocks()
             @return:
             """
@@ -386,7 +388,6 @@ class tomography:
                     # convert fit centers to real units
                     frqs_hologram[ii][..., 0] = fit_params[:, 1].reshape(frqs_hologram[ii].shape[:-1]) * dfx + self.fxs[roi[2]]
                     frqs_hologram[ii][..., 1] = fit_params[:, 2].reshape(frqs_hologram[ii].shape[:-1]) * dfy + self.fys[roi[0]]
-
 
             print(f"fit frequencies in {time.perf_counter() - tstart:.2f}s")
 
@@ -607,7 +608,6 @@ class tomography:
             figh.savefig(Path(save_dir, "frequency_mapping.png"))
             plt.close(figh)
 
-
         return xform_dmd2frq
 
     def unmix_holograms(self,
@@ -724,7 +724,6 @@ class tomography:
                                             holograms_ft_bg[slices],  # reference slices
                                             dtype=complex,
                                             chunks=holograms_ft_bg.chunksize[:-2] + (1, 1)
-                                            # chunks=(1,) * self.nextra_dims + (1, 1, 1)
                                             )
 
             if self.verbose:
@@ -752,7 +751,6 @@ class tomography:
 
         else:
             # rolling average
-            # # todo: when I do this I run out of memory later ...
             convolve_kernel = da.ones(tuple([kernel_size if ii in bg_average_axes else 1 for ii in range(holograms_ft_bg.ndim)]))
 
             numerator = dconvolve(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
@@ -771,14 +769,6 @@ class tomography:
 
             holograms_ft_bg_comp = (numerator / denominator)
 
-            # temporary file approach
-            # tdir = tempfile.TemporaryDirectory()
-            # fname_z = Path(tdir.name) / "bg.zarr"
-            ## temp_zarr = zarr.open(fname_z, "r+")
-            # holograms_ft_bg_comp.to_zarr(fname_z, component="holograms_ft_bg", compute=True)
-            ## holograms_ft_bg_comp = numerator.compute() / denominator
-            # self.holograms_ft_bg = da.from_zarr(fname_z, "holograms_ft_bg", chunks=holograms_ft_bg.chunksize)
-
         if self.verbose:
             with ProgressBar():
                 self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(),
@@ -786,7 +776,6 @@ class tomography:
         else:
             self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(),
                                                  chunks=holograms_ft_bg.chunksize)
-
 
         # #########################
         # determine phase offsets of electric field compared to background
@@ -801,7 +790,6 @@ class tomography:
                                                 self.holograms_ft_bg,
                                                 dtype=complex,
                                                 chunks=holograms_ft.chunksize[:-2] + (1, 1),
-                                                # chunks=(1,) * self.nextra_dims + (1, 1, 1)
                                                 )
 
                 if self.verbose:
@@ -816,6 +804,16 @@ class tomography:
 
         self.phase_offsets = phase_offsets
         self.holograms_ft = holograms_ft * da.exp(1j * self.phase_offsets)
+
+        # #########################
+        # define powers
+        # #########################
+        # self.powers_rms = da.sqrt(da.mean(da.abs(self.imgs_raw) ** 2, axis=(-1, -2)))
+        # if self.imgs_raw_bg is not None:
+        #     self.powers_rms_bg = da.sqrt(da.mean(da.abs(self.imgs_raw_bg) ** 2, axis=(-1, -2)))
+
+        self.e_powers_rms = da.sqrt(da.mean(da.abs(self.holograms_ft) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft.shape[-2:])
+        self.e_powers_rms_bg = da.sqrt(da.mean(da.abs(self.holograms_ft_bg) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft_bg.shape[-2:])
 
     def reconstruct_n(self,
                       mode: str = "rytov",
@@ -840,10 +838,10 @@ class tomography:
                       use_gpu: bool = False):
         """
 
-        @param mode: "born", "rytov", or "bpm
+        @param mode: "born", "rytov", or "bpm"
         @param solver: "naive" or "fista"
         @param scattered_field_regularization:
-        @param niters:
+        @param niters: number of iterations
         @param reconstruction_regularizer:
         @param dxy_sampling_factor:
         @param dz_sampling_factor:
@@ -855,6 +853,11 @@ class tomography:
         @param use_imaginary_constraint:
         @param use_real_constraint:
         @param interpolate_model:
+        @param step: ignored unless mode = "bpm"
+        @param stochastic_descent:
+        @param verbose:
+        @param compute_cost:
+        @param use_gpu:
         @return:
         """
 
@@ -887,7 +890,8 @@ class tomography:
         if mode == "bpm":
             drs_v = (drs_v[0], self.dxy, self.dxy)
             v_size = (v_size[0], self.holograms_ft.shape[-2], self.holograms_ft.shape[-1])
-
+            
+        # must ensure chunks for reconstruction use full pattern sets
         new_chunks = list(self.holograms_ft.chunksize)
         new_chunks[-3] = self.npatterns
 
@@ -949,9 +953,6 @@ class tomography:
 
         v_fts_start = da.map_blocks(reconstruction,
                                     eraw_start,
-                                    # mean_beam_frqs[..., 0],
-                                    # mean_beam_frqs[..., 1],
-                                    # mean_beam_frqs[..., 2],
                                     mean_beam_frqs_first[..., 0],
                                     mean_beam_frqs_first[..., 1],
                                     mean_beam_frqs_first[..., 2],
@@ -1062,8 +1063,8 @@ class tomography:
 
             # get refractive index
             n = da.map_blocks(recon,
-                              v_fts_start, # initial guess
-                              eraw_start, # data
+                              v_fts_start,  # initial guess
+                              eraw_start,  # data
                               #masks,
                               self.no,
                               self.wavelength,
@@ -1151,7 +1152,7 @@ class tomography:
             n = da.map_blocks(recon,
                               v_fts_start,  # initial guess
                               da.rechunk(self.holograms_ft, chunks=new_chunks),  # data
-                              da.rechunk(self.holograms_ft_bg, chunks=new_chunks), # background
+                              da.rechunk(self.holograms_ft_bg, chunks=new_chunks),  # background
                               self.no,
                               self.wavelength,
                               self.dz_final,
@@ -1179,22 +1180,6 @@ class tomography:
         return n, v_fts_start, drs_v, xform_recon_pix2coords
 
 
-    def get_powers(self):
-        # compute powers
-        powers_rms = da.sqrt(da.mean(da.abs(self.imgs_raw) ** 2, axis=(-1, -2)))
-        e_powers_rms = da.sqrt(da.mean(da.abs(self.holograms_ft) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft.shape[-2:])
-
-        return powers_rms, e_powers_rms
-
-
-    def get_powers_bg(self):
-        # compute powers
-        powers_rms_bg = da.sqrt(da.mean(da.abs(self.imgs_raw_bg) ** 2, axis=(-1, -2)))
-        e_powers_rms_bg = da.sqrt(da.mean(da.abs(self.holograms_ft_bg) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft_bg.shape[-2:])
-
-        return powers_rms_bg, e_powers_rms_bg
-
-
     def plot_interferograms(self,
                             nmax_to_plot: int,
                             save_dir: Optional[str] = None):
@@ -1203,7 +1188,6 @@ class tomography:
 
         @param nmax_to_plot:
         @param save_dir:
-        @param axes_names:
         @return:
         """
         if not hasattr(self, "efield_scattered_ft"):
@@ -1212,7 +1196,6 @@ class tomography:
         if save_dir is not None:
             save_dir = Path(save_dir)
             save_dir.mkdir(exist_ok=True)
-
 
         nmax_to_plot = np.min([nmax_to_plot, np.prod(self.holograms_ft.shape[:-2])])
 
@@ -1260,7 +1243,6 @@ class tomography:
         with ProgressBar():
             dask.compute(*results_interferograms)
 
-
     def plot_frqs(self,
                   index: tuple[int],
                   time_axis: int = 1,
@@ -1273,7 +1255,7 @@ class tomography:
         could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
         @param time_axis:
         @param figsize:
-        @param kwargs:
+        @param kwargs: passed through to matplotlib.pyplot.figure
         @return:
         """
 
@@ -1289,10 +1271,15 @@ class tomography:
             else:
                 slices.append(slice(None))
 
+        # add slices for multiplexed dimension and xy dimension
         slices = tuple(slices + [slice(None), slice(None)])
         squeeze_axes = tuple([ii for ii in range(self.nextra_dims) if ii != time_axis])
 
         ref_slices = slices[:-1]
+
+        # ####################################
+        # hologram frequencies
+        # ####################################
 
         # each element of list should have shape ntimes x nmultiplex x 2
         hologram_frqs_mean = [np.mean(f, axis=1, keepdims=True) for f in self.hologram_frqs]
@@ -1345,6 +1332,7 @@ class tomography:
 
         @param index:
         @param figsize:
+        @param gamma:
         @return:
         """
         extent = [self.x[0] - 0.5 * self.dxy, self.x[-1] + 0.5 * self.dxy,
@@ -1391,7 +1379,6 @@ class tomography:
         except Exception as e:
             print(e)
 
-
         return figh
 
 
@@ -1436,10 +1423,12 @@ def grad_descent(v_ft_start: array,
     @param niters: number of iterations
     @param use_fista:
     @param tau_tv:
+    @param tau_lasso:
     @param use_imaginary_constraint:
     @param use_real_constraint:
     @param masks: # todo: add mask to remove points which we don't want to consider
     @param verbose:
+    @param compute_cost:
     @return results: dict
     """
     # put on gpu optionally
@@ -1884,15 +1873,17 @@ def grad_descent_prop_model(v_start: array,
 
     return results
 
+
 def cut_mask(img: array,
              mask: array,
              mask_val: float = 0) -> array:
     """
     Mask points in image and set to a given value. Designed to be used with dask.array map_blocks()
+
     @param img:
     @param mask:
-    @param mask_val:
-    @return:
+    @param mask_val: At any position where mask is True, replace the value of img with this value
+    @return: img_masked
     """
     if isinstance(img, cp.ndarray) and _gpu_available:
         xp = cp
@@ -1919,7 +1910,8 @@ def get_fz(fx: np.ndarray,
     """
     Get z-component of frequency given fx, fy
 
-    @param frqs_2d: nfrqs x 2
+    @param fx: nfrqs
+    @param fy:
     @param no: index of refraction
     @param wavelength: wavelength
     @return frqs_3d:
@@ -1977,12 +1969,12 @@ def get_global_phase_shifts(imgs: array,
                             thresh: Optional[float] = None) -> np.ndarray:
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
-    imgs * np.exp(1j * phase_shift) ~ img_ref
+    imgs * A*np.exp(1j * phase_shift) ~ img_ref
 
     @param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
-    @param ref_imgs: n_{-m} x ... x n_{-2} x n_{-1} array
+    @param ref_imgs: reference images. Should be broadcastable to same size as imgs.
     @param thresh: only consider points in images where both abs(imgs) and abs(ref_imgs) > thresh
-    @return phase_shifts:
+    @return fit_params:
     """
 
     if isinstance(imgs, cp.ndarray) and _gpu_available:
@@ -2004,14 +1996,15 @@ def get_global_phase_shifts(imgs: array,
         ind = np.unravel_index(ii, loop_shape)
 
         if thresh is None:
-            mask = xp.ones(imgs[ind].shape, dtype=bool)
+            # mask = xp.ones(imgs[ind].shape, dtype=bool)
+            A = xp.expand_dims(imgs[ind].ravel(), axis=1)
+            B = ref_imgs[ind].ravel()
         else:
             mask = xp.logical_and(np.abs(imgs[ind]) > thresh, xp.abs(ref_imgs) > thresh)
+            A = xp.expand_dims(imgs[ind][mask], axis=1)
+            B = ref_imgs[ind][mask]
 
-        A = xp.expand_dims(imgs[ind][mask], axis=1)
-        B = ref_imgs[ind][mask]
         fps, _, _, _ = xp.linalg.lstsq(A, B, rcond=None)
-        # fit_params[ind, :] = fps
         fit_params[ind] = fps
 
     return fit_params
@@ -2050,8 +2043,8 @@ def get_scattering_potential(n: array,
     @param wavelength:
     @return:
     """
-    sp = - (2 * np.pi / wavelength) ** 2 * (n**2 - no**2)
-    return sp
+    v = - (2 * np.pi / wavelength) ** 2 * (n**2 - no**2)
+    return v
 
 
 def get_rytov_phase(eimgs_ft: array,
@@ -2064,8 +2057,8 @@ def get_rytov_phase(eimgs_ft: array,
 
     We calculate \psi_s(r) = log | U_total(r) / U_o(r)| + 1j * unwrap[angle(U_total) - angle(U_o)]
 
-    @param eimgs: n0 x n1 ... x nm x ny x nx
-    @param eimgs_bg: broadcastable to same size as eimgs
+    @param eimgs_ft: n0 x n1 ... x nm x ny x nx
+    @param eimgs_bg_ft: broadcastable to same size as eimgs
     @param float regularization: regularization value. Any pixels where the background
     exceeds this value will be set to zero
     @return psi_rytov:
@@ -2129,30 +2122,24 @@ def get_scattered_field(eimgs_ft: array,
     @param regularization:
     @return efield_scattered_ft: scattered field of same size as eimgs_ft
     """
+    # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
+    # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
 
     if isinstance(eimgs_ft, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
 
-    eimgs_ft = xp.asarray(eimgs_ft)
-    eimgs_bg_ft = xp.asarray(eimgs_bg_ft)
-
     def ift(m): return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
     def ft(m): return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-    # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
-    # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
-
-    # compute scattered field
-    holograms_bg = ift(eimgs_bg_ft)
-    holograms = ift(eimgs_ft)
-
+    # compute scattered field in real space
+    holograms_bg = ift(xp.asarray(eimgs_bg_ft))
+    holograms = ift(xp.asarray(eimgs_ft))
     efield_scattered = (holograms - holograms_bg) / (xp.abs(holograms_bg) + regularization)
 
     # Fourier transform
-    # efield_scattered_ft_raw = xp.expand_dims(ft(efield_scattered), axis=tuple(range(nextra_dims)))
     efield_scattered_ft_raw = ft(efield_scattered)
 
     return efield_scattered_ft_raw
@@ -2164,7 +2151,7 @@ def unmix_hologram(img: array,
                    fmax_int: float,
                    fx_ref: np.ndarray,
                    fy_ref: np.ndarray,
-                   apodization: np.ndarray = 1) -> array:
+                   apodization: array = 1) -> array:
     """
     Given an off-axis hologram image, determine the electric field represented
 
@@ -2323,7 +2310,9 @@ def fwd_model_linear(beam_fx,
     """
     Forward model from scattering potential v to imaged electric field after interacting with object
 
-    @param beam_frqs: (nbeams, 3). Normalized to no/wavelength
+    @param beam_fx: nbeams Normalized to no/wavelength
+    @param beam_fy:
+    @param beam_fz:
     @param no: index of refraction
     @param na_det: detection numerical aperture
     @param wavelength:
@@ -2557,6 +2546,7 @@ def reconstruction(efield_fts: array,
     @param v_shape: (nz_v, ny_v, nx_v) grid size for scattering potential reconstruction grid
     @param regularization: regularization factor
     @param mode: "born" or "rytov"
+    @param no_data_value:
     @return v_ft:
     @return drs: full coordinate grid can be obtained from get_coords
     """
@@ -2658,6 +2648,7 @@ def apply_n_constraints(v_ft: array,
     @param beta:
     @param bool use_raar: whether to use the Relaxed-Averaged-Alternating Reflection algorithm
     @param require_real_part_greater_bg:
+    @param print_info:
     @return v_ft_out:
     """
 
@@ -2767,7 +2758,7 @@ def fit_ref_frq(img_ft: np.ndarray,
 
     Note: when the beam angle is non-zero, the dominant tomography frequency component will not be centered
     on this circle, but will be at position f_ref - f_beam
-    @param img:
+    @param img_ft:
     @param dxy:
     @param fmax_int:
     @param search_rad_fraction:
@@ -2914,13 +2905,14 @@ def plot_scattered_angle(img_efield_ft,
 
     @param img_efield_ft:
     @param img_efield_bg_ft:
-    @param img_efield_scattered_ft:
+    @param img_efield_scatt_ft:
     @param beam_frq:
     @param frq_ref:
     @param fmax_int:
-    @param fcoords:
     @param dxy:
     @param title:
+    @param figsize:
+    @param gamma:
     @return figh:
     """
 
@@ -3014,7 +3006,6 @@ def plot_scattered_angle(img_efield_ft,
         ax3.set_ylim(np.flip(flims[ii]))
 
     return figh
-
 
 
 def plot_odt_sampling(frqs: np.ndarray,
