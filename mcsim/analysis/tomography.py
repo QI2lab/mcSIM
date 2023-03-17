@@ -1321,6 +1321,113 @@ class tomography:
 
         return figh
 
+    def plot_phases(self,
+                    index: tuple[int],
+                    time_axis: int = 1,
+                    figsize: tuple[float] = (30., 8.),
+                    **kwargs):
+        """
+        Plot phase drift fits versus time for a single slice
+
+        @param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
+        axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
+        could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
+        @param time_axis:
+        @param figsize:
+        @param kwargs: passed through to matplotlib.pyplot.figure
+        @return: figh
+        """
+
+        if len(index) != (self.nextra_dims - 1):
+            raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
+
+        # logic for slicing out desired index
+        slices = []
+        index_counter = 0
+        for ii in range(self.nextra_dims):
+            if ii != time_axis:
+                slices.append(slice(index[index_counter], index[index_counter] + 1))
+            else:
+                slices.append(slice(None))
+
+        # add slices for patterns, y, x
+        slices = tuple(slices + [slice(None), slice(None), slice(None)])
+        squeeze_axes = tuple([ii for ii in range(self.nextra_dims) if ii != time_axis]) + (-1, -2)
+
+        # get slice of phases
+        ph = np.unwrap(self.phase_offsets[slices].squeeze(axis=squeeze_axes), axis=0)
+        ph_bg = np.unwrap(self.phase_offsets_bg[slices].squeeze(axis=squeeze_axes), axis=0)
+
+        # plot
+        figh2 = plt.figure(figsize=figsize, **kwargs)
+        figh2.suptitle(f"index={index}\nphase variation versus time")
+
+        ax = figh2.add_subplot(1, 2, 1)
+        ax.set_title("Phases")
+        ax.plot(ph)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("phase (rad)")
+
+        ax = figh2.add_subplot(1, 2, 2)
+        ax.set_title("Background phases")
+        ax.plot(ph_bg)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("phase (rad)")
+
+        return figh2
+
+    def plot_powers(self,
+                    index: tuple[int],
+                    time_axis: int = 1,
+                    figsize: tuple[float] = (30., 8.),
+                    **kwargs
+                    ):
+
+        if len(index) != (self.nextra_dims - 1):
+            raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
+
+            # logic for slicing out desired index
+        slices = []
+        index_counter = 0
+        for ii in range(self.nextra_dims):
+            if ii != time_axis:
+                slices.append(slice(index[index_counter], index[index_counter] + 1))
+            else:
+                slices.append(slice(None))
+
+        # add slices for patterns
+        slices = tuple(slices + [slice(None)])
+        squeeze_axes = tuple([ii for ii in range(self.nextra_dims) if ii != time_axis])
+
+        # get slice of phases
+        with ProgressBar():
+            computed = dask.compute([self.e_powers_rms[slices].squeeze(axis=squeeze_axes),
+                                     self.e_powers_rms_bg[slices].squeeze(axis=squeeze_axes)],
+                                    scheduler="threads")
+
+        epowers, epowers_bg = computed[0]
+        if isinstance(epowers, cp.ndarray):
+            epowers = epowers.get()
+        if isinstance(epowers_bg, cp.ndarray):
+            epowers_bg = epowers_bg.get()
+
+        # plot
+        figh2 = plt.figure(figsize=figsize, **kwargs)
+        figh2.suptitle(f"index={index}\nhologram magnitude variation versus time")
+
+        ax = figh2.add_subplot(1, 2, 1)
+        ax.set_title("|E| RMS average")
+        ax.plot(epowers)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("|E|")
+
+        ax = figh2.add_subplot(1, 2, 2)
+        ax.set_title("|Ebg| RMS average")
+        ax.plot(epowers_bg)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("|E|")
+
+        return figh2, epowers, epowers_bg
 
     def show_image(self,
                    index: tuple[int],
