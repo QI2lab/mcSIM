@@ -150,7 +150,7 @@ class tomography:
                                     axis=tuple(range(self.nextra_dims)) + (-3,))
 
         # settings
-        self.reconstruction_settings = {} # keys will differ depending on recon mode
+        self.reconstruction_settings = {}
 
     def estimate_hologram_frqs(self,
                                roi_size_pix: int = 10,
@@ -1009,7 +1009,7 @@ class tomography:
             start_mode = "rytov"
 
         # Take first frequencies and assume these are only ones present
-        # in case of multiple beam frequencies, not clear what to do exactly.
+        # todo: in case of multiple beam frequencies, not clear what to do exactly.
         mean_beam_frqs_first = np.stack([f[0] for f in mean_beam_frqs], axis=0)
 
         v_fts_start = da.map_blocks(reconstruction,
@@ -1033,10 +1033,6 @@ class tomography:
         if mode == "born" or mode == "rytov":
             if solver == "fista":
                 # define forward model
-                # todo: should I use real beam frqs and generate a model for each data point?
-                # todo: fix for multiple frequencies
-                # todo: easy in the case where all images use same multiplexing
-
                 nmax_multiplex = np.max([len(f) for f in mean_beam_frqs])
                 # nth entry in list is nth set of demultiplexed frequencies
                 # for images which don't have enough multiplexed frequencies, replaced by inf
@@ -1075,6 +1071,8 @@ class tomography:
                     results = grad_descent(v_fts.squeeze(axis=tuple(range(nextra_dims))),
                                            efield_scattered_ft.squeeze(axis=tuple(range(nextra_dims))),
                                            model,
+                                           no,
+                                           wavelength,
                                            step,
                                            niters=niters,
                                            use_fista=True,
@@ -1126,7 +1124,7 @@ class tomography:
             n = da.map_blocks(recon,
                               v_fts_start,  # initial guess
                               eraw_start,  # data
-                              #masks,
+                              #masks, # todo: add
                               self.no,
                               self.wavelength,
                               self.step,
@@ -1501,21 +1499,37 @@ class tomography:
         if isinstance(epowers_bg, cp.ndarray):
             epowers_bg = epowers_bg.get()
 
+        # slice amplitudes
+        amp = self.amp_corr[slices].squeeze(axis=squeeze_axes + (-1, -2))
+        amp_bg = self.amp_corr_bg[slices].squeeze(axis=squeeze_axes + (-1, -2))
+
         # plot
         figh2 = plt.figure(figsize=figsize, **kwargs)
         figh2.suptitle(f"index={index}\nhologram magnitude variation versus time")
 
-        ax = figh2.add_subplot(1, 2, 1)
+        ax = figh2.add_subplot(2, 2, 1)
         ax.set_title("|E| RMS average")
         ax.plot(epowers)
         ax.set_xlabel("time step")
         ax.set_ylabel("|E|")
 
-        ax = figh2.add_subplot(1, 2, 2)
+        ax = figh2.add_subplot(2, 2, 2)
         ax.set_title("|Ebg| RMS average")
         ax.plot(epowers_bg)
         ax.set_xlabel("time step")
         ax.set_ylabel("|E|")
+
+        ax = figh2.add_subplot(2, 2, 3)
+        ax.set_title("E fit amplitude")
+        ax.plot(amp)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("amp")
+
+        ax = figh2.add_subplot(2, 2, 4)
+        ax.set_title("Ebg bit amplitude")
+        ax.plot(amp_bg)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("amplitude")
 
         return figh2, epowers, epowers_bg
 
@@ -1600,6 +1614,8 @@ def soft_threshold(t: float,
 def grad_descent(v_ft_start: array,
                  e_measured_ft: array,
                  model: csr_matrix,
+                 no: float,
+                 wavelength: float,
                  step: float,
                  niters: int = 100,
                  use_fista: bool = True,
@@ -3748,7 +3764,7 @@ def display_tomography_recon(recon_fname: str,
         pd = da.mod(da.angle(estack) - da.angle(ebg_stack), 2 * np.pi)
         pd_even = pd - 2*np.pi * (pd > np.pi)
         viewer.add_image(pd_even, scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e) - angle(e bg)", contrast_limits=[-1, 1],
+                         name="angle(e) - angle(e bg)", contrast_limits=[-0.1, 0.1],
                          colormap="PiYG",
                          translate=(ny, 0)
                          )
