@@ -1719,18 +1719,24 @@ def grad_descent(v_ft_start: array,
 
         # FT so can apply proximal operators in real space
         tstart_fft = time.perf_counter()
-        v = ift(v_ft.reshape(v_shape))
+        # v = ift(v_ft.reshape(v_shape))
+        n = get_n(ift(v_ft.reshape(v_shape)), no, wavelength)
+
         tend_fft = time.perf_counter()
 
         # apply TV proximity operators
         # todo: better to apply this to n directly?
         tstart_tv = time.perf_counter()
         if tau_tv != 0:
-            v_real = denoise_tv(v.real, weight=tau_tv, channel_axis=None)
-            v_imag = denoise_tv(v.imag, weight=tau_tv, channel_axis=None)
+            # v_real = denoise_tv(v.real, weight=tau_tv, channel_axis=None)
+            # v_imag = denoise_tv(v.imag, weight=tau_tv, channel_axis=None)
+            n_real = denoise_tv(n.real, weight=tau_tv, channel_axis=None)
+            n_imag = denoise_tv(n.imag, weight=tau_tv, channel_axis=None)
         else:
-            v_real = v.real
-            v_imag = v.imag
+            # v_real = v.real
+            # v_imag = v.imag
+            n_real = n.real
+            n_imag = n.imag
 
         tend_tv = time.perf_counter()
 
@@ -1738,8 +1744,10 @@ def grad_descent(v_ft_start: array,
         tstart_l1 = time.perf_counter()
 
         if tau_lasso != 0:
-            v_real = soft_threshold(tau_lasso, v_real)
-            v_imag = soft_threshold(tau_lasso, v_imag)
+            # v_real = soft_threshold(tau_lasso, v_real)
+            # v_imag = soft_threshold(tau_lasso, v_imag)
+            n_real = soft_threshold(tau_lasso, n_real - no) + no
+            n_imag = soft_threshold(tau_lasso, n_imag)
 
         tend_l1 = time.perf_counter()
 
@@ -1747,18 +1755,20 @@ def grad_descent(v_ft_start: array,
         tstart_constraints = time.perf_counter()
 
         if use_imaginary_constraint:
-            v_imag[v_imag > 0] = 0
+            # v_imag[v_imag > 0] = 0
+            n_imag[n_imag < 0] = 0
 
         if use_real_constraint:
-            # actually ... this is no longer right if there is any imaginary part
-            v_real[v_real > 0] = 0
+            # v_real[v_real > 0] = 0 # this is no longer right if there is any imaginary part
+            n_real[n_real < no] = no
 
         tend_constraints = time.perf_counter()
 
         # ft back to Fourier space
         tstart_fft_back = time.perf_counter()
 
-        v_ft_prox = ft(v_real + 1j * v_imag).ravel()
+        # v_ft_prox = ft(v_real + 1j * v_imag).ravel()
+        v_ft_prox = ft(get_scattering_potential(n_real + 1j * n_imag, no, wavelength)).ravel()
 
         tend_fft_back = time.perf_counter()
 
