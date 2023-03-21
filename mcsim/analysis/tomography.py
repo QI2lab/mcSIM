@@ -19,9 +19,8 @@ from dask.diagnostics import ProgressBar
 from dask_image.ndfilters import convolve as dconvolve
 # plotting
 import matplotlib.pyplot as plt
-from matplotlib.colors import PowerNorm, Normalize
+from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle, Arc
-from matplotlib.cm import ScalarMappable
 import zarr
 #
 from localize_psf import fit, rois, camera, affine
@@ -49,6 +48,7 @@ except ImportError:
 array = Union[np.ndarray, cp.ndarray]
 csr_matrix = Union[sp.csr_matrix, sp_gpu.csr_matrix]
 
+
 class tomography:
     def __init__(self,
                  imgs_raw: da.array,
@@ -66,9 +66,6 @@ class tomography:
         """
         Object to reconstruct optical diffraction tomography data
 
-        Philosophy: only add one of Fourier transform/real space representation of fields and etc. as class attributes.
-        Others should be recalculated if needed.
-
         @param imgs_raw: n1 x n2 x ... x nm x npatterns x ny x nx. Data intensity images
         @param wavelength: wavelength in um
         @param no: background index of refraction
@@ -79,9 +76,11 @@ class tomography:
         @param hologram_frqs_guess: list of length npatterns, where each entry is an array of frequencies contained
          in the given pattern. These arrays may be of different sizes, i.e. different patterns may contain a different
           number of frequencies. But each array should be of size n_i x 2
-        @param imgs_raw_bg: background intensity images
+        @param imgs_raw_bg: background intensity images. If no background images are provided, then a time
+        average of imgs_raw will be used as the background
         @param phase_offsets: phase shifts between images and corresponding background images
         @param axes_names: names of first m + 1 axes
+        @param verbose:
         """
         self.verbose = verbose
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
@@ -103,10 +102,12 @@ class tomography:
         # reference frequency
         # shape = n0 x ... x nm x 2 where imgs have shape n0 x ... x nm x npatterns x ny x nx
         self.reference_frq = np.array(reference_frq_guess) + np.zeros(self.imgs_raw.shape[:-3] + (2,))
+        self.reference_frq_bg = None
 
         # list of length npatterns, with each entry [1 x 1 ... x 1 x nmultiplex x 2]
         # with potential different nmultiplex for each pattern
         self.hologram_frqs = hologram_frqs_guess
+        self.hologram_frqs_bg = None
 
         # physical parameters
         self.wavelength = wavelength
@@ -127,6 +128,11 @@ class tomography:
         self.dz_final = None
         self.step = None
 
+        self.powers_rms = None
+        self.e_powers_rms = None
+        self.powers_rms_bg = None
+        self.e_powers_rms_bg = None
+
         # generate coordinates of ground truth image
         self.dxy = dxy
         self.x = (np.arange(self.nx) - (self.nx // 2)) * dxy
@@ -144,8 +150,7 @@ class tomography:
                                     axis=tuple(range(self.nextra_dims)) + (-3,))
 
         # settings
-        # self.reconstruction_settings = {} # keys will differ depending on recon mode
-
+        self.reconstruction_settings = {}
 
     def estimate_hologram_frqs(self,
                                roi_size_pix: int = 10,
@@ -157,8 +162,11 @@ class tomography:
         looking at FFT
         @param roi_size_pix: ROI size (in pixels) to do frequency fitting on
         @param save_dir:
+        @param use_gpufit:
         @return:
         """
+        self.reconstruction_settings.update({"roi_size_pix": roi_size_pix})
+
         saving = save_dir is not None
 
         if saving:
@@ -174,7 +182,7 @@ class tomography:
                               use_guess_init_params,
                               saving: bool,
                               roi_size_pix: int,
-                              prefix: str="",
+                              prefix: str = "",
                               block_id=None):
             """
 
@@ -185,6 +193,7 @@ class tomography:
             guess in the fit
             @param saving:
             @param roi_size_pix:
+            @param prefix:
             @param block_id: can use this to figure out what blcok we are in when running with dask.array map_blocks()
             @return:
             """
@@ -270,12 +279,28 @@ class tomography:
 
         # todo: fit background images also
         if not use_gpufit or not _gpufit_available:
-            delayed = []
+            delayed_frqs = []
+            delayed_frqs_bg = []
             # loop over patterns
             for ii in range(self.npatterns):
                 n_multiplex_this_pattern = len(self.hologram_frqs[ii])
-                delayed.append(da.map_blocks(get_hologram_frqs,
+                delayed_frqs.append(da.map_blocks(get_hologram_frqs,
                                              self.imgs_raw[..., ii, :, :],
+                                             self.hologram_frqs[ii][:, 0],
+                                             self.hologram_frqs[ii][:, 1],
+                                             use_guess_init_params=False,
+                                             saving=saving,
+                                             roi_size_pix=roi_size_pix,
+                                             prefix=str(ii),
+                                             dtype=float,
+                                             chunks=(1,) * self.nextra_dims + (n_multiplex_this_pattern, 2),
+                                             drop_axis=(-1, -2),
+                                             new_axis=(-1, -2)
+                                             ))
+
+                if not self.use_average_as_background:
+                    delayed_frqs_bg.append(da.map_blocks(get_hologram_frqs,
+                                             self.imgs_raw_bg[..., ii, :, :],
                                              self.hologram_frqs[ii][:, 0],
                                              self.hologram_frqs[ii][:, 1],
                                              use_guess_init_params=False,
@@ -294,9 +319,12 @@ class tomography:
 
             if self.verbose:
                 with ProgressBar():
-                    frqs_hologram = dask.compute(delayed)[0]
+                    frqs_hologram, frqs_hologram_bg = dask.compute([delayed_frqs, delayed_frqs_bg])[0]
             else:
-                frqs_hologram = dask.compute(delayed)[0]
+                frqs_hologram, frqs_hologram_bg = dask.compute([delayed_frqs, delayed_frqs_bg])[0]
+
+            if self.use_average_as_background:
+                frqs_hologram_bg = frqs_hologram
 
         else:
             
@@ -387,7 +415,6 @@ class tomography:
                     frqs_hologram[ii][..., 0] = fit_params[:, 1].reshape(frqs_hologram[ii].shape[:-1]) * dfx + self.fxs[roi[2]]
                     frqs_hologram[ii][..., 1] = fit_params[:, 2].reshape(frqs_hologram[ii].shape[:-1]) * dfy + self.fys[roi[0]]
 
-
             print(f"fit frequencies in {time.perf_counter() - tstart:.2f}s")
 
         # for hologram interference frequencies, use frequency closer to guess value
@@ -398,9 +425,8 @@ class tomography:
         #     frq_dists_neg_ref = np.linalg.norm(frqs_hologram[ii] + ref_frq_exp, axis=-1)
         #     frqs_hologram[ii][frq_dists_neg_ref < frq_dists_ref, :] *= -1
 
-        #return frqs_hologram
         self.hologram_frqs = frqs_hologram
-
+        self.hologram_frqs_bg = frqs_hologram_bg
 
     def estimate_reference_frq(self,
                                mode: str = "fit",
@@ -412,6 +438,8 @@ class tomography:
         @param save_dir:
         @return:
         """
+        
+        self.reconstruction_settings.update({"reference_frequency_mode": mode})
 
         if mode == "fit":
             raise NotImplementedError("mode 'fit' not implemented after multiplexing code update")
@@ -436,6 +464,8 @@ class tomography:
             if np.linalg.norm(frq_ref - self.reference_frq) > np.linalg.norm(frq_ref + self.reference_frq):
                 frq_ref = -frq_ref
 
+            frq_ref_bg = frq_ref
+
             if saving:
                 save_dir = Path(save_dir)
                 save_dir.mkdir(exist_ok=True)
@@ -443,11 +473,12 @@ class tomography:
                 figh_ref_frq.savefig(Path(save_dir, "frequency_reference_diagnostic.png"))
         elif mode == "average":
             frq_ref = np.mean(np.stack([np.mean(f, axis=-2) for f in self.hologram_frqs], axis=-1), axis=-1)
+            frq_ref_bg = np.mean(np.stack([np.mean(f, axis=-2) for f in self.hologram_frqs_bg], axis=-1), axis=-1)
         else:
             raise ValueError(f"'mode' must be '{mode:s}' but must be 'fit' or 'average'")
 
         self.reference_frq = frq_ref
-
+        self.reference_frq_bg = frq_ref_bg
 
     def get_beam_frqs(self):
         """
@@ -607,7 +638,6 @@ class tomography:
             figh.savefig(Path(save_dir, "frequency_mapping.png"))
             plt.close(figh)
 
-
         return xform_dmd2frq
 
     def unmix_holograms(self,
@@ -615,6 +645,7 @@ class tomography:
                         kernel_size: Optional[int] = None,
                         mask: Optional[np.ndarray] = None,
                         fit_phases: bool = False,
+                        correct_amplitudes: bool = True,
                         apodization: Optional[np.ndarray] = None,
                         use_gpu: bool = False):
         """
@@ -627,10 +658,14 @@ class tomography:
         time points that will be used
         @param mask: area to be cut out of hologrms
         @param fit_phases: whether to fit phase differences between image and background holograms
+        @param correct_amplitudes:
         @param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         @param use_gpu:
         @return:
         """
+
+        self.reconstruction_settings.update({"background_average_kernel_size": kernel_size})
+        self.reconstruction_settings.update({"correct_amplitudes": correct_amplitudes})
 
         if use_gpu and _gpu_available:
             xp = cp
@@ -640,14 +675,17 @@ class tomography:
         if apodization is None:
             apodization = np.outer(tukey(self.ny, alpha=0.1), tukey(self.nx, alpha=0.1))
 
-        # ref_frq_da = da.from_array(self.reference_frq, chunks=(1,) * (self.reference_frq.ndim - 1) + (2,))
         # make ref_frq_da[..., ii] broadcastable to same size as raw images so can use with dask array
-        # ref_frq_chunks = (1,) * (self.nextra_dims + 3) + (2,)
-        ref_frq_chunks = self.imgs_raw.chunksize[:-2] + (1, 1, 2)
-
         ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
-                                   chunks=ref_frq_chunks
+                                   chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
                                    )
+
+        if self.use_average_as_background:
+            ref_frq_bg_da = ref_frq_da
+        else:
+            ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
+                                       chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
+                                       )
 
         # #########################
         # get electric field from holograms
@@ -682,9 +720,6 @@ class tomography:
         if self.use_average_as_background:
             holograms_ft_bg = holograms_ft
         else:
-            # todo: I should fit the bg reference frequencies also and use them here
-            ref_frq_bg_da = da.mean(ref_frq_da, axis=bg_average_axes, keepdims=True)
-
             holograms_ft_raw_bg = da.map_blocks(unmix_hologram,
                                                 self.imgs_raw_bg,
                                                 self.dxy,
@@ -724,7 +759,6 @@ class tomography:
                                             holograms_ft_bg[slices],  # reference slices
                                             dtype=complex,
                                             chunks=holograms_ft_bg.chunksize[:-2] + (1, 1)
-                                            # chunks=(1,) * self.nextra_dims + (1, 1, 1)
                                             )
 
             if self.verbose:
@@ -734,11 +768,18 @@ class tomography:
                 fit_params = fit_params_dask.compute()
 
             phase_offsets_bg = xp.angle(fit_params)
+            amp_corr_bg = xp.abs(fit_params)
 
         else:
             phase_offsets_bg = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
+            amp_corr_bg = np.ones(phase_offsets_bg.shape)
 
         self.phase_offsets_bg = phase_offsets_bg
+
+        if correct_amplitudes:
+            self.amp_corr_bg = amp_corr_bg
+        else:
+            self.amp_corr_bg = np.ones(amp_corr_bg.shape)
 
         # #########################
         # determine background electric field
@@ -746,21 +787,30 @@ class tomography:
         print("Computing background electric field")
         if kernel_size is None:
             # average all available
-            holograms_ft_bg_comp = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+            # holograms_ft_bg_comp = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+            #                                axis=bg_average_axes,
+            #                                keepdims=True)
+
+            # todo: testing adjusting normalizations also
+            holograms_ft_bg_comp = da.mean(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg) * self.amp_corr_bg,
                                            axis=bg_average_axes,
                                            keepdims=True)
 
         else:
             # rolling average
-            # # todo: when I do this I run out of memory later ...
             convolve_kernel = da.ones(tuple([kernel_size if ii in bg_average_axes else 1 for ii in range(holograms_ft_bg.ndim)]))
 
-            numerator = dconvolve(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+            # numerator = dconvolve(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg),
+            #                       convolve_kernel,
+            #                       mode="constant",
+            #                       cval=0).rechunk(holograms_ft_bg.chunksize)
+
+            # todo: testing adjusting normalization
+            numerator = dconvolve(holograms_ft_bg * da.exp(1j * self.phase_offsets_bg) * self.amp_corr_bg,
                                   convolve_kernel,
                                   mode="constant",
                                   cval=0).rechunk(holograms_ft_bg.chunksize)
 
-            # todo: should be able to compute denominator much more efficiently...
             # denominator = dconvolve(da.ones(holograms_ft_bg.shape), convolve_kernel, mode="constant", cval=0)
             other_shape = da.ones(tuple([holograms_ft_bg.shape[ii] if ii in bg_average_axes else 1 for ii in range(holograms_ft_bg.ndim)]))
 
@@ -771,14 +821,6 @@ class tomography:
 
             holograms_ft_bg_comp = (numerator / denominator)
 
-            # temporary file approach
-            # tdir = tempfile.TemporaryDirectory()
-            # fname_z = Path(tdir.name) / "bg.zarr"
-            ## temp_zarr = zarr.open(fname_z, "r+")
-            # holograms_ft_bg_comp.to_zarr(fname_z, component="holograms_ft_bg", compute=True)
-            ## holograms_ft_bg_comp = numerator.compute() / denominator
-            # self.holograms_ft_bg = da.from_zarr(fname_z, "holograms_ft_bg", chunks=holograms_ft_bg.chunksize)
-
         if self.verbose:
             with ProgressBar():
                 self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(),
@@ -787,12 +829,12 @@ class tomography:
             self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(),
                                                  chunks=holograms_ft_bg.chunksize)
 
-
         # #########################
         # determine phase offsets of electric field compared to background
         # #########################
         if self.use_average_as_background:
             phase_offsets = self.phase_offsets_bg
+            amp_corr = self.amp_corr_bg
         else:
             if fit_phases:
                 print("computing phase offsets")
@@ -801,7 +843,6 @@ class tomography:
                                                 self.holograms_ft_bg,
                                                 dtype=complex,
                                                 chunks=holograms_ft.chunksize[:-2] + (1, 1),
-                                                # chunks=(1,) * self.nextra_dims + (1, 1, 1)
                                                 )
 
                 if self.verbose:
@@ -811,11 +852,29 @@ class tomography:
                     fit_params = fit_params_dask.compute()
 
                 phase_offsets = xp.angle(fit_params)
+                amp_corr = xp.abs(fit_params)
             else:
                 phase_offsets = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1))
+                amp_corr = np.ones(phase_offsets.shape)
 
         self.phase_offsets = phase_offsets
-        self.holograms_ft = holograms_ft * da.exp(1j * self.phase_offsets)
+
+        if correct_amplitudes:
+            self.amp_corr = amp_corr
+        else:
+            self.amp_corr = np.ones(amp_corr.shape)
+
+        self.holograms_ft = holograms_ft * da.exp(1j * self.phase_offsets) * self.amp_corr
+
+        # #########################
+        # define powers
+        # #########################
+        # self.powers_rms = da.sqrt(da.mean(da.abs(self.imgs_raw) ** 2, axis=(-1, -2)))
+        # if self.imgs_raw_bg is not None:
+        #     self.powers_rms_bg = da.sqrt(da.mean(da.abs(self.imgs_raw_bg) ** 2, axis=(-1, -2)))
+
+        self.e_powers_rms = da.sqrt(da.mean(da.abs(self.holograms_ft) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft.shape[-2:])
+        self.e_powers_rms_bg = da.sqrt(da.mean(da.abs(self.holograms_ft_bg) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft_bg.shape[-2:])
 
     def reconstruct_n(self,
                       mode: str = "rytov",
@@ -840,10 +899,10 @@ class tomography:
                       use_gpu: bool = False):
         """
 
-        @param mode: "born", "rytov", or "bpm
+        @param mode: "born", "rytov", or "bpm"
         @param solver: "naive" or "fista"
         @param scattered_field_regularization:
-        @param niters:
+        @param niters: number of iterations
         @param reconstruction_regularizer:
         @param dxy_sampling_factor:
         @param dz_sampling_factor:
@@ -855,6 +914,11 @@ class tomography:
         @param use_imaginary_constraint:
         @param use_real_constraint:
         @param interpolate_model:
+        @param step: ignored unless mode = "bpm"
+        @param stochastic_descent:
+        @param verbose:
+        @param compute_cost:
+        @param use_gpu:
         @return:
         """
 
@@ -887,7 +951,8 @@ class tomography:
         if mode == "bpm":
             drs_v = (drs_v[0], self.dxy, self.dxy)
             v_size = (v_size[0], self.holograms_ft.shape[-2], self.holograms_ft.shape[-1])
-
+            
+        # must ensure chunks for reconstruction use full pattern sets
         new_chunks = list(self.holograms_ft.chunksize)
         new_chunks[-3] = self.npatterns
 
@@ -898,12 +963,12 @@ class tomography:
             self.holograms_ft = da.map_blocks(xp.asarray,
                                               self.holograms_ft,
                                               dtype=complex,
-                                              meta=xp.array((), dtype=complex)
+                                              meta=xp.array(())
                                               )
             self.holograms_ft_bg = da.map_blocks(xp.asarray,
                                                  self.holograms_ft_bg,
                                                  dtype=complex,
-                                                 meta=xp.array((), dtype=complex)
+                                                 meta=xp.array(())
                                                  )
 
         # ############################
@@ -944,14 +1009,11 @@ class tomography:
             start_mode = "rytov"
 
         # Take first frequencies and assume these are only ones present
-        # in case of multiple beam frequencies, not clear what to do exactly.
+        # todo: in case of multiple beam frequencies, not clear what to do exactly.
         mean_beam_frqs_first = np.stack([f[0] for f in mean_beam_frqs], axis=0)
 
         v_fts_start = da.map_blocks(reconstruction,
                                     eraw_start,
-                                    # mean_beam_frqs[..., 0],
-                                    # mean_beam_frqs[..., 1],
-                                    # mean_beam_frqs[..., 2],
                                     mean_beam_frqs_first[..., 0],
                                     mean_beam_frqs_first[..., 1],
                                     mean_beam_frqs_first[..., 2],
@@ -966,15 +1028,11 @@ class tomography:
                                     no_data_value=0,
                                     dtype=complex,
                                     meta=xp.array(()),
-                                    chunks=(1,) * self.nextra_dims + v_size)
+                                    chunks=eraw_start.chunksize[:-3] + v_size)
 
         if mode == "born" or mode == "rytov":
             if solver == "fista":
                 # define forward model
-                # todo: should I use real beam frqs and generate a model for each data point?
-                # todo: fix for multiple frequencies
-                # todo: easy in the case where all images use same multiplexing
-
                 nmax_multiplex = np.max([len(f) for f in mean_beam_frqs])
                 # nth entry in list is nth set of demultiplexed frequencies
                 # for images which don't have enough multiplexed frequencies, replaced by inf
@@ -1013,6 +1071,8 @@ class tomography:
                     results = grad_descent(v_fts.squeeze(axis=tuple(range(nextra_dims))),
                                            efield_scattered_ft.squeeze(axis=tuple(range(nextra_dims))),
                                            model,
+                                           no,
+                                           wavelength,
                                            step,
                                            niters=niters,
                                            use_fista=True,
@@ -1062,13 +1122,13 @@ class tomography:
 
             # get refractive index
             n = da.map_blocks(recon,
-                              v_fts_start, # initial guess
-                              eraw_start, # data
-                              #masks,
+                              v_fts_start,  # initial guess
+                              eraw_start,  # data
+                              #masks, # todo: add
                               self.no,
                               self.wavelength,
                               self.step,
-                              chunks=(1,) * self.nextra_dims + v_size,
+                              chunks=v_fts_start.chunksize[:-3] + v_size,
                               dtype=complex,
                               meta=xp.array(()),
                               )
@@ -1151,7 +1211,7 @@ class tomography:
             n = da.map_blocks(recon,
                               v_fts_start,  # initial guess
                               da.rechunk(self.holograms_ft, chunks=new_chunks),  # data
-                              da.rechunk(self.holograms_ft_bg, chunks=new_chunks), # background
+                              da.rechunk(self.holograms_ft_bg, chunks=new_chunks),  # background
                               self.no,
                               self.wavelength,
                               self.dz_final,
@@ -1176,23 +1236,27 @@ class tomography:
         else:
             raise ValueError(f"mode must be ..., but was {mode:s}")
 
+        self.reconstruction_settings.update({"mode": mode,
+                                             "solver": solver,
+                                             "scattered_field_regularization": scattered_field_regularization,
+                                             "niters": niters,
+                                             "reconstruction_regularizer": reconstruction_regularizer,
+                                             "dxy_sampling_factor": dxy_sampling_factor,
+                                             "dz_sampling_factor": dz_sampling_factor,
+                                             "z_fov": z_fov,
+                                             "nbin": nbin,
+                                             "tau_tv": tau_tv,
+                                             "tau_lasso": tau_lasso,
+                                             "use_imaginary_constraint": use_imaginary_constraint,
+                                             "use_real_constraint": use_real_constraint,
+                                             "interpolate_model": interpolate_model,
+                                             "step": step,
+                                             "stochastic_descent": stochastic_descent,
+                                             "use_gpu": use_gpu
+                                             }
+                                            )
+
         return n, v_fts_start, drs_v, xform_recon_pix2coords
-
-
-    def get_powers(self):
-        # compute powers
-        powers_rms = da.sqrt(da.mean(da.abs(self.imgs_raw) ** 2, axis=(-1, -2)))
-        e_powers_rms = da.sqrt(da.mean(da.abs(self.holograms_ft) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft.shape[-2:])
-
-        return powers_rms, e_powers_rms
-
-
-    def get_powers_bg(self):
-        # compute powers
-        powers_rms_bg = da.sqrt(da.mean(da.abs(self.imgs_raw_bg) ** 2, axis=(-1, -2)))
-        e_powers_rms_bg = da.sqrt(da.mean(da.abs(self.holograms_ft_bg) ** 2, axis=(-1, -2))) / np.prod(self.holograms_ft_bg.shape[-2:])
-
-        return powers_rms_bg, e_powers_rms_bg
 
 
     def plot_interferograms(self,
@@ -1203,7 +1267,6 @@ class tomography:
 
         @param nmax_to_plot:
         @param save_dir:
-        @param axes_names:
         @return:
         """
         if not hasattr(self, "efield_scattered_ft"):
@@ -1212,7 +1275,6 @@ class tomography:
         if save_dir is not None:
             save_dir = Path(save_dir)
             save_dir.mkdir(exist_ok=True)
-
 
         nmax_to_plot = np.min([nmax_to_plot, np.prod(self.holograms_ft.shape[:-2])])
 
@@ -1260,7 +1322,6 @@ class tomography:
         with ProgressBar():
             dask.compute(*results_interferograms)
 
-
     def plot_frqs(self,
                   index: tuple[int],
                   time_axis: int = 1,
@@ -1273,7 +1334,7 @@ class tomography:
         could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
         @param time_axis:
         @param figsize:
-        @param kwargs:
+        @param kwargs: passed through to matplotlib.pyplot.figure
         @return:
         """
 
@@ -1289,10 +1350,15 @@ class tomography:
             else:
                 slices.append(slice(None))
 
+        # add slices for multiplexed dimension and xy dimension
         slices = tuple(slices + [slice(None), slice(None)])
         squeeze_axes = tuple([ii for ii in range(self.nextra_dims) if ii != time_axis])
 
         ref_slices = slices[:-1]
+
+        # ####################################
+        # hologram frequencies
+        # ####################################
 
         # each element of list should have shape ntimes x nmultiplex x 2
         hologram_frqs_mean = [np.mean(f, axis=1, keepdims=True) for f in self.hologram_frqs]
@@ -1334,6 +1400,138 @@ class tomography:
 
         return figh
 
+    def plot_phases(self,
+                    index: tuple[int],
+                    time_axis: int = 1,
+                    figsize: tuple[float] = (30., 8.),
+                    **kwargs):
+        """
+        Plot phase drift fits versus time for a single slice
+
+        @param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
+        axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
+        could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
+        @param time_axis:
+        @param figsize:
+        @param kwargs: passed through to matplotlib.pyplot.figure
+        @return: figh
+        """
+
+        if len(index) != (self.nextra_dims - 1):
+            raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
+
+        # logic for slicing out desired index
+        slices = []
+        index_counter = 0
+        for ii in range(self.nextra_dims):
+            if ii != time_axis:
+                slices.append(slice(index[index_counter], index[index_counter] + 1))
+            else:
+                slices.append(slice(None))
+
+        # add slices for patterns, y, x
+        slices = tuple(slices + [slice(None), slice(None), slice(None)])
+        squeeze_axes = tuple([ii for ii in range(self.nextra_dims) if ii != time_axis]) + (-1, -2)
+
+        # get slice of phases
+        ph = np.unwrap(self.phase_offsets[slices].squeeze(axis=squeeze_axes), axis=0)
+        ph_bg = np.unwrap(self.phase_offsets_bg[slices].squeeze(axis=squeeze_axes), axis=0)
+
+        # plot
+        figh2 = plt.figure(figsize=figsize, **kwargs)
+        figh2.suptitle(f"index={index}\nphase variation versus time")
+
+        ax = figh2.add_subplot(1, 2, 1)
+        ax.set_title("Phases")
+        ax.plot(ph)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("phase (rad)")
+
+        ax = figh2.add_subplot(1, 2, 2)
+        ax.set_title("Background phases")
+        ax.plot(ph_bg)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("phase (rad)")
+
+        return figh2
+
+    def plot_powers(self,
+                    index: tuple[int],
+                    time_axis: int = 1,
+                    figsize: tuple[float] = (30., 8.),
+                    **kwargs
+                    ):
+        """
+        Plot hologram intensity
+
+        @param index:
+        @param time_axis:
+        @param figsize:
+        @param kwargs:
+        @return figh, epower, epower_bg:
+        """
+
+        if len(index) != (self.nextra_dims - 1):
+            raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
+
+            # logic for slicing out desired index
+        slices = []
+        index_counter = 0
+        for ii in range(self.nextra_dims):
+            if ii != time_axis:
+                slices.append(slice(index[index_counter], index[index_counter] + 1))
+            else:
+                slices.append(slice(None))
+
+        # add slices for patterns
+        slices = tuple(slices + [slice(None)])
+        squeeze_axes = tuple([ii for ii in range(self.nextra_dims) if ii != time_axis])
+
+        # get slice of phases
+        with ProgressBar():
+            computed = dask.compute([self.e_powers_rms[slices].squeeze(axis=squeeze_axes),
+                                     self.e_powers_rms_bg[slices].squeeze(axis=squeeze_axes)],
+                                    scheduler="threads")
+
+        epowers, epowers_bg = computed[0]
+        if isinstance(epowers, cp.ndarray):
+            epowers = epowers.get()
+        if isinstance(epowers_bg, cp.ndarray):
+            epowers_bg = epowers_bg.get()
+
+        # slice amplitudes
+        amp = self.amp_corr[slices].squeeze(axis=squeeze_axes + (-1, -2))
+        amp_bg = self.amp_corr_bg[slices].squeeze(axis=squeeze_axes + (-1, -2))
+
+        # plot
+        figh2 = plt.figure(figsize=figsize, **kwargs)
+        figh2.suptitle(f"index={index}\nhologram magnitude variation versus time")
+
+        ax = figh2.add_subplot(2, 2, 1)
+        ax.set_title("|E| RMS average")
+        ax.plot(epowers)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("|E|")
+
+        ax = figh2.add_subplot(2, 2, 2)
+        ax.set_title("|Ebg| RMS average")
+        ax.plot(epowers_bg)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("|E|")
+
+        ax = figh2.add_subplot(2, 2, 3)
+        ax.set_title("E fit amplitude")
+        ax.plot(amp)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("amp")
+
+        ax = figh2.add_subplot(2, 2, 4)
+        ax.set_title("Ebg bit amplitude")
+        ax.plot(amp_bg)
+        ax.set_xlabel("time step")
+        ax.set_ylabel("amplitude")
+
+        return figh2, epowers, epowers_bg
 
     def show_image(self,
                    index: tuple[int],
@@ -1345,6 +1543,7 @@ class tomography:
 
         @param index:
         @param figsize:
+        @param gamma:
         @return:
         """
         extent = [self.x[0] - 0.5 * self.dxy, self.x[-1] + 0.5 * self.dxy,
@@ -1391,7 +1590,6 @@ class tomography:
         except Exception as e:
             print(e)
 
-
         return figh
 
 
@@ -1416,6 +1614,8 @@ def soft_threshold(t: float,
 def grad_descent(v_ft_start: array,
                  e_measured_ft: array,
                  model: csr_matrix,
+                 no: float,
+                 wavelength: float,
                  step: float,
                  niters: int = 100,
                  use_fista: bool = True,
@@ -1436,10 +1636,12 @@ def grad_descent(v_ft_start: array,
     @param niters: number of iterations
     @param use_fista:
     @param tau_tv:
+    @param tau_lasso:
     @param use_imaginary_constraint:
     @param use_real_constraint:
     @param masks: # todo: add mask to remove points which we don't want to consider
     @param verbose:
+    @param compute_cost:
     @return results: dict
     """
     # put on gpu optionally
@@ -1515,19 +1717,26 @@ def grad_descent(v_ft_start: array,
 
         tend_grad = time.perf_counter()
 
-        # FT so can apply TV
+        # FT so can apply proximal operators in real space
         tstart_fft = time.perf_counter()
-        v = ift(v_ft.reshape(v_shape))
+        # v = ift(v_ft.reshape(v_shape))
+        n = get_n(ift(v_ft.reshape(v_shape)), no, wavelength)
+
         tend_fft = time.perf_counter()
 
         # apply TV proximity operators
+        # todo: better to apply this to n directly?
         tstart_tv = time.perf_counter()
         if tau_tv != 0:
-            v_real = denoise_tv(v.real, weight=tau_tv, channel_axis=None)
-            v_imag = denoise_tv(v.imag, weight=tau_tv, channel_axis=None)
+            # v_real = denoise_tv(v.real, weight=tau_tv, channel_axis=None)
+            # v_imag = denoise_tv(v.imag, weight=tau_tv, channel_axis=None)
+            n_real = denoise_tv(n.real, weight=tau_tv, channel_axis=None)
+            n_imag = denoise_tv(n.imag, weight=tau_tv, channel_axis=None)
         else:
-            v_real = v.real
-            v_imag = v.imag
+            # v_real = v.real
+            # v_imag = v.imag
+            n_real = n.real
+            n_imag = n.imag
 
         tend_tv = time.perf_counter()
 
@@ -1535,8 +1744,10 @@ def grad_descent(v_ft_start: array,
         tstart_l1 = time.perf_counter()
 
         if tau_lasso != 0:
-            v_real = soft_threshold(tau_lasso, v_real)
-            v_imag = soft_threshold(tau_lasso, v_imag)
+            # v_real = soft_threshold(tau_lasso, v_real)
+            # v_imag = soft_threshold(tau_lasso, v_imag)
+            n_real = soft_threshold(tau_lasso, n_real - no) + no
+            n_imag = soft_threshold(tau_lasso, n_imag)
 
         tend_l1 = time.perf_counter()
 
@@ -1544,18 +1755,20 @@ def grad_descent(v_ft_start: array,
         tstart_constraints = time.perf_counter()
 
         if use_imaginary_constraint:
-            v_imag[v_imag > 0] = 0
+            # v_imag[v_imag > 0] = 0
+            n_imag[n_imag < 0] = 0
 
         if use_real_constraint:
-            # actually ... this is no longer right if there is any imaginary part
-            v_real[v_real > 0] = 0
+            # v_real[v_real > 0] = 0 # this is no longer right if there is any imaginary part
+            n_real[n_real < no] = no
 
         tend_constraints = time.perf_counter()
 
         # ft back to Fourier space
         tstart_fft_back = time.perf_counter()
 
-        v_ft_prox = ft(v_real + 1j * v_imag).ravel()
+        # v_ft_prox = ft(v_real + 1j * v_imag).ravel()
+        v_ft_prox = ft(get_scattering_potential(n_real + 1j * n_imag, no, wavelength)).ravel()
 
         tend_fft_back = time.perf_counter()
 
@@ -1564,7 +1777,6 @@ def grad_descent(v_ft_start: array,
 
         q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
 
-        # todo: is it better to apply the proximal operator last or do FISTA as usual?
         if ii == 0 or ii == (niters - 1) or not use_fista:
             v_ft = v_ft_prox
         else:
@@ -1572,7 +1784,6 @@ def grad_descent(v_ft_start: array,
 
         tend_update = time.perf_counter()
 
-        # todo: don't need to compute cost for iteration ... so might omit to save time depending on how costly it is
         # compute cost
         tstart_err = time.perf_counter()
 
@@ -1884,15 +2095,17 @@ def grad_descent_prop_model(v_start: array,
 
     return results
 
+
 def cut_mask(img: array,
              mask: array,
              mask_val: float = 0) -> array:
     """
     Mask points in image and set to a given value. Designed to be used with dask.array map_blocks()
+
     @param img:
     @param mask:
-    @param mask_val:
-    @return:
+    @param mask_val: At any position where mask is True, replace the value of img with this value
+    @return: img_masked
     """
     if isinstance(img, cp.ndarray) and _gpu_available:
         xp = cp
@@ -1919,7 +2132,8 @@ def get_fz(fx: np.ndarray,
     """
     Get z-component of frequency given fx, fy
 
-    @param frqs_2d: nfrqs x 2
+    @param fx: nfrqs
+    @param fy:
     @param no: index of refraction
     @param wavelength: wavelength
     @return frqs_3d:
@@ -1977,12 +2191,12 @@ def get_global_phase_shifts(imgs: array,
                             thresh: Optional[float] = None) -> np.ndarray:
     """
     Given a stack of images and a reference, determine the phase shifts between images, such that
-    imgs * np.exp(1j * phase_shift) ~ img_ref
+    imgs * A*np.exp(1j * phase_shift) ~ img_ref
 
     @param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
-    @param ref_imgs: n_{-m} x ... x n_{-2} x n_{-1} array
+    @param ref_imgs: reference images. Should be broadcastable to same size as imgs.
     @param thresh: only consider points in images where both abs(imgs) and abs(ref_imgs) > thresh
-    @return phase_shifts:
+    @return fit_params:
     """
 
     if isinstance(imgs, cp.ndarray) and _gpu_available:
@@ -2004,14 +2218,15 @@ def get_global_phase_shifts(imgs: array,
         ind = np.unravel_index(ii, loop_shape)
 
         if thresh is None:
-            mask = xp.ones(imgs[ind].shape, dtype=bool)
+            # mask = xp.ones(imgs[ind].shape, dtype=bool)
+            A = xp.expand_dims(imgs[ind].ravel(), axis=1)
+            B = ref_imgs[ind].ravel()
         else:
             mask = xp.logical_and(np.abs(imgs[ind]) > thresh, xp.abs(ref_imgs) > thresh)
+            A = xp.expand_dims(imgs[ind][mask], axis=1)
+            B = ref_imgs[ind][mask]
 
-        A = xp.expand_dims(imgs[ind][mask], axis=1)
-        B = ref_imgs[ind][mask]
         fps, _, _, _ = xp.linalg.lstsq(A, B, rcond=None)
-        # fit_params[ind, :] = fps
         fit_params[ind] = fps
 
     return fit_params
@@ -2050,8 +2265,8 @@ def get_scattering_potential(n: array,
     @param wavelength:
     @return:
     """
-    sp = - (2 * np.pi / wavelength) ** 2 * (n**2 - no**2)
-    return sp
+    v = - (2 * np.pi / wavelength) ** 2 * (n**2 - no**2)
+    return v
 
 
 def get_rytov_phase(eimgs_ft: array,
@@ -2064,8 +2279,8 @@ def get_rytov_phase(eimgs_ft: array,
 
     We calculate \psi_s(r) = log | U_total(r) / U_o(r)| + 1j * unwrap[angle(U_total) - angle(U_o)]
 
-    @param eimgs: n0 x n1 ... x nm x ny x nx
-    @param eimgs_bg: broadcastable to same size as eimgs
+    @param eimgs_ft: n0 x n1 ... x nm x ny x nx
+    @param eimgs_bg_ft: broadcastable to same size as eimgs
     @param float regularization: regularization value. Any pixels where the background
     exceeds this value will be set to zero
     @return psi_rytov:
@@ -2129,30 +2344,24 @@ def get_scattered_field(eimgs_ft: array,
     @param regularization:
     @return efield_scattered_ft: scattered field of same size as eimgs_ft
     """
+    # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
+    # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
 
     if isinstance(eimgs_ft, cp.ndarray) and _gpu_available:
         xp = cp
     else:
         xp = np
 
-    eimgs_ft = xp.asarray(eimgs_ft)
-    eimgs_bg_ft = xp.asarray(eimgs_bg_ft)
-
     def ift(m): return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
     def ft(m): return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-    # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
-    # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
-
-    # compute scattered field
-    holograms_bg = ift(eimgs_bg_ft)
-    holograms = ift(eimgs_ft)
-
+    # compute scattered field in real space
+    holograms_bg = ift(xp.asarray(eimgs_bg_ft))
+    holograms = ift(xp.asarray(eimgs_ft))
     efield_scattered = (holograms - holograms_bg) / (xp.abs(holograms_bg) + regularization)
 
     # Fourier transform
-    # efield_scattered_ft_raw = xp.expand_dims(ft(efield_scattered), axis=tuple(range(nextra_dims)))
     efield_scattered_ft_raw = ft(efield_scattered)
 
     return efield_scattered_ft_raw
@@ -2164,7 +2373,7 @@ def unmix_hologram(img: array,
                    fmax_int: float,
                    fx_ref: np.ndarray,
                    fy_ref: np.ndarray,
-                   apodization: np.ndarray = 1) -> array:
+                   apodization: array = 1) -> array:
     """
     Given an off-axis hologram image, determine the electric field represented
 
@@ -2323,7 +2532,9 @@ def fwd_model_linear(beam_fx,
     """
     Forward model from scattering potential v to imaged electric field after interacting with object
 
-    @param beam_frqs: (nbeams, 3). Normalized to no/wavelength
+    @param beam_fx: nbeams Normalized to no/wavelength
+    @param beam_fy:
+    @param beam_fz:
     @param no: index of refraction
     @param na_det: detection numerical aperture
     @param wavelength:
@@ -2557,6 +2768,7 @@ def reconstruction(efield_fts: array,
     @param v_shape: (nz_v, ny_v, nx_v) grid size for scattering potential reconstruction grid
     @param regularization: regularization factor
     @param mode: "born" or "rytov"
+    @param no_data_value:
     @return v_ft:
     @return drs: full coordinate grid can be obtained from get_coords
     """
@@ -2658,6 +2870,7 @@ def apply_n_constraints(v_ft: array,
     @param beta:
     @param bool use_raar: whether to use the Relaxed-Averaged-Alternating Reflection algorithm
     @param require_real_part_greater_bg:
+    @param print_info:
     @return v_ft_out:
     """
 
@@ -2767,7 +2980,7 @@ def fit_ref_frq(img_ft: np.ndarray,
 
     Note: when the beam angle is non-zero, the dominant tomography frequency component will not be centered
     on this circle, but will be at position f_ref - f_beam
-    @param img:
+    @param img_ft:
     @param dxy:
     @param fmax_int:
     @param search_rad_fraction:
@@ -2914,13 +3127,14 @@ def plot_scattered_angle(img_efield_ft,
 
     @param img_efield_ft:
     @param img_efield_bg_ft:
-    @param img_efield_scattered_ft:
+    @param img_efield_scatt_ft:
     @param beam_frq:
     @param frq_ref:
     @param fmax_int:
-    @param fcoords:
     @param dxy:
     @param title:
+    @param figsize:
+    @param gamma:
     @return figh:
     """
 
@@ -3014,7 +3228,6 @@ def plot_scattered_angle(img_efield_ft,
         ax3.set_ylim(np.flip(flims[ii]))
 
     return figh
-
 
 
 def plot_odt_sampling(frqs: np.ndarray,
@@ -3191,469 +3404,15 @@ def plot_odt_sampling(frqs: np.ndarray,
     return figh
 
 
-def plot_n3d(n: np.ndarray,
-             no: float,
-             coords: Optional[tuple[np.ndarray]] = None,
-             title: str = ""):
-    """
-    Plot 3D index of refraction
-    @param v_ft: 3D Fourier transform of scattering potential
-    @param no: background index of refraction
-    @param coords: (x, y, z)
-    @param title:
-    @return figh:
-    """
-
-    nz_v, ny_v, nx_v = n.shape
-
-    # ####################
-    # real-space coordinates
-    # ####################
-    if coords is None:
-        x_v = np.arange(nx_v) - (nx_v // 2)
-        y_v = np.arange(ny_v) - (ny_v // 2)
-        z_v = np.arange(nz_v) - (nz_v // 2)
-    else:
-        x_v, y_v, z_v = coords
-
-    dxy_v = x_v[1] - x_v[0]
-
-    extent_v_xy = [x_v[0] - 0.5 * dxy_v, x_v[-1] + 0.5 * dxy_v,
-                   y_v[0] - 0.5 * dxy_v, y_v[-1] + 0.5 * dxy_v]
-
-    # ####################
-    # fourier-space coordinates
-    # ####################
-    fx = fft.fftshift(fft.fftfreq(nx_v, dxy_v))
-    dfx_sp = fx[1] - fx[0]
-    fy = fft.fftshift(fft.fftfreq(ny_v, dxy_v))
-    dfy_sp = fy[1] - fy[0]
-
-    extent_fxy = [fx[0] - 0.5 * dfx_sp, fx[-1] + 0.5 * dfx_sp,
-                  fy[0] - 0.5 * dfy_sp, fy[-1] + 0.5 * dfy_sp]
-
-    # FT
-    n_ft = fft.fftshift(fft.fftn(fft.ifftshift(n)))
-
-    vmax_real = 1.5 * np.percentile((np.real(n) - no), 99.99)
-    if vmax_real <= 0:
-        vmax_real = 1e-12
-
-    vmax_imag = 1.5 * np.percentile(np.imag(n), 99.99)
-    if vmax_imag <= 0:
-        vmax_imag = 1e-12
-
-    vmax_n_ft = 1.5 * np.percentile(np.abs(n_ft), 99.99)
-    if vmax_n_ft <= 0:
-        vmax_n_ft = 1e-12
-
-    # plots
-    fmt_fn = lambda x: "%0.6f" % x
-
-    figh = plt.figure(figsize=(16, 8))
-    figh.suptitle(f"Index of refraction, {title:s}")
-    grid = figh.add_gridspec(4, nz_v + 1)
-
-    for ii in range(nz_v):
-        ax = figh.add_subplot(grid[0, ii])
-        ax.set_title("%0.1fum" % z_v[ii])
-        im = ax.imshow(np.real(n[ii]) - no,
-                       vmin=-vmax_real, vmax=vmax_real, cmap="RdBu",
-                       origin="lower", extent=extent_v_xy)
-        im.format_cursor_data = fmt_fn
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-        if ii == 0:
-            ax.set_ylabel("real(n) - no")
-
-        ax = figh.add_subplot(grid[1, ii])
-        im = ax.imshow(np.imag(n[ii]),
-                       vmin=-vmax_imag, vmax=vmax_imag, cmap="RdBu",
-                       origin="lower", extent=extent_v_xy)
-        im.format_cursor_data = fmt_fn
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("imag(n)")
-
-        ax = figh.add_subplot(grid[2, ii])
-        im = ax.imshow(np.abs(n_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_n_ft),
-                       origin="lower", extent=extent_fxy)
-        im.format_cursor_data = fmt_fn
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("|n(f)|")
-
-        # ax = figh.add_subplot(grid[3, ii])
-        # im = ax.imshow(np.abs(v_ft[ii]), cmap="copper", norm=PowerNorm(gamma=0.1, vmin=0, vmax=vmax_sp_ft),
-        #                origin="lower", extent=extent_fxy)
-        # im.format_cursor_data = fmt_fn
-        # if ii == 0:
-        #     ax.set_ylabel("|F(f)|")
-        # ax.set_xticks([])
-        # ax.set_yticks([])
-
-    ax = figh.add_subplot(grid[0, nz_v])
-    ax.axis("off")
-    plt.colorbar(ScalarMappable(norm=Normalize(vmin=-vmax_real, vmax=vmax_real), cmap="RdBu"), ax=ax)
-
-    ax = figh.add_subplot(grid[1, nz_v])
-    ax.axis("off")
-    plt.colorbar(ScalarMappable(norm=Normalize(vmin=-vmax_imag, vmax=vmax_imag), cmap="RdBu"), ax=ax)
-
-    return figh
-
-
-def compare_v3d(v_ft: np.ndarray,
-                v_ft_gt: np.ndarray,
-                ttl: str = "",
-                figsize: tuple[float] = (35, 20),
-                gamma: float = 0.1,
-                nmax_columns: int = 21):
-    """
-    Display slices of scattering potential in 3D. Show both real-space and Fourier-space
-
-    @param v_ft:
-    @param v_ft_gt:
-    @param ttl:
-    @param figsize:
-    @param gamma: gamma applied to FT images only
-    @param nmax_columns: maximum number of columns per figure. If number of slices of v_ft exceeds this, create more
-    figures to display
-    @return fighs: list of figures displaying real-space scattering potential
-    @return fighs_ft:
-    """
-
-    fighs = []
-    fighs_ft = []
-
-    v = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft)))
-    v_gt = fft.fftshift(fft.ifftn(fft.ifftshift(v_ft_gt)))
-
-    # set display limits
-    vminr = np.min([1.2 * np.min(v_gt.real), -0.01])
-    vmaxr = 0
-    vmini = np.min([1.2 * np.min(v_gt.imag), -0.1])
-    vmaxi = -vmini
-    vmink = 0
-    vmaxk = 1.2 * np.max(np.abs(v_ft_gt))
-
-    # create figures
-    nmax_columns = np.min([nmax_columns, v.shape[0]])
-    nfigs = int(np.ceil(v.shape[0] / nmax_columns))
-
-    for ii in range(nfigs):
-        figh = plt.figure(figsize=figsize)
-        figh.suptitle(f"{ttl:s} ({ii + 1:d}/{nfigs:d})")
-        grid = figh.add_gridspec(nrows=6, ncols=nmax_columns + 1, width_ratios=[1] * nmax_columns + [0.1])
-
-        fighs.append(figh)
-
-    for ii in range(v.shape[0]):
-        fig_num = ii // nmax_columns
-        col = ii - (fig_num * nmax_columns)
-        figh = fighs[fig_num]
-
-        ax = figh.add_subplot(grid[0, col])
-        im = ax.imshow(v[ii].real, vmin=vminr, vmax=vmaxr, cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("Re(v)")
-
-        if col == (nmax_columns - 1):
-            ax = figh.add_subplot(grid[0, col + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh.add_subplot(grid[1, col])
-        im = ax.imshow(v_gt[ii].real, vmin=vminr, vmax=vmaxr, cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("Re(v gt)")
-
-        if col == (nmax_columns - 1):
-            ax = figh.add_subplot(grid[1, col + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh.add_subplot(grid[2, col])
-        im = ax.imshow(v[ii].real - v_gt[ii].real, vmin=vminr, vmax=-vminr, cmap="PiYG")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("Re(v - v gt)")
-
-        if col == (nmax_columns - 1):
-            ax = figh.add_subplot(grid[2, col + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh.add_subplot(grid[3, col])
-        im = ax.imshow(v[ii].imag, vmin=vmini, vmax=vmaxi, cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("Im(v)")
-
-        if col == (nmax_columns - 1):
-            ax = figh.add_subplot(grid[3, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh.add_subplot(grid[4, ii])
-        im = ax.imshow(v_gt[ii].imag, vmin=vmini, vmax=vmaxi, cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("Im(v gt)")
-
-        if col == (nmax_columns - 1):
-            ax = figh.add_subplot(grid[4, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh.add_subplot(grid[5, ii])
-        im = ax.imshow(v[ii].imag - v_gt[ii].imag, vmin=vmini, vmax=vmaxi, cmap="PiYG")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("Im(v - v gt)")
-
-        if col == (nmax_columns - 1):
-            ax = figh.add_subplot(grid[5, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-    # k-space
-    for ii in range(nfigs):
-        figh_ft = plt.figure(figsize=figsize)
-        figh_ft.suptitle(f"{ttl:s} k-space ({ii + 1:d}/{nfigs:d})")
-        grid = figh_ft.add_gridspec(nrows=5, ncols=v.shape[0] + 1, width_ratios=[1] * v.shape[0] + [0.1])
-
-        fighs_ft.append(figh_ft)
-
-    for ii in range(v.shape[0]):
-        fig_num = ii // nmax_columns
-        col = ii - (fig_num * nmax_columns)
-        figh_ft = fighs_ft[fig_num]
-
-        ax = figh_ft.add_subplot(grid[0, col])
-        im = ax.imshow(np.abs(v_ft[ii]), norm=PowerNorm(gamma=gamma, vmin=vmink, vmax=vmaxk), cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("|V(k)|")
-
-        if col == (nmax_columns - 1):
-            ax = figh_ft.add_subplot(grid[0, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh_ft.add_subplot(grid[1, col])
-        im = ax.imshow(np.abs(v_ft_gt[ii]), norm=PowerNorm(gamma=gamma, vmin=vmink, vmax=vmaxk), cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("|V gt(k)|")
-
-        if col == (nmax_columns - 1):
-            ax = figh_ft.add_subplot(grid[1, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh_ft.add_subplot(grid[2, col])
-        im = ax.imshow(np.abs(v_ft[ii] - v_ft_gt[ii]), norm=PowerNorm(gamma=gamma, vmin=vmink, vmax=vmaxk), cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("|V - V gt(k)|")
-
-        if col == (nmax_columns - 1):
-            ax = figh_ft.add_subplot(grid[2, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh_ft.add_subplot(grid[3, col])
-        im = ax.imshow(np.angle(v_ft[ii]), vmin=-np.pi, vmax=np.pi, cmap="RdBu")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("Angle(V(k))")
-
-        if col == (nmax_columns - 1):
-            ax = figh_ft.add_subplot(grid[3, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh_ft.add_subplot(grid[4, col])
-        im = ax.imshow(np.angle(v_ft_gt[ii]), vmin=-np.pi, vmax=np.pi, cmap="RdBu")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if col == 0:
-            ax.set_ylabel("Angle(V gt(k))")
-
-        if col == (nmax_columns - 1):
-            ax = figh_ft.add_subplot(grid[4, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-    return fighs, fighs_ft
-
-
-def compare_escatt(e: np.ndarray,
-                   e_gt: np.ndarray,
-                   beam_frqs: np.ndarray,
-                   dxy: float,
-                   ttl: str = "",
-                   figsize: tuple[float] = (35, 20),
-                   gamma: float = 0.1):
-    """
-    Compare two scattered electric field arrays
-
-    @param e:
-    @param e_gt:
-    @param beam_frqs:
-    @param dxy:
-    @param ttl:
-    @param figsize:
-    @return figh, figh_ft:
-    """
-    nbeams, ny, nx = e.shape
-
-    x, y  = get_coords((dxy, dxy), (nx, ny))
-
-    e_gt_ft = fft.fftshift(fft.fft2(fft.fftshift(e_gt, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-    e_ft = fft.fftshift(fft.fft2(fft.fftshift(e, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-    # display limits
-    vmaxe = 1.2 * np.max(np.abs(e_gt))
-    vmaxek = 1.2 * np.max(np.abs(e_gt_ft))
-
-    # compare electric fields
-    figh = plt.figure(figsize=figsize)
-    figh.suptitle(f"{ttl:s} real space")
-    grid = figh.add_gridspec(nrows=5, ncols=nbeams + 1, width_ratios=[1] * nbeams + [0.1])
-    for ii in range(nbeams):
-        shift_fact = np.exp(-1j * 2*np.pi * (beam_frqs[ii, 0] * x + beam_frqs[ii, 1] * y))
-
-        ax = figh.add_subplot(grid[0, ii])
-        im = ax.imshow(np.abs(e[ii]), vmin=0, vmax=vmaxe, cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("|E(r)|")
-
-        if ii == (nbeams - 1):
-            ax = figh.add_subplot(grid[0, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-
-        ax = figh.add_subplot(grid[1, ii])
-        im = ax.imshow(np.abs(e_gt[ii]), vmin=0, vmax=vmaxe, cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("|E gt(r)|")
-
-        if ii == (nbeams - 1):
-            ax = figh.add_subplot(grid[1, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh.add_subplot(grid[2, ii])
-        im = ax.imshow(np.abs(e[ii] - e_gt[ii]), vmin=0, vmax=vmaxe, cmap="Greens")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("|E - E gt(r)|")
-
-        if ii == (nbeams - 1):
-            ax = figh.add_subplot(grid[2, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh.add_subplot(grid[3, ii])
-        im = ax.imshow(np.angle(e[ii] * shift_fact), vmin=-np.pi, vmax=np.pi, cmap="RdBu")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("ang(E(r)) shifted")
-
-        if ii == (nbeams - 1):
-            ax = figh.add_subplot(grid[3, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh.add_subplot(grid[4, ii])
-        im = ax.imshow(np.angle(e_gt[ii] * shift_fact), vmin=-np.pi, vmax=np.pi, cmap="RdBu")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("ang(E gt(r)) shifted")
-
-        if ii == (nbeams - 1):
-            ax = figh.add_subplot(grid[4, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-    # k-space
-    figh_ft = plt.figure(figsize=figsize)
-    figh_ft.suptitle(f"{ttl:s} k-space")
-    grid = figh_ft.add_gridspec(nrows=5, ncols=nbeams + 1, width_ratios=[1] * nbeams + [0.1])
-    for ii in range(nbeams):
-        ax = figh_ft.add_subplot(grid[0, ii])
-        im = ax.imshow(np.abs(e_ft[ii]), norm=PowerNorm(gamma=gamma, vmin=0, vmax=vmaxek), cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("|E(k)|")
-
-        if ii == (nbeams - 1):
-            ax = figh_ft.add_subplot(grid[0, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh_ft.add_subplot(grid[1, ii])
-        im = ax.imshow(np.abs(e_gt_ft[ii]), norm=PowerNorm(gamma=gamma, vmin=0, vmax=vmaxek), cmap="bone")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("|E gt(k)|")
-
-        if ii == (nbeams - 1):
-            ax = figh_ft.add_subplot(grid[1, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh_ft.add_subplot(grid[2, ii])
-        im = ax.imshow(np.abs(e_ft[ii] - e_gt_ft[ii]), norm=PowerNorm(gamma=gamma, vmin=0, vmax=vmaxek), cmap="Greens")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("|E - E gt(k)|")
-
-        if ii == (nbeams - 1):
-            ax = figh_ft.add_subplot(grid[2, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh_ft.add_subplot(grid[3, ii])
-        im = ax.imshow(np.angle(e_ft[ii]), vmin=-np.pi, vmax=np.pi, cmap="RdBu")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("ang(E(k))")
-
-        if ii == (nbeams - 1):
-            ax = figh_ft.add_subplot(grid[3, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-        ax = figh_ft.add_subplot(grid[4, ii])
-        im = ax.imshow(np.angle(e_gt_ft[ii]), vmin=-np.pi, vmax=np.pi, cmap="RdBu")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        if ii == 0:
-            ax.set_ylabel("ang(E gt(k))")
-
-        if ii == (nbeams - 1):
-            ax = figh_ft.add_subplot(grid[4, ii + 1])
-            plt.colorbar(im, cax=ax)
-
-    return figh, figh_ft
-
-
 def display_tomography_recon(recon_fname: str,
                              raw_data_fname: Optional[str] = None,
                              show_raw: bool = True,
                              show_raw_ft: bool = False,
                              show_v_fft: bool = False,
                              show_efields: bool = False,
+                             compute: bool = False,
+                             time_axis: int = 1,
+                             time_range: Optional[list[int]] = None,
                              block_while_display: bool = True):
     """
     Display reconstruction results and (optionally) raw data in Napari
@@ -3720,51 +3479,112 @@ def display_tomography_recon(recon_fname: str,
     # load images
     # plot index of refraction
     n_extra_dims = img_z.n.ndim - 4
-    n = da.from_zarr(img_z.n).rechunk((1,) * n_extra_dims + (1, 1, ny_sp, nx_sp))
+    slices = []
+    for ii in range(n_extra_dims):
+        if ii == time_axis:
+            if time_range is not None:
+                slices.append(slice(time_range[0], time_range[1]))
+            else:
+                slices.append(slice(None))
+        else:
+            slices.append(slice(None))
+    slices = tuple(slices)
+
+    slices_n = slices + (slice(None), slice(None), slice(None), slice(None))
+
+    n = da.from_zarr(img_z.n).rechunk((1,) * n_extra_dims + (1, 1, ny_sp, nx_sp))[slices_n]
     n_r = n[..., 0, :, :]
     n_im = n[..., 1, :, :]
 
     # broadcasting
     dummy_shape_array = da.from_array(np.zeros((1,) * n_extra_dims + (npatterns, nz_sp, 1, 1)))
-    n_im_stack, n_r_stack, _ = da.broadcast_arrays(da.expand_dims(n_im, axis=-4),
-                                                   da.expand_dims(n_r, axis=-4),
-                                                   dummy_shape_array)
+
+    if compute:
+        print("loading n")
+        with ProgressBar():
+            c = dask.compute([n_r, n_im])
+            n_r, n_im = c[0]
+            n_im_stack, n_r_stack, _ = np.broadcast_arrays(np.expand_dims(n_im, axis=-4),
+                                                           np.expand_dims(n_r, axis=-4),
+                                                           dummy_shape_array.compute())
+    else:
+        n_im_stack, n_r_stack, _ = da.broadcast_arrays(da.expand_dims(n_im, axis=-4),
+                                                       da.expand_dims(n_r, axis=-4),
+                                                       dummy_shape_array)
+
 
     if show_raw:
-        imgs = da.from_zarr(raw_data.cam2.odt)
+        slices_img = slices + (slice(None), slice(None), slice(None))
+
+        imgs = da.from_zarr(raw_data.cam2.odt)[slices_img]
         imgs_raw_ft = da.fft.fftshift(da.fft.fft2(da.fft.ifftshift(imgs, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-        ims_raw_stack, img_raw_ft_stack, _ = da.broadcast_arrays(da.expand_dims(imgs, axis=-3),
-                                                                 da.expand_dims(imgs_raw_ft, axis=-3),
-                                                                 dummy_shape_array)
+        if compute:
+            print("loading raw images")
+            with ProgressBar():
+                c = dask.compute([imgs, imgs_raw_ft])
+                imgs, img_raw_ft = c[0]
+
+                ims_raw_stack, img_raw_ft_stack, _ = np.broadcast_arrays(np.expand_dims(imgs, axis=-3),
+                                                                         np.expand_dims(imgs_raw_ft, axis=-3),
+                                                                         dummy_shape_array.compute())
+
+        else:
+            ims_raw_stack, img_raw_ft_stack, _ = da.broadcast_arrays(da.expand_dims(imgs, axis=-3),
+                                                                     da.expand_dims(imgs_raw_ft, axis=-3),
+                                                                     dummy_shape_array)
+
 
     if show_efields:
         csize = list(img_z.efield_scattered_ft.chunks)
         csize[-3] = img_z.efield_scattered_ft.shape[-3]
 
+        slices_e = slices + (slice(None), slice(None), slice(None))
+
         # scattered field
-        escatt_load = da.from_zarr(img_z.efield_scattered_ft).rechunk(csize)
+        escatt_load = da.from_zarr(img_z.efield_scattered_ft).rechunk(csize)[slices_e]
         escatt = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(escatt_load, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
         # measured field
-        e_load_ft = da.from_zarr(img_z.efields_ft).rechunk(csize)
+        e_load_ft = da.from_zarr(img_z.efields_ft).rechunk(csize)[slices_e]
         e = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(e_load_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
         # background field
-        ebg_load_ft = da.from_zarr(img_z.efield_bg_ft).rechunk(csize)
+        ebg_load_ft = da.from_zarr(img_z.efield_bg_ft).rechunk(csize)[slices_e]
         ebg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(ebg_load_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        # rytov phi
+        try:
+            erytov_ft = da.from_zarr(img_z.phi_rytov_ft).rechunk(csize)[slices_e]
+            erytov = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(erytov_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+        except:
+            erytov = da.zeros(e.shape, chunks=e.chunksize)
 
         # compute electric field power
         efield_power = da.mean(da.abs(e), axis=(-1, -2), keepdims=True)
-        # efield_power_stack = da.stack([efield_power] * nz_sp, axis=-3)
 
-        efield_power_stack, _ = da.broadcast_arrays(da.expand_dims(efield_power, axis=-3),
-                                                    dummy_shape_array)
+        if compute:
+            print("loading electric fields")
+            with ProgressBar():
+                c = dask.compute([escatt, e, ebg, erytov])
+                escatt, e, ebg, erytov = c[0]
 
-        escatt_stack, estack, ebg_stack, _ = da.broadcast_arrays(da.expand_dims(escatt, axis=-3),
-                                                                 da.expand_dims(e, axis=-3),
-                                                                 da.expand_dims(ebg, axis=-3),
-                                                                 dummy_shape_array)
+                efield_power_stack, _ = np.broadcast_arrays(np.expand_dims(efield_power, axis=-3), dummy_shape_array.compute())
+
+            escatt_stack, estack, ebg_stack, erytov_stack, _ = np.broadcast_arrays(np.expand_dims(escatt, axis=-3),
+                                                                                   np.expand_dims(e, axis=-3),
+                                                                                   np.expand_dims(ebg, axis=-3),
+                                                                                   np.expand_dims(erytov, axis=-3),
+                                                                                   dummy_shape_array)
+
+        else:
+            efield_power_stack, _ = da.broadcast_arrays(da.expand_dims(efield_power, axis=-3), dummy_shape_array)
+
+            escatt_stack, estack, ebg_stack, erytov_stack, _ = da.broadcast_arrays(da.expand_dims(escatt, axis=-3),
+                                                                                   da.expand_dims(e, axis=-3),
+                                                                                   da.expand_dims(ebg, axis=-3),
+                                                                                   da.expand_dims(erytov, axis=-3),
+                                                                                   dummy_shape_array)
 
     # ######################
     # create viewer
@@ -3815,7 +3635,7 @@ def display_tomography_recon(recon_fname: str,
     coords = [c.ravel() for c in coords]
     points = np.stack(coords, axis=1)
 
-    dphi = da.from_zarr(img_z.phase_shifts)
+    dphi = da.from_zarr(img_z.phase_shifts)[slices + (slice(None), slice(None), slice(None))]
     dphi_stack = da.stack([dphi] * nz_sp, axis=-3)
 
     if show_efields:
@@ -3832,20 +3652,6 @@ def display_tomography_recon(recon_fname: str,
                             },
                       scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
                       )
-
-    # viewer.add_image(dphi_stack, scale=(dz_v / dxy_v, ny, nx),
-    #                  name="phase shifts",
-    #                  contrast_limits=[-np.pi, np.pi],
-    #                  colormap="PiYG",
-    #                  translate=(2*ny + ny / 2, nx_raw + nx / 2)
-    #                  )
-
-    # viewer.add_image(, scale=(dz_v / dxy_v, ny, nx),
-    #                  name="efield amp",
-    #                  contrast_limits=[0, 1000],
-    #                  colormap="fire",
-    #                  translate=(2 * ny + ny / 2, nx_raw + nx + nx / 2)
-    #                  )
 
     # ######################
     # show ROI in image
@@ -3883,7 +3689,7 @@ def display_tomography_recon(recon_fname: str,
     # electric fields
     # ######################
     if show_efields:
-        # display amplitude and phase
+        # E scattered field
         viewer.add_image(da.abs(escatt_stack), scale=(dz_v / dxy_v, 1, 1),
                          name="|e scatt|", contrast_limits=[0, 1.2],
                          translate=(0, nx_raw))
@@ -3894,35 +3700,82 @@ def display_tomography_recon(recon_fname: str,
                          colormap="PiYG",
                          translate=(ny, nx_raw))
 
-        # display amplitude and phase
-        viewer.add_image(da.abs(estack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|e|", contrast_limits=[0, 500],
+        # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + nx // 2]])
+        # viewer.add_points(points + offset,
+        #                   features={"dphi": np.zeros(len(points)),},
+        #                   text={"string": "{dphi:.0f} E scattered",
+        #                         "size": 10,
+        #                         "color": "red"
+        #                         },
+        #                   scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
+        #                   )
+
+        # rytov
+        viewer.add_image(da.abs(erytov_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|e scatt|", contrast_limits=[0, 1.2],
                          translate=(0, nx_raw + nx))
 
-        #
-        viewer.add_image(da.angle(estack), scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e)", contrast_limits=[-np.pi, np.pi],
+        viewer.add_image(da.angle(erytov_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="angle(e rytov)", contrast_limits=[-np.pi, np.pi],
                          colormap="PiYG",
                          translate=(ny, nx_raw + nx))
 
-        # display amplitude and phase
+        # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + nx + nx // 2]])
+        # viewer.add_points(points + offset,
+        #                   features={"dphi": np.zeros(len(points)), },
+        #                   text={"string": "{dphi:.0f} E Rytov",
+        #                         "size": 10,
+        #                         "color": "red"
+        #                         },
+        #                   scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
+        #                   )
+
+        # measured field
+        viewer.add_image(da.abs(estack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|e|", contrast_limits=[0, 500],
+                         translate=(0, nx_raw + 2*nx))
+
+        viewer.add_image(da.angle(estack), scale=(dz_v / dxy_v, 1, 1),
+                         name="angle(e)", contrast_limits=[-np.pi, np.pi],
+                         colormap="PiYG",
+                         translate=(ny, nx_raw + 2*nx))
+
+        # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + 2*nx + nx // 2]])
+        # viewer.add_points(points + offset,
+        #                   features={"dphi": np.zeros(len(points)), },
+        #                   text={"string": "{dphi:.0f} E",
+        #                         "size": 10,
+        #                         "color": "red"
+        #                         },
+        #                   scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
+        #                   )
+
+        # background field
         viewer.add_image(da.abs(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
                          name="|e bg|", contrast_limits=[0, 500],
-                         translate=(0, nx_raw + 2 * nx))
+                         translate=(0, nx_raw + 3 * nx))
 
-        #
         viewer.add_image(da.angle(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
                          name="angle(e bg)", contrast_limits=[-np.pi, np.pi],
                          colormap="PiYG",
-                         translate=(ny, nx_raw + 2 * nx))
+                         translate=(ny, nx_raw + 3 * nx))
 
-        # phase diff
+        # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + 3*nx + nx // 2]])
+        # viewer.add_points(points + offset,
+        #                   features={"dphi": np.zeros(len(points)), },
+        #                   text={"string": "{dphi:.0f} E background",
+        #                         "size": 10,
+        #                         "color": "red"
+        #                         },
+        #                   scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
+        #                   )
+
+        # phase difference between measured and bg
         pd = da.mod(da.angle(estack) - da.angle(ebg_stack), 2 * np.pi)
         pd_even = pd - 2*np.pi * (pd > np.pi)
         viewer.add_image(pd_even, scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e) - angle(e bg)", contrast_limits=[-1, 1],
+                         name="angle(e) - angle(e bg)", contrast_limits=[-0.1, 0.1],
                          colormap="PiYG",
-                         # translate=(2*ny, nx_raw + 2 * nx)
                          translate=(ny, 0)
                          )
 
