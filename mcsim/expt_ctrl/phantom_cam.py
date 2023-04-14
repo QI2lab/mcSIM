@@ -848,9 +848,9 @@ class phantom_cam(camera):
         """
         getattr(self._phcon, "PhSendSoftwareTrigger")(self.cam_index)
 
-    def get_params(self, cine_no=1):
+    def get_params(self, cine_no: int = 1):
         """
-        Convert the output to a dictionary using struct2dict
+        The user may convert the output to a dictionary using struct2dict
         """
         aqParams = tagACQUIPARAMS()
         getattr(self._phcon, "PhGetCineParams")(self.cam_index, ct.c_int(cine_no), ct.byref(aqParams), None)
@@ -1114,8 +1114,8 @@ class phantom_cam(camera):
     def stopSequenceAcquisition(self):
         self.record_cine(0)  # stop recording
 
-    def startContinuousSequenceAcquisition(self, *args):
-        pass
+    def startContinuousSequenceAcquisition(self, exposure_ms: float = 0.):
+        self.setExposure(exposure_ms)
 
     def getImageWidth(self):
         ch = ct.pointer(ct.c_int())
@@ -1160,6 +1160,20 @@ class phantom_cam(camera):
 
         return (exposure.value / 1e3)
 
+    def setExposure(self, exposure_ms: float, cine_no: int = 0):
+        """
+        Set camera exposure time
+        """
+        exposure_ns = int(np.round(exposure_ms * 1e6))
+
+        # older parameters like exposure are not set using the PhSetCineInfo function, but instead by setting
+        # the acquisition parameters sturcture
+
+        acq_params = self.setAcqParams(cine_no=cine_no, Exposure=exposure_ns)
+        exposure_set_ms = acq_params.Exposure / 1e6
+
+        return exposure_set_ms
+
     def setAcqParams(self, cine_no, **kwargs):
         """
         Set acquisition parameters. Give as keyword arguments. Any acquisition parameters not provided will keep
@@ -1177,7 +1191,7 @@ class phantom_cam(camera):
         result = getattr(self._phcon, "PhSetCineParams")(self.cam_index, cn, ct.byref(params))
         if result != 0:
             raise Exception(self.get_error(result))
-        # paramsa are input and will also contain actual output values
+        # params are input and will also contain actual output values
 
         return params
 
@@ -1190,8 +1204,6 @@ class phantom_cam(camera):
     def getCameraDevice(self):
         return self.name
 
-    def setExposure(self):
-        pass
 
 
 # ###############################
