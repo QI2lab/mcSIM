@@ -741,7 +741,6 @@ class tagCINESTATUS(ct.Structure):
         ("Triggered", ct.c_bool)
     ]
 
-
 class tagIMRANGE(ct.Structure):
     _fields_ = [
         ("First", ct.c_int),
@@ -1204,8 +1203,6 @@ class phantom_cam(camera):
     def getCameraDevice(self):
         return self.name
 
-
-
 # ###############################
 # load Cine
 # ###############################
@@ -1559,8 +1556,6 @@ def imread_cine(fname):
                 "setup_info": setup_info}
 
     return imgs, metadata
-
-
 
 
 if __name__ == "__main__":
