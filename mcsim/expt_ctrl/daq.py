@@ -49,7 +49,8 @@ class nidaq(daq):
     def __init__(self,
                  dev_name: str = "Dev1",
                  digital_lines: str = "port0/line0:15",
-                 analog_lines: list = ["ao0", "ao1", "ao2"],
+                 analog_lines: tuple = ("ao0", "ao1", "ao2"),
+                 analog_input_lines: tuple[str] = ("ai0",),
                  digital_line_names: Optional[dict] = None,
                  analog_line_names: Optional[dict] = None,
                  presets: Optional[dict] = None,
@@ -79,7 +80,7 @@ class nidaq(daq):
 
         self.dev_name = dev_name
 
-        # digital lines
+        # digital output lines
         self.digital_lines = f"/{dev_name}/{digital_lines}" # todo: get rid of in favor of digital_lines_addresses
         self.n_digital_lines = 16 # todo: want to detect not hard code
         self.digital_lines_addresses = [f"/{dev_name:s}/port0/line{ii:d}" for ii in range(self.n_digital_lines)]
@@ -87,20 +88,25 @@ class nidaq(daq):
         self.last_known_digital_val = np.zeros(self.n_digital_lines, dtype=np.uint8)
         self.do_re = ".*Dev(\d+).*port(\d+).*line(\d+)"
 
-        # analog lines
+        # analog output lines
         self.analog_lines = [f"/{dev_name}/{line}" for line in analog_lines]
         self.n_analog_lines = len(self.analog_lines)
         self.analog_line_names = analog_line_names
         self.last_known_analog_val = np.zeros(self.n_analog_lines, dtype=float)
-        self.ao_re = ".*Dev(\d+).*ao(\d+)"
+        # self.ao_re = ".*Dev(\d+).*ao(\d+)"
+
+        # analog input lines
+        self.analog_input_line_names = [f"/{dev_name}/{line}" for line in analog_input_lines]
+        self.n_analog_inputs = len(self.analog_input_line_names)
 
         # preset states
         self.presets = presets
 
-        # task handles. generally do not access directly
+        # task handles
         self._task_do = None
         self._task_ao = None
         self._task_di = None
+        self._task_ai = None
 
         # any code which requires device to already be present should go inside this block
         self.initialized = initialize
@@ -173,8 +179,16 @@ class nidaq(daq):
             raise ValueError(f"array must have shape {self.n_digital_lines:d} but had shape {array.shape}")
 
         self._task_do = daqmx.Task()
-        self._task_do.CreateDOChan(self.digital_lines, "", daqmx.DAQmx_Val_ChanForAllLines)
-        self._task_do.WriteDigitalLines(1, 1, 10.0, daqmx.DAQmx_Val_GroupByChannel, array, None, None)
+        self._task_do.CreateDOChan(self.digital_lines,
+                                   "",
+                                   daqmx.DAQmx_Val_ChanForAllLines)
+        self._task_do.WriteDigitalLines(1,
+                                        1,
+                                        10.0,
+                                        daqmx.DAQmx_Val_GroupByChannel,
+                                        array,
+                                        None,
+                                        None)
         self._task_do.StopTask()
         self._task_do.ClearTask()
 
@@ -187,17 +201,18 @@ class nidaq(daq):
         if array.shape != (len(addresses),):
             raise ValueError(f"array must have shape {len(addresses):d}, but had shape {array.shape}")
 
-        # for ii, ad in enumerate(addresses):
-        #     task_do = daqmx.Task()
-        #     task_do.CreateDOChan(ad, "", daqmx.DAQmx_Val_ChanForAllLines)
-        #     task_do.WriteDigitalLines(1, 1, 10.0, daqmx.DAQmx_Val_GroupByChannel, np.atleast_1d(array[ii]).astype(np.uint8), None, None)
-        #     task_do.StopTask()
-        #     task_do.ClearTask()
-
         try:
             self._task_do = daqmx.Task()
-            self._task_do.CreateDOChan(", ".join(addresses), "", daqmx.DAQmx_Val_ChanForAllLines)
-            self._task_do.WriteDigitalLines(1, 1, 10.0, daqmx.DAQmx_Val_GroupByChannel, np.atleast_1d(array).astype(np.uint8), None, None)
+            self._task_do.CreateDOChan(", ".join(addresses),
+                                       "",
+                                       daqmx.DAQmx_Val_ChanForAllLines)
+            self._task_do.WriteDigitalLines(1,
+                                            1,
+                                            10.0,
+                                            daqmx.DAQmx_Val_GroupByChannel,
+                                            np.atleast_1d(array).astype(np.uint8),
+                                            None,
+                                            None)
 
             # cache values
             for ii, ad in enumerate(addresses):
@@ -255,7 +270,8 @@ class nidaq(daq):
         raise NotImplementedError("todo: this should be main function for setting analog lines once")
 
 
-    def set_analog_once(self, array: np.ndarray,
+    def set_analog_once(self,
+                        array: np.ndarray,
                         lines: Optional[list] = None,
                         lower_lims_volts: float = -5.0,
                         upper_lims_volts: float = 5.0):
@@ -292,17 +308,22 @@ class nidaq(daq):
             for ii, l in enumerate(lines):
                 try:  # ensure we dispose of task properly even if write fails because out of range
                     self._task_ao = daqmx.Task()
-                    self._task_ao.CreateAOVoltageChan(self.analog_lines[l], "", lower_lims_volts[ii],
-                                                      upper_lims_volts[ii], daqmx.DAQmx_Val_Volts, None)
-                    self._task_ao.WriteAnalogScalarF64(True, daqmx.DAQmx_Val_WaitInfinitely, array[ii], None)
+                    self._task_ao.CreateAOVoltageChan(self.analog_lines[l],
+                                                      "",
+                                                      lower_lims_volts[ii],
+                                                      upper_lims_volts[ii],
+                                                      daqmx.DAQmx_Val_Volts,
+                                                      None)
+                    self._task_ao.WriteAnalogScalarF64(True,
+                                                       daqmx.DAQmx_Val_WaitInfinitely,
+                                                       array[ii],
+                                                       None)
                     self.last_known_analog_val[l] = array[ii]
                 except daqmx.InvalidAODataWriteError as e:
                     print(e)
                 finally:
                     self._task_ao.StopTask()
                     self._task_ao.ClearTask()
-
-
 
     def set_analog_lines_by_name(self,
                                  array: np.ndarray,
@@ -361,7 +382,9 @@ class nidaq(daq):
                      analog_clock_source: str = "OnBoardClock",
                      digital_input_source: Optional[str] = None,
                      di_export_line: Optional[str] = None,
-                     continuous: bool = True):
+                     continuous: bool = True,
+                     nrepeats: Optional[int] = None,
+                     analog_read: bool = True):
         """
         Set a sequence of digital (and optionally also analog) commands to the DAQ.
 
@@ -377,6 +400,8 @@ class nidaq(daq):
         @param di_export_line: export the signal digital_input_source to a different line. Typically this
         port will be used as the input clock source for the analog task
         @param continuous: if True, then sequence will be run repeatedly. If False, sequence will be run once.
+        @param nrepeats: useful for specifying how much data to acquire with analog read
+        @param analog_read: read all analog in ports during sequence
         @return:
 
         # example of running digital + analog sequence
@@ -405,8 +430,9 @@ class nidaq(daq):
         >>> time.sleep(1)
         >>> daq.stop_sequence()
         """
-        # if not digital_array.shape[0] == analog_array.shape[0]:
-        #     raise ValueError("digital_array and analog_array should have the same size in their first dimension")
+
+        if nrepeats is None:
+            nrepeats = 1
 
         start_trigger = f"/{self.dev_name}/do/StartTrigger"
 
@@ -414,35 +440,52 @@ class nidaq(daq):
         # digital task
         # ######################
         self._task_do = daqmx.Task()
-        self._task_do.CreateDOChan(self.digital_lines, "", daqmx.DAQmx_Val_ChanForAllLines)
+        self._task_do.CreateDOChan(self.digital_lines,
+                                   "",
+                                   daqmx.DAQmx_Val_ChanForAllLines)
 
         # clock source
         if continuous:
             repeat = daqmx.DAQmx_Val_ContSamps
         else:
             repeat = daqmx.DAQmx_Val_FiniteSamps
-        self._task_do.CfgSampClkTiming(digital_clock_source, sample_rate_hz, daqmx.DAQmx_Val_Rising, repeat, digital_array.shape[0])
 
-        # configure triigger source
-        #self._task_do.CfgDigEdgeStartTrig(start_trigger, daqmx.DAQmx_Val_Rising)
+        self._task_do.CfgSampClkTiming(digital_clock_source,
+                                       sample_rate_hz,
+                                       daqmx.DAQmx_Val_Rising,
+                                       repeat,
+                                       digital_array.shape[0])
+
+        # configure trigger source
+        # self._task_do.CfgDigEdgeStartTrig(start_trigger, daqmx.DAQmx_Val_Rising)
 
         # Write the output waveform
         samples_per_ch_ct_digital = ct.c_int32()
-        self._task_do.WriteDigitalLines(digital_array.shape[0], False, 10.0, daqmx.DAQmx_Val_GroupByChannel, digital_array,
-                                        ct.byref(samples_per_ch_ct_digital), None)
+        self._task_do.WriteDigitalLines(digital_array.shape[0],
+                                        False,
+                                        10.0,
+                                        daqmx.DAQmx_Val_GroupByChannel,
+                                        digital_array,
+                                        ct.byref(samples_per_ch_ct_digital),
+                                        None)
 
         # ######################
         # if analog trigger source is a PFI port, then need to create a digital input task
         # ######################
         if digital_input_source is not None:
             self._task_di = daqmx.Task()
-            self._task_di.CreateDIChan(digital_input_source, "", daqmx.DAQmx_Val_ChanForAllLines)
+            self._task_di.CreateDIChan(digital_input_source,
+                                       "",
+                                       daqmx.DAQmx_Val_ChanForAllLines)
 
             # PFI lines are unbuffered, so must specify this
             self._task_di.CfgInputBuffer(0)
 
             # event on rising edge
-            self._task_di.CfgChangeDetectionTiming(digital_input_source, None, daqmx.DAQmx_Val_ContSamps, 0)
+            self._task_di.CfgChangeDetectionTiming(digital_input_source,
+                                                   None,
+                                                   daqmx.DAQmx_Val_ContSamps,
+                                                   0)
             # export signal to another pin, so can use it to trigger or etc.
 
             if di_export_line is not None:
@@ -453,18 +496,28 @@ class nidaq(daq):
 
 
         # ######################
-        # analog task
+        # analog ouput task
         # ######################
         if analog_array is None:
             self._task_ao = None
         else:
             # set tasks
             self._task_ao = daqmx.Task()
-            self._task_ao.CreateAOVoltageChan(", ".join(self.analog_lines), "", -5.0, 5.0, daqmx.DAQmx_Val_Volts, None)
+            self._task_ao.CreateAOVoltageChan(", ".join(self.analog_lines),
+                                              "",
+                                              -5.0,
+                                              5.0,
+                                              daqmx.DAQmx_Val_Volts,
+                                              None)
 
-            self._task_ao.CfgSampClkTiming(analog_clock_source, sample_rate_hz, daqmx.DAQmx_Val_Rising, repeat,
+            self._task_ao.CfgSampClkTiming(analog_clock_source,
+                                           sample_rate_hz,
+                                           daqmx.DAQmx_Val_Rising,
+                                           repeat,
                                            analog_array.shape[0])
-            self._task_ao.CfgDigEdgeStartTrig(start_trigger, daqmx.DAQmx_Val_Rising)
+
+            self._task_ao.CfgDigEdgeStartTrig(start_trigger,
+                                              daqmx.DAQmx_Val_Rising)
 
             # if analog task has only one step, then we need to add a second step, otherwise WriteAnalogF64 will complain
             # This can happen if we are using a digital line to trigger the analog lines that only rarely change,
@@ -473,22 +526,69 @@ class nidaq(daq):
 
 
             samples_per_ch_ct = ct.c_int32()
-            self._task_ao.WriteAnalogF64(analog_array.shape[0], False, 10.0, daqmx.DAQmx_Val_GroupByScanNumber,
-                                         analog_array, ct.byref(samples_per_ch_ct), None)
+            self._task_ao.WriteAnalogF64(analog_array.shape[0],
+                                         False,
+                                         10.0,
+                                         daqmx.DAQmx_Val_GroupByScanNumber,
+                                         analog_array,
+                                         ct.byref(samples_per_ch_ct),
+                                         None)
 
+
+        # ######################
+        # analog input task
+        # ######################
+        if not analog_read:
+            self._task_ai = None
+        else:
+            if self._task_ai is not None:
+                try:
+                    self._task_ai.ClearTask()
+                except (daqmx.DAQmxFunctions.InvalidTaskError, AttributeError):
+                    pass
+
+            self._task_ai = daqmx.Task()
+            self._task_ai.CreateAIVoltageChan(", ".join(self.analog_input_line_names),
+                                              "",
+                                              daqmx.DAQmx_Val_Diff,
+                                              -10.,
+                                              10.,
+                                              daqmx.DAQmx_Val_Volts,
+                                              None
+                                              )
+
+            self._task_ai.CfgSampClkTiming(digital_clock_source,
+                                           sample_rate_hz,
+                                           daqmx.DAQmx_Val_Rising,
+                                           daqmx.DAQmx_Val_FiniteSamps,
+                                           digital_array.shape[0] * nrepeats
+                                           )
+
+            self._task_ai.CfgDigEdgeStartTrig(start_trigger,
+                                              daqmx.DAQmx_Val_Rising)
 
         # todo: give option to block/wait for sequence to finish
 
     def start_sequence(self):
+        """
+        Start a sequence prepared using set_sequence()
+        @return:
+        """
 
         if self._task_di is not None:
             self._task_di.StartTask()
         if self._task_ao is not None:
             self._task_ao.StartTask()
+        if self._task_ai is not None:
+            self._task_ai.StartTask()
         self._task_do.StartTask()
 
 
     def stop_sequence(self):
+        """
+        Stop a sequence
+        @return:
+        """
 
         # stop digital output task
         try:
@@ -512,6 +612,43 @@ class nidaq(daq):
             except (daqmx.DAQmxFunctions.InvalidTaskError, AttributeError):
                 pass
 
+        # don't stop analog task, otherwise problems
+        # if self._task_ai is not None:
+        #     try:
+        #         self._task_ai.StopTask()
+        #         # self._task_ai.ClearTask()
+        #     except (daqmx.DAQmxFunctions.InvalidTaskError, AttributeError):
+        #         pass
+
+    def read_ai(self, n_samples, timeout=1., stop=True):
+        """
+        read analog input data recorded during sequence
+        @param n_samples:
+        @param timeout:
+        @param stop:
+        @return:
+        """
+        n_channels = len(self.analog_input_line_names)
+
+        if n_channels != 1:
+            raise NotImplementedError()
+
+        data = np.zeros((n_samples, n_channels), dtype=np.float64)
+        arr_size = data.size
+        read = ct.c_int32()
+        self._task_ai.ReadAnalogF64(n_samples, # numSampsPerChan
+                                    timeout,  # timeout in seconds
+                                    daqmx.DAQmx_Val_GroupByChannel, # fillMode
+                                    data, # readArray[]
+                                    arr_size, # arraySizeInSamps
+                                    ct.byref(read), # sampsPerchanRead
+                                    None # reserved
+                                    )
+
+        if stop:
+            self._task_ai.StopTask()
+
+        return data
 
 # ###########################
 # helper functions for working with line mappings and program arrays
@@ -656,7 +793,7 @@ def load_config_file(fname: str) -> (dict, dict, dict, str):
     """
     load configuration data from json file
     @param fname:
-    @return analog_map, digital_map, presets:
+    @return analog_map, digital_map, presets, tstamp:
     """
     with open(fname, "r") as f:
         data = json.load(f)
@@ -665,7 +802,6 @@ def load_config_file(fname: str) -> (dict, dict, dict, str):
     analog_map = data["analog_map"]
     digital_map = data["digital_map"]
     presets = data["presets"]
-
 
     return digital_map, analog_map, presets, tstamp
 
