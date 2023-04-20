@@ -1,5 +1,5 @@
 {
-	"timestamp": "2022_07_07_14;44;38",
+	"timestamp": "2023_04_13_17;25;25",
 	"analog_map": {
 		"vc_mirror_x": 0,
 		"vc_mirror_y": 1,
@@ -53,7 +53,7 @@
 			},
 			"analog": {
 				"vc_mirror_x": -0.06,
-				"vc_mirror_y": -0.2
+				"vc_mirror_y": -0.7
 			}
 		},
 		"green": {
