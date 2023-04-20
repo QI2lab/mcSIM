@@ -103,8 +103,9 @@ For more information about these tools, see the [readme](analysis/localize-psf/R
 pip installing the mcsim repository as described above will also pull in these dependencies.
 
 # Examples
-Scripts illustrated examples of different DMD simulations and analysis are stored in [examples](examples). Associated 
-data is located in [examples/data](examples/data)
+Scripts illustrated examples of different DMD simulations and analysis are stored in [examples](examples).
+Associated data necessary to run some of these examples can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.7851110).
+These scripts assume this data has been placed in a directory called `examples/data`
   
 # Hardware control code
 Hardware control is based around [MicroManager2.0](https://micro-manager.org/). Currently, we control the instrument
