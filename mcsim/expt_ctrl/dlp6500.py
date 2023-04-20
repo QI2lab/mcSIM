@@ -416,8 +416,8 @@ def firmware_index_2pic_bit(firmware_indices):
     @param firmware_indices:
     @return:
     """
-    pic_inds = firmware_indices // 24
-    bit_inds = firmware_indices - 24 * pic_inds
+    pic_inds = np.asarray(firmware_indices) // 24
+    bit_inds = firmware_indices - 24 * np.asarray(pic_inds)
 
     return pic_inds, bit_inds
 
@@ -746,6 +746,9 @@ class dlp6500:
         self.firmware_pattern_info = firmware_pattern_info
         self.presets = presets
         self.firmware_patterns = firmware_patterns
+
+        # on-the-fly patterns
+        self.on_the_fly_patterns = None
 
         # USB packet length not including report_id_byte
         self.packet_length_bytes = 64
@@ -1565,15 +1568,12 @@ class dlp6500:
                                 compression_mode: str = 'erle',
                                 combine_images: bool = True):
         """
-        Upload on-the-fly pattern sequence to DMD.
+        Upload on-the-fly pattern sequence to DMD. This command is based on Table 5-3 in the DLP programming manual
         # todo: seems I need to call set_pattern_sequence() after this command to actually get sequence running. Why?
 
-        WARNING: When using triggered operations, the DLP6500 behaves differently depending on the state of the trigger
-        in signals when this command is issued. If the trigger in signals are HIGH, then the patterns will be displayed
-        when the trigger is high. If the trigger in signals are LOW, then the patterns will be displayed when
-        the trigger is low.
-
-        This command is based on Table 5-3 in the DLP programming manual
+        The DLP6500 behaves differently depending on the state of the trigger in signals when this command is issued.
+        If the trigger in signals are HIGH, then the patterns will be displayed when the trigger is high. If the
+        trigger in signals are LOW, then the patterns will be displayed when the trigger is low.
 
         :param patterns: N x Ny x Nx NumPy array of uint8
         :param exp_times: exposure times in us. Either a single uint8 number, or a list the same
@@ -1623,6 +1623,8 @@ class dlp6500:
 
         # #########################
         # #########################
+        # store patterns so we can check what is uploaded later
+        self.on_the_fly_patterns = patterns
 
         # need to issue stop before changing mode. Otherwise DMD will sometimes lock up and not be responsive.
         self.start_stop_sequence('stop')
@@ -1741,7 +1743,7 @@ class dlp6500:
         :param clear_pattern_after_trigger:
         :param bit_depth:
         :param num_repeats: number of repeats. 0 repeats means repeat continuously.
-        :param mode: pre-stored or
+        :param mode: 'pre-stored' or 'on-the-fly'
         :return:
         """
         # #########################
