@@ -46,11 +46,14 @@ excitation_wavelengths = [0.465, 0.532]
 # ############################################
 # load OTF data
 # ############################################
+# todo: switch to json or hardcode for configuration files
+
 otf_data_path = root_dir / "2020_05_19_otf_fit_blue.pkl"
 
 with open(otf_data_path, 'rb') as f:
     otf_data = pickle.load(f)
 otf_p = otf_data['fit_params']
+
 
 def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_p[0]) ** 2) * fit_psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
 
@@ -127,21 +130,21 @@ for kk in range(ncolors):
     # ###########################################
     save_dir = root_dir / f"{tstamp:s}_sim_reconstruction_{excitation_wavelengths[kk] * 1e3:.0f}nm"
 
-    imgset = sim.SimImageSet({"pixel_size": pixel_size, "na": na, "wavelength": emission_wavelengths[kk]},
-                             imgs[kk, :, :, roi[0]:roi[1], roi[2]:roi[3]],
-                             otf=otf,
-                             wiener_parameter=0.1,
-                             frq_estimation_mode="band-correlation",
-                             frq_guess=frqs_guess,
-                             phase_estimation_mode="wicker-iterative",
-                             phases_guess=phases_guess,
-                             combine_bands_mode="fairSIM",
-                             fmax_exclude_band0=0.4,
-                             normalize_histograms=False,
-                             background=100,
-                             gain=2,
-                             min_p2nr=0.5,
-                             use_gpu=use_gpu)
+    imgset = sim.SimImageSet.initialize({"pixel_size": pixel_size, "na": na, "wavelength": emission_wavelengths[kk]},
+                                        imgs[kk, :, :, roi[0]:roi[1], roi[2]:roi[3]],
+                                        otf=otf,
+                                        wiener_parameter=0.1,
+                                        frq_estimation_mode="band-correlation",
+                                        frq_guess=frqs_guess,
+                                        phase_estimation_mode="wicker-iterative",
+                                        phases_guess=phases_guess,
+                                        combine_bands_mode="fairSIM",
+                                        fmax_exclude_band0=0.4,
+                                        normalize_histograms=False,
+                                        background=100,
+                                        gain=2,
+                                        min_p2nr=0.5,
+                                        use_gpu=use_gpu)
 
     # ###########################################
     # run reconstruction
@@ -152,15 +155,20 @@ for kk in range(ncolors):
                        compute_mcnr=True)
 
     # ###########################################
+    # print parameters
+    # ###########################################
+    imgset.print_parameters()
+
+    # ###########################################
     # save reconstruction results
     # ###########################################
     imgset.save_imgs(save_dir,
-                     format="tiff",
+                     format="tiff",  #format="zarr",
                      save_raw_data=False,
                      save_patterns=False)
 
     # ###########################################
-    # plot diagnostics
+    # save diagnostic plots
     # ###########################################
     imgset.plot_figs(save_dir,
                      figsize=(20, 10),
