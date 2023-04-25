@@ -63,9 +63,9 @@ array = Union[np.ndarray, cp.ndarray]
 def _ft(m: array) -> array:
     """
     2D Fourier transform which can use either CPU or GPU and using specific shifting idiom
-    @param m: array to be Fourier transformed
-    @param use_gpu:
-    @return mft: Fourier transform of m
+
+    :param m: array to be Fourier transformed
+    :return mft: Fourier transform of m
     """
     use_gpu = isinstance(m, cp.ndarray) and _cupy_available
 
@@ -86,9 +86,9 @@ def _ft(m: array) -> array:
 def _ift(m: array) -> array:
     """
     2D inverse real Fourier transform which can use either CPU or GPU
-    @param m:
-    @param use_gpu:
-    @return:
+
+    :param m:
+    :return:
     """
     # note: at first had self.use_gpu here, but then next map_blocks fn took ~1 minute to run!
     # so think I should avoid calls to self
@@ -164,55 +164,56 @@ class SimImageSet:
         Simplified constructor for SimImageSet. Use this constructor when all SIM reconstruction parameters
         are known at the outset (including e.g. frequency and phase guesses but not necessarily final values).
         For usage examples see
+
         >>> help(SimImageSet)
 
         :param physical_params: {'pixel_size', 'na', 'wavelength'}. Pixel size and emission wavelength in um
         :param imgs: n0 x n1 x ... nm x nangles x nphases x ny x nx raw data to be reconstructed. The first
-        m-dimensions will be reconstructed in parallel. These may represent e.g. time-series and z-stack data.
-        The same reconstruction parameters must be used for the full stack, so these should not represent different
-        channels.
+           m-dimensions will be reconstructed in parallel. These may represent e.g. time-series and z-stack data.
+           The same reconstruction parameters must be used for the full stack, so these should not represent different
+           channels.
         :param otf: optical transfer function evaluated at the same frequencies as the fourier transforms of imgs.
-         If None, estimate from NA. This can either be an array of size ny x nx, or an array of size nangles x ny x nx
-         The second case corresponds to a system that has different OTF's per SIM acquisition angle.
+            If None, estimate from NA. This can either be an array of size ny x nx, or an array of size nangles x ny x nx
+            The second case corresponds to a system that has different OTF's per SIM acquisition angle.
         :param wiener_parameter: Attenuation parameter for Wiener filtering. This has a sligtly different meaning
-         depending on the value of combine_bands_mode
+            depending on the value of combine_bands_mode
         :param str frq_estimation_mode: "band-correlation", "fourier-transform", or "fixed"
-        "band-correlation" first unmixes the bands using the phase guess values and computes the correlation between
-        the shifted and unshifted band
-        "fourier-transform" correlates the Fourier transform of the image with itself.
-        "fixed" uses the frq_guess values
+           "band-correlation" first unmixes the bands using the phase guess values and computes the correlation between
+           the shifted and unshifted band
+           "fourier-transform" correlates the Fourier transform of the image with itself.
+           "fixed" uses the frq_guess values
         :param frq_guess: 2 x nangles array of guess SIM frequency values
         :param str phase_estimation_mode: "wicker-iterative", "real-space", "naive", or "fixed"
-        "wicker-iterative" follows the approach of https://doi.org/10.1364/OE.21.002032.
-        "real-space" follows the approach of section IV-B in https://doir.org/10.1109/JSTQE.2016.2521542.
-        "naive" uses the phase of the Fourier transform of the raw data.
-        "fixed" uses the values provided from phases_guess.
+           "wicker-iterative" follows the approach of https://doi.org/10.1364/OE.21.002032.
+           "real-space" follows the approach of section IV-B in https://doir.org/10.1109/JSTQE.2016.2521542.
+           "naive" uses the phase of the Fourier transform of the raw data.
+           "fixed" uses the values provided from phases_guess.
         :param phases_guess: nangles x nphases array of phase guesses
         :param combine_bands_mode: "fairSIM" if using method of https://doi.org/10.1038/ncomms10980 or "openSIM" if
-        using method of https://doi.org/10.1109/jstqe.2016.2521542
+           using method of https://doi.org/10.1109/jstqe.2016.2521542
         :param float fmax_exclude_band0: amount of the unshifted bands to exclude, as a fraction of fmax. This can
-        enhance optical sectioning by replacing the low frequency information in the reconstruction with the data.
-        from the shifted bands only.
-        For more details on the band replacement optical sectioning approach, see https://doi.org/10.1364/BOE.5.002580
-        and https://doi.org/10.1016/j.ymeth.2015.03.020
+           enhance optical sectioning by replacing the low frequency information in the reconstruction with the data.
+           from the shifted bands only.
+           For more details on the band replacement optical sectioning approach, see https://doi.org/10.1364/BOE.5.002580
+           and https://doi.org/10.1016/j.ymeth.2015.03.020
         :param mod_depths_guess: If use_fixed_mod_depths is True, these modulation depths are used
         :param use_fixed_mod_depths: if true, use mod_depths_guess instead of estimating the modulation depths from the data
         :param mod_depth_otf_mask_threshold:
         :param minimum_mod_depth: if modulation depth is estimated to be less than this value, it will be replaced
-        with this value during reconstruction
+           with this value during reconstruction
         :param normalize_histograms: for each phase, normalize histograms of images to account for laser power fluctuations
         :param background: Either a single number, or broadcastable to size of imgs. The background will be subtracted
-         before running the SIM reconstruction
+           before running the SIM reconstruction
         :param determine_amplitudes: whether to determine amplitudes as part of Wicker phase optimization.
-        This flag only has an effect if phase_estimation_mode is "wicker-iterative"
+           This flag only has an effect if phase_estimation_mode is "wicker-iterative"
         :param background: a single number, or an array which is broadcastable to the same size as images. This will
-        be subtracted from the raw data before processing.
+           be subtracted from the raw data before processing.
         :param gain: gain of the camera in ADU/photons. This is a single number or an array which is broadcastable to
-         the same size as the images whcih is sued to convert the ADU counts to photon numbers.
+           the same size as the images whcih is sued to convert the ADU counts to photon numbers.
         :param max_phase_err: If the determined phase error between components exceeds this value, use the phase guess
-        values instead of those determined by the estimation algorithm.
+           values instead of those determined by the estimation algorithm.
         :param min_p2nr: if the peak-to-noise ratio is smaller than this value, use the frequency guesses instead
-         of the frequencies determined by the estimation algorithm.
+            of the frequencies determined by the estimation algorithm.
         :param trim_negative_values: set values in SIM-SR reconstruction which are less than zero to zero
         :param use_gpu:
         :param print_to_terminal:
@@ -279,11 +280,12 @@ class SimImageSet:
         3 x 3 x ny x nx NumPy array, or a larger image series of sizes n0 x ... x nm x 3 x 3 x ny x nx as long as
         the SIM parameters are the same for all images in the stack.
 
-        @param use_gpu:
-        @param print_to_terminal:
+        :param use_gpu: Run SIM computations on the GPU
+        :param print_to_terminal: Print diagnostic information to the terminal dureing reconstruction
 
-        Notes:
+        =================
         Coordinates
+        =================
         Both the raw data and the SIM data use the same coordinates as the FFT with the origin in the center.
         i.e. the coordinates in the raw image are x = (arange(nx) - (nx // 2)) * dxy
         and for the SIM image they are            x = ((arange(2*nx) - (2*nx)//2) * 0.5 * dxy
@@ -292,14 +294,18 @@ class SimImageSet:
         images are at (2*n) // 2 = n. This translation is due to the fact that for odd n,
         n // 2 != (2*n) // 2 * 0.5 = n / 2
 
+        =================
         Examples:
+        =================
         For normal use cases, it is best to use the classmethod initialize() as the constructor for the class.
         initialize() requires that all SIM reconstruction settings be known when the constructor is called.
+
         >>> sim_obj = SimImageSet.initialize(*args, **kwargs)
         >>> sim_obj.reconstruct()  # estimate parameters and reconstruct data
 
         However, there will be other cases where the desired SIM reconstruction settings are not known when
         the class is initialized. In this case, more granular controller is possible
+
         >>> sim_obj = SimImageSet()
         >>> sim_obj.preprocess_data()
         >>> sim_obj.update_otf()
@@ -308,12 +314,15 @@ class SimImageSet:
         >>> sim_obj.reconstruct()
 
         Results can be printed to the terminal
+
         >>> sim_obj.print_parameters()  # print parameters to terminal
 
         Results can be saved to file
+
         >>> sim_obj.save_imgs()  # save images to file
 
         Diagnostics can be printed
+
         >>> sim_obj.plot_figs()  # plot diagnostic figures
 
         """
@@ -424,15 +433,16 @@ class SimImageSet:
                         ):
         """
         Preprocess SIM data
-        @param pix_size_um:
-        @param na:
-        @param wavelength:
-        @param imgs:
-        @param normalize_histograms:
-        @param gain:
-        @param background:
-        @param axes_names:
-        @return:
+
+        :param pix_size_um:
+        :param na:
+        :param wavelength:
+        :param imgs:
+        :param normalize_histograms:
+        :param gain:
+        :param background:
+        :param axes_names:
+        :return:
         """
 
         self._preprocessing_settings = {"normalize_histograms": normalize_histograms,
@@ -577,19 +587,20 @@ class SimImageSet:
                               ):
         """
         Set flags and settings for SIM reconstruction
-        @param wiener_parameter:
-        @param frq_estimation_mode:
-        @param phase_estimation_mode:
-        @param combine_bands_mode:
-        @param fmax_exclude_band0:
-        @param use_fixed_mod_depths:
-        @param mod_depth_otf_mask_threshold:
-        @param minimum_mod_depth:
-        @param determine_amplitudes:
-        @param max_phase_err:
-        @param min_p2nr:
-        @param trim_negative_values:
-        @return:
+
+        :param wiener_parameter:
+        :param frq_estimation_mode:
+        :param phase_estimation_mode:
+        :param combine_bands_mode:
+        :param fmax_exclude_band0:
+        :param use_fixed_mod_depths:
+        :param mod_depth_otf_mask_threshold:
+        :param minimum_mod_depth:
+        :param determine_amplitudes:
+        :param max_phase_err:
+        :param min_p2nr:
+        :param trim_negative_values:
+        :return:
         """
         # todo: argument checking
         reconstruction_mode = "wiener-filter"
@@ -636,8 +647,8 @@ class SimImageSet:
                    otf: Optional[array] = None):
         """
         Set OTF
-        @param otf:
-        @return:
+
+        :param otf:
         """
         # #############################################
         # OTF
@@ -675,10 +686,11 @@ class SimImageSet:
                                  ):
         """
         Set SIM parameter guess values
-        @param frq_guess:
-        @param phases_guess:
-        @param mod_depths_guess:
-        @return:
+
+        :param frq_guess:
+        :param phases_guess:
+        :param mod_depths_guess:
+        :return:
         """
 
         if frq_guess is not None:
@@ -699,7 +711,8 @@ class SimImageSet:
     def delete(self):
         """
         Delete data on GPU, otherwise will be retained and look like memory leak
-        @return:
+
+        :return:
         """
         if self.use_gpu:
             for attr_name in dir(self):
@@ -710,7 +723,8 @@ class SimImageSet:
                             slices: Optional[tuple] = None):
         """
         Estimate SIM parameters from chosen slice
-        @return:
+
+        :return:
         """
 
         tstart_param_est = time.perf_counter()
@@ -1066,12 +1080,12 @@ class SimImageSet:
         """
         SIM reconstruction
 
-        @param slices: tuple of slice objects describing the array to use for fitting SIM parameters
-        @param compute_widefield:
-        @param compute_os:
-        @param compute_deconvolved:
-        @param compute_mcnr:
-        @return:
+        :param slices: tuple of slice objects describing the array to use for fitting SIM parameters
+        :param compute_widefield:
+        :param compute_os:
+        :param compute_deconvolved:
+        :param compute_mcnr:
+        :return:
         """
 
         if self.use_gpu and _cupy_available:
@@ -1299,7 +1313,8 @@ class SimImageSet:
     def print_parameters(self):
         """
         Print parameters used during SIM reconstruction
-        @return:
+
+        :return:
         """
         self.print_log(f"SIM reconstruction for {self.nangles:d} angles and {self.nphases:d} phases")
         self.print_log(f"images are size {self.ny:d}x{self.nx:d} with pixel size {self.dx:.3f}x{self.dy:.3f}um")
@@ -1363,8 +1378,9 @@ class SimImageSet:
                    stream):
         """
         Add stream to be used with print_log()
-        @param stream:
-        @return:
+
+        :param stream:
+        :return:
         """
         if stream not in self._streams:
             self._streams.append(stream)
@@ -1395,15 +1411,15 @@ class SimImageSet:
         """
         Automate plotting and saving of figures
 
-        @param save_dir:
-        @param save_prefix:
-        @param save_suffix:
-        @param slices: tuple of slices indicating which image to plot. len(slices) = self.imgs.ndim - 4
-        @param figsize:
-        @param diagnostics_only:
-        @param interactive_plotting:
-        @param imgs_dpi: Set to 400 for high resolution, but slower saving
-        @return:
+        :param save_dir:
+        :param save_prefix:
+        :param save_suffix:
+        :param slices: tuple of slices indicating which image to plot. len(slices) = self.imgs.ndim - 4
+        :param figsize:
+        :param diagnostics_only:
+        :param interactive_plotting:
+        :param imgs_dpi: Set to 400 for high resolution, but slower saving
+        :return:
         """
 
         # #############################################
@@ -1508,9 +1524,9 @@ class SimImageSet:
         Display SIM images for visual inspection. Use this to examine SIM pictures and their Fourier transforms
         as an aid to guessing frequencies before doing reconstruction.
 
-        @param slices: tuple of slices indicating which image to plot. len(slices) = self.imgs.ndim - 4
-        @param figsize:
-        @return figs, fig_names:
+        :param slices: tuple of slices indicating which image to plot. len(slices) = self.imgs.ndim - 4
+        :param figsize:
+        :return figs, fig_names:
         """
 
         if slices is None:
@@ -1643,6 +1659,7 @@ class SimImageSet:
                             **kwargs):
         """
         Plot SIM image and compare with 'widefield' image
+
         :return:
         """
 
@@ -2023,6 +2040,7 @@ class SimImageSet:
                             figsize=(20, 10)):
         """
         Plot frequency fits
+
         :param figsize:
         :return figs: list of figure handles
         :return fig_names: list of figure names
@@ -2143,14 +2161,14 @@ class SimImageSet:
         """
         Save SIM results and metadata to file
 
-        @param save_dir: directory to save results
-        @param save_suffix:
-        @param save_prefix:
-        @param format: "tiff", "zarr" or "hdf5". If tiff is used, metadata will be saved in a .json file
-        @param save_patterns:
-        @param save_raw_data:
-        @param save_processed_data:
-        @return:
+        :param save_dir: directory to save results
+        :param save_suffix:
+        :param save_prefix:
+        :param format: "tiff", "zarr" or "hdf5". If tiff is used, metadata will be saved in a .json file
+        :param save_patterns:
+        :param save_raw_data:
+        :param save_processed_data:
+        :return:
         """
 
         # #############################################
@@ -2304,10 +2322,11 @@ def show_sim_napari(fname_zarr: str,
                     viewer = None):
     """
     Plot all images obtained from SIM reconstruction with correct scale/offset
-    @param fname_zarr:
-    @param block:
-    @param viewer: if viewer is supplied, plot results on this viewer
-    @return viewer:
+
+    :param fname_zarr:
+    :param block:
+    :param viewer: if viewer is supplied, plot results on this viewer
+    :return viewer:
     """
 
     import napari
@@ -2480,8 +2499,8 @@ def fit_modulation_frq(ft1: np.ndarray,
                        keep_guess_if_better: bool = True) -> (np.ndarray, np.ndarray, dict):
     """
     Find SIM frequency from image by maximizing the cross correlation between ft1 and ft2
-    C(df) =  \sum_f ft1(f) x ft2^*(f + df)
-    modulation freqency = argmax_{df} |C(df)|
+    :math:`C(df) =  \\sum_f ft1(f) x ft2^*(f + df)`
+    modulation freqency = :Math:`\\argmax_{df} |C(df)|`
 
     Note that there is ambiguity in the definition of this frequency, as -f will also be a peak. If frq_guess is
     provided, the peak closest to the guess will be returned.
@@ -2491,13 +2510,13 @@ def fit_modulation_frq(ft1: np.ndarray,
     :param dxy: pixel size. Units of dxy and max_frq_shift must be consistent
     :param mask: boolean array same size as ft1 and ft2. Only consider frequency points where mask is True
     :param frq_guess: frequency guess [fx, fy]. If frequency guess is None, an initial guess will be chosen by
-    finding the maximum f_guess = argmax_f CC[ft1, ft2](f), where CC[ft1, ft2] is the discrete cross-correlation
-     Currently roi_pix_size is only used internally to set max_frq_shift
+       finding the maximum f_guess = argmax_f CC[ft1, ft2](f), where CC[ft1, ft2] is the discrete cross-correlation
+       Currently roi_pix_size is only used internally to set max_frq_shift
     :param max_frq_shift: maximum frequency shift to consider vis-a-vis the guess frequency
     :param keep_guess_if_better: keep the initial frequency guess if the cost function is more optimal
-     at this point than after fitting
-
+       at this point than after fitting
     :return fit_frqs, mask, fit_result:
+
     """
 
     if ft1.shape != ft2.shape:
@@ -2604,7 +2623,7 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     Use this to plot the results of SIM frequency determination after running get_sim_frq()
 
     :param img1_ft:
-    :param img2_ft
+    :param img2_ft:
     :param frqs: fit value of frequency [fx, fy]
     :param dxy: pixel size in um
     :param fmax: maximum frequency. Will display this using a circle
@@ -2885,20 +2904,18 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
                                debug: bool = False) -> (np.ndarray, np.ndarray, dict):
     """
     Estimate relative phases between components using the iterative cross-correlation minimization method of Wicker,
-    described in detail here https://doi.org/10.1364/OE.21.002032. This function is hard coded for 3 bands.
-
-    NOTE: this method is not sensitive to the absolute phase, only the relative phases...
+    described in detail here https://doi.org/10.1364/OE.21.002032. This function is hard coded for 3 bands. This
+    method is not sensitive to the absolute phase, only the relative phases...
 
     Suppose that S(r) is the sample, h(r) is the PSF, and D_n(r) is the data. Then the separated (but unshifted) bands
-    are C_m(k) = S(k - m*ko) * h_m(k), and the data vector is related to the band vector by
-    D(k) = M*C(k), where M is a matrix of shape nphases x nbands.
+    are :math: `C_m(k) = S(k - m*ko) h_m(k)`, and the data vector is related to the band vector by
+    :math: `D(k) = M C(k)`, where M is a matrix of shape nphases x nbands.
 
     This function minimizes the cross correlation between shfited bands which should not contain common information.
-    Let cc^l_ij = C_i(k) \otimes C_j(k-lp). These should have low overlap for i =/= j + l.
-    So the minimization function is
-    g(M) = \sum_{i \neq l+j} |cc^l_ij|^0.5
+    Let :math:`cc^l_ij = C_i(k) \\otimes C_j(k-lp)`. These should have low overlap for :math:`i \\neq j + l`.
+    So the minimization function is :math:`g(M) = \\sum_{i \neq l+j} |cc^l_ij|^{1/2}`
 
-    This can be written in terms of the correlations of data matrix, dc^l_ij in a way that minimizes numerical effort
+    This can be written in terms of the correlations of data matrix, :math: `dc^l_{ij}` in a way that minimizes numerical effort
     to compute g for different mixing matrices M.
 
     :param imgs_ft: array of size nphases x ny x nx, where the components are o(f), o(f-fo), o(f+fo)
@@ -2910,8 +2927,8 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
     :param fit_amps: if True will also fit amplitude differences between components
     :param debug:
     :return phases, amps, result: where phases is a list of phases determined using this method, amps = [A1, A2, A3],
-    and result is a dictionary giving information about the convergence of the optimization
-    If fit_amps is False, A1=A2=A3=1
+       and result is a dictionary giving information about the convergence of the optimization
+       If fit_amps is False, A1=A2=A3=1
     """
     # TODO: this can also return components separated the opposite way of desired
     # todo: currently hardcoded for 3 phases
@@ -3065,7 +3082,7 @@ def get_noise_power(img_ft: array,
     where the OTF has support.If an nD image array is passed, compute this over the last two dimensions
 
     :param img_ft: Size n0 x n1 x ... x ny x nx. Fourier transform of image.
-    :param dxy: pixel size (dy, dx)
+    :param drs: pixel size (dy, dx)
     :param fmax: maximum frequency where signal may be present
     :return noise_power:
     """
@@ -3092,9 +3109,10 @@ def get_band_mixing_matrix(phases: list,
                            amps: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Return matrix M, which relates the measured images D to the Fluorescence profile S multiplied by the OTF H
-    [[D_1(k)], [D_2(k)], [D_3(k)], ...[D_n(k)]] = M * [[S(k)H(k)], [S(k-p)H(k)], [S(k+p)H(k)]]
+    :math: `[[D_1(k)], [D_2(k)], [D_3(k)], ...[D_n(k)]] = M [[S(k)H(k)], [S(k-p)H(k)], [S(k+p)H(k)]]`
 
-    We assume the modulation has the form [1 + m*cos(k*r + phi)], leading to
+    We assume the modulation has the form :math:`1 + m \\cos(kr + \\phi)`, leading to
+
     M = [A_1 * [1, 0.5*m*exp(ip_1), 0.5*m*exp(-ip_1)],
          A_2 * [1, 0.5*m*exp(ip_2), 0.5*m*exp(-ip_2)],
          A_3 * [1, 0.5*m*exp(ip_3), 0.5*m*exp(-ip_3)],
@@ -3123,10 +3141,11 @@ def get_band_mixing_matrix_jac(phases: list[float],
                                amps: list[float]) -> list[np.ndarray]:
     """
     Get jacobian of band mixing matrix in parameters [p1, p2, p3, a1, a2, a3, m]
-    @param phases:
-    @param mod_depth:
-    @param amps:
-    @return jac:
+
+    :param phases:
+    :param mod_depth:
+    :param amps:
+    :return jac:
     """
     p1, p2, p3 = phases
     a1, a2, a3, = amps
@@ -3164,10 +3183,10 @@ def get_band_mixing_inv(phases: np.ndarray,
     """
     Get inverse of the band mixing matrix, which maps measured data to separated (but unshifted) bands
 
-    @param phases:
-    @param mod_depth:
-    @param amps:
-    @return mixing_mat_inv:
+    :param phases:
+    :param mod_depth:
+    :param amps:
+    :return mixing_mat_inv:
     """
 
     mixing_mat = get_band_mixing_matrix(phases, mod_depth, amps)
@@ -3192,7 +3211,19 @@ def unmix_bands(imgs_ft: array,
                 amps: Optional[np.ndarray] = None) -> array:
     """
     Do noisy inversion of SIM data, i.e. determine
-    [[S(f)H(k)], [S(f-p)H(f)], [S(f+p)H(f)]] = M^{-1} * [[D_1(f)], [D_2(f)], [D_3(f)]]
+    .. math::
+
+       \\begin{pmatrix}
+       S(f)H(k)]\\
+       S(f-p)H(f)\\
+       S(f+p)H(f)
+       \\end{pmatrix}
+        = M^{-1}
+       \\begin{pmatrix}
+       D_1(f)\\
+       D_2(f)\\
+       D_3(f)
+       \\end{pmatrix}
 
     :param imgs_ft: n0 x ... x nm x nangles x nphases x ny x nx.
      Fourier transform of SIM image data with DC frequency information in middle. i.e. as obtained from fftshift
@@ -3200,7 +3231,7 @@ def unmix_bands(imgs_ft: array,
     :param mod_depths: list of length nangles. Optional. If not provided, all are set to 1.
     :param amps: list of length nangles x nphases. If not provided, all are set to 1.
     :return components_ft: nangles x nphases x ny x nx array, where the first index corresponds to the bands
-    S(f)H(f), S(f-p)H(f), or S(f+p)H(f)
+    :math: `S(f)H(f), S(f-p)H(f), S(f+p)H(f)`
     """
     # todo: could generalize for case with more than 3 phases or angles
 
@@ -3251,11 +3282,11 @@ def shift_bands(bands_unmixed_ft: array,
     """
     Shift separated SIM bands to correct locations in Fourier space
 
-    @param bands_unmixed_ft: n0 x ... x nm x 3 x ny x nx
-    @param frq_shifts: n0 x ... x nm x 2
-    @param drs: (dy, dx)
-    @param upsample_factor:
-    @return shifted_bands_ft:
+    :param bands_unmixed_ft: n0 x ... x nm x 3 x ny x nx
+    :param frq_shifts: n0 x ... x nm x 2
+    :param drs: (dy, dx)
+    :param upsample_factor:
+    :return shifted_bands_ft:
     """
 
     use_gpu = isinstance(bands_unmixed_ft, cp.ndarray) and _cupy_available
@@ -3299,8 +3330,8 @@ def get_band_overlap(band0: array,
     modulation depth.
 
     This is done by computing the amplitude and phase of
-    C = \sum [Band_0(f) * conj(Band_1(f + fo))] / \sum [ |Band_0(f)|^2]
-    where Band_1(f) = O(f-fo), so Band_1(f+fo) = O(f). i.e. these are the separated SIM.
+    :math:`C = \sum [Band_0(f) * conj(Band_1(f + fo))] / \sum [ |Band_0(f)|^2]`
+    where :math: `Band_1(f) = O(f-fo)`, so :math: `Band_1(f+fo) = O(f)`. i.e. these are the separated SIM.
 
     If correct reconstruction parameters are used, expect Band_0(f) and Band_1(f) differ only by a complex constant.
     This constant contains information about the global phase offset AND the modulation depth. i.e.
@@ -3308,15 +3339,15 @@ def get_band_overlap(band0: array,
     This function extracts the complex conjugate of this value, c* = m * np.exp(i*phase_corr)
 
     Given this information, can perform the phase correction
-    Band_1(f + fo) -> np.exp(i*phase_corr) / m * Band_1(f + fo)
+    :math: `Band_1(f + fo) \\to np.exp(i*phase_corr) / m * Band_1(f + fo)`
 
     :param band0: n0 x ... x nm x nangles x ny x nx. Typically band0(f) = S(f) * otf(f) * wiener(f) ~ S(f)
     :param band1: same shape as band0. Typically band1(f) = S((f-fo) + fo) * otf(f + fo) * wiener(f + fo),
-    i.e. the separated band after shifting to correct position
+       i.e. the separated band after shifting to correct position
     :param otf0: Same shape as band0
     :param otf1:
     :param mask: same shape as band0. Where mask is True, use these points to evaluate the band correlation.
-     Typically construct by picking some value where otf(f) and otf(f + fo) are both > w, where w is some cutoff value.
+       Typically construct by picking some value where otf(f) and otf(f + fo) are both > w, where w is some cutoff value.
 
     :return phases, mags:
     """
@@ -3408,11 +3439,11 @@ def resample_bandlimited_ft(img_ft: array,
     The expanded array is normalized so that the realspace values will match after an inverse FFT,
     thus the corresponding Fourier space components will have the relationship b_k = a_k * b.size / a.size
 
-    @param img_ft: frequency space representation of image, arranged so that zero frequency is near the center of
-    the array. The frequencies can be obtained with fftshift(fftfreq(n, dxy))
-    @param mag: factor by which to oversample array. This must be an integer
-    @param axes: zero-pad along these axes only
-    @return img_ft_pad: expanded array
+    :param img_ft: frequency space representation of image, arranged so that zero frequency is near the center of
+       the array. The frequencies can be obtained with fftshift(fftfreq(n, dxy))
+    :param mag: factor by which to oversample array. This must be an integer
+    :param axes: zero-pad along these axes only
+    :return img_ft_pad: expanded array
     """
 
     use_gpu = isinstance(img_ft, cp.ndarray) and _cupy_available
@@ -3548,23 +3579,20 @@ def get_simulated_sim_imgs(ground_truth: array,
     :param frqs: SIM frequencies, of size nangles x 2. frqs[ii] = [fx, fy]
     :param phases: SIM phases in radians. Of size nangles x nphases. Phases may be different for each angle.
     :param mod_depths: SIM pattern modulation depths. Size nangles. If pass matrices, then mod depths can vary
-    spatially. Assume pattern modulation is the same for all phases of a given angle. Maybe pass list of numpy arrays
+       spatially. Assume pattern modulation is the same for all phases of a given angle. Maybe pass list of numpy arrays
     :param gains: gain of each pixel (or single value for all pixels)
     :param offsets: offset of each pixel (or single value for all pixels)
     :param readout_noise_sds: noise standard deviation for each pixel (or single value for all pixels)
     :param pix_size: pixel size of the input image (i.e. before binning). The pixel size of the output image
-    will be (pix_size * nbin)
+       will be (pix_size * nbin)
     :param amps: Amplitudes of the final image after binning.
     :param coherent_projection:
     :param psf: the point-spread function. Must have same dimensions as ground_truth, but may be different size
-    proper frequency points can be obtained using fft.fftshift(fft.fftfreq(nx, dx)) and etc.
+       proper frequency points can be obtained using fft.fftshift(fft.fftfreq(nx, dx)) and etc.
     :param nbin:
     :param kwargs: keyword arguments which will be passed through to simulated_img()
 
-    :return sim_imgs: nangles x nphases x nz x ny x nx array
-    :return snrs: nangles x nphases x nz x ny x nx array giving an estimate of the signal-to-noise ratio which will be
-    accurate as long as the photon number is large enough that the Poisson distribution is close to a normal distribution
-    :return patterns, snrs, patterns, raw_patterns:
+    :return sim_imgs, snrs, patterns, patterns_raw:
     """
 
     if isinstance(ground_truth, cp.ndarray) and _cupy_available:
