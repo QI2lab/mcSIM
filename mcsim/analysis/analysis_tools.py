@@ -72,9 +72,11 @@ def azimuthal_avg(img: np.ndarray,
     # dist_sd = np.sqrt(np.bincount(masks.ravel(), dist_grid.ravel() ** 2) / npts_bin - dist_mean ** 2) * np.sqrt(npts_bin / (npts_bin - 1))
 
     # do azimuthal averaging
-    az_avg = np.bincount(masks[to_use_inds], img[to_use_inds]) / npts_bin
+    az_avg = np.bincount(masks[to_use_inds], img[to_use_inds].real) / npts_bin + \
+             1j * np.bincount(masks[to_use_inds], img[to_use_inds].imag) / npts_bin
     # correct variance for unbiased estimator. (of course still biased for sd)
-    sd = np.sqrt(np.bincount(masks[to_use_inds], img[to_use_inds] ** 2) / npts_bin - az_avg ** 2) * np.sqrt(npts_bin / (npts_bin - 1))
+    # todo: correct to handle complex numbers appropriately
+    sd = np.sqrt(np.bincount(masks[to_use_inds], np.abs(img[to_use_inds]) ** 2) / npts_bin - np.abs(az_avg) ** 2) * np.sqrt(npts_bin / (npts_bin - 1))
     dist_mean = np.bincount(masks[to_use_inds], dist_grid[to_use_inds]) / npts_bin
     dist_sd = np.sqrt(np.bincount(masks[to_use_inds], dist_grid[to_use_inds] ** 2) / npts_bin - dist_mean ** 2) * np.sqrt(npts_bin / (npts_bin - 1))
 
