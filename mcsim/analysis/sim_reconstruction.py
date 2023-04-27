@@ -354,7 +354,7 @@ class SimImageSet:
         # GPU
         # #############################################
         self.use_gpu = use_gpu
-        if not _cupy_available:
+        if self.use_gpu and not _cupy_available:
             raise ValueError("'use_gpu' was true, but CuPy could not be imported")
 
         # #############################################
