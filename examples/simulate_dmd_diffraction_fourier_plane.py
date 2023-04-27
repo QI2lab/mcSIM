@@ -77,7 +77,7 @@ ang = -45 * np.pi/180
 f1 = np.array([np.sin(-45 * np.pi / 180), np.cos(-45 * np.pi / 180)]) * 1/4 * np.sqrt(2)
 # f2 = np.array([np.sin(-40 * np.pi / 180), np.cos(-40 * np.pi / 180)]) * 1/4 * np.sqrt(2) * 0.7
 # frqs = np.stack((f1, f2), axis=0)
-frqs = xp.expand_dims(f1, axis=0)
+frqs = np.expand_dims(f1, axis=0)
 
 frqs, offsets = np.broadcast_arrays(frqs, offsets)
 

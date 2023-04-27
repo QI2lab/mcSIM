@@ -212,7 +212,7 @@ def simulate_dmd(pattern: array,
 
     if phase_errs is None:
         phase_errs = xp.zeros(pattern.shape)
-    phase_errs = xp.array(efield_profile)
+    phase_errs = xp.asarray(phase_errs)
 
     if efield_profile is None:
         efield_profile = xp.ones(pattern.shape)

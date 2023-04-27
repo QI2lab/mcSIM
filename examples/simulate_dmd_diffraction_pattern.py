@@ -39,7 +39,7 @@ period = 3 * np.sqrt(2)
 pattern = np.cos(2 * np.pi / period * (xx * np.cos(theta_pattern) + yy * np.sin(theta_pattern)))
 pattern[pattern <= 0] = 0
 pattern[pattern > 0] = 1
-# pattern[pattern == 0] = 1
+pattern = pattern.astype(bool)
 
 # sample 1D simulation
 data1d = dmd.simulate_1d(pattern,
