@@ -1,0 +1,5 @@
+Texas Instruments DLP6500 DMD API
+=================================
+
+.. automodule:: expt_ctrl.dlp6500
+   :members:

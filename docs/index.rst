@@ -12,8 +12,12 @@ Welcome to mcSIM's documentation!
 
    sim
    odt
+   tools
    dmd_patterns
    dmd_simulation
+   dmd_affine
+   dlp6500
+   daq
 
 
 Indices and tables

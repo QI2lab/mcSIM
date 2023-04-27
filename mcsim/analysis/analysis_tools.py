@@ -1,5 +1,6 @@
 """
-Miscellaneous helper functions. Many are written to run on the GPU if the array passed to them are CuPy arrays
+Miscellaneous helper functions. Many are written to run on either the CPU or the GPU depending on if the arrays
+passed to them are NumPy or CuPy arrays
 """
 
 import numpy as np
@@ -15,25 +16,22 @@ except ImportError:
 
 array = Union[np.ndarray, cp.ndarray]
 
+
 def azimuthal_avg(img: np.ndarray,
                   dist_grid: np.ndarray,
                   bin_edges: np.ndarray,
-                  weights: Optional[np.ndarray] = None):
+                  weights: Optional[np.ndarray] = None) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
     Take azimuthal average of img. All points which have a dist_grid value lying
     between successive bin_edges will be averaged. Points are considered to lie within a bin
     if their value is strictly smaller than the upper edge, and greater than or equal to the lower edge.
+
     :param img: 2D image
     :param dist_grid:
     :param bin_edges:
     :param weights:
-
     :return az_avg:
-    :return sdm:
-    :return dist_mean:
-    :return dist_sd:
-    :return npts_bin:
-    :return masks:
+    :return: (sdm, dist_mean, dist_sd, npts_bin, masks)
     """
 
     # there are many possible approaches for doing azimuthal averaging.
@@ -119,11 +117,11 @@ def elliptical_grid(params: np.ndarray,
     axis of an ellipse with the given axes A and B that contains (x, y).
 
     :param params: [cx, cy, aspect_ratio, theta]. aspect_ratio = wy/wx. theta is the rotation angle of the x-axis of the
-    ellipse measured CCW from the x-axis of the coordinate system
+      ellipse measured CCW from the x-axis of the coordinate system
     :param xx: x-coordinates to compute grid on
     :param yy: y-coordinates to compute grid on
     :param units: 'mean', 'major', or 'minor'
-    :return:
+    :return: distance grid
     """
 
     cx = params[0]
@@ -173,8 +171,7 @@ def get_peak_value(img: array,
     :param y: 1D array representing y-coordinates of image
     :param peak_coord: peak coordinates [px, py]
     :param peak_pixel_size: number of pixels (along each direction) to sum to get peak value
-
-    :return peak_value: estimated value of the peak
+    :return: estimated value of the peak
     """
 
     if isinstance(img, cp.ndarray):
@@ -200,7 +197,6 @@ def get_peak_value(img: array,
     xx_roi = xp.expand_dims(rois.cut_roi(roi, xx), axis=tuple(range(img_roi.ndim - 2)))
     yy_roi = xp.expand_dims(rois.cut_roi(roi, yy), axis=tuple(range(img_roi.ndim - 2)))
 
-
     weights = pixel_overlap(xp.array([[py, px]]),
                             xp.stack((yy_roi.ravel(), xx_roi.ravel()), axis=1),
                             [peak_pixel_size * dy, peak_pixel_size * dx],
@@ -225,7 +221,7 @@ def pixel_overlap(centers1: array,
     :param centers2: Broadcastable to same size as centers1
     :param lens1: list of pixel 1 sizes along each dimension
     :param lens2: list of pixel 2 sizes along each dimension
-    :return overlaps: overlap area of pixels
+    :return: overlap area of pixels
     """
 
     if isinstance(centers1, cp.ndarray):
@@ -271,13 +267,12 @@ def translate_pix(img: array,
 
     :param img: image to translate
     :param shifts: distance to translate along each axis (s1, s2, ...). If these are not integers, then they will be
-    rounded to the closest integer value.
+      rounded to the closest integer value.
     :param dr: size of pixels along each axis (dr1, dr2, ...)
     :param axes: identify the axes being wrapped, (a1, a2, ...)
     :param bool wrap: if true, pixels on the boundary are shifted across to the opposite side. If false, these
-    parts of the array are padded with pad_val
+      parts of the array are padded with pad_val
     :param pad_val: value to pad portions of the image that would wrap around. Only used if wrap is False
-
     :return img_shifted, pix_shifts:
     """
 
@@ -375,27 +370,27 @@ def translate_ft(img_ft: array,
 
     If an array with more than 2 dimensions is passed in, then the shift will be applied to the last two dimensions
 
+    The total amount of memory used by this function is roughly set the fft routine, and is about 3x the size of
+    the input image
+
     :param img_ft: NumPy or CuPy array representing the fourier transform of an image with
-     frequency origin centered as if using fftshift. Shape n1 x n2 x ... x n_{-2} x n_{-1}.
+      frequency origin centered as if using fftshift. Shape n1 x n2 x ... x n_{-3} x ny x nx
       Shifting is done along the last two axes. If this is a CuPy array, routine will be run on the GPU
     :param fx: array of x-shift frequencies
-    fx and fy should either be broadcastable to the same size as img_ft, or they should be of size
-    n_{-m} x ... x n_{-3} x 2 where images along dimensions -m, ..., -3 are shifted in parallel
+      fx and fy should either be broadcastable to the same size as img_ft, or they should be of size
+      n_{-m} x ... x n_{-3} where images along dimensions -m, ..., -3 are shifted in parallel
     :param fy:
     :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
-
-    :return img_ft_shifted: shifted images, same size as img_ft
+    :return: shifted images, same size as img_ft
     """
 
     use_gpu = isinstance(img_ft, cp.ndarray) and _cupy_available
 
     if use_gpu:
         xp = cp
-        # avoid issues like https://github.com/cupy/cupy/issues/6355
-        cp.fft._cache.PlanCache(memsize=0)
+        cp.fft._cache.PlanCache(memsize=0)  # avoid issues like https://github.com/cupy/cupy/issues/6355
     else:
         xp = np
-
 
     if img_ft.ndim < 2:
         raise ValueError("img_ft must be at least 2D")
@@ -417,6 +412,7 @@ def translate_ft(img_ft: array,
         shapes_broadcastable = False
 
     # otherwise make shapes broadcastable if possible
+    # todo: think I can get rid of this logic and simply expand fx, fy over [-2, -1] axes
     if not shapes_broadcastable:
         ndim_extra_frq = fx.ndim
         if fx.shape != img_ft.shape[-2 - ndim_extra_frq:-2]:
@@ -439,6 +435,7 @@ def translate_ft(img_ft: array,
             drs = (1, 1)
         dy, dx = drs
 
+        # todo: only need to expand y and only by axis -1
         # must use symmetric frequency representation to do shifting correctly!
         # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
         # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
@@ -446,11 +443,11 @@ def translate_ft(img_ft: array,
         axis_expand_x = tuple(range(n_extra_dims + 1))
         x = xp.expand_dims(xp.fft.fftfreq(nx) * nx * dx, axis=axis_expand_x)
         # todo: replace with this second option which is more intuitive
-        # x = np.expand_dims(fft.ifftshift(np.arange(nx) - nx // 2) * dx, axis=axis_expand_x)
+        # x = xp.expand_dims(xp.fft.ifftshift(np.arange(nx) - nx // 2) * dx, axis=axis_expand_x)
 
         axis_expand_y = tuple(range(n_extra_dims)) + (-1,)
         y = xp.expand_dims(xp.fft.fftfreq(ny) * ny * dy, axis=axis_expand_y)
-        # y = np.expand_dims(fft.ifftshift(np.arange(ny) - ny // 2) * dy, axis=axis_expand_y)
+        # y = xp.expand_dims(xp.fft.ifftshift(np.arange(ny) - ny // 2) * dy, axis=axis_expand_y)
 
         exp_factor = xp.exp(-1j * 2 * np.pi * (fx * x + fy * y))
 

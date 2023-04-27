@@ -2,17 +2,32 @@
 Determine affine transformation mapping DMD space (object space) to camera space (image space) by projecting
 an array of spots onto a relatively flat fluorescent background (e.g. a thin layer of fluorescent dye)
 
-The affine transformation (in homogeneous coordinates) is represented by a matrix,
-[[xi], [yi], [1]] = T * [[xo], [yo], [1]]
+The affine transformation is represented by a matrix :math:`T` which relates object
+space coordinates :math:`r_o = (x_o, y_o)` to image space coordinates :math:`r_i = (x_i, y_i)`,
 
-Given a function defined on object space, g(xo, yo), we can define a corresponding function on image space
-gi(xi, yi) = g(T^{-1} [[xi], [yi], [1]])
+.. math::
+
+  \\begin{pmatrix}
+  x_i\\\\
+  y_i\\\\
+  1
+  \\end{pmatrix}
+  = T
+  \\begin{pmatrix}
+  xo\\\\
+  yo\\\\
+  1
+  \\end{pmatrix}
+
+Given a function defined on object space, :math:`g(x_o, y_o)`, we can define a corresponding function on image space
+:math:`\\tilde{g}(r_i) = g(T^{-1} r_i)`
 """
 
 from typing import Optional
 import json
 from pathlib import Path
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.colors import PowerNorm
@@ -34,9 +49,7 @@ def get_affine_fit_pattern(dmd_size: list[int],
     :param corner_size: size of blcosk indicating corners
     :param point_spacing: spacing between points
     :param mark_sep: separation between inversion/flip markers near center
-
-    :return patterns, radii, centers:
-    centers in format [[cx, cy]]
+    :return patterns, radii, centers: centers in format [[cx, cy]]
     """
     if isinstance(radii, (float, int)):
         radii = [radii]
@@ -131,15 +144,16 @@ def fit_pattern_peaks(img: np.ndarray,
     :param img: Fluorescence image of calibration pattern
     :param centers: spot positions on DMD
     :param centers_init: [[cy1, cx1], [cy2, cx2], ...] guess position of centers in the fluorescence image.
-    Must supply at least three centers. Given one initial center, the other two should be shifted by one index
-     along each direction of the DMD
+      Must supply at least three centers. Given one initial center, the other two should be shifted by one index
+      along each direction of the DMD
     :param indices_init: indices corresponding to centers init in the calibration pattern
     :param roi_size: ROI size in pixels used in fitting
     :param chi_squared_relative_max: fits with chi squared values larger than this factor * the chi squared of the
-     initial guess points will be ignored
+      initial guess points will be ignored
     :param max_position_err: points where fits have larger relative position error than this value will be ignored
     :param img_sd:
     :param bool debug:
+    :return:
     """
 
     if img_sd is None:
@@ -352,7 +366,7 @@ def plot_affine_summary(img: np.ndarray,
                         vmin_percentile: float = 5,
                         vmax_percentile: float = 99.9,
                         gamma: float = 1.,
-                        **kwargs):
+                        **kwargs) -> matplotlib.figure.Figure:
     """
     Plot results of DMD affine transformation fitting using results of fit_pattern_peaks()
 
@@ -364,6 +378,7 @@ def plot_affine_summary(img: np.ndarray,
     :param dmd_centers: ny x nx x 2, center positiosn on DMD
     :param affine_xform: affine transformation
     :param options: {'cam_pix', 'dmd_pix', 'dmd2cam_mag_expected', 'cam_mag'}
+    :param indices_init:
     :param vmin_percentile:
     :param vmax_percentile:
     :param gamma: gamma used in displaying image
@@ -373,7 +388,6 @@ def plot_affine_summary(img: np.ndarray,
 
     if "cam_mag" not in options.keys():
         options.update({"cam_mag": np.nan})
-
 
     fps = np.array(fps, copy=True)
     # ensure longer sigma is first
@@ -493,7 +507,7 @@ def plot_affine_summary(img: np.ndarray,
     ax = fig.add_subplot(grid[4:6, 1])
     no_nans = angles.ravel()[np.logical_not(np.isnan(angles.ravel()))]
     median_angle = np.median(no_nans * 180 / np.pi)
-    im = ax.imshow(angles * 180 /np.pi, vmin=0, vmax=180, cmap=cmap)
+    im = ax.imshow(angles * 180 / np.pi, vmin=0, vmax=180, cmap=cmap)
     ax.set_title('angle, median=%0.1f$^\deg$' % median_angle)
     plt.colorbar(im)
 
@@ -568,7 +582,7 @@ def estimate_xform(img: np.ndarray,
                    vmax_percentile: float = 99.,
                    gamma: float = 1.,
                    figsize=(16, 12),
-                   **kwargs):
+                   **kwargs) -> (dict, matplotlib.figure.Figure):
     """
     Estimate affine transformation from DMD space to camera image space from an image.
 
@@ -577,15 +591,20 @@ def estimate_xform(img: np.ndarray,
     :param pattern_centers: pattern centers in DMD coordinates
     :param centers_init: [[cy1, cx1], [cy2, cx2], [cy3, cx3]] in image space
     :param indices_init: [[ia1, ib1], [ia2, ib2], [ia3, ib3]]. ia indices are along the y-direction of the DMD pattern,
-    starting with 0 which is the topmost when plotted. ib indices are long the x-direction starting with 0 which is the
-    leftmost when plotted
+      starting with 0 which is the topmost when plotted. ib indices are long the x-direction starting with 0 which is the
+      leftmost when plotted
     :param options: {'cam_pix', 'dmd_pix', 'dmd2cam_mag_expected'}. Distances are
-    in meters.
+      in meters.
     :param roi_size: size of ROI to fit each peak
     :param export_fname: file name (not including extension) to use when saving results
+    :param plot:
     :param export_dir: directory to save results
-    :return data: affine trasnformation data
-    :return fig: figure handle to summary data
+    :param debug:
+    :param vmin_percentile:
+    :param vmax_percentile:
+    :param gamma:
+    :param figsize:
+    :return : (data, figure) affine trasnformation data and figure handle
     """
 
     # fit points
