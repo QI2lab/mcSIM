@@ -303,3 +303,6 @@ expt_ctrl/temp*.cfg
 # data files
 *.zarr
 *.hdf5
+
+# documentation
+docs/_*
