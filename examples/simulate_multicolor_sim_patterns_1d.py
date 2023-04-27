@@ -100,7 +100,7 @@ for ii in range(len(wlens)):
     # generate pattern for this wavelength
     periods[ii] = base_period * wlens[ii] / wlens[0]
     sinusoid = np.cos(2 * np.pi * (xx - yy) / np.sqrt(2) / periods[ii])
-    pattern = np.zeros(((n_pattern, n_pattern)))
+    pattern = np.zeros(((n_pattern, n_pattern)), dtype=bool)
     pattern[sinusoid >= 0] = 1
 
     # do 1D DMD simulations

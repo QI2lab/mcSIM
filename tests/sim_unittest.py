@@ -252,31 +252,6 @@ class TestSIM(unittest.TestCase):
         np.testing.assert_allclose(mat.dot(mat_inv), np.identity(mat.shape[0]), atol=1e-10)
 
 
-    def test_band_mixing_mat_inv_jac(self):
-        """
-        test jacobian of band mixing matrix inverse
-        @return:
-        """
-        phases = [0, 2 * np.pi / 3 - 0.89243, 4 * np.pi / 3 + 0.236]
-        amps = [0.78, 0.876, 0.276]
-        m = 0.777
-        params = np.array(phases + amps + [m])
-        ds = 1e-8
-
-        jac = sim.get_band_mixing_inv_jac(phases, m, amps)
-
-        jac_est = []
-        def get_mat(p): return sim.get_band_mixing_inv([p[0], p[1], p[2]], p[6], [p[3], p[4], p[5]])
-
-        for ii in range(len(params)):
-            params_temp = np.array(params, copy=True)
-            params_temp[ii] -= ds
-            jac_est.append(1 / ds * (get_mat(params) - get_mat(params_temp)))
-
-        max_err = np.max([np.max(np.abs(jac[ii] - jac_est[ii])) for ii in range(len(params))])
-        self.assertAlmostEqual(max_err, 0, places=6)
-
-
     def test_expand_fourier_sp(self):
         """
         Test expand_fourier_sp() function

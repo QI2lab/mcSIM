@@ -13,7 +13,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                          odt_exposure_time: float,
                          sim_exposure_time: float,
                          npatterns: int,
-                         dt: float = 105e-6,
+                         dt: float,
                          interval: float = 0,
                          n_odt_per_sim: int = 1,
                          n_trig_width: int = 1,
@@ -24,7 +24,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                          sim_stabilize_t: float = 200e-3,
                          shutter_delay_time: float = 50e-3,
                          z_voltages: list[float] = None,
-                         use_dmd_as_odt_shutter: bool =False,
+                         use_dmd_as_odt_shutter: bool = False,
                          n_digital_ch: int = 16,
                          n_analog_ch: int = 4,
                          acquisition_mode: str = None):
@@ -132,39 +132,15 @@ def get_sim_odt_sequence(daq_do_map: dict,
     # for z-stack, digital pgm are just repeated. We don't need to do anything at all
     digital_pgm_full = np.vstack(digital_pgms)
 
-    # analog pgms must be repeated with correct z voltages
+    # analog pgms must be repeated with correct z-voltages
     analog_pgms_one_z = np.vstack(analog_pgms)
 
     # check correct number of analog program steps and analog triggers
     if not analog_pgms_one_z.shape[0] == np.sum(digital_pgm_full[:, daq_do_map["analog_trigger"]]):
-        raise AssertionError(f"size of analog program={analog_pgms_one_z.shape[0]:d}"
-                             f" should equal number of analog triggers={np.sum(digital_pgm_full[:, daq_do_map['analog_trigger']]):d}")
-
-    # todo: correct logic here ... e.g. if one channel not present or etc.
-    # check number of patterns and number of camera triggers match
-    # for odt
-    # if np.sum(digital_pgm_full[:, daq_do_map["odt_cam"]]) // n_trig_width != (n_odt_patterns * n_odt_per_sim):
-    #     raise ValueError("number of odt pics (%d) did not match DAQ program (%d)" %
-    #                      (n_odt_patterns * n_odt_per_sim, np.sum(digital_pgm_full[:, daq_do_map["odt_cam"]]) // n_trig_width))
-
-    # for SIM
-    # if np.sum(digital_pgm_full[:, daq_do_map["sim_cam"]]) // n_trig_width != n_sim_patterns:
-    #     raise ValueError(
-    #         f"number of sim pics ({n_sim_patterns:d}) did not match"
-    #         f" DAQ program {np.sum(digital_pgm_full[:, daq_do_map['sim_cam']]) // n_trig_width:d}")
-
-    # check program and number of pictures match
-    # if np.sum(digital_program[:, daq_do_map["odt_cam"]]) // n_trig_width != nodt_pics // ntimes // nz:
-    #     raise ValueError("number of odt pics (%d) did not match DAQ program (%d)" %
-    #                      (nodt_pics, np.sum(digital_program[:, daq_do_map["odt_cam"]]) // n_trig_width))
-
-    # if np.sum(digital_program[:, daq_do_map["sim_cam"]]) // n_trig_width != nsim_pics // ntimes // nz:
-    #     raise ValueError(f"number of sim pics ({nsim_pics:d}) did not match DAQ program "
-    #                      f"{np.sum(digital_program[:, daq_do_map['sim_cam']]) // n_trig_width:d}")
-    #
-    # if np.sum(digital_program[:, daq_do_map["analog_trigger"]]) != len(channels):
-    #     raise ValueError(f"number of analog triggers, {np.sum(digital_program[:, daq_do_map['analog_trigger']]):d},"
-    #                      f" did not match {len(channels) * nz:d}")
+        raise AssertionError(f"size of analog program="
+                             f"{analog_pgms_one_z.shape[0]:d}"
+                             f" should equal number of analog triggers="
+                             f"{np.sum(digital_pgm_full[:, daq_do_map['analog_trigger']]):d}")
 
     # get correct voltage for each step
     analog_pgms_per_z = []
@@ -189,7 +165,7 @@ def get_odt_sequence(daq_do_map: dict,
                      preset: dict,
                      exposure_time: float,
                      npatterns: int,
-                     dt: float = 105e-6,
+                     dt: float,
                      interval: float = 0,
                      nrepeats: int = 1,
                      n_trig_width: int = 1,
@@ -201,9 +177,7 @@ def get_odt_sequence(daq_do_map: dict,
                      n_analog_ch: int = 4,
                      use_dmd_as_shutter: bool = False):
     """
-    Get DAQ ODT sequence
-
-    all times in seconds
+    Create DAQ sequence for running optical diffraction tomography experiment. All times given in seconds.
 
     @param daq_do_map: dictionary with named lines as keys and line numbers as values. Must include lines ...
     @param daq_ao_map: dictionary with named lines as keys and line number as values.
@@ -317,7 +291,7 @@ def get_sim_sequence(daq_do_map: dict,
                      preset: dict,
                      exposure_time: float,
                      npatterns: int,
-                     dt: float = 105e-6,
+                     dt: float,
                      interval: float = 0.,
                      nrepeats: int = 1,
                      n_trig_width: int = 1,

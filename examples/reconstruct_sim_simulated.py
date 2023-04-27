@@ -126,21 +126,21 @@ tstart = time.perf_counter()
 
 save_dir = root_dir / f"{tstamp:s}_sim_reconstruction_simulated"
 
-imgset = sim.SimImageSet({"pixel_size": dxy, "na": na, "wavelength": wavelength},
-                         imgs,
-                         otf=None,
-                         wiener_parameter=0.3,
-                         frq_estimation_mode="band-correlation",
-                         frq_guess=frqs_gt,
-                         phase_estimation_mode="wicker-iterative",
-                         phases_guess=phases_gt,
-                         combine_bands_mode="fairSIM",
-                         fmax_exclude_band0=0.4,
-                         normalize_histograms=False,
-                         background=100,
-                         gain=2,
-                         min_p2nr=0.5,
-                         use_gpu=use_gpu)
+imgset = sim.SimImageSet.initialize({"pixel_size": dxy, "na": na, "wavelength": wavelength},
+                                    imgs,
+                                    otf=None,
+                                    wiener_parameter=0.3,
+                                    frq_estimation_mode="band-correlation",
+                                    frq_guess=frqs_gt,
+                                    phase_estimation_mode="wicker-iterative",
+                                    phases_guess=phases_gt,
+                                    combine_bands_mode="fairSIM",
+                                    fmax_exclude_band0=0.4,
+                                    normalize_histograms=False,
+                                    background=100,
+                                    gain=2,
+                                    min_p2nr=0.5,
+                                    use_gpu=use_gpu)
 
 # run reconstruction
 imgset.reconstruct(compute_widefield=True,
