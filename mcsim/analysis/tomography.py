@@ -474,8 +474,8 @@ class tomography:
 
                 figh_ref_frq.savefig(Path(save_dir, "frequency_reference_diagnostic.png"))
         elif mode == "average":
-            frq_ref = np.mean(np.stack([np.mean(f, axis=-2) for f in self.hologram_frqs], axis=-1), axis=-1)
-            frq_ref_bg = np.mean(np.stack([np.mean(f, axis=-2) for f in self.hologram_frqs_bg], axis=-1), axis=-1)
+            frq_ref = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
+            frq_ref_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
         else:
             raise ValueError(f"'mode' must be '{mode:s}' but must be 'fit' or 'average'")
 
@@ -526,9 +526,11 @@ class tomography:
                                                                     mean_hologram_frqs,
                                                                     dist_err_max=0.1,
                                                                     niterations=100)
-        else:
+        elif len(mean_hologram_frqs) > 3:
             # no point in RANSAC if not enough points to invert transformation
             xform_dmd2frq, _ = affine.fit_xform_points(centers_dmd, mean_hologram_frqs)
+        else:
+            return None
 
         # # map pupil positions to frequency
         frqs_from_pupil = affine.xform_points(centers_dmd, xform_dmd2frq)
@@ -1515,11 +1517,15 @@ class tomography:
         ax.set_xlabel("time step")
         ax.set_ylabel("|E|")
 
+        ax.set_ylim([0, None])
+
         ax = figh2.add_subplot(2, 2, 2)
         ax.set_title("|Ebg| RMS average")
         ax.plot(epowers_bg)
         ax.set_xlabel("time step")
         ax.set_ylabel("|E|")
+
+        ax.set_ylim([0, None])
 
         ax = figh2.add_subplot(2, 2, 3)
         ax.set_title("E fit amplitude")
@@ -1527,11 +1533,15 @@ class tomography:
         ax.set_xlabel("time step")
         ax.set_ylabel("amp")
 
+        ax.set_ylim([0, None])
+
         ax = figh2.add_subplot(2, 2, 4)
         ax.set_title("Ebg bit amplitude")
         ax.plot(amp_bg)
         ax.set_xlabel("time step")
         ax.set_ylabel("amplitude")
+
+        ax.set_ylim([0, None])
 
         return figh2, epowers, epowers_bg
 
@@ -2530,7 +2540,8 @@ def fwd_model_linear(beam_fx,
                      v_shape: tuple[int],
                      drs_v: tuple[float],
                      mode: str = "born",
-                     interpolate: bool = False):
+                     interpolate: bool = False,
+                     use_gpu: bool = False):
     """
     Forward model from scattering potential v to imaged electric field after interacting with object
 
@@ -2551,6 +2562,17 @@ def fwd_model_linear(beam_fx,
     :return (data, row_index, column_index): raw data
     """
 
+    if use_gpu and _gpu_available:
+        xp = cp
+        spm = sp_gpu
+    else:
+        xp = np
+        spm = sp
+
+    beam_fx = xp.asarray(beam_fx)
+    beam_fy = xp.asarray(beam_fy)
+    beam_fz = xp.asarray(beam_fz)
+
     ny, nx = e_shape
     dy, dx = drs_e
 
@@ -2559,8 +2581,8 @@ def fwd_model_linear(beam_fx,
     # ##################################
     # get frequencies of electric field images and make broadcastable to shape (nimgs, ny, nx)
     # ##################################
-    fx = np.expand_dims(fft.fftshift(fft.fftfreq(nx, dx)), axis=(0, 1))
-    fy = np.expand_dims(fft.fftshift(fft.fftfreq(ny, dy)), axis=(0, 2))
+    fx = xp.expand_dims(xp.fft.fftshift(xp.fft.fftfreq(nx, dx)), axis=(0, 1))
+    fy = xp.expand_dims(xp.fft.fftshift(xp.fft.fftfreq(ny, dy)), axis=(0, 2))
 
     # ##################################
     # set sampling of 3D scattering potential
@@ -2569,9 +2591,9 @@ def fwd_model_linear(beam_fx,
     v_size = np.prod(v_shape)
     dz_v, dy_v, dx_v = drs_v
 
-    fx_v = fft.fftshift(fft.fftfreq(nx_v, dx_v))
-    fy_v = fft.fftshift(fft.fftfreq(ny_v, dy_v))
-    fz_v = fft.fftshift(fft.fftfreq(nz_v, dz_v))
+    fx_v = xp.fft.fftshift(xp.fft.fftfreq(nx_v, dx_v))
+    fy_v = xp.fft.fftshift(xp.fft.fftfreq(ny_v, dy_v))
+    fz_v = xp.fft.fftshift(xp.fft.fftfreq(nz_v, dz_v))
     dfx_v = fx_v[1] - fx_v[0]
     dfy_v = fy_v[1] - fy_v[0]
     dfz_v = fz_v[1] - fz_v[0]
@@ -2593,22 +2615,22 @@ def fwd_model_linear(beam_fx,
         # ##################################
 
         # logical array, which frqs in detection NA
-        detectable = np.sqrt(fx ** 2 + fy ** 2)[0] <= (na_det / wavelength)
-        detectable = np.tile(detectable, [nimgs, 1, 1])
+        detectable = xp.sqrt(fx ** 2 + fy ** 2)[0] <= (na_det / wavelength)
+        detectable = xp.tile(detectable, [nimgs, 1, 1])
 
         #
-        fz = np.tile(get_fz(fx, fy, no, wavelength), [nimgs, 1, 1])
+        fz = xp.tile(get_fz(fx, fy, no, wavelength), [nimgs, 1, 1])
 
         # construct frequencies where we have data about the 3D scattering potentials
         # frequencies of the sample F = f - no/lambda * beam_vec
-        Fx, Fy, Fz = np.broadcast_arrays(fx - np.expand_dims(beam_fx, axis=(1, 2)),
-                                         fy - np.expand_dims(beam_fy, axis=(1, 2)),
-                                         fz - np.expand_dims(beam_fz, axis=(1, 2))
+        Fx, Fy, Fz = xp.broadcast_arrays(fx - xp.expand_dims(beam_fx, axis=(1, 2)),
+                                         fy - xp.expand_dims(beam_fy, axis=(1, 2)),
+                                         fz - xp.expand_dims(beam_fz, axis=(1, 2))
                                          )
         # if don't copy, then elements of F's are reference to other elements.
-        Fx = np.array(Fx, copy=True)
-        Fy = np.array(Fy, copy=True)
-        Fz = np.array(Fz, copy=True)
+        Fx = xp.array(Fx, copy=True)
+        Fy = xp.array(Fy, copy=True)
+        Fz = xp.array(Fz, copy=True)
 
         # indices into the final scattering potential
         # taking advantage of the fact that the final scattering potential indices have FFT structure
@@ -2627,15 +2649,15 @@ def fwd_model_linear(beam_fx,
         Fy = fy
 
         # helper frequencies for calculating fz
-        fx_rytov = Fx + np.expand_dims(beam_fx, axis=(1, 2))
-        fy_rytov = Fy + np.expand_dims(beam_fy, axis=(1, 2))
+        fx_rytov = Fx + xp.expand_dims(beam_fx, axis=(1, 2))
+        fy_rytov = Fy + xp.expand_dims(beam_fy, axis=(1, 2))
 
         fz = get_fz(fx_rytov,
                     fy_rytov,
                     no,
                     wavelength)
 
-        Fz = fz - np.expand_dims(beam_fz, axis=(1, 2))
+        Fz = fz - xp.expand_dims(beam_fz, axis=(1, 2))
 
         # take care of frequencies which do not contain signal
         detectable = (fx_rytov ** 2 + fy_rytov ** 2) <= (na_det / wavelength) ** 2
@@ -2645,7 +2667,7 @@ def fwd_model_linear(beam_fx,
         yind = Fy / dfy_v + ny_v // 2
         xind = Fx / dfx_v + nx_v // 2
 
-        zind, yind, xind = [np.array(a, copy=True) for a in np.broadcast_arrays(zind, yind, xind)]
+        zind, yind, xind = [xp.array(a, copy=True) for a in xp.broadcast_arrays(zind, yind, xind)]
     else:
         raise ValueError(f"'mode' must be 'born' or 'rytov' but was '{mode:s}'")
 
@@ -2658,18 +2680,23 @@ def fwd_model_linear(beam_fx,
     # use csc for fast left mult w.dot(L)
     if interpolate:
         # trilinear interpolation scheme ... needs 8 points in cube around point of interest
-        z0 = np.floor(zind).astype(int)
+        z0 = xp.floor(zind).astype(int)
         z1 = z0 + 1
-        y0 = np.floor(yind).astype(int)
+        y0 = xp.floor(yind).astype(int)
         y1 = y0 + 1
-        x0 = np.floor(xind).astype(int)
+        x0 = xp.floor(xind).astype(int)
         x1 = x0 + 1
 
         # find indices in bounds
-        to_use = np.logical_and.reduce((z0 >= 0, z1 < nz_v,
-                                        y0 >= 0, y1 < ny_v,
-                                        x0 >= 0, x1 < nx_v,
-                                        detectable))
+        tzd = xp.logical_and(xp.logical_and(z0 >= 0, z1 < nz_v), detectable)
+        txy = xp.logical_and(xp.logical_and(y0 >= 0, y1 < ny_v), xp.logical_and(x0 >= 0, x1 < nx_v))
+        to_use = xp.logical_and(tzd, txy)
+
+        # reduce not supported by cupy
+        # to_use = xp.logical_and.reduce((z0 >= 0, z1 < nz_v,
+        #                                 y0 >= 0, y1 < ny_v,
+        #                                 x0 >= 0, x1 < nx_v,
+        #                                 detectable))
         # todo: add in the points this misses where only option is to round
         # todo: could do this by adding to_use per coordinate ... and then normalizing the rows of the matrix
         # todo: but what if miss point in E array entirely?
@@ -2695,45 +2722,48 @@ def fwd_model_linear(beam_fx,
                           (zind - z0) * (yind - y0) * (xind - x0)]
 
         # row_index -> indices into E vector
-        row_index = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
-        row_index = np.tile(row_index, 8)
+        row_index = xp.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
+        row_index = xp.tile(row_index, 8)
 
         # column_index -> indices into V vector
         inds_to_use = [[i[to_use] for i in inow] for inow in inds]
-        zinds_to_use, yinds_to_use, xinds_to_use = [np.concatenate(i) for i in list(zip(*inds_to_use))]
+        zinds_to_use, yinds_to_use, xinds_to_use = [xp.concatenate(i) for i in list(zip(*inds_to_use))]
 
-        column_index = np.ravel_multi_index(tuple((zinds_to_use, yinds_to_use, xinds_to_use)), v_shape)
+        column_index = xp.ravel_multi_index(tuple((zinds_to_use, yinds_to_use, xinds_to_use)), v_shape)
 
         # construct sparse matrix values
-        interp_weights_to_use = np.concatenate([w[to_use] for w in interp_weights])
+        interp_weights_to_use = xp.concatenate([w[to_use] for w in interp_weights])
 
         data = interp_weights_to_use / (2 * 1j * (2 * np.pi * np.tile(fz[to_use], 8))) * dx_v * dy_v * dz_v / (dx * dy)
 
     else:
         # find indices in bounds
-        to_use = np.logical_and.reduce((zind >= 0, zind < nz_v,
-                                        yind >= 0, yind < ny_v,
-                                        xind >= 0, xind < nx_v,
-                                        detectable))
+        # to_use = np.logical_and.reduce((zind >= 0, zind < nz_v,
+        #                                 yind >= 0, yind < ny_v,
+        #                                 xind >= 0, xind < nx_v,
+        #                                 detectable))
+        tzd = xp.logical_and(xp.logical_and(zind >= 0, zind < nz_v), detectable)
+        txy = xp.logical_and(xp.logical_and(yind >= 0, yind < ny_v), xp.logical_and(xind >= 0, xind < nx_v))
+        to_use = xp.logical_and(tzd, txy)
 
-        inds_round = (np.round(zind[to_use]).astype(int),
-                      np.round(yind[to_use]).astype(int),
-                      np.round(xind[to_use]).astype(int))
+        inds_round = (xp.round(zind[to_use]).astype(int),
+                      xp.round(yind[to_use]).astype(int),
+                      xp.round(xind[to_use]).astype(int))
 
         # row index = position in E
-        row_index = np.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
+        row_index = xp.arange(nimgs * ny * nx, dtype=int).reshape([nimgs, ny, nx])[to_use]
 
         # column index = position in V
-        column_index = np.ravel_multi_index(inds_round, v_shape)
+        column_index = xp.ravel_multi_index(inds_round, v_shape)
 
         # matrix values
-        data = np.ones(len(row_index)) / (2 * 1j * (2 * np.pi * fz[to_use])) * dx_v * dy_v * dz_v / (dx * dy)
+        data = xp.ones(len(row_index)) / (2 * 1j * (2 * np.pi * fz[to_use])) * dx_v * dy_v * dz_v / (dx * dy)
 
     # construct sparse matrix
     # E(k) = model * V(k)
     # column index = position in V
     # row index = position in E
-    model = sp.csr_matrix((data, (row_index, column_index)), shape=(nimgs * ny * nx, v_size))
+    model = spm.csr_matrix((data, (row_index, column_index)), shape=(nimgs * ny * nx, v_size))
 
     return model, (data, row_index, column_index)
 
@@ -3715,7 +3745,7 @@ def display_tomography_recon(recon_fname: str,
 
         # rytov
         viewer.add_image(da.abs(erytov_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|e scatt|", contrast_limits=[0, 1.2],
+                         name="|e rytov|", contrast_limits=[0, 1.2],
                          translate=(0, nx_raw + nx))
 
         viewer.add_image(da.angle(erytov_stack), scale=(dz_v / dxy_v, 1, 1),
