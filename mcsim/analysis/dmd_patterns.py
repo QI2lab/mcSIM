@@ -1,6 +1,6 @@
 """
 Generate SIM patterns using lattice periodicity vectors Va and Vb, and duplicating roi_size single unit cell.
-See the supplemental material of doi: 10.1038/nmeth.1734 for more discussion of similar approaches.
+See the supplemental material of  https://doi.org/10.1038/nmeth.1734 for more discussion of similar approaches.
 
 Note: we interpret the pattern params(x, y) = M[i_y, i_x], where M is the matrix representing the pattern. matplotlib
 will display the matrix with i_y = 1 on top, so the pattern we really want is the matrix flipped along the first
@@ -38,9 +38,8 @@ def get_sim_pattern(dmd_size: list[int],
     :param vec_b: [dxb, dyb]
     :param nphases: number of phase shifts required. This effects the filling of the pattern
     :param phase_index: integer in range(nphases)
-
     :return pattern, cell: 'pattern' is an array giving the desired pattern and 'cell' is an array giving
-    a single unit cell of the pattern
+      a single unit cell of the pattern
     """
 
     # ensure both vec_b components are divisible by nphases
@@ -67,7 +66,7 @@ def tile_pattern(dmd_size: list[int],
     """
     Generate SIM patterns using lattice periodicity vectors vec_a = [dxa, dya] and vec_b = [dxb, 0],
     and duplicating roi_size single unit cell. See the supplemental material of
-    doi: 10.1038/nmeth.1734 for more information.
+    https://doi.org/10.1038/nmeth.1734 for more information.
 
     # todo: much slower than the old function because looping and doing pixel assignment instead of concatenating
 
@@ -79,12 +78,11 @@ def tile_pattern(dmd_size: list[int],
     :param vec_a: [dxa, dya]
     :param vec_b: [dxb, dyb]
     :param start_coord: [x, y]. Coordinate to position the start of a unit cell on the DMD.
-    This adjusts the phase of the resulting pattern. These coordinates are relative to the image corner
+      This adjusts the phase of the resulting pattern. These coordinates are relative to the image corner
     :param cell:
     :param x_cell:
     :param y_cell:
     :param do_cell_reduction: whether or not to call get_minimal_cell() before tiling
-
     :return pattern:
     """
     vec_a = np.array(vec_a, copy=True)
@@ -246,9 +244,8 @@ def get_sim_unit_cell(vec_a: np.ndarray,
     :param vec_a:
     :param vec_b:
     :param nphases: number of phase shifts. Required to determine the on and off pixels in cell.
-
-    :retur cell: square array representing cell. Ones and zeroes give on and off points, and nans are
-    points that are not part of the unit cell, but are necessary to pad the array to make it squares
+    :return cell: square array representing cell. Ones and zeroes give on and off points, and nans are
+      points that are not part of the unit cell, but are necessary to pad the array to make it squares
     :return x_cell: x-coordinates of cell pixels
     :return y_cell: y-coordinates of cell pixels
     """
@@ -610,7 +607,6 @@ def get_reciprocal_vects(vec_a: np.ndarray,
     :param vec_a:
     :param vec_b:
     :param mode: 'frequency' or 'angular-frequency'
-
     :return reciprocal_vect1:
     :return reciprocal_vect2:
     """
@@ -708,7 +704,7 @@ def get_sim_phase(vec_a: np.ndarray,
     """
     Get phase of dominant frequency component in the SIM pattern.
 
-    P(x, y) = 0.5 * (1 + cos(2pi*f_x*x + 2pi*f_y*y + phi)
+    :math: `P(x, y) = 0.5 (1 + \\cos(2 \\pi f_x x + 2\\pi f_y y + \\phi)`
 
     :param vec_a:
     :param vec_b:
@@ -716,9 +712,8 @@ def get_sim_phase(vec_a: np.ndarray,
     :param phase_index: 0, ..., nphases-1
     :param pattern_size: [nx, ny]
     :param origin: origin to use for computing the phase. If 'fft', will assume the coordinates are the same
-    as used in an FFT (i.e. before performing an ifftshift, with the 0 near the center). If 'corner', will
-    suppose the origin is at pattern[0, 0].
-
+      as used in an FFT (i.e. before performing an ifftshift, with the 0 near the center). If 'corner', will
+      suppose the origin is at pattern[0, 0].
     :return phase: phase of the SIM pattern at the dominant frequency component (which is recp_vec_b)
     """
 
@@ -749,8 +744,8 @@ def get_lattice_dft_frqs(vec_a: np.ndarray,
     :param vec_a:
     :param vec_b:
     :return bcell, f1, f2, fvecs: bcell is a boolean array indicating which points are in the frequency unit cell.
-    f1 and f2 are integers which define the frequencies, f = f1 * b1 + f2 * b2. fvecs are the frequencies for each
-    points in bcell
+      f1 and f2 are integers which define the frequencies, f = f1 * b1 + f2 * b2. fvecs are the frequencies for each
+      points in bcell
     """
     b1, b2 = get_reciprocal_vects(vec_a, vec_b)
     det = int(np.linalg.det(np.stack((vec_a, vec_b), axis=1)))
@@ -773,12 +768,12 @@ def get_lattice_dft(unit_cell,
                     vec_b):
     """
     Compute the lattice DFT of a given pattern defined on a unit cell
-    @param unit_cell:
-    @param x: coordinates of the unit cell
-    @param y:
-    @param vec_a: lattice vectors
-    @param vec_b:
-    @return ldft, f1, f2, fvecs:
+    :param unit_cell:
+    :param x: coordinates of the unit cell
+    :param y:
+    :param vec_a: lattice vectors
+    :param vec_b:
+    :return ldft, f1, f2, fvecs:
     """
     bcell, f1, f2, fvecs = get_lattice_dft_frqs(vec_a, vec_b)
 
@@ -972,7 +967,7 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
                                      nmax: int = 20,
                                      origin: str = "fft",
                                      include_blaze_correction: bool = True,
-                                     dmd_params: Optional[dict] = None):
+                                     dmd_params: Optional[dict] = None) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
     Utility function for computing many electric field and intensity components of the Fourier pattern, including the
     effect of the Blaze angle and system numerical aperture
@@ -993,7 +988,7 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
     :param vec_a:
     :param vec_b:
     :param fmax: maximum pass frequency for electric field in 1/mirrors. i.e. fmax = NA/lambda without the factor
-    of 2 that appears for the intensity. Note that fmax <= 1, which is the maximum frequency supported by the DMD.
+      of 2 that appears for the intensity. Note that fmax <= 1, which is the maximum frequency supported by the DMD.
     :param nphases:
     :param phase_index:
     :param dmd_size: [nx, ny]
@@ -1002,12 +997,11 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
     :param include_blaze_correction: if True, include blaze corrections
     :param dmd_params: dictionary {'wavelength', 'dx', 'dy', 'wx', 'wy', 'theta_ins': [tx_in, ty_in],
      'theta_outs': [tx_out, ty_out]}
-
-    :return np.array intensity_fc: fourier components of intensity (band limited)
-    :return np.array efield_fc: fourier components of efield (band limited)
-    :return np.array ns: vec = ns * recp_vec_a + ms * recp_vec_b
-    :return np.array ms: vec = ns * recp_vec_a + ms * recp_vec_b
-    :return np.array vecs: ns * recp_vec_a + ms * recp_vec_b
+    :return intensity_fc: fourier components of intensity (band limited)
+    :return efield_fc: fourier components of efield (band limited)
+    :return ns: vec = ns * recp_vec_a + ms * recp_vec_b
+    :return ms: vec = ns * recp_vec_a + ms * recp_vec_b
+    :return vecs: ns * recp_vec_a + ms * recp_vec_b
     """
 
     if dmd_params is None and include_blaze_correction is True:
@@ -1214,7 +1208,7 @@ def show_fourier_components(vec_a: np.ndarray,
                             **kwargs):
     """
     Display strength of fourier components for a given pattern. Display function for data generated with
-    ``get_bandlimited_fourier_components()''. See that function for more information about parameters
+    `get_bandlimited_fourier_components()`. See that function for more information about parameters
 
     :param vec_a:
     :param vec_b:
@@ -1228,7 +1222,6 @@ def show_fourier_components(vec_a: np.ndarray,
     :param gamma: gamma to use in power law normalization of plots
     :param figsize:
     :param kwargs: passed through to figure
-
     :return figh: handle to figure
     """
 
@@ -1524,9 +1517,8 @@ def binarize(pattern_gray: np.ndarray,
 
     :param pattern_gray: gray scale pattern, with values in the range [0, 1]
     :param mode: "floyd-steinberg" to specify the Floyd-Steinberg error diffusion algorithm, "jjn" to use
-    the error diffusion algorithm of Jarvis, Judis, and Ninke https:doi.org/10.1016/S0146-664X(76)80003-2,
-     "random" to use a random dither, or "round" to round to the nearest value
-
+      the error diffusion algorithm of Jarvis, Judis, and Ninke https:doi.org/10.1016/S0146-664X(76)80003-2,
+      "random" to use a random dither, or "round" to round to the nearest value
     :return pattern_binary: binary approximation of pattern_gray
     """
 
@@ -1893,7 +1885,7 @@ def find_allowed_angles(period: float,
     :param period:
     :param nphases:
     :param nmax:
-    :param restrict_to_coordinate_axes: deprecated...used to allow running old behavior when adding functionatlity
+    :param restrict_to_coordinate_axes: deprecated...used to allow running old behavior when adding functionality
     :return:
     """
 

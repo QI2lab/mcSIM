@@ -5,6 +5,7 @@
 
 import os
 import sys
+from mcsim import __version__
 
 # sys.path.insert(0, os.path.abspath('../../pycromanager/'))
 sys.path.insert(0, os.path.abspath("../mcsim"))
@@ -15,7 +16,7 @@ sys.path.insert(0, os.path.abspath("../mcsim"))
 project = 'mcSIM'
 copyright = '2023, Peter T. Brown'
 author = 'Peter T. Brown'
-release = '1.4'
+release = __version__
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

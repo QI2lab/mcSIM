@@ -1,6 +1,20 @@
 """
-Tools for reconstructing 2D SIM images from raw data.
-The primary reconstruction code is contained in the class SimImageSet
+Tools for reconstructing 2D sinusoidal SIM images from raw data.
+The primary reconstruction code is contained in the class `SimImageSet`
+Suppose we illuminate an object :math:`O(r)` with a series of patterns,
+
+.. math::
+
+  I_{ij}(r) = A_{ij} \\left[m_i \\cos (2\\pi f_i \\cdot r + \\phi_{ij}) \\right]
+
+Then the images we measure are
+
+.. math::
+
+  D_{ij}(r) = \\left[I_{ij}(r) O(r) \\right] * h(r)
+
+where :math:`h(r)` is the point-spread function of the system.
+
 """
 import sys
 import time
@@ -2404,8 +2418,14 @@ def sim_optical_section(imgs: array,
     differences following the approach of https://doi.org/10.1016/s0030-4018(98)00210-7
 
     In the most common case, where the phase differences are (0, 2*pi/3, 4*pi/3) the result is
-    OS Img =  sqrt( (I[0] - I[1])**2 + (I[1] - I[2])**2 + (I[2] - I[0])**2 ) = m*A * 3/ np.sqrt(2)
-    where I[a] = A * [1 + m * cos(phi + phi_a)]
+
+    .. math::
+
+      I_\\text{os}(r) &=  \\sqrt{ (I_0(r) - I_1(r))^2 + (I_1(r) - I_2(r))^2 + (I_2(r) - I_0(r))^2 }\\
+
+                      &= \\frac{3}{\\sqrt{2}} mA\\
+
+      I_a(r) &= A \\left[1 + m \\cos(\\phi + \\phi_a) \\right]
 
     :param imgs: images stored as nD array, where one of the dimensions is of size 3.
     :param axis: axis to perform the optical sectioning computation along. imgs.shape[axis] must = 3
@@ -2499,8 +2519,12 @@ def fit_modulation_frq(ft1: np.ndarray,
                        keep_guess_if_better: bool = True) -> (np.ndarray, np.ndarray, dict):
     """
     Find SIM frequency from image by maximizing the cross correlation between ft1 and ft2
-    :math:`C(df) =  \\sum_f ft1(f) x ft2^*(f + df)`
-    modulation freqency = :Math:`\\argmax_{df} |C(df)|`
+
+    .. math::
+
+       C(f') &= \\sum_f ft_1(f)  ft_2^*(f + f')\\
+
+       f^\\star &= \\text{argmax}_{f'} |C(f')|
 
     Note that there is ambiguity in the definition of this frequency, as -f will also be a peak. If frq_guess is
     provided, the peak closest to the guess will be returned.
@@ -2905,18 +2929,25 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
     """
     Estimate relative phases between components using the iterative cross-correlation minimization method of Wicker,
     described in detail here https://doi.org/10.1364/OE.21.002032. This function is hard coded for 3 bands. This
-    method is not sensitive to the absolute phase, only the relative phases...
+    method is not sensitive to the absolute phase, only the relative phases.
 
-    Suppose that S(r) is the sample, h(r) is the PSF, and D_n(r) is the data. Then the separated (but unshifted) bands
-    are :math: `C_m(k) = S(k - m*ko) h_m(k)`, and the data vector is related to the band vector by
-    :math: `D(k) = M C(k)`, where M is a matrix of shape nphases x nbands.
+    The optimal band unmixing matrix :math:`M`, which we parameterize by the SIM phase shifts, is given by solving
+    the following optimization problem
 
-    This function minimizes the cross correlation between shfited bands which should not contain common information.
-    Let :math:`cc^l_ij = C_i(k) \\otimes C_j(k-lp)`. These should have low overlap for :math:`i \\neq j + l`.
-    So the minimization function is :math:`g(M) = \\sum_{i \neq l+j} |cc^l_ij|^{1/2}`
+    .. math::
 
-    This can be written in terms of the correlations of data matrix, :math: `dc^l_{ij}` in a way that minimizes numerical effort
-    to compute g for different mixing matrices M.
+      C_m(k) &= O(k - m*ko) h_m(k)\\
+
+      D(k) &= M C(k)\\
+
+      cc^l_ij &= C_i(k) \\otimes C_j(k-lp)\\
+
+      M^* &= \\text{argmin}_M \\sum_{i \\neq l+j} |cc^l_ij|^{1/2}.
+
+    This function minimizes the cross correlation between SIM bands which should not contain common information.
+    Note that the shifted bands should have low overlap for :math:`i \\neq j + l`.
+    The cost function can be rewritten in terms of the correlations of data matrix, :math: `dc^l_{ij}` in a way
+    that minimizes numerical effort to recompute for different parameters.
 
     :param imgs_ft: array of size nphases x ny x nx, where the components are o(f), o(f-fo), o(f+fo)
     :param otf: size ny x nx
@@ -3108,16 +3139,32 @@ def get_band_mixing_matrix(phases: list,
                            mod_depth: float = 1.,
                            amps: Optional[np.ndarray] = None) -> np.ndarray:
     """
-    Return matrix M, which relates the measured images D to the Fluorescence profile S multiplied by the OTF H
-    :math: `[[D_1(k)], [D_2(k)], [D_3(k)], ...[D_n(k)]] = M [[S(k)H(k)], [S(k-p)H(k)], [S(k+p)H(k)]]`
+    Return matrix M, which relates the measured images to the object profile filtered by the OTF
 
-    We assume the modulation has the form :math:`1 + m \\cos(kr + \\phi)`, leading to
+    .. math::
 
-    M = [A_1 * [1, 0.5*m*exp(ip_1), 0.5*m*exp(-ip_1)],
-         A_2 * [1, 0.5*m*exp(ip_2), 0.5*m*exp(-ip_2)],
-         A_3 * [1, 0.5*m*exp(ip_3), 0.5*m*exp(-ip_3)],
-         ...
-        ]
+       \\begin{pmatrix}
+         D_1(f)\\\\
+         D_2(f)\\\\
+         D_3(f)
+       \\end{pmatrix}
+       = M
+       \\begin{pmatrix}
+       O(f)H(f)\\\\
+       O(f-p)H(f)\\\\
+       S(f+p)H(f)
+       \\end{pmatrix}
+
+    We assume the modulation has the form :math:`1 + m \\cos(2 \\pi f \\cdot r + \\phi)`, leading to
+
+    .. math::
+
+      M =
+      \\begin{pmatrix}
+      A_1 & \\frac{1}{2} A_1 m e^{i \\phi_1} & \\frac{1}{2} A_1 m e^{-i \\phi_1}\\\\
+      A_2 & \\frac{1}{2} A_2 m e^{i \\phi_2} & \\frac{1}{2} A_2 m e^{-i \\phi_2}\\\\
+      A_3 & \\frac{1}{2} A_3 m e^{i \\phi_3} & \\frac{1}{2} A_3 m e^{-i \\phi_3}
+      \\end{pmatrix}
 
     :param phases: np.array([phase_1, ..., phase_n])
     :param mod_depth: np.array([m_1, m_2, ..., m_n]. In most cases, these are equal
@@ -3211,27 +3258,28 @@ def unmix_bands(imgs_ft: array,
                 amps: Optional[np.ndarray] = None) -> array:
     """
     Do noisy inversion of SIM data, i.e. determine
+
     .. math::
 
        \\begin{pmatrix}
-       S(f)H(k)]\\
-       S(f-p)H(f)\\
-       S(f+p)H(f)
+         O(f)H(f)\\\\
+         O(f-p)H(f)\\\\
+         O(f+p)H(f)
        \\end{pmatrix}
         = M^{-1}
        \\begin{pmatrix}
-       D_1(f)\\
-       D_2(f)\\
-       D_3(f)
+         D_1(f)\\\\
+         D_2(f)\\\\
+         D_3(f)
        \\end{pmatrix}
 
-    :param imgs_ft: n0 x ... x nm x nangles x nphases x ny x nx.
-     Fourier transform of SIM image data with DC frequency information in middle. i.e. as obtained from fftshift
-    :param phases: array nangles x nphases listing phases
-    :param mod_depths: list of length nangles. Optional. If not provided, all are set to 1.
-    :param amps: list of length nangles x nphases. If not provided, all are set to 1.
-    :return components_ft: nangles x nphases x ny x nx array, where the first index corresponds to the bands
-    :math: `S(f)H(f), S(f-p)H(f), S(f+p)H(f)`
+    :param imgs_ft: Fourier transform of SIM image data :math:`D_i(f)` as an array of
+      size n0 x ... x nm x nangles x nphases x ny x nx.
+      DC frequency information should be shifted to the center of the array i.e. as obtained from fftshift
+    :param phases: nangles x nphases listing phases for each data image :math:`D_i`
+    :param mod_depths: modulation depths for each SIM angle. Optional. If not provided, all are set to 1.
+    :param amps: Amplitudes for the SIM pattern in each image, nangles x nphases. If not provided, all are set to 1.
+    :return components_ft: unmixed bands of size nangles x nbands x ny x nx array, where the first index corresponds to the bands
     """
     # todo: could generalize for case with more than 3 phases or angles
 
@@ -3330,19 +3378,32 @@ def get_band_overlap(band0: array,
     modulation depth.
 
     This is done by computing the amplitude and phase of
-    :math:`C = \sum [Band_0(f) * conj(Band_1(f + fo))] / \sum [ |Band_0(f)|^2]`
-    where :math: `Band_1(f) = O(f-fo)`, so :math: `Band_1(f+fo) = O(f)`. i.e. these are the separated SIM.
 
-    If correct reconstruction parameters are used, expect Band_0(f) and Band_1(f) differ only by a complex constant.
+    .. math::
+
+      C &= \\frac{\\sum_f b_0(f) * b_1^*(f + f_o)}{\\sum |b_0(f)|^2}\\
+
+      b_1(f + f_o) &= O(f)
+
+    If correct reconstruction parameters are used, we expect the bands differ only by a complex constant over
+    any areas where they are not noise corrupted and both the OTF and the shifted OTF have support
     This constant contains information about the global phase offset AND the modulation depth. i.e.
-    Band_1(f) = c * Band_0(f) = m * np.exp(-i*phase_corr) * Band_0(f)
-    This function extracts the complex conjugate of this value, c* = m * np.exp(i*phase_corr)
+
+    .. math::
+
+       b_1(f) = m  e^{-i * \\phi_c} * b_0(f)
 
     Given this information, can perform the phase correction
-    :math: `Band_1(f + fo) \\to np.exp(i*phase_corr) / m * Band_1(f + fo)`
 
-    :param band0: n0 x ... x nm x nangles x ny x nx. Typically band0(f) = S(f) * otf(f) * wiener(f) ~ S(f)
-    :param band1: same shape as band0. Typically band1(f) = S((f-fo) + fo) * otf(f + fo) * wiener(f + fo),
+    .. math::
+
+      b_1(f + f_o) \\to \\frac{e^{i \\phi_c}}{m} b_1(f + f_o)`
+
+    This function return :math:`m e^{i \\phi_c}`
+
+
+    :param band0: n0 x ... x nm x nangles x ny x nx. Typically band0(f) = O(f) * otf(f) * wiener(f) ~ O(f)
+    :param band1: same shape as band0. Typically band1(f) = O((f-fo) + fo) * otf(f + fo) * wiener(f + fo),
        i.e. the separated band after shifting to correct position
     :param otf0: Same shape as band0
     :param otf1:

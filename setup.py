@@ -1,6 +1,7 @@
 from setuptools import setup, find_packages
 import sys
 from os import path
+from mcsim import __version__
 
 this_dir = path.abspath(path.dirname(__file__))
 with open(path.join(this_dir, "README.md")) as f:
@@ -33,6 +34,7 @@ extras = {'expt_ctrl': ['PyDAQmx'],
                   'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim'
                   # 'cucim @ git+https://github.com/rapidsai/cucim.git@v22.04.00#egg=cucim&subdirectory=python/cucim'
                   ]
+
           }
 
 # check what platform we are on
@@ -41,7 +43,7 @@ if sys.platform == 'win32':
 
 setup(
     name='mcsim',
-    version='1.3.0',
+    version=__version__,
     description="A package for simulating and controlling a multicolor structured illumination"
                 " microscopy (SIM) experiment using a DLP6500 digital micromirror device (DMD)"
                 " and performing SIM reconstruction.",

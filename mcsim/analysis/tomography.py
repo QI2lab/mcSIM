@@ -1,5 +1,7 @@
 """
-Tools for reconstructing optical diffraction tomography (ODT) data
+Tools for reconstructing optical diffraction tomography (ODT) data using either the Born approximation,
+ Rytov approximation, or multislice (paraxial) beam propogation method (BPM) and a FISTA solver. The primary
+ reconstruction tasks are carried out with the tomography class
 """
 import time
 import datetime
@@ -66,21 +68,21 @@ class tomography:
         """
         Object to reconstruct optical diffraction tomography data
 
-        @param imgs_raw: n1 x n2 x ... x nm x npatterns x ny x nx. Data intensity images
-        @param wavelength: wavelength in um
-        @param no: background index of refraction
-        @param na_detection:
-        @param na_excitation:
-        @param dxy: pixel size in um
-        @param reference_frq_guess: [fx, fy] hologram reference frequency
-        @param hologram_frqs_guess: list of length npatterns, where each entry is an array of frequencies contained
+        :param imgs_raw: n1 x n2 x ... x nm x npatterns x ny x nx. Data intensity images
+        :param wavelength: wavelength in um
+        :param no: background index of refraction
+        :param na_detection:
+        :param na_excitation:
+        :param dxy: pixel size in um
+        :param reference_frq_guess: [fx, fy] hologram reference frequency
+        :param hologram_frqs_guess: list of length npatterns, where each entry is an array of frequencies contained
          in the given pattern. These arrays may be of different sizes, i.e. different patterns may contain a different
           number of frequencies. But each array should be of size n_i x 2
-        @param imgs_raw_bg: background intensity images. If no background images are provided, then a time
+        :param imgs_raw_bg: background intensity images. If no background images are provided, then a time
         average of imgs_raw will be used as the background
-        @param phase_offsets: phase shifts between images and corresponding background images
-        @param axes_names: names of first m + 1 axes
-        @param verbose:
+        :param phase_offsets: phase shifts between images and corresponding background images
+        :param axes_names: names of first m + 1 axes
+        :param verbose:
         """
         self.verbose = verbose
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
@@ -160,10 +162,10 @@ class tomography:
         Estimate hologram frequencies from raw images.
         Guess values need to be within a few pixels for this to succeed. Can easily achieve this accuracy by
         looking at FFT
-        @param roi_size_pix: ROI size (in pixels) to do frequency fitting on
-        @param save_dir:
-        @param use_gpufit:
-        @return:
+        :param roi_size_pix: ROI size (in pixels) to do frequency fitting on
+        :param save_dir:
+        :param use_gpufit:
+        :return:
         """
         self.reconstruction_settings.update({"roi_size_pix": roi_size_pix})
 
@@ -186,16 +188,16 @@ class tomography:
                               block_id=None):
             """
 
-            @param img:
-            @param fx_guesses:
-            @param fy_guesses:
-            @param use_guess_init_params: if True use guess not only to find an initial ROI but also as the initial
+            :param img:
+            :param fx_guesses:
+            :param fy_guesses:
+            :param use_guess_init_params: if True use guess not only to find an initial ROI but also as the initial
             guess in the fit
-            @param saving:
-            @param roi_size_pix:
-            @param prefix:
-            @param block_id: can use this to figure out what blcok we are in when running with dask.array map_blocks()
-            @return:
+            :param saving:
+            :param roi_size_pix:
+            :param prefix:
+            :param block_id: can use this to figure out what blcok we are in when running with dask.array map_blocks()
+            :return:
             """
 
             nextra_dims = img.ndim - 2
@@ -433,10 +435,10 @@ class tomography:
                                save_dir: Optional[str] = None):
         """
         Estimate hologram reference frequency
-        @param mode: if "fit" fit the residual speckle pattern to try and estimate the reference frequency.
+        :param mode: if "fit" fit the residual speckle pattern to try and estimate the reference frequency.
          If "average" take the average of self.hologram_frqs as the reference frequency
-        @param save_dir:
-        @return:
+        :param save_dir:
+        :return:
         """
         
         self.reconstruction_settings.update({"reference_frequency_mode": mode})
@@ -484,7 +486,7 @@ class tomography:
         """
         Get beam incident beam frequencies from hologram frequencies and reference frequency
 
-        @return beam_frqs: array of size N1 x N2 ... x Nm x 3
+        :return beam_frqs: array of size N1 x N2 ... x Nm x 3
         """
 
         # bxys = self.hologram_frqs - np.expand_dims(self.reference_frq, axis=0)
@@ -507,9 +509,9 @@ class tomography:
         This could be between frequencies displayed on DMD and measured frequency space (DMD in imaging plane)
         or between mirror positions on DMD and frequency space (DMD in Fourier plane)
 
-        @param offsets:
-        @param save_dir:
-        @return:
+        :param offsets:
+        :param save_dir:
+        :return:
         """
 
         centers_dmd = np.concatenate(offsets, axis=0)
@@ -653,15 +655,15 @@ class tomography:
 
         Note that this only depends on reference frequencies, and not on determined hologram frequencies
 
-        @param bg_average_axes: axes to average along when producing background images
-        @param kernel_size: when averaging time points to generate a background image, this is the number of
+        :param bg_average_axes: axes to average along when producing background images
+        :param kernel_size: when averaging time points to generate a background image, this is the number of
         time points that will be used
-        @param mask: area to be cut out of hologrms
-        @param fit_phases: whether to fit phase differences between image and background holograms
-        @param correct_amplitudes:
-        @param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
-        @param use_gpu:
-        @return:
+        :param mask: area to be cut out of hologrms
+        :param fit_phases: whether to fit phase differences between image and background holograms
+        :param correct_amplitudes:
+        :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
+        :param use_gpu:
+        :return:
         """
 
         self.reconstruction_settings.update({"background_average_kernel_size": kernel_size})
@@ -899,27 +901,27 @@ class tomography:
                       use_gpu: bool = False):
         """
 
-        @param mode: "born", "rytov", or "bpm"
-        @param solver: "naive" or "fista"
-        @param scattered_field_regularization:
-        @param niters: number of iterations
-        @param reconstruction_regularizer:
-        @param dxy_sampling_factor:
-        @param dz_sampling_factor:
-        @param z_fov:
-        @param nbin: for BPM, bin image by this factor
-        @param mask:
-        @param tau_tv:
-        @param tau_lasso:
-        @param use_imaginary_constraint:
-        @param use_real_constraint:
-        @param interpolate_model:
-        @param step: ignored unless mode = "bpm"
-        @param stochastic_descent:
-        @param verbose:
-        @param compute_cost:
-        @param use_gpu:
-        @return:
+        :param mode: "born", "rytov", or "bpm"
+        :param solver: "naive" or "fista"
+        :param scattered_field_regularization:
+        :param niters: number of iterations
+        :param reconstruction_regularizer:
+        :param dxy_sampling_factor:
+        :param dz_sampling_factor:
+        :param z_fov:
+        :param nbin: for BPM, bin image by this factor
+        :param mask:
+        :param tau_tv:
+        :param tau_lasso:
+        :param use_imaginary_constraint:
+        :param use_real_constraint:
+        :param interpolate_model:
+        :param step: ignored unless mode = "bpm"
+        :param stochastic_descent:
+        :param verbose:
+        :param compute_cost:
+        :param use_gpu:
+        :return:
         """
 
         if use_gpu and _gpu_available:
@@ -1265,9 +1267,9 @@ class tomography:
         """
         Plot nmax interferograms
 
-        @param nmax_to_plot:
-        @param save_dir:
-        @return:
+        :param nmax_to_plot:
+        :param save_dir:
+        :return:
         """
         if not hasattr(self, "efield_scattered_ft"):
             raise ValueError()
@@ -1329,13 +1331,13 @@ class tomography:
                   **kwargs):
         """
 
-        @param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
+        :param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
         axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
         could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
-        @param time_axis:
-        @param figsize:
-        @param kwargs: passed through to matplotlib.pyplot.figure
-        @return:
+        :param time_axis:
+        :param figsize:
+        :param kwargs: passed through to matplotlib.pyplot.figure
+        :return:
         """
 
         if len(index) != (self.nextra_dims - 1):
@@ -1408,13 +1410,13 @@ class tomography:
         """
         Plot phase drift fits versus time for a single slice
 
-        @param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
+        :param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
         axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
         could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
-        @param time_axis:
-        @param figsize:
-        @param kwargs: passed through to matplotlib.pyplot.figure
-        @return: figh
+        :param time_axis:
+        :param figsize:
+        :param kwargs: passed through to matplotlib.pyplot.figure
+        :return: figh
         """
 
         if len(index) != (self.nextra_dims - 1):
@@ -1464,11 +1466,11 @@ class tomography:
         """
         Plot hologram intensity
 
-        @param index:
-        @param time_axis:
-        @param figsize:
-        @param kwargs:
-        @return figh, epower, epower_bg:
+        :param index:
+        :param time_axis:
+        :param figsize:
+        :param kwargs:
+        :return figh, epower, epower_bg:
         """
 
         if len(index) != (self.nextra_dims - 1):
@@ -1541,10 +1543,10 @@ class tomography:
         """
         display raw image
 
-        @param index:
-        @param figsize:
-        @param gamma:
-        @return:
+        :param index:
+        :param figsize:
+        :param gamma:
+        :return:
         """
         extent = [self.x[0] - 0.5 * self.dxy, self.x[-1] + 0.5 * self.dxy,
                   self.y[-1] + 0.5 * self.dxy, self.y[0] - 0.5 * self.dxy]
@@ -1598,9 +1600,9 @@ def soft_threshold(t: float,
     """
     Softmax function, which is the proximal operator for the LASSO (L1 regularization) problem
 
-    @param t: softmax parameter
-    @param x: array to take softmax of
-    @return x_out:
+    :param t: softmax parameter
+    :param x: array to take softmax of
+    :return x_out:
     """
     # x_out = np.array(x, copy=True)
     x_out = x.copy()
@@ -1629,20 +1631,20 @@ def grad_descent(v_ft_start: array,
     """
     Perform gradient descent using a linear model
 
-    @param v_ft_start:
-    @param e_measured_ft: npatterns x ny x nx array
-    @param model: CSR matrix mapping from vft to electric field
-    @param step: step-size used in gradient descent
-    @param niters: number of iterations
-    @param use_fista:
-    @param tau_tv:
-    @param tau_lasso:
-    @param use_imaginary_constraint:
-    @param use_real_constraint:
-    @param masks: # todo: add mask to remove points which we don't want to consider
-    @param verbose:
-    @param compute_cost:
-    @return results: dict
+    :param v_ft_start:
+    :param e_measured_ft: npatterns x ny x nx array
+    :param model: CSR matrix mapping from vft to electric field
+    :param step: step-size used in gradient descent
+    :param niters: number of iterations
+    :param use_fista:
+    :param tau_tv:
+    :param tau_lasso:
+    :param use_imaginary_constraint:
+    :param use_real_constraint:
+    :param masks: # todo: add mask to remove points which we don't want to consider
+    :param verbose:
+    :param compute_cost:
+    :return results: dict
     """
     # put on gpu optionally
     use_gpu = isinstance(v_ft_start, cp.ndarray) and _gpu_available
@@ -1868,28 +1870,28 @@ def grad_descent_prop_model(v_start: array,
     at the points before and after each voxel, and in an additional plane to account for the imaging. So we have
     nz + 2 electric field planes.
 
-    @param v_start:
-    @param e_measured:
-    @param e_measured_bg:
-    @param no:
-    @param wavelength:
-    @param dz_final:
-    @param drs:
-    @param model:
-    @param step:
-    @param niters:
-    @param use_fista:
-    @param tau_tv:
-    @param tau_lasso:
-    @param use_imaginary_constraint:
-    @param use_real_constraint:
-    @param masks:
-    @param verbose: print iteration info
-    @param compute_cost:
-    @param stochastic_descent:
-    @param atf:
-    @param apodization:
-    @return:
+    :param v_start:
+    :param e_measured:
+    :param e_measured_bg:
+    :param no:
+    :param wavelength:
+    :param dz_final:
+    :param drs:
+    :param model:
+    :param step:
+    :param niters:
+    :param use_fista:
+    :param tau_tv:
+    :param tau_lasso:
+    :param use_imaginary_constraint:
+    :param use_real_constraint:
+    :param masks:
+    :param verbose: print iteration info
+    :param compute_cost:
+    :param stochastic_descent:
+    :param atf:
+    :param apodization:
+    :return:
     """
 
     # put on gpu optionally
@@ -2102,10 +2104,10 @@ def cut_mask(img: array,
     """
     Mask points in image and set to a given value. Designed to be used with dask.array map_blocks()
 
-    @param img:
-    @param mask:
-    @param mask_val: At any position where mask is True, replace the value of img with this value
-    @return: img_masked
+    :param img:
+    :param mask:
+    :param mask_val: At any position where mask is True, replace the value of img with this value
+    :return: img_masked
     """
     if isinstance(img, cp.ndarray) and _gpu_available:
         xp = cp
@@ -2132,11 +2134,11 @@ def get_fz(fx: np.ndarray,
     """
     Get z-component of frequency given fx, fy
 
-    @param fx: nfrqs
-    @param fy:
-    @param no: index of refraction
-    @param wavelength: wavelength
-    @return frqs_3d:
+    :param fx: nfrqs
+    :param fy:
+    :param no: index of refraction
+    :param wavelength: wavelength
+    :return frqs_3d:
     """
 
     with np.errstate(invalid="ignore"):
@@ -2150,10 +2152,10 @@ def get_angles(frqs: np.ndarray,
                wavelength: float):
     """
     Convert from frequency vectors to angle vectors. Frequency vectors should be normalized to no / wavelength
-    @param frqs: (fx, fy, fz), expect |frqs| = no / wavelength
-    @param no: background index of refraction
-    @param wavelength:
-    @return: theta, phi
+    :param frqs: (fx, fy, fz), expect |frqs| = no / wavelength
+    :param no: background index of refraction
+    :param wavelength:
+    :return: theta, phi
     """
     frqs = np.atleast_2d(frqs)
 
@@ -2172,11 +2174,11 @@ def angles2frqs(no: float,
                 phi: np.ndarray):
     """
     Get frequency vector from angles
-    @param no:
-    @param wavelength:
-    @param theta:
-    @param phi:
-    @return:
+    :param no:
+    :param wavelength:
+    :param theta:
+    :param phi:
+    :return:
     """
     fz = no / wavelength * np.cos(theta)
     fy = no / wavelength * np.sin(theta) * np.sin(phi)
@@ -2193,10 +2195,10 @@ def get_global_phase_shifts(imgs: array,
     Given a stack of images and a reference, determine the phase shifts between images, such that
     imgs * A*np.exp(1j * phase_shift) ~ img_ref
 
-    @param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
-    @param ref_imgs: reference images. Should be broadcastable to same size as imgs.
-    @param thresh: only consider points in images where both abs(imgs) and abs(ref_imgs) > thresh
-    @return fit_params:
+    :param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
+    :param ref_imgs: reference images. Should be broadcastable to same size as imgs.
+    :param thresh: only consider points in images where both abs(imgs) and abs(ref_imgs) > thresh
+    :return fit_params:
     """
 
     if isinstance(imgs, cp.ndarray) and _gpu_available:
@@ -2239,10 +2241,10 @@ def get_n(scattering_pot: array,
     """
     convert from the scattering potential to the index of refraction
 
-    @param scattering_pot: F(r) = - (2*np.pi / lambda)^2 * (n(r)^2 - no^2)
-    @param no: background index of refraction
-    @param wavelength: wavelength
-    @return n: refractive index
+    :param scattering_pot: F(r) = - (2*np.pi / lambda)^2 * (n(r)^2 - no^2)
+    :param no: background index of refraction
+    :param wavelength: wavelength
+    :return n: refractive index
     """
     if isinstance(scattering_pot, cp.ndarray) and _gpu_available:
         xp = cp
@@ -2260,10 +2262,10 @@ def get_scattering_potential(n: array,
     """
     Convert from the index of refraction to the scattering potential
 
-    @param n:
-    @param no:
-    @param wavelength:
-    @return:
+    :param n:
+    :param no:
+    :param wavelength:
+    :return:
     """
     v = - (2 * np.pi / wavelength) ** 2 * (n**2 - no**2)
     return v
@@ -2279,11 +2281,11 @@ def get_rytov_phase(eimgs_ft: array,
 
     We calculate \psi_s(r) = log | U_total(r) / U_o(r)| + 1j * unwrap[angle(U_total) - angle(U_o)]
 
-    @param eimgs_ft: n0 x n1 ... x nm x ny x nx
-    @param eimgs_bg_ft: broadcastable to same size as eimgs
-    @param float regularization: regularization value. Any pixels where the background
+    :param eimgs_ft: n0 x n1 ... x nm x ny x nx
+    :param eimgs_bg_ft: broadcastable to same size as eimgs
+    :param float regularization: regularization value. Any pixels where the background
     exceeds this value will be set to zero
-    @return psi_rytov:
+    :return psi_rytov:
     """
 
     use_gpu = isinstance(eimgs_ft, cp.ndarray) and _gpu_available
@@ -2339,10 +2341,10 @@ def get_scattered_field(eimgs_ft: array,
     Compute estimate of scattered electric field with regularization. This function only operates on the
     last two dimensions of the array
 
-    @param eimgs_ft: array of size n0 x ... x nm x ny x nx
-    @param eimgs_bg_ft: broadcastable to same size as eimgs_ft
-    @param regularization:
-    @return efield_scattered_ft: scattered field of same size as eimgs_ft
+    :param eimgs_ft: array of size n0 x ... x nm x ny x nx
+    :param eimgs_bg_ft: broadcastable to same size as eimgs_ft
+    :param regularization:
+    :return efield_scattered_ft: scattered field of same size as eimgs_ft
     """
     # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
     # and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
@@ -2377,13 +2379,13 @@ def unmix_hologram(img: array,
     """
     Given an off-axis hologram image, determine the electric field represented
 
-    @param img: n1 x ... x n_{-3} x n_{-2} x n_{-1} array
-    @param dxy: pixel size
-    @param fmax_int: maximum frequency where intensity OTF has support
-    @param fx_ref:
-    @param fy_ref:
-    @param apodization:
-    @return efield_ft:
+    :param img: n1 x ... x n_{-3} x n_{-2} x n_{-1} array
+    :param dxy: pixel size
+    :param fmax_int: maximum frequency where intensity OTF has support
+    :param fx_ref:
+    :param fy_ref:
+    :param apodization:
+    :return efield_ft:
     """
 
     if isinstance(img, cp.ndarray) and _gpu_available:
@@ -2418,11 +2420,11 @@ def get_fmax(no: float,
              wavelength: float) -> np.ndarray:
     """
     Maximum frequencies measurable in ODT image
-    @param no: index of refraction
-    @param na_detection:
-    @param na_excitation:
-    @param wavelength:
-    @return (fx_max, fy_max, fz_max):
+    :param no: index of refraction
+    :param na_detection:
+    :param na_excitation:
+    :param wavelength:
+    :return (fx_max, fy_max, fz_max):
     """
     alpha = np.arcsin(na_detection / no)
     beta = np.max(na_excitation / no)
@@ -2448,17 +2450,17 @@ def get_reconstruction_sampling(no: float,
     """
     Get information about pixel grid scattering potential will be reconstructed on
 
-    @param no: background index of refraction
-    @param na_det: numerical aperture of detection objective
-    @param na_exc: maximum excitation numerical aperture (i.e. corresponding to the steepest input beam and not nec.
+    :param no: background index of refraction
+    :param na_det: numerical aperture of detection objective
+    :param na_exc: maximum excitation numerical aperture (i.e. corresponding to the steepest input beam and not nec.
     the objective).
-    @param wavelength: wavelength
-    @param dxy: camera pixel size
-    @param img_size: (ny, nx) size of hologram images
-    @param z_fov: field-of-view in z-direction
-    @param dz_sampling_factor: z-spacing as a fraction of the nyquist limit
-    @param dxy_sampling_factor: xy-spacing as a fraction of nyquist limit
-    @return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp):
+    :param wavelength: wavelength
+    :param dxy: camera pixel size
+    :param img_size: (ny, nx) size of hologram images
+    :param z_fov: field-of-view in z-direction
+    :param dz_sampling_factor: z-spacing as a fraction of the nyquist limit
+    :param dxy_sampling_factor: xy-spacing as a fraction of nyquist limit
+    :return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp):
     """
     ny, nx = img_size
 
@@ -2504,10 +2506,10 @@ def get_coords(drs: list[float],
     """
     Compute spatial coordinates
 
-    @param drs: (dz, dy, dx)
-    @param nrs: (nz, ny, nx)
-    @param expand: if False then return z, y, x as 1D arrays, otherwise return as 3D arrays
-    @return: coords (z, y, x)
+    :param drs: (dz, dy, dx)
+    :param nrs: (nz, ny, nx)
+    :param expand: if False then return z, y, x as 1D arrays, otherwise return as 3D arrays
+    :return: coords (z, y, x)
     """
     coords = [dr * (np.arange(nr) - (nr // 2)) for dr, nr in zip(drs, nrs)]
 
@@ -2532,20 +2534,21 @@ def fwd_model_linear(beam_fx,
     """
     Forward model from scattering potential v to imaged electric field after interacting with object
 
-    @param beam_fx: nbeams Normalized to no/wavelength
-    @param beam_fy:
-    @param beam_fz:
-    @param no: index of refraction
-    @param na_det: detection numerical aperture
-    @param wavelength:
-    @param e_shape: (ny, nx), shape of scattered fields
-    @param drs_e: (dy, dx) pixel size of scattered field
-    @param v_shape: (nz, ny, nx) shape of scattering potential
-    @param drs_v: (dz, dy, dx) pixel size of scattering potential
-    @param mode: "born" or "rytov"
-    @param interpolate: use trilinear interpolation or not
-    @return model:
-    @return (data, row_index, column_index): raw data
+    :param beam_fx: nbeams Normalized to no/wavelength
+    :param beam_fy:
+    :param beam_fz:
+    :param no: index of refraction
+    :param na_det: detection numerical aperture
+    :param wavelength:
+    :param e_shape: (ny, nx), shape of scattered fields
+    :param drs_e: (dy, dx) pixel size of scattered field
+    :param v_shape: (nz, ny, nx) shape of scattering potential
+    :param drs_v: (dz, dy, dx) pixel size of scattering potential
+    :param mode: "born" or "rytov"
+    :param interpolate: use trilinear interpolation or not
+    :param use_gpu: usually doesn't make sense for one-off construction of matrix
+    :return model:
+    :return (data, row_index, column_index): raw data
     """
 
     ny, nx = e_shape
@@ -2752,25 +2755,25 @@ def reconstruction(efield_fts: array,
     Given a set of holograms obtained using ODT, put the hologram information back in the correct locations in
     Fourier space
 
-    @param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used.
+    :param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used.
     Any points in efield_fts which are NaN will be ignored. efield_fts can have an arbitrary number of leading
     singleton dimensions, but must have at least three dimensions.
     i.e. it should have shape 1 x ... x 1 x nimgs x ny x nx
-    @param beam_fx: beam frqs must satify each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2.
+    :param beam_fx: beam frqs must satify each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2.
      Divide these into three arguments to make this function easier to use with dask map_blocks()
-    @param beam_fy:
-    @param beam_fz:
-    @param no: background index of refraction
-    @param na_det: detection numerical aperture
-    @param wavelength:
-    @param dxy: pixel size
-    @param drs_v: (dz_v, dy_v, dx_v) pixel size for scattering potential reconstruction grid
-    @param v_shape: (nz_v, ny_v, nx_v) grid size for scattering potential reconstruction grid
-    @param regularization: regularization factor
-    @param mode: "born" or "rytov"
-    @param no_data_value:
-    @return v_ft:
-    @return drs: full coordinate grid can be obtained from get_coords
+    :param beam_fy:
+    :param beam_fz:
+    :param no: background index of refraction
+    :param na_det: detection numerical aperture
+    :param wavelength:
+    :param dxy: pixel size
+    :param drs_v: (dz_v, dy_v, dx_v) pixel size for scattering potential reconstruction grid
+    :param v_shape: (nz_v, ny_v, nx_v) grid size for scattering potential reconstruction grid
+    :param regularization: regularization factor
+    :param mode: "born" or "rytov"
+    :param no_data_value:
+    :return v_ft:
+    :return drs: full coordinate grid can be obtained from get_coords
     """
 
     if isinstance(efield_fts, cp.ndarray) and _gpu_available:
@@ -2862,16 +2865,16 @@ def apply_n_constraints(v_ft: array,
     constraint 1: scattering potential FT must match data at points where we have information
     constraint 2: real(n) >= no and imag(n) >= 0
 
-    @param v_ft: 3D fourier transform of scattering potential. This array should have nan values where the array
+    :param v_ft: 3D fourier transform of scattering potential. This array should have nan values where the array
      values are unknown.
-    @param no: background index of refraction
-    @param wavelength: wavelength in um
-    @param n_iterations: number of iterations
-    @param beta:
-    @param bool use_raar: whether to use the Relaxed-Averaged-Alternating Reflection algorithm
-    @param require_real_part_greater_bg:
-    @param print_info:
-    @return v_ft_out:
+    :param no: background index of refraction
+    :param wavelength: wavelength in um
+    :param n_iterations: number of iterations
+    :param beta:
+    :param bool use_raar: whether to use the Relaxed-Averaged-Alternating Reflection algorithm
+    :param require_real_part_greater_bg:
+    :param print_info:
+    :return v_ft_out:
     """
 
     if isinstance(v_ft, cp.ndarray) and _gpu_available:
@@ -2980,15 +2983,15 @@ def fit_ref_frq(img_ft: np.ndarray,
 
     Note: when the beam angle is non-zero, the dominant tomography frequency component will not be centered
     on this circle, but will be at position f_ref - f_beam
-    @param img_ft:
-    @param dxy:
-    @param fmax_int:
-    @param search_rad_fraction:
-    @param npercentiles:
-    @param filter_size:
-    @param dilate_erode_footprint_size:
-    @param show_figure:
-    @return results, circ_dbl_fn, figh: results["fit_params"] = [cx, cy, radius]
+    :param img_ft:
+    :param dxy:
+    :param fmax_int:
+    :param search_rad_fraction:
+    :param npercentiles:
+    :param filter_size:
+    :param dilate_erode_footprint_size:
+    :param show_figure:
+    :return results, circ_dbl_fn, figh: results["fit_params"] = [cx, cy, radius]
     """
     ny, nx = img_ft.shape
 
@@ -3125,17 +3128,17 @@ def plot_scattered_angle(img_efield_ft,
     
     Allows img and ft to be passed in or calculated ....
 
-    @param img_efield_ft:
-    @param img_efield_bg_ft:
-    @param img_efield_scatt_ft:
-    @param beam_frq:
-    @param frq_ref:
-    @param fmax_int:
-    @param dxy:
-    @param title:
-    @param figsize:
-    @param gamma:
-    @return figh:
+    :param img_efield_ft:
+    :param img_efield_bg_ft:
+    :param img_efield_scatt_ft:
+    :param beam_frq:
+    :param frq_ref:
+    :param fmax_int:
+    :param dxy:
+    :param title:
+    :param figsize:
+    :param gamma:
+    :return figh:
     """
 
     # real-space coordinates
@@ -3239,14 +3242,14 @@ def plot_odt_sampling(frqs: np.ndarray,
     """
     Illustrate the region of frequency space which is obtained using the plane waves described by frqs
 
-    @param frqs: nfrqs x 2 array of [[fx0, fy0], [fx1, fy1], ...]
-    @param na_detect: detection NA
-    @param na_excite: excitation NA
-    @param ni: index of refraction of medium that samle is immersed in. This may differ from the immersion medium
+    :param frqs: nfrqs x 2 array of [[fx0, fy0], [fx1, fy1], ...]
+    :param na_detect: detection NA
+    :param na_excite: excitation NA
+    :param ni: index of refraction of medium that samle is immersed in. This may differ from the immersion medium
     of the objectives
-    @param wavelength:
-    @param figsize:
-    @return:
+    :param wavelength:
+    :param figsize:
+    :return:
     """
     frq_norm = ni / wavelength
     alpha_det = np.arcsin(na_detect / ni)
@@ -3417,14 +3420,14 @@ def display_tomography_recon(recon_fname: str,
     """
     Display reconstruction results and (optionally) raw data in Napari
 
-    @param recon_fname: refractive index reconstruction stored in zarr file
-    @param raw_data_fname: raw data stored in zar file
-    @param show_raw:
-    @param show_raw_ft:
-    @param show_v_fft:
-    @param show_efields:
-    @param block_while_display:
-    @return:
+    :param recon_fname: refractive index reconstruction stored in zarr file
+    :param raw_data_fname: raw data stored in zar file
+    :param show_raw:
+    :param show_raw_ft:
+    :param show_v_fft:
+    :param show_efields:
+    :param block_while_display:
+    :return:
     """
 
     import napari

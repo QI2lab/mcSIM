@@ -11,7 +11,9 @@ Welcome to mcSIM's documentation!
    :caption: Contents:
 
    sim
-
+   odt
+   dmd_patterns
+   dmd_simulation
 
 
 Indices and tables
