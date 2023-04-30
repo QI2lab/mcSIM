@@ -1,10 +1,9 @@
 import unittest
 import time
 import numpy as np
-import scipy.signal
+from scipy.signal.windows import hann
 from scipy import fft
-from localize_psf import affine
-from localize_psf import rois
+from localize_psf import affine, rois
 import mcsim.analysis.dmd_patterns as dmd
 import mcsim.analysis.analysis_tools as tools
 
@@ -13,7 +12,6 @@ class TestPatterns(unittest.TestCase):
 
     def setUp(self):
         pass
-
 
     def test_pattern_main_phase_vs_phase_index(self):
         """
@@ -28,8 +26,8 @@ class TestPatterns(unittest.TestCase):
 
         fx = fft.fftshift(fft.fftfreq(nx))
         fy = fft.fftshift(fft.fftfreq(ny))
-        window = np.expand_dims(scipy.signal.windows.hann(nx), axis=0) * \
-                 np.expand_dims(scipy.signal.windows.hann(ny), axis=1)
+        window = np.expand_dims(hann(nx), axis=0) * \
+                 np.expand_dims(hann(ny), axis=1)
 
         va = [-3, 11]
         vb = [3, 12]
@@ -47,7 +45,6 @@ class TestPatterns(unittest.TestCase):
 
             # assert np.round(np.abs(pattern_phase_est - float(phase)), 3) == 0
             self.assertAlmostEqual(pattern_phase_est, float(phase), 3)
-
 
     def test_patterns_main_phase(self):
         """
@@ -103,7 +100,7 @@ class TestPatterns(unittest.TestCase):
                 # estimate phase from FFT
                 pattern, _ = dmd.get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index)
 
-                window = scipy.signal.windows.hann(nx)[None, :] * scipy.signal.windows.hann(ny)[:, None]
+                window = hann(nx)[None, :] * hann(ny)[:, None]
                 pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern * window)))
                 fx = fft.fftshift(fft.fftfreq(nx))
                 fy = fft.fftshift(fft.fftfreq(ny))
@@ -118,7 +115,6 @@ class TestPatterns(unittest.TestCase):
 
                 # assert np.round(phase_diff, 1) == 0
                 self.assertAlmostEqual(phase_diff, 0, 1)
-
 
     def test_pattern_all_phases(self):
         """
@@ -153,7 +149,7 @@ class TestPatterns(unittest.TestCase):
             unit_cell, xc, yc = dmd.get_sim_unit_cell(vec_a, vec_b, nphases)
 
             # get ft
-            window = scipy.signal.windows.hann(nx)[None, :] * scipy.signal.windows.hann(ny)[:, None]
+            window = hann(nx)[None, :] * hann(ny)[:, None]
             pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern * window)))
             fxs = fft.fftshift(fft.fftfreq(nx))
             dfx = fxs[1] - fxs[0]
@@ -221,7 +217,6 @@ class TestPatterns(unittest.TestCase):
             to_compare = np.logical_not(np.isnan(efield_img - efield))
             np.testing.assert_allclose(efield_img[to_compare], efield[to_compare], atol=1e-12)
 
-
     def test_affine_phase_xform(self):
         """
         Test transforming pattern and phases through affine xform
@@ -284,8 +279,8 @@ class TestPatterns(unittest.TestCase):
         # taking nearest pixel does a better job with amplitudes, but can introduce fourier components that did not exist before
         # pattern_xform_nearest = affine.affine_xform_mat(pattern, affine_xform_roi, img_coords, mode="nearest")
 
-        window = np.expand_dims(scipy.signal.windows.hann(nx), axis=0) * \
-                 np.expand_dims(scipy.signal.windows.hann(ny), axis=1)
+        window = np.expand_dims(hann(nx), axis=0) * \
+                 np.expand_dims(hann(ny), axis=1)
 
         pattern_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xform * window)))
         fx = fft.fftshift(fft.fftfreq(nx))
@@ -298,7 +293,9 @@ class TestPatterns(unittest.TestCase):
                     efields_direct[ii, jj] = np.nan
                 else:
                     try:
-                        efields_direct[ii, jj] = tools.get_peak_value(pattern_ft, fx, fy, vecs_xformed[ii, jj], peak_pixel_size=2)
+                        efields_direct[ii, jj] = tools.get_peak_value(pattern_ft, fx, fy,
+                                                                      vecs_xformed[ii, jj],
+                                                                      peak_pixel_size=2)
                     except ZeroDivisionError:
                         efields_direct[ii, jj] = np.nan
 
@@ -307,10 +304,16 @@ class TestPatterns(unittest.TestCase):
         # compare results
         to_compare = np.logical_and(np.abs(efields_xformed) > 0.05, np.logical_not(np.isnan(efields_direct)))
         # test angles
-        np.testing.assert_allclose(np.angle(efields_xformed[to_compare]), np.angle(efields_direct[to_compare]), atol=0.003)
+        np.testing.assert_allclose(np.angle(efields_xformed[to_compare]),
+                                   np.angle(efields_direct[to_compare]),
+                                   atol=0.003)
         # test amplitudes
-        np.testing.assert_allclose(np.abs(efields_xformed[to_compare]), np.abs(efields_direct[to_compare]), atol=0.07)
-        np.testing.assert_allclose(np.abs(efields_xformed[to_compare]), np.abs(efields_direct[to_compare]), rtol=0.25)
+        np.testing.assert_allclose(np.abs(efields_xformed[to_compare]),
+                                   np.abs(efields_direct[to_compare]),
+                                   atol=0.07)
+        np.testing.assert_allclose(np.abs(efields_xformed[to_compare]),
+                                   np.abs(efields_direct[to_compare]),
+                                   rtol=0.25)
 
 
 if __name__ == "__main__":
