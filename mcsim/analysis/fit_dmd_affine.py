@@ -122,7 +122,7 @@ def get_affine_fit_pattern(dmd_size: list[int],
 
         patterns.append(mask)
 
-    patterns = np.asarray(patterns)
+    patterns = np.asarray(patterns).astype(bool)
 
     return patterns, radii, centers
 
