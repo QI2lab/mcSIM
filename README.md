@@ -84,16 +84,9 @@ on tools for working with affine transformations found
 
 ### [otf_tools.py](mcsim/analysis/otf_tools.py)
 Code for extracting optical transfer function from measurement of the strength of various Fourier peaks for a given SIM DMD pattern.
- 
-### [psd.py](mcsim/analysis/psd.py)
-Code for doing the periodic/smooth image decomposition, an alternative to apodization for the Fourier transform.
-This code is taken from https://github.com/jacobkimmel/ps_decomp (with permission), and included here for convenience.
 
 ### [analysis_tools.py](mcsim/analysis/analysis_tools.py)
 Miscellaneous image processing tools, primarily for working with Fourier transforms
-
-### [mm_io.py](mcsim/analysis/mm_io.py)
-Tools for IO of MicroManager style tif files and metadata. 
 
 ### [localize-psf](https://github.com/QI2lab/localize-psf/blob/master/localize_psf)
 Useful tools for automatically localizing sparse fluorescent beads and performing both 2D and 3D
