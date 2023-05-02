@@ -1,8 +1,9 @@
 """
-Functions for calibrating noise and gain map of sCMOS camera, doing denoising of imaging data, or producing
-simulated camera data
+Functions for calibrating noise and gain map of sCMOS camera
 """
 import time
+from typing import Optional
+import matplotlib.figure
 import numpy as np
 import dask
 import dask.array as da
@@ -14,21 +15,19 @@ import matplotlib.pyplot as plt
 def get_pixel_statistics(imgs,
                          description: str = "",
                          moments: tuple[int] = (1, 2),
-                         corr_dists: tuple[int] = None) -> dict:
+                         corr_dists: Optional[tuple[int]] = None) -> dict:
     """
     Estimate camera readout noise from a set of images taken in zero light conditions
 
     :param imgs: numpy or dask image array. If you have a set of individual tiff files, such an array can be produced
-    with dask_image, e.g.
-    >>> imgs = dask_image.imread.imread("*.tif")
+      with dask_image, e.g.
+      >>> imgs = dask_image.imread.imread("*.tif")
     :param description:
     :param moments: list of moments to calculate. by default only the first and second moment. But if also compute the
-     3rd and 4th can estimate the uncertainty in the variance
+      3rd and 4th can estimate the uncertainty in the variance
     :param corr_dists: list of correlator distances (along x, y, and t) to compute correlations
-
-    :return data: dictionary storing data.
-    Keys have the form "moment_n" for the nth moment and
-    "corr_r_dist=n" where r = x, y, or t and n is the correlation step size
+    :return data: dictionary storing data. Keys have the form "moment_n" for the nth moment and
+     "corr_r_dist=n" where r = x, y, or t and n is the correlation step size
     """
 
     if corr_dists is not None and np.any([not isinstance(cd, int) for cd in corr_dists]):
@@ -105,12 +104,12 @@ def get_gain_map(dark_means: np.ndarray,
                  max_mean: float = np.inf) -> (np.ndarray, np.ndarray, np.ndarray):
     """
 
-    @param dark_means: array of size ny x nx
-    @param dark_vars: array of size ny x nx
-    @param light_means: array of size ni x ny x nx
-    @param light_vars: array of size ni x ny x nx
-    @param max_mean: ignore data points with means larger than this value (to avoid issues with saturation)
-    @return gains, dark_means, dark_vars:
+    :param dark_means: array of size ny x nx
+    :param dark_vars: array of size ny x nx
+    :param light_means: array of size ni x ny x nx
+    :param light_vars: array of size ni x ny x nx
+    :param max_mean: ignore data points with means larger than this value (to avoid issues with saturation)
+    :return gains, dark_means, dark_vars:
     """
 
     # minimize over g_ij \sum_k ( (nu_ij - v_ij) - g_ij * (Dk_ij - o_ij) )^2
@@ -132,15 +131,16 @@ def get_gain_map(dark_means: np.ndarray,
 
 def plot_noise_stats(noise_data: dict,
                      nbins: int = 600,
-                     figsize: tuple[float] = (20, 10)):
+                     figsize: tuple[float] = (20, 10)) -> (list[matplotlib.figure.Figure], list[str]):
     """
-       Display gain curve for single pixel vs. illumination data
-       :param dict noise_data: {"means", "variances"} fields are ny x nx arrays
-       fields  store nillum x ny x nx arrays
-       :param nbins: number of bins for histograms
-       :param figsize:
-       :return:
-       """
+    Display gain curve for single pixel vs. illumination data
+
+    :param dict noise_data: {"means", "variances"} fields are ny x nx arrays
+      fields  store nillum x ny x nx arrays
+    :param nbins: number of bins for histograms
+    :param figsize:
+    :return: (figure list, names list)
+    """
 
     # todo: deprecate
     offsets = noise_data['means']
@@ -283,12 +283,13 @@ def plot_camera_noise_results(offsets: np.ndarray,
                               light_means: np.ndarray,
                               light_vars: np.ndarray,
                               gains: np.ndarray,
-                              light_means_err: np.ndarray = None,
-                              light_vars_err: np.ndarray = None,
+                              light_means_err: Optional[np.ndarray] = None,
+                              light_vars_err: Optional[np.ndarray] = None,
                               nbins: int = 600,
-                              figsize: tuple[float] = (20, 10)):
+                              figsize: tuple[float] = (20, 10)) -> (list[matplotlib.figure.Figure], list[str]):
     """
     Display gain curve for single pixel vs. illumination data
+
     :param offsets: ny x nx
     :param dark_vars: ny x nx
     :param light_means: ni x ny x nx
@@ -298,7 +299,7 @@ def plot_camera_noise_results(offsets: np.ndarray,
     :param light_vars_err:
     :param nbins: number of bins for histograms
     :param figsize:
-    :return:
+    :return: (figures, figure names)
     """
 
     if light_means_err is None:

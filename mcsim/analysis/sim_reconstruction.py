@@ -2426,9 +2426,9 @@ def sim_optical_section(imgs: array,
 
     .. math::
 
-      I_\\text{os}(r) &=  \\sqrt{ (I_0(r) - I_1(r))^2 + (I_1(r) - I_2(r))^2 + (I_2(r) - I_0(r))^2 }\\
+      I_\\text{os}(r) &=  \\sqrt{ (I_0(r) - I_1(r))^2 + (I_1(r) - I_2(r))^2 + (I_2(r) - I_0(r))^2 }
 
-                      &= \\frac{3}{\\sqrt{2}} mA\\
+                      &= \\frac{3}{\\sqrt{2}} mA
 
       I_a(r) &= A \\left[1 + m \\cos(\\phi + \\phi_a) \\right]
 
@@ -2527,7 +2527,7 @@ def fit_modulation_frq(ft1: np.ndarray,
 
     .. math::
 
-       C(f') &= \\sum_f ft_1(f)  ft_2^*(f + f')\\
+       C(f') &= \\sum_f ft_1(f)  ft_2^*(f + f')
 
        f^\\star &= \\text{argmax}_{f'} |C(f')|
 
@@ -2941,11 +2941,11 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
 
     .. math::
 
-      C_m(k) &= O(k - m*ko) h_m(k)\\
+      C_m(k) &= O(k - m*ko) h_m(k)
 
-      D(k) &= M C(k)\\
+      D(k) &= M C(k)
 
-      cc^l_ij &= C_i(k) \\otimes C_j(k-lp)\\
+      cc^l_ij &= C_i(k) \\otimes C_j(k-lp)
 
       M^* &= \\text{argmin}_M \\sum_{i \\neq l+j} |cc^l_ij|^{1/2}.
 
@@ -3386,7 +3386,7 @@ def get_band_overlap(band0: array,
 
     .. math::
 
-      C &= \\frac{\\sum_f b_0(f) * b_1^*(f + f_o)}{\\sum |b_0(f)|^2}\\
+      C &= \\frac{\\sum_f b_0(f) * b_1^*(f + f_o)}{\\sum |b_0(f)|^2}
 
       b_1(f + f_o) &= O(f)
 

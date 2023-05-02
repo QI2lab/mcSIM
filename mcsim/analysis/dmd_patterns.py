@@ -2192,7 +2192,6 @@ def vects2pattern_data(dmd_size: list[int],
     :param invert: whether or not pattern is "inverted", i.e. if the roll of "OFF" and "ON" should be flipped
     :param pitch: DMD micromirror pitch
     :param generate_patterns:
-
     :return patterns, vec_as, vec_bs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle:
     """
 
@@ -2260,7 +2259,6 @@ def plot_sim_pattern_sets(patterns: np.ndarray,
     :param pitch:
     :param figsize:
     :param kwargs: passed through to figure
-
     :return figh: handle to resulting figure
     """
 
@@ -2354,7 +2352,6 @@ def export_pattern_set(dmd_size: list[int],
     :param wavelength:
     :param save_dir:
     :param plot_results:
-
     :return patterns, data, figh:
     """
     save_dir = Path(save_dir)
