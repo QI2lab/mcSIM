@@ -1110,6 +1110,10 @@ class phantom_cam(camera):
 
         return img
 
+    def isSequenceRunning(self):
+        # todo: what best to do here?
+        return False
+
     def stopSequenceAcquisition(self):
         self.record_cine(0)  # stop recording
 
@@ -1193,6 +1197,22 @@ class phantom_cam(camera):
         # params are input and will also contain actual output values
 
         return params
+
+    def getROI(self):
+        # raise NotImplementedError()
+        # todo: generalize
+        nx = self.getImageWidth()
+        ny = self.getImageHeight()
+
+        nx_start = (1280 - nx) // 2
+        # nx_end = 1280 - (1280 - nx_cam2) // 2
+        ny_start = (960 - ny) // 2
+        # ny_end = 960 - (960 - ny_cam2) // 2
+
+        return [nx_start, ny_start, nx, ny]
+
+    def setROI(self):
+        raise NotImplementedError()
 
     def snapImage(self):
         pass
