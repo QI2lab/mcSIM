@@ -21,12 +21,13 @@ def get_angular_spectrum_kernel(dz: float,
                                 use_gpu: bool = False) -> array:
     """
     Get the angular spectrum/plane wave expansion kernel for propagating an electric field by distance dz
-    @param dz:
-    @param wavelength:
-    @param no:
-    @param shape:
-    @param drs:
-    @return:
+
+    :param dz:
+    :param wavelength:
+    :param no:
+    :param shape:
+    :param drs:
+    :return:
     """
 
     if use_gpu:
@@ -58,12 +59,13 @@ def propagate_homogeneous(efield_start: array,
     """
     Propagate the Fourier transform of an optical field a distance z through a medium with homogeneous index
     of refraction n using the angular spectrum method
-    @param efield_start: n0 x ... x nm x ny x nx array
-    @param zs:
-    @param no:
-    @param drs: (dy, dx)
-    @param wavelength:
-    @return efield_prop: no x ... x nm x nz x ny x nx array
+
+    :param efield_start: n0 x ... x nm x ny x nx array
+    :param zs:
+    :param no:
+    :param drs: (dy, dx)
+    :param wavelength:
+    :return efield_prop: no x ... x nm x nz x ny x nx array
     """
 
     use_gpu = isinstance(efield_start, cp.ndarray) and _gpu_available
@@ -111,14 +113,14 @@ def propagate_inhomogeneous(efield_start: array,
     Array stores electric field on each side of pixels, plus the electric field at the imaging plane. So if
     there are nz pixels, there are nz + 2 planes
 
-    @param efield_start: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
-    @param n: nz x ny x nx array
-    @param no: background index of refraction
-    @param drs: (dz, dy, dx)
-    @param wavelength: wavelength in same units as drs
-    @param apodization:
-    @param model:
-    @return efield: n0 x ... x nm x nz x ny x nx electric field
+    :param efield_start: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
+    :param n: nz x ny x nx array
+    :param no: background index of refraction
+    :param drs: (dz, dy, dx)
+    :param wavelength: wavelength in same units as drs
+    :param apodization:
+    :param model:
+    :return efield: n0 x ... x nm x nz x ny x nx electric field
     """
 
     use_gpu = isinstance(efield_start, cp.ndarray) and _gpu_available
@@ -180,14 +182,14 @@ def backpropagate_inhomogeneous(efield_end: array,
     a, b we have
     np.sum(a.conj() * propagate_inhomogeneous(b)) = np.sum(backpropagate_inhomogeneous(a).conj() * b)
 
-    @param efield_end: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
-    @param n: nz x ny x nx array
-    @param no: background index of refraction
-    @param drs: (dz, dy, dx)
-    @param wavelength: wavelength in same units as drs
-    @param apodization:
-    @param model:
-    @return efield: n0 x ... x nm x nz x ny x nx electric field
+    :param efield_end: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
+    :param n: nz x ny x nx array
+    :param no: background index of refraction
+    :param drs: (dz, dy, dx)
+    :param wavelength: wavelength in same units as drs
+    :param apodization:
+    :param model:
+    :return efield: n0 x ... x nm x nz x ny x nx electric field
     """
 
     if atf is None:

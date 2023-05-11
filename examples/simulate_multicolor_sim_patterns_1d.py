@@ -31,7 +31,7 @@ tout_offsets = np.linspace(-10, 10, 4800) * np.pi / 180
 
 # set up different wavelengths
 wlens = [0.465e-6, 0.635e-6, 0.532e-6, 0.785e-6]
-diff_orders = [4, 3, -4, -3, 2] # todo: find closest orders instead of presetting
+diff_orders = [4, 3, -4, -3] # todo: find closest orders instead of presetting
 inverted = [False, False, True, True]
 display_colors = ['b', 'r', 'g', 'k']
 

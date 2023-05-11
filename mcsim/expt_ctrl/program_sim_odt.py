@@ -27,35 +27,37 @@ def get_sim_odt_sequence(daq_do_map: dict,
                          use_dmd_as_odt_shutter: bool = False,
                          n_digital_ch: int = 16,
                          n_analog_ch: int = 4,
-                         acquisition_mode: str = None):
+                         acquisition_mode: str = None,
+                         parameter_scan: dict = None):
     """
     Create DAQ program for SIM/ODT experiment
 
     # todo: maybe should pass around dictionaries with all settings for SIM/ODT separately?
 
-    @param daq_do_map: e.g. from daq_map.py
-    @param daq_ao_map: e.g. from daq_map.py
-    @param channels:
-    @param presets:
-    @param odt_exposure_time: odt exposure time in s
-    @param sim_exposure_time: sim exposure time in s
-    @param npatterns: list which should match size of channels
-    @param dt: daq time step
-    @param interval: interval between images
-    @param n_odt_per_sim: number of ODT images to take per each SIM image set
-    @param n_trig_width: width of triggers
-    @param dmd_delay:
-    @param odt_stabilize_t:
-    @param min_odt_frame_time:
-    @param sim_readout_time:
-    @param sim_stabilize_t:
-    @param shutter_delay_time:
-    @param z_voltages:
-    @param bool use_dmd_as_odt_shutter:
-    @param n_digital_ch:
-    @param n_analog_ch:
-    @param acquisition_mode: "sim", "both", or "average", applies only to SIM sequence
-    @return:
+    :param daq_do_map: e.g. from daq_map.py
+    :param daq_ao_map: e.g. from daq_map.py
+    :param channels:
+    :param presets:
+    :param odt_exposure_time: odt exposure time in s
+    :param sim_exposure_time: sim exposure time in s
+    :param npatterns: list which should match size of channels
+    :param dt: daq time step
+    :param interval: interval between images
+    :param n_odt_per_sim: number of ODT images to take per each SIM image set
+    :param n_trig_width: width of triggers
+    :param dmd_delay:
+    :param odt_stabilize_t:
+    :param min_odt_frame_time:
+    :param sim_readout_time:
+    :param sim_stabilize_t:
+    :param shutter_delay_time:
+    :param z_voltages:
+    :param bool use_dmd_as_odt_shutter:
+    :param n_digital_ch:
+    :param n_analog_ch:
+    :param acquisition_mode: "sim", "both", or "average", applies only to SIM sequence
+    :param parameter_scan: dictionary defining parameter scan. These values will overwrite the values set in 'channels'
+    :return:
     """
 
     if z_voltages is None:
@@ -129,10 +131,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
             digital_pgms.append(d)
             analog_pgms.append(a)
 
-    # for z-stack, digital pgm are just repeated. We don't need to do anything at all
     digital_pgm_full = np.vstack(digital_pgms)
-
-    # analog pgms must be repeated with correct z-voltages
     analog_pgms_one_z = np.vstack(analog_pgms)
 
     # check correct number of analog program steps and analog triggers
@@ -142,6 +141,12 @@ def get_sim_odt_sequence(daq_do_map: dict,
                              f" should equal number of analog triggers="
                              f"{np.sum(digital_pgm_full[:, daq_do_map['analog_trigger']]):d}")
 
+    # #######################
+    # z-stack logic
+    # #######################
+
+    # digital pgm are just repeated. We don't need to do anything
+    # analog pgms must be repeated with correct z-voltages
     # get correct voltage for each step
     analog_pgms_per_z = []
     for v in z_voltages:
@@ -152,9 +157,33 @@ def get_sim_odt_sequence(daq_do_map: dict,
     analog_pgm_full = np.vstack(analog_pgms_per_z)
     analog_pgm_full[:, daq_ao_map["z_stage_monitor"]] = analog_pgm_full[:, daq_ao_map["z_stage"]]
 
+    # #######################
+    # parameter_scan
+    # #######################
+    if parameter_scan is not None:
+        scan_lines, scan_volts = zip(*parameter_scan.items())
+        nparams = len(scan_volts[0])
+
+        # check all are the same size
+        if not np.all(np.array([len(p) == nparams for p in scan_volts])):
+            raise ValueError()
+
+        analog_pgms_per_parameter = []
+        for ii in range(nparams):
+            pgm_temp = np.array(analog_pgm_full, copy=True)
+
+            for jj, line in enumerate(scan_lines):
+                pgm_temp[:, daq_ao_map[line]] = scan_volts[jj][ii]
+            analog_pgms_per_parameter.append(pgm_temp)
+
+        analog_pgm_full = np.vstack(analog_pgms_per_parameter)
+
+    # #######################
     # print information
+    # #######################
     info += "channels are:" + " ".join(channels) + "\n"
-    info += f"full digital program = {digital_pgm_full.shape[0] * dt * 1e3: 0.3f}ms = {digital_pgm_full.shape[0]:d} clock cycles\n"
+    info += f"full digital program = {digital_pgm_full.shape[0] * dt * 1e3: 0.3f}ms =" \
+            f" {digital_pgm_full.shape[0]:d} clock cycles\n"
     info += f"full analog program = {analog_pgm_full.shape[0]} steps"
 
     return digital_pgm_full, analog_pgm_full, info
@@ -179,25 +208,25 @@ def get_odt_sequence(daq_do_map: dict,
     """
     Create DAQ sequence for running optical diffraction tomography experiment. All times given in seconds.
 
-    @param daq_do_map: dictionary with named lines as keys and line numbers as values. Must include lines ...
-    @param daq_ao_map: dictionary with named lines as keys and line number as values.
-    @param preset: preset used to set analog information. Dictionary with keys "analog" and "digital", where values
+    :param daq_do_map: dictionary with named lines as keys and line numbers as values. Must include lines ...
+    :param daq_ao_map: dictionary with named lines as keys and line number as values.
+    :param preset: preset used to set analog information. Dictionary with keys "analog" and "digital", where values
     are subentries. In this case, digital entries are ignored.
-    @param exposure_time:
-    @param npatterns: number of patterns
-    @param dt: sampling time step
-    @param interval:
-    @param nrepeats: number of repeats. Typically used for time/z-stacks
-    @param n_trig_width:
-    @param dmd_delay: time to trigger DMD before triggering camera
-    @param stabilize_t: time to wait for laser to stabilize at the start of sequence
-    @param min_frame_time: minimum time before triggering the camera again
-    @param shutter_delay_time: delay time to allow shutter to open
-    @param n_digital_ch: number of digital lines
-    @param n_analog_ch: number of analog lines
-    @param use_dmd_as_shutter: whether to assume there are 2x as many DMD patterns with "off" pattern interleaved
+    :param exposure_time:
+    :param npatterns: number of patterns
+    :param dt: sampling time step
+    :param interval:
+    :param nrepeats: number of repeats. Typically used for time/z-stacks
+    :param n_trig_width:
+    :param dmd_delay: time to trigger DMD before triggering camera
+    :param stabilize_t: time to wait for laser to stabilize at the start of sequence
+    :param min_frame_time: minimum time before triggering the camera again
+    :param shutter_delay_time: delay time to allow shutter to open
+    :param n_digital_ch: number of digital lines
+    :param n_analog_ch: number of analog lines
+    :param use_dmd_as_shutter: whether to assume there are 2x as many DMD patterns with "off" pattern interleaved
     between on patterns
-    @return: do_odt, ao_odt, info
+    :return: do_odt, ao_odt, info
     """
 
     info = ""
@@ -309,25 +338,25 @@ def get_sim_sequence(daq_do_map: dict,
     Generate DAQ array for running a SIM experiment. Also supports taking a pseudo-widefield image by
     running through all SIM patterns during one camera exposure
 
-    @param daq_do_map:
-    @param daq_ao_map:
-    @param preset:
-    @param exposure_time:
-    @param npatterns:
-    @param dt:
-    @param interval:
-    @param nrepeats:
-    @param n_trig_width:
-    @param dmd_delay:
-    @param stabilize_t:
-    @param min_frame_time:
-    @param cam_readout_time:
-    @param shutter_delay_time:
-    @param n_digital_ch:
-    @param n_analog_ch:
-    @param use_dmd_as_shutter:
-    @param acquisition_mode: "sim", "both", or "average"
-    @return do_channel, ao_channel, info:
+    :param daq_do_map:
+    :param daq_ao_map:
+    :param preset:
+    :param exposure_time:
+    :param npatterns:
+    :param dt:
+    :param interval:
+    :param nrepeats:
+    :param n_trig_width:
+    :param dmd_delay:
+    :param stabilize_t:
+    :param min_frame_time:
+    :param cam_readout_time:
+    :param shutter_delay_time:
+    :param n_digital_ch:
+    :param n_analog_ch:
+    :param use_dmd_as_shutter:
+    :param acquisition_mode: "sim", "both", or "average"
+    :return do_channel, ao_channel, info:
     """
 
     info = ""

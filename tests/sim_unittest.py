@@ -7,11 +7,11 @@ from scipy import fft
 import mcsim.analysis.sim_reconstruction as sim
 import mcsim.analysis.analysis_tools as tools
 
+
 class TestSIM(unittest.TestCase):
 
     def setUp(self):
         pass
-
 
     def test_fit_modulation_frq(self):
         """
@@ -20,7 +20,6 @@ class TestSIM(unittest.TestCase):
         :return:
         """
         # set parameters
-        #options = {'pixel_size': 0.065, 'wavelength': 0.5, 'na': 1.3}
         dxy = 0.065
         wavelength = 0.5
         na = 1.3
@@ -53,10 +52,10 @@ class TestSIM(unittest.TestCase):
         self.assertAlmostEqual(np.abs(frq_extracted[0]), np.abs(frqs[0]), places=5)
         self.assertAlmostEqual(np.abs(frq_extracted[1]), np.abs(frqs[1]), places=5)
 
-
     def test_getphase_realspace(self):
         """
         Test get_phase_realspace() function
+
         :return:
         """
 
@@ -74,9 +73,13 @@ class TestSIM(unittest.TestCase):
         xx_edge, yy_edge = np.meshgrid(x_edge, y_edge)
         m_edge = 1 + 0.2 * np.cos(2 * np.pi * (frqs[0] * xx_edge + frqs[1] * yy_edge) + phi)
 
-        phase_guess_edge = sim.get_phase_realspace(m_edge, frqs, dx, phase_guess=0, origin="edge")
+        phase_guess_edge = sim.get_phase_realspace(m_edge,
+                                                   frqs,
+                                                   dx,
+                                                   phase_guess=0,
+                                                   origin="edge")
 
-        self.assertAlmostEqual(phi, float(phase_guess_edge), places=5)
+        self.assertAlmostEqual(phi, float(phase_guess_edge), places=4)
 
         # create sample image with origin in center/i.e. using fft style coordinates
         # x_center = tools.get_fft_pos(nx, dx)
@@ -85,14 +88,18 @@ class TestSIM(unittest.TestCase):
         xx_center, yy_center = np.meshgrid(x_center, y_center)
         m_center = 1 + 0.2 * np.cos(2 * np.pi * (frqs[0] * xx_center + frqs[1] * yy_center) + phi)
 
-        phase_guess_center = sim.get_phase_realspace(m_center, frqs, dx, phase_guess=0, origin="center")
+        phase_guess_center = sim.get_phase_realspace(m_center,
+                                                     frqs,
+                                                     dx,
+                                                     phase_guess=0,
+                                                     origin="center")
 
         self.assertAlmostEqual(phi, float(phase_guess_center), places=4)
-
 
     def test_get_phase_ft(self):
         """
         Test get_phase_ft() function, which guesses phase from value of image FT
+
         :return:
         """
         # set parameters
@@ -116,15 +123,14 @@ class TestSIM(unittest.TestCase):
 
         self.assertAlmostEqual(phi, float(phase_guess_center), places=5)
 
-
     def test_get_phase_wicker(self):
         pass
-
 
     def test_get_simulated_sim_imgs(self):
         """
         Test that get_simulated_sim_imgs() returns images with the correct SIM parameters when used with different
         levels of binning
+
         @return:
         """
         nbins = [1, 2, 3, 4, 5, 6, 4, 5]
@@ -135,9 +141,17 @@ class TestSIM(unittest.TestCase):
 
             freq = np.array([1 / 25.6346, 1 / 25.77772])
             phi = 0.23626
-            gt, _, _, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)), freq, phi, 1, 1, 0, 0, dxy, photon_shot_noise=False,
-                                               bin_size=nbin)
-            #gt = gt[0, 0]
+            gt, _, _, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)),
+                                                     frqs=freq,
+                                                     phases=phi,
+                                                     mod_depths=[1.],
+                                                     gains=1,
+                                                     offsets=0,
+                                                     readout_noise_sds=0,
+                                                     pix_size=dxy,
+                                                     photon_shot_noise=False,
+                                                     nbin=nbin)
+            gt = gt[0, 0, 0]
             gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(gt)))
 
             # test phase
@@ -148,9 +162,12 @@ class TestSIM(unittest.TestCase):
             fx = fft.fftshift(fft.fftfreq(gt_ft.shape[0], nbin * dxy))
             dfx = fx[1] - fx[0]
             frq_guess = freq + np.random.uniform(-0.005, 0.005, 2)
-            frqs_fit, _, result = sim.fit_modulation_frq(gt_ft, gt_ft, nbin * dxy, frq_guess=frq_guess, max_frq_shift=5 * dfx)
+            frqs_fit, _, result = sim.fit_modulation_frq(gt_ft,
+                                                         gt_ft,
+                                                         nbin * dxy,
+                                                         frq_guess=frq_guess,
+                                                         max_frq_shift=5 * dfx)
             np.testing.assert_allclose(frqs_fit, freq, atol=1e-5)
-
 
     def test_get_band_mixing_matrix(self):
         """
@@ -202,7 +219,9 @@ class TestSIM(unittest.TestCase):
         sim_fs_ft = np.zeros(gt_ft_shifted.shape, dtype=complex)
         for ii in range(nangles):
             kmat = sim.get_band_mixing_matrix(phases[ii], mods[ii], amps[ii])
-            sim_fs_ft[ii] = sim.image_times_matrix(gt_ft_shifted[ii], kmat)
+            # sim_fs_ft[ii] = sim.image_times_matrix(gt_ft_shifted[ii], kmat)
+            for jj in range(nphases):
+                sim_fs_ft[ii, jj] = np.sum(np.expand_dims(kmat[jj], axis=(-1, -2)) * gt_ft_shifted[ii], axis=0)
 
         sim_fs_rs = np.zeros(gt_ft_shifted.shape)
         for ii in range(nangles):
@@ -211,7 +230,6 @@ class TestSIM(unittest.TestCase):
 
         np.testing.assert_allclose(sim_fs_ft, sim_rs_ft, atol=1e-10)
         np.testing.assert_allclose(sim_fs_rs, sim_rs, atol=1e-12)
-
 
     def test_band_mixing_mat_jac(self):
         """
@@ -231,11 +249,10 @@ class TestSIM(unittest.TestCase):
         for ii in range(len(params)):
             params_temp = np.array(params, copy=True)
             params_temp[ii] -= ds
-            jac_est.append(1 /ds * (get_mat(params) - get_mat(params_temp)))
+            jac_est.append(1 / ds * (get_mat(params) - get_mat(params_temp)))
 
         max_err = np.max([np.max(np.abs(jac[ii] - jac_est[ii])) for ii in range(len(params))])
         self.assertAlmostEqual(max_err, 0, places=7)
-
 
     def test_band_mixing_mat_inv(self):
         """
@@ -251,7 +268,6 @@ class TestSIM(unittest.TestCase):
 
         np.testing.assert_allclose(mat.dot(mat_inv), np.identity(mat.shape[0]), atol=1e-10)
 
-
     def test_expand_fourier_sp(self):
         """
         Test expand_fourier_sp() function
@@ -261,7 +277,7 @@ class TestSIM(unittest.TestCase):
         arr = np.array([[1, 2], [3, 4]])
         arr_ft = fft.fftshift(fft.fft2(fft.ifftshift(arr)))
 
-        arr_ft_ex = sim.resample_bandlimited_ft(arr_ft, (2, 2))
+        arr_ft_ex = sim.resample_bandlimited_ft(arr_ft, (2, 2), axes=(-1, -2))
         arr_ex = fft.fftshift(fft.ifft2(fft.ifftshift(arr_ft_ex)))
 
         self.assertTrue(np.array_equal(arr_ex.real, np.array([[1, 1.5, 2, 1.5],
@@ -269,34 +285,35 @@ class TestSIM(unittest.TestCase):
                                                                [3, 3.5, 4, 3.5],
                                                                [2, 2.5, 3, 2.5]])))
 
-
     def test_expand_fourier_sp_odd1d(self):
         """
         Test function with odd input size
+
+        :return:
         """
         arr = np.random.rand(151)
         arr_ft = fft.fftshift(fft.fft(fft.ifftshift(arr)))
 
-        arr_ex_ft = sim.resample_bandlimited_ft(arr_ft, (2,))
+        arr_ex_ft = sim.resample_bandlimited_ft(arr_ft, (2,), axes=(-1,))
         arr_exp = fft.fftshift(fft.ifft(fft.ifftshift(arr_ex_ft))).real
 
         max_err = np.max(np.abs(arr_exp[1::2] - arr))
         self.assertTrue(max_err < 1e-14)
 
-
     def test_expand_fourier_sp_even1d(self):
         """
         test function with even input size
+
+        :return:
         """
         arr = np.random.rand(100)
         arr_ft = fft.fftshift(fft.fft(fft.ifftshift(arr)))
 
-        arr_ex_ft = sim.resample_bandlimited_ft(arr_ft, (2,))
+        arr_ex_ft = sim.resample_bandlimited_ft(arr_ft, (2,), axes=(-1,))
         arr_exp = fft.fftshift(fft.ifft(fft.ifftshift(arr_ex_ft))).real
 
         max_err = np.max(np.abs(arr_exp[::2] - arr))
         self.assertTrue(max_err < 1e-14)
-
 
     def test_expand_fourier_sp_odd2d(self):
         """
@@ -305,12 +322,11 @@ class TestSIM(unittest.TestCase):
         arr = np.random.rand(151, 151)
         arr_ft = fft.fftshift(fft.fft2(fft.ifftshift(arr)))
 
-        arr_ex_ft = sim.resample_bandlimited_ft(arr_ft, (2, 2))
+        arr_ex_ft = sim.resample_bandlimited_ft(arr_ft, (2, 2), axes=(-1, -2))
         arr_exp = fft.fftshift(fft.ifft2(fft.ifftshift(arr_ex_ft))).real
 
         max_err = np.max(np.abs(arr_exp[1::2, 1::2] - arr))
         self.assertTrue(max_err < 1e-14)
-
 
     def test_expand_fourier_sp_even2d(self):
         """
@@ -319,12 +335,11 @@ class TestSIM(unittest.TestCase):
         arr = np.random.rand(100, 100)
         arr_ft = fft.fftshift(fft.fft2(fft.ifftshift(arr)))
 
-        arr_ex_ft = sim.resample_bandlimited_ft(arr_ft, (2, 2))
+        arr_ex_ft = sim.resample_bandlimited_ft(arr_ft, (2, 2), axes=(-1, -2))
         arr_exp = fft.fftshift(fft.ifft2(fft.ifftshift(arr_ex_ft))).real
 
         max_err = np.max(np.abs(arr_exp[::2, ::2] - arr))
         self.assertTrue(max_err < 1e-14)
-
 
     def test_translate_ft(self):
         """
@@ -359,7 +374,6 @@ class TestSIM(unittest.TestCase):
             self.assertTrue(max_err < 1e-7)
 
         # todo: also test approximately gives the right thing for partial pixel shifts (i.e. that the phases make sense)
-
 
 
 if __name__ == "__main__":

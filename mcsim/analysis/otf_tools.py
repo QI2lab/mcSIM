@@ -14,12 +14,12 @@ import numpy as np
 from scipy import fft
 import scipy.signal
 import scipy.optimize
-
+from typing import Optional
+import matplotlib
 import matplotlib.colors
 from matplotlib.colors import PowerNorm
 import matplotlib.patches
 import matplotlib.pyplot as plt
-
 from mcsim.analysis import dmd_patterns, simulate_dmd, sim_reconstruction
 import mcsim.analysis.analysis_tools as tools
 from localize_psf import affine, fit_psf
@@ -31,14 +31,12 @@ def frq2angles(frq_2d,
     """
     Convert from frequency vectors (in angular spectrum representation) to angles
 
-    f = n/lambda * [cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta)]
+    :math:`f = n/\\lambda * [\\cos(\\phi) \\sin(\\theta), \\sin(\\phi) \\sin(\\theta), \\cos(\\theta)]`
 
     :param frq_2d:
     :param wavelength:
     :param n:
-
-    :return phi:
-    :return theta:
+    :return: (phi, theta)
     """
     frq_2d = np.array(frq_2d, copy=True)
 
@@ -65,7 +63,6 @@ def angles2frq(theta,
     :param phi:
     :param float wavelength:
     :param float n: index of refraction of medium
-
     :return frq:
     """
     frq = n/wavelength * np.array([np.cos(phi) * np.sin(theta),
@@ -74,11 +71,11 @@ def angles2frq(theta,
     return frq
 
 
-def interfere_polarized(theta1,
-                        phi1,
-                        theta2,
-                        phi2,
-                        alpha):
+def interfere_polarized(theta1: float,
+                        phi1: float,
+                        theta2: float,
+                        phi2: float,
+                        alpha: float):
     """
     Let the optical axis point along z. theta is the angle with respect to the optical axis,
     and phi is the azimuthal angle of the ray. Alpha is the azimuthal angle of the polarization,
@@ -101,7 +98,6 @@ def interfere_polarized(theta1,
     :param theta2: angle of second ray
     :param phi2: azimuthal angle of second ray
     :param alpha: polarization angle
-
     :return: dot product of the two polarization vectors
     """
     int = np.cos(alpha - phi1) * np.cos(alpha - phi2) * np.cos(phi1) * np.cos(phi2) * np.cos(theta1) * np.cos(theta2) + \
@@ -117,12 +113,13 @@ def interfere_polarized(theta1,
     return int
 
 
-def interfere_unpolarized(theta1,
-                          phi1,
-                          theta2,
-                          phi2):
+def interfere_unpolarized(theta1: float,
+                          phi1: float,
+                          theta2: float,
+                          phi2: float):
     """
     Intereference averaged over input polarization
+
     :param theta1:
     :param phi1:
     :param theta2:
@@ -136,13 +133,12 @@ def interfere_unpolarized(theta1,
     return intensity
 
 
-def get_int_fc(efield_fc):
+def get_int_fc(efield_fc: np.ndarray) -> np.ndarray:
     """
     Generate intensity fourier components from efield fourier components ignoring polarization effects
 
     :param efield_fc: electric field Fourier components nvec1 x nvec2 array,
      where efield_fc[ii, jj] is the electric field at frequencies f = ii * v1 + jj * v2.
-
     :return intensity_fc: intensity Fourier components at the same frequencies, f = ii * v1 + jj * v2
     """
     ny, nx = efield_fc.shape
@@ -154,22 +150,21 @@ def get_int_fc(efield_fc):
     return intensity_fc
 
 
-def get_int_fc_pol(efield_fc,
+def get_int_fc_pol(efield_fc: np.ndarray,
                    vecs,
-                   wavelength,
-                   n,
-                   polarization_angle=None):
+                   wavelength: float,
+                   n: float,
+                   polarization_angle: Optional[float] = None):
     """
     Calculate intensity from electric field including effect of polarization.
 
     :param efield_fc: electric field Fourier components nvec1 x nvec2 array, where efield_fc[ii, jj]
      is the electric field at frequencies f = ii * v1 + jj * v2.
     :param vecs: nvec1 x nvec2 x 2
-    :param float wavelength: wavelength of excitation light. If vecs are given in 1/unit, then wavelength must be given
-    in unit.
+    :param wavelength: wavelength of excitation light. If vecs are given in 1/unit, then wavelength must be given
+      in unit.
     :param n: index of refraction of medium
     :param polarization_angle: can either be an angle in radians, or "None" in which case assume unpolarized light.
-
     :return intensity_fc: nvec1 x nvec2 x 2
     """
     ny, nx = efield_fc.shape
@@ -216,12 +211,12 @@ def get_int_fc_pol(efield_fc,
     return intensity_fc
 
 
-def get_all_fourier_exp(imgs,
-                        frq_vects_theory,
+def get_all_fourier_exp(imgs: np.ndarray,
+                        frq_vects_theory: np.ndarray,
                         roi: list[int],
                         pixel_size_um: float,
-                        fmax_img,
-                        to_use=None,
+                        fmax_img: float,
+                        to_use: Optional[np.ndarray] = None,
                         use_guess_frqs: bool = True,
                         max_frq_shift_pix: float = 1.5,
                         force_start_from_guess: bool = True,
@@ -240,12 +235,9 @@ def get_all_fourier_exp(imgs,
     procedure to find peak
     :param max_frq_shift_pix:
     :param force_start_from_guess:
-    :param int peak_pix: number of pixels to use when calculating peak. Typically 2.
-    :param float bg:
-
-    :return intensity:
-    :return intensity_unc:
-    :return frq_vects_expt:
+    :param peak_pix: number of pixels to use when calculating peak. Typically 2.
+    :param bg:
+    :return: (intensity, frq_vects_expt)
     """
     if to_use is None:
         to_use = np.ones(frq_vects_theory[:, :, :, 0].shape, dtype=np.int)
@@ -371,7 +363,6 @@ def get_all_fourier_thry(vas,
     :param nphases:
     :param phase_index:
     :param dmd_size:
-
     :return efield_theory:
     :return ns:
     :return ms:
@@ -397,8 +388,15 @@ def get_all_fourier_thry(vas,
 
         # get expected values
         efield_theory[ii], ns, ms, frq_vects_dmd[ii] = \
-            dmd_patterns.get_efield_fourier_components(unit_cell, xcell, ycell, va, vb, nphases, phase_index,
-                                                       dmd_size=dmd_size, nmax=nmax)
+            dmd_patterns.get_efield_fourier_components(unit_cell,
+                                                       xcell,
+                                                       ycell,
+                                                       va,
+                                                       vb,
+                                                       nphases,
+                                                       phase_index,
+                                                       dmd_size=dmd_size,
+                                                       nmax=nmax)
 
         # change normalization from 1 being maximum possible fourier component to 1 being DC component
         efield_theory[ii] = efield_theory[ii] / np.nansum(unit_cell) * np.nansum(unit_cell >= 0)
@@ -417,7 +415,7 @@ def get_intensity_fourier_thry(efields,
                                dmd_shape: tuple[int],
                                use_blaze_correction: bool = False,
                                use_polarization_correction: bool = False,
-                               dmd_params: dict = None):
+                               dmd_params: Optional[dict] = None):
     """
 
     :param efields: nimgs x nvecs1 x nvecs2, electric field Fourier components from DMD pattern, with no blaze
@@ -434,14 +432,13 @@ def get_intensity_fourier_thry(efields,
     :param dmd_shape:
     :param use_blaze_correction: whether or not to use blaze correction
     :param use_polarization_correction: whether or not to correct for polarization effects. Assumes input is
-    completely unpolarized. # todo: can add other polarization options
+      completely unpolarized. # todo: can add other polarization options
     :param dmd_params: {"wavelength", "gamma", "wx", "wy", "theta_ins": [tx, ty], "theta_outs": [tx, ty]}. These can be
-    omitted if use_blaze_correction is False
-
+      omitted if use_blaze_correction is False
     :return intensity_theory: theoretical intensity using DMD coordinates. nimgs x nvecs1 x nvecs2
     :return intensity_theory_xformed: theoretical intensity using camera ROI coordinates. Same magnitude but different
-    phase versus intensity_theory. nimgs x nvecs1 x nvecs2. This is identical to intensity_theory in magnitude, but
-    different in phase
+      phase versus intensity_theory. nimgs x nvecs1 x nvecs2. This is identical to intensity_theory in magnitude, but
+      different in phase
     :return frq_vects_cam: frequency vectors in camera space in 1/pixels. nimgs x nvecs1 x nvecs2 x 2
     :return frq_vects_um: frequency vectors in camera space in 1/microns. nimgs x nvecs1 x nvecs2 x 2
     """
@@ -499,6 +496,7 @@ def fit_phase_diff(phase_th,
                    frqs):
     """
     Match theory and experimental phases as best as possible by modifying affine transformation
+
     :param phase_th:
     :param phase_expt:
     :param frqs:
@@ -536,16 +534,17 @@ def plot_pattern(img: np.ndarray,
                  roi: list[int],
                  nphases: int,
                  phase_index: int,
-                 fmax_in=None,
+                 fmax_in: Optional = None,
                  peak_int_exp=None,
                  peak_int_exp_unc=None,
                  peak_int_theory=None,
                  otf=None,
                  otf_unc=None,
                  to_use=None,
-                 figsize=(20, 10)):
+                 figsize=(20, 10)) -> matplotlib.figure.Figure:
     """
     plot image and affine xformed pattern it corresponds to
+
     :param img: image ny x nx
     :param va: [vx, vy]
     :param vb: [vx, vy]
@@ -557,7 +556,6 @@ def plot_pattern(img: np.ndarray,
     :param roi: [ystart, yend, xstart, xend] region of interest in image
     :param nphases: number of phaseshifts used to generate the DMD pattern. Needed in addition to va/vb to specify pattern
     :param phase_index:  index of phaseshift. Needed in addition to va, vb, nphases to specify pattern
-
     :return fig_handle:
     """
 
@@ -724,9 +722,10 @@ def plot_otf(frq_vects,
              otf_unc=None,
              to_use=None,
              wf_corrected=None,
-             figsize: tuple[float] = (20, 10)):
+             figsize: tuple[float] = (20, 10)) -> matplotlib.figure.Figure:
     """
     Plot complete OTF
+
     :param frq_vects:
     :param fmax_img:
     :param otf:

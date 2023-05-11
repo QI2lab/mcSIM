@@ -5,10 +5,12 @@ import datetime
 import numpy as np
 from pathlib import Path
 import json
+import tifffile
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-from mcsim.analysis import fit_dmd_affine, mm_io
+
+from mcsim.analysis import fit_dmd_affine
 
 # ###########################
 # set image data location
@@ -47,8 +49,8 @@ mask = masks[1]
 # ###########################
 affine_summary = {}
 for nc in range(len(channel_labels)):
-    img, _ = mm_io.read_tiff(img_fname, slices=nc)
-    img = img[0]
+    img = tifffile.imread(img_fname)[nc]
+
     affine_xform_data, figh = fit_dmd_affine.estimate_xform(img,
                                                             mask,
                                                             pattern_centers,
