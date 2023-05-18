@@ -3774,3 +3774,52 @@ def get_simulated_sim_imgs(ground_truth: array,
             # mcnrs[ii, jj] = 0
 
     return sim_imgs, snrs, patterns, patterns_raw
+
+
+def get_hexagonal_patterns(dxy, ny, nx, frq_mag, phase1s, phase2s, use_gpu=False):
+    """
+    Generate hexagonal SIM patterns
+
+    :param dxy:
+    :param ny:
+    :param nx:
+    :param frq_mag:
+    :param phase1s:
+    :param phase2s:
+    :param use_gpu:
+    :return:
+    """
+
+    if len(phase1s) != len(phase2s):
+        raise ValueError()
+
+    if use_gpu and _cupy_available:
+        xp = cp
+    else:
+        xp = np
+
+    npatterns = len(phase1s)
+    x = xp.arange(nx) * dxy
+    y = xp.arange(ny) * dxy
+    xx, yy = xp.meshgrid(x, y)
+
+    phi_a = 0
+    phi_b = 2 * np.pi / 3
+    phi_c = 4 * np.pi / 3
+
+    # ignoring z-component ...
+    ka = np.array([np.cos(phi_a), np.sin(phi_a), 0]) * (2 * np.pi) * frq_mag
+    kb = np.array([np.cos(phi_b), np.sin(phi_b), 0]) * (2 * np.pi) * frq_mag
+    kc = np.array([np.cos(phi_c), np.sin(phi_c), 0]) * (2 * np.pi) * frq_mag
+
+    def efield_plane_wave(x, y, z, kvec): return xp.exp(1j * (kvec[0] * x + kvec[1] * y + kvec[2] * z))
+
+    def e_hex(x, y, z, alpha_b, alpha_c): return efield_plane_wave(x, y, z, ka) + \
+        efield_plane_wave(x, y, z, kb) * xp.exp(1j * alpha_b) + \
+        efield_plane_wave(x, y, z, kc) * xp.exp(1j * alpha_c)
+
+    patterns = xp.zeros((npatterns, ny, nx))
+    for ii in range(npatterns):
+        patterns[ii] = 1 / 9 * xp.abs(e_hex(xp.array(xx), xp.array(yy), 0, phase1s[ii], phase2s[ii]))**2
+
+    return patterns
