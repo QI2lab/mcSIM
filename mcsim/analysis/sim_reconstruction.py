@@ -2729,16 +2729,16 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # #######################################
     roi_cx = np.argmin(np.abs(fx_sim - fxs))
     roi_cy = np.argmin(np.abs(fy_sim - fys))
-    roi = rois.get_centered_roi([roi_cy, roi_cx],
+    roi = rois.get_centered_rois([roi_cy, roi_cx],
                                 roi_size,
                                 min_vals=[0, 0],
-                                max_vals=cc.shape)
+                                max_vals=cc.shape)[0]
 
     extent_roi = get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
     ax = figh.add_subplot(gspec[0, 0])
     ax.set_title("cross correlation, ROI")
-    im1 = ax.imshow(rois.cut_roi(roi, cc),
+    im1 = ax.imshow(rois.cut_roi(roi, cc)[0],
                     interpolation=None,
                     norm=PowerNorm(gamma=gamma),
                     extent=extent_roi,
@@ -2800,12 +2800,15 @@ def plot_correlation_fit(img1_ft: np.ndarray,
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
-    roi_center = rois.get_centered_roi([cy_c, cx_c], [roi[1] - roi[0], roi[3] - roi[2]], [0, 0], img1_ft.shape)
+    roi_center = rois.get_centered_rois([cy_c, cx_c], [roi[1] - roi[0], roi[3] - roi[2]], [0, 0], img1_ft.shape)[0]
     extent_roic = get_extent(fys[roi_center[0]:roi_center[1]],
                              fxs[roi_center[2]:roi_center[3]])
 
-    im3 = ax3.imshow(rois.cut_roi(roi_center, np.abs(img1_ft)**2),
-                     interpolation=None, norm=PowerNorm(gamma=gamma), extent=extent_roic, cmap=cmap)
+    im3 = ax3.imshow(rois.cut_roi(roi_center, np.abs(img1_ft)**2)[0],
+                     interpolation=None,
+                     norm=PowerNorm(gamma=gamma),
+                     extent=extent_roic,
+                     cmap=cmap)
     ax3.scatter(0, 0, color='r', marker='x')
 
     # colorbar
@@ -2824,8 +2827,11 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     ax4.set_title(title)
     ax4.set_xlabel('$f_x (1/\mu m)$')
 
-    im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2), interpolation=None, norm=PowerNorm(gamma=gamma),
-                     extent=extent_roi, cmap=cmap)
+    im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2)[0],
+                     interpolation=None,
+                     norm=PowerNorm(gamma=gamma),
+                     extent=extent_roi,
+                     cmap=cmap)
     ax4.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):

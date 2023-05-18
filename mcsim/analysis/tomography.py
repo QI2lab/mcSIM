@@ -222,10 +222,10 @@ class tomography:
                 # ROI centered on frequency guess
                 nx_center_2 = np.argmin(np.abs(np.squeeze(fx_guess) - self.fxs))
                 ny_center_2 = np.argmin(np.abs(np.squeeze(fy_guess) - self.fys))
-                roi2 = rois.get_centered_roi([ny_center_2, nx_center_2],
+                roi2 = rois.get_centered_rois([ny_center_2, nx_center_2],
                                              [roi_size_pix, roi_size_pix],
                                              min_vals=[0, 0],
-                                             max_vals=img.shape[-2:])
+                                             max_vals=img.shape[-2:])[0]
 
                 apodization = np.outer(hann(img.shape[-2]), hann(img.shape[-1]))
 
@@ -233,8 +233,8 @@ class tomography:
                 ft2 = img_ref_ft[..., roi2[0]:roi2[1], roi2[2]:roi2[3]]
 
                 # fit to Gaussian
-                fxfx_roi = rois.cut_roi(roi2, fxfx)
-                fyfy_roi = rois.cut_roi(roi2, fyfy)
+                fxfx_roi = rois.cut_roi(roi2, fxfx)[0]
+                fyfy_roi = rois.cut_roi(roi2, fyfy)[0]
                 if use_guess_init_params:
                     fx_ip_guess = np.squeeze(fx_guess)
                     fy_ip_guess = np.squeeze(fy_guess)
@@ -357,10 +357,10 @@ class tomography:
 
                     nx_center = np.argmin(np.abs(np.squeeze(fx_guess) - self.fxs))
                     ny_center = np.argmin(np.abs(np.squeeze(fy_guess) - self.fys))
-                    roi = rois.get_centered_roi([ny_center, nx_center],
+                    roi = rois.get_centered_rois([ny_center, nx_center],
                                                  [roi_size_pix, roi_size_pix],
                                                  min_vals=[0, 0],
-                                                 max_vals=(self.ny, self.nx))
+                                                 max_vals=(self.ny, self.nx))[0]
 
                     nfits = np.prod(self.imgs_raw.shape[:self.nextra_dims])
 
