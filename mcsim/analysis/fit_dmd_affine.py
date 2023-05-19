@@ -174,7 +174,7 @@ def fit_pattern_peaks(img: np.ndarray,
     # fit initial centers
     # #############################
     for ii in range(len(centers_init)):
-        roi = rois.get_centered_roi(centers_init[ii], [roi_size, roi_size])
+        roi = rois.get_centered_rois(centers_init[ii], [roi_size, roi_size])[0]
 
         cell = img[roi[0]:roi[1], roi[2]:roi[3]]
         cell_sd = img_sd[roi[0]:roi[1], roi[2]:roi[3]]
@@ -295,7 +295,7 @@ def fit_pattern_peaks(img: np.ndarray,
         yc = int(center_guess[1])
 
         # get roi
-        roi = rois.get_centered_roi([yc, xc], [roi_size, roi_size])
+        roi = rois.get_centered_rois([yc, xc], [roi_size, roi_size])[0]
 
         xstart = int(roi[2])
         xend = int(roi[3])

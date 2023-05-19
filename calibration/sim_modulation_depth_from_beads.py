@@ -30,7 +30,9 @@ import localize_psf.rois as roi_fns
 # data_dirs = [Path(r"H:\2022_12_07\003_515_0.1um_beads")]
 # data_dirs = [Path(r"H:\2022_12_07\004_660_680_0.2um_beads")]
 # data_dirs = [Path(r"H:\2022_12_08\014_515_0.1um_beads_sim")]
-data_dirs = [Path(r"H:\2022_12_08\020_515_0.1um_beads_sim")]
+# data_dirs = [Path(r"H:\2022_12_08\020_515_0.1um_beads_sim")]
+# data_dirs = [Path(r"H:\2023_05_08\006_0.1um_beads_blue")]
+data_dirs = [Path(r"H:\2023_05_08\007_0.1um_beads_blue")]
 
 # channel dependent settings
 
@@ -58,7 +60,8 @@ bead_radii = 0.5 * np.array([0.1])
 use_gpu = True
 figsize = (30, 9)
 save_results = True
-nrois_to_plot = 5 # 5
+# nrois_to_plot = 5 # 5
+nrois_to_plot = 0
 
 # localization filtering parameters
 roi_size = (0, 1.5, 1.5)  # (sz, sy, sx) in um
@@ -164,14 +167,17 @@ for d in data_dirs:
         # take widefield image
         img_middle_wf = np.mean(imgs[0, nz//2, ic], axis=(0, 1))
 
-        coords = localize.get_coords((1,) + img_middle_wf.shape, (1, dxy, dxy), broadcast=True)
-        zz, yy, xx = coords
+        zz, yy, xx = localize.get_coords((1,) + img_middle_wf.shape, (1, dxy, dxy), broadcast=True)
+        coords = localize.get_coords((1,) + img_middle_wf.shape, (1, dxy, dxy), broadcast=False)
         filter = localize.get_param_filter(coords,
                                            fit_dist_max_err=(np.inf, np.inf),
                                            min_spot_sep=min_spot_sep,
                                            sigma_bounds=sigma_bounds,
                                            amp_bounds=(min_fit_amp[ic], np.inf),
                                            dist_boundary_min=min_boundary_distance)
+
+        localize.prepare_rois(img_middle_wf[None, :, :], coords, np.array([[0, 1, 0, 1, 0, 1]]))
+
         # filter = localize.no_filter()
         model = fit_psf.gaussian3d_psf_model()
 
@@ -269,10 +275,7 @@ for d in data_dirs:
 
                         # get ROI's to fit spots
                         imgs_now = np.expand_dims(imgs[it, iz, ic, ia, ip], axis=0)
-                        img_rois = [roi_fns.cut_roi(r, imgs_now) for r in rois[ic]]
-
-                        coords_rois = [[roi_fns.cut_roi(r, c) for c in coords] for r in rois[ic]]
-                        coords_rois = list(zip(*coords_rois))
+                        img_rois, coords_rois, roi_sizes = localize.prepare_rois(imgs_now, coords, rois[ic])
 
                         # fix parameters to match initial fits
                         fixed_params = np.zeros(model.nparams, dtype=bool)
@@ -281,6 +284,7 @@ for d in data_dirs:
                         # do fitting
                         fit_results = localize.fit_rois(img_rois,
                                                         coords_rois,
+                                                        roi_sizes,
                                                         fps_start[ic],
                                                         fixed_params=fixed_params,
                                                         use_gpu=use_gpu,
@@ -693,4 +697,3 @@ for d in data_dirs:
                 if save_results:
                     figh.savefig(Path(save_dir, f"focus_color={ic:d}_time={it:d}.png"))
                     plt.close(figh)
-

@@ -234,7 +234,7 @@ class TestPatterns(unittest.TestCase):
         nmax = 40
         nx = 500
         ny = 500
-        roi = rois.get_centered_roi([1024, 1024], [ny, nx])
+        roi = rois.get_centered_rois([1024, 1024], [ny, nx])[0]
 
         # vec_a = np.array([8, 17])
         # vec_b = np.array([3, -6])

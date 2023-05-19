@@ -31,7 +31,7 @@ imgs = tifffile.imread(fname_raw_data).reshape([ncolors, nangles, nphases, ny, n
 # ############################################
 # set ROI to reconstruction, [cy, cx]
 # ############################################
-roi = rois.get_centered_roi([791, 896], [850, 851])
+roi = rois.get_centered_rois([791, 896], [850, 851])[0]
 nx_roi = roi[3] - roi[2]
 ny_roi = roi[1] - roi[0]
 
