@@ -31,7 +31,7 @@ imgs = tifffile.imread(fname_raw_data).reshape([ncolors, nangles, nphases, ny, n
 # ############################################
 # set ROI to reconstruction, [cy, cx]
 # ############################################
-roi = rois.get_centered_roi([791, 896], [850, 851])
+roi = rois.get_centered_rois([791, 896], [850, 851])[0]
 nx_roi = roi[3] - roi[2]
 ny_roi = roi[1] - roi[0]
 
@@ -44,18 +44,11 @@ emission_wavelengths = [0.519, 0.580]
 excitation_wavelengths = [0.465, 0.532]
 
 # ############################################
-# load OTF data
+# set OTF
 # ############################################
-# todo: switch to json or hardcode for configuration files
-
-otf_data_path = root_dir / "2020_05_19_otf_fit_blue.pkl"
-
-with open(otf_data_path, 'rb') as f:
-    otf_data = pickle.load(f)
-otf_p = otf_data['fit_params']
-
-
-def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_p[0]) ** 2) * fit_psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
+# determined by fit to measured OTF
+otf_attenuation_params = np.array([2.446])
+def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_attenuation_params[0]) ** 2) * fit_psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
 
 # ############################################
 # load affine transformations from DMD to camera

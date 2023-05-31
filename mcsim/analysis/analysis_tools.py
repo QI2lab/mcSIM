@@ -191,11 +191,11 @@ def get_peak_value(img: array,
     iy = np.argmin(np.abs(py - y))
 
     # get ROI around pixel for weighted averaging
-    roi = rois.get_centered_roi([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])
-    img_roi = rois.cut_roi(roi, img)
+    roi = rois.get_centered_rois([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])[0]
+    img_roi = rois.cut_roi(roi, img)[0]
 
-    xx_roi = xp.expand_dims(rois.cut_roi(roi, xx), axis=tuple(range(img_roi.ndim - 2)))
-    yy_roi = xp.expand_dims(rois.cut_roi(roi, yy), axis=tuple(range(img_roi.ndim - 2)))
+    xx_roi = xp.expand_dims(rois.cut_roi(roi, xx)[0], axis=tuple(range(img_roi.ndim - 2)))
+    yy_roi = xp.expand_dims(rois.cut_roi(roi, yy)[0], axis=tuple(range(img_roi.ndim - 2)))
 
     weights = pixel_overlap(xp.array([[py, px]]),
                             xp.stack((yy_roi.ravel(), xx_roi.ravel()), axis=1),

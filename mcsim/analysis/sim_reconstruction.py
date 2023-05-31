@@ -2426,9 +2426,9 @@ def sim_optical_section(imgs: array,
 
     .. math::
 
-      I_\\text{os}(r) &=  \\sqrt{ (I_0(r) - I_1(r))^2 + (I_1(r) - I_2(r))^2 + (I_2(r) - I_0(r))^2 }\\
+      I_\\text{os}(r) &=  \\sqrt{ (I_0(r) - I_1(r))^2 + (I_1(r) - I_2(r))^2 + (I_2(r) - I_0(r))^2 }
 
-                      &= \\frac{3}{\\sqrt{2}} mA\\
+                      &= \\frac{3}{\\sqrt{2}} mA
 
       I_a(r) &= A \\left[1 + m \\cos(\\phi + \\phi_a) \\right]
 
@@ -2527,7 +2527,7 @@ def fit_modulation_frq(ft1: np.ndarray,
 
     .. math::
 
-       C(f') &= \\sum_f ft_1(f)  ft_2^*(f + f')\\
+       C(f') &= \\sum_f ft_1(f)  ft_2^*(f + f')
 
        f^\\star &= \\text{argmax}_{f'} |C(f')|
 
@@ -2729,16 +2729,16 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # #######################################
     roi_cx = np.argmin(np.abs(fx_sim - fxs))
     roi_cy = np.argmin(np.abs(fy_sim - fys))
-    roi = rois.get_centered_roi([roi_cy, roi_cx],
+    roi = rois.get_centered_rois([roi_cy, roi_cx],
                                 roi_size,
                                 min_vals=[0, 0],
-                                max_vals=cc.shape)
+                                max_vals=cc.shape)[0]
 
     extent_roi = get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
     ax = figh.add_subplot(gspec[0, 0])
     ax.set_title("cross correlation, ROI")
-    im1 = ax.imshow(rois.cut_roi(roi, cc),
+    im1 = ax.imshow(rois.cut_roi(roi, cc)[0],
                     interpolation=None,
                     norm=PowerNorm(gamma=gamma),
                     extent=extent_roi,
@@ -2800,12 +2800,15 @@ def plot_correlation_fit(img1_ft: np.ndarray,
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
-    roi_center = rois.get_centered_roi([cy_c, cx_c], [roi[1] - roi[0], roi[3] - roi[2]], [0, 0], img1_ft.shape)
+    roi_center = rois.get_centered_rois([cy_c, cx_c], [roi[1] - roi[0], roi[3] - roi[2]], [0, 0], img1_ft.shape)[0]
     extent_roic = get_extent(fys[roi_center[0]:roi_center[1]],
                              fxs[roi_center[2]:roi_center[3]])
 
-    im3 = ax3.imshow(rois.cut_roi(roi_center, np.abs(img1_ft)**2),
-                     interpolation=None, norm=PowerNorm(gamma=gamma), extent=extent_roic, cmap=cmap)
+    im3 = ax3.imshow(rois.cut_roi(roi_center, np.abs(img1_ft)**2)[0],
+                     interpolation=None,
+                     norm=PowerNorm(gamma=gamma),
+                     extent=extent_roic,
+                     cmap=cmap)
     ax3.scatter(0, 0, color='r', marker='x')
 
     # colorbar
@@ -2824,8 +2827,11 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     ax4.set_title(title)
     ax4.set_xlabel('$f_x (1/\mu m)$')
 
-    im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2), interpolation=None, norm=PowerNorm(gamma=gamma),
-                     extent=extent_roi, cmap=cmap)
+    im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2)[0],
+                     interpolation=None,
+                     norm=PowerNorm(gamma=gamma),
+                     extent=extent_roi,
+                     cmap=cmap)
     ax4.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
@@ -2941,11 +2947,11 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
 
     .. math::
 
-      C_m(k) &= O(k - m*ko) h_m(k)\\
+      C_m(k) &= O(k - m*ko) h_m(k)
 
-      D(k) &= M C(k)\\
+      D(k) &= M C(k)
 
-      cc^l_ij &= C_i(k) \\otimes C_j(k-lp)\\
+      cc^l_ij &= C_i(k) \\otimes C_j(k-lp)
 
       M^* &= \\text{argmin}_M \\sum_{i \\neq l+j} |cc^l_ij|^{1/2}.
 
@@ -3386,7 +3392,7 @@ def get_band_overlap(band0: array,
 
     .. math::
 
-      C &= \\frac{\\sum_f b_0(f) * b_1^*(f + f_o)}{\\sum |b_0(f)|^2}\\
+      C &= \\frac{\\sum_f b_0(f) * b_1^*(f + f_o)}{\\sum |b_0(f)|^2}
 
       b_1(f + f_o) &= O(f)
 
@@ -3768,3 +3774,52 @@ def get_simulated_sim_imgs(ground_truth: array,
             # mcnrs[ii, jj] = 0
 
     return sim_imgs, snrs, patterns, patterns_raw
+
+
+def get_hexagonal_patterns(dxy, ny, nx, frq_mag, phase1s, phase2s, use_gpu=False):
+    """
+    Generate hexagonal SIM patterns
+
+    :param dxy:
+    :param ny:
+    :param nx:
+    :param frq_mag:
+    :param phase1s:
+    :param phase2s:
+    :param use_gpu:
+    :return:
+    """
+
+    if len(phase1s) != len(phase2s):
+        raise ValueError()
+
+    if use_gpu and _cupy_available:
+        xp = cp
+    else:
+        xp = np
+
+    npatterns = len(phase1s)
+    x = xp.arange(nx) * dxy
+    y = xp.arange(ny) * dxy
+    xx, yy = xp.meshgrid(x, y)
+
+    phi_a = 0
+    phi_b = 2 * np.pi / 3
+    phi_c = 4 * np.pi / 3
+
+    # ignoring z-component ...
+    ka = np.array([np.cos(phi_a), np.sin(phi_a), 0]) * (2 * np.pi) * frq_mag
+    kb = np.array([np.cos(phi_b), np.sin(phi_b), 0]) * (2 * np.pi) * frq_mag
+    kc = np.array([np.cos(phi_c), np.sin(phi_c), 0]) * (2 * np.pi) * frq_mag
+
+    def efield_plane_wave(x, y, z, kvec): return xp.exp(1j * (kvec[0] * x + kvec[1] * y + kvec[2] * z))
+
+    def e_hex(x, y, z, alpha_b, alpha_c): return efield_plane_wave(x, y, z, ka) + \
+        efield_plane_wave(x, y, z, kb) * xp.exp(1j * alpha_b) + \
+        efield_plane_wave(x, y, z, kc) * xp.exp(1j * alpha_c)
+
+    patterns = xp.zeros((npatterns, ny, nx))
+    for ii in range(npatterns):
+        patterns[ii] = 1 / 9 * xp.abs(e_hex(xp.array(xx), xp.array(yy), 0, phase1s[ii], phase2s[ii]))**2
+
+    return patterns

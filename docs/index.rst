@@ -12,12 +12,14 @@ Welcome to mcSIM's documentation!
 
    sim
    odt
+   field_prop
    tools
    dmd_patterns
    dmd_simulation
    dmd_affine
    dlp6500
    daq
+   otf_tools
 
 
 Indices and tables
