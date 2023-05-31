@@ -1194,7 +1194,7 @@ class dlp6500:
         trig_byte = [int(invert)]
         rising_edge_bytes = struct.unpack('BB', struct.pack('<h', rising_edge_delay_us))
         falling_edge_bytes = struct.unpack('BB', struct.pack('<h', falling_edge_delay_us))
-        data = trig_byte + rising_edge_bytes + falling_edge_bytes
+        data = trig_byte + list(rising_edge_bytes) + list(falling_edge_bytes)
 
         if trigger_number == 1:
             resp = self.send_command('w', True, self.command_dict["TRIG_OUT1_CTL"], data)
