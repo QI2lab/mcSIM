@@ -187,8 +187,8 @@ def get_peak_value(img: array,
     xx, yy = np.meshgrid(x, y)
 
     # find closest pixel
-    ix = np.argmin(np.abs(px - x))
-    iy = np.argmin(np.abs(py - y))
+    ix = int(np.argmin(np.abs(px - x)))
+    iy = int(np.argmin(np.abs(py - y)))
 
     # get ROI around pixel for weighted averaging
     roi = rois.get_centered_rois([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])[0]
