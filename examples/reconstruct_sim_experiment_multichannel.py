@@ -1,5 +1,5 @@
 """
-Reconstruct SIM image of argoSIM slide pattern of closely spaced line pairs.
+Reconstruct multichannel SIM images of argoSIM slide pattern of closely spaced line pairs.
 """
 import datetime
 import numpy as np
@@ -13,6 +13,8 @@ import mcsim.analysis.sim_reconstruction as sim
 from localize_psf import fit_psf, affine, rois
 
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
+
+# load data (data can be downloaded from Zenodo as described in README)
 root_dir = Path("data")
 fname_raw_data = root_dir / "argosim_line_pairs.tif"
 
@@ -164,5 +166,6 @@ for kk in range(ncolors):
     # save diagnostic plots
     # ###########################################
     imgset.plot_figs(save_dir,
+                     diagnostics_only=True,
                      figsize=(20, 10),
                      imgs_dpi=300)

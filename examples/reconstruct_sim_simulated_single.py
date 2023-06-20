@@ -1,5 +1,5 @@
 """
-Reconstruct synthetic SIM image of closely spaced line pairs.
+Reconstruct single channel, single time point synthetic SIM image of closely spaced line pairs.
 """
 import matplotlib
 matplotlib.use("TkAgg")

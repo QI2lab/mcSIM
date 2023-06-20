@@ -40,26 +40,32 @@ git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .[expt_ctrl]
 ```
-Some functions can be optionally run on a GPU. This functionality has been tested with CUDA 11.2 and 11.8.  If GPU support is desired
-and you are using CUDA 11.2 or greater, install the package using
+Some functions can be optionally run on a GPU. This functionality has been tested with CUDA 11.2 and 11.8.  If GPU support is desired,
+first install [CuPy](https://cupy.dev/) manually, and then install mcSIM with pip. For example, if you are using a conda environment and
+CUDA toolkit 11.8
 ```
+conda install -c conda-forge cupy cudatoolkit=11.8
 git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .[gpu]
 ```
-Otherwise, you must manually install the appropriate versions of [CuPy](https://cupy.dev/) and [cuCIM](https://pypi.org/project/cucim/) installed.
-Actually only the scikit-image portion of cuCIM is required. Note that the entire package cannot be installed on Windows,
-but the scikit-image portion can. This portion of cuCIM can be installed manually using
+This will install the appropriate version of the scikit-image portion of [cuCIM](https://pypi.org/project/cucim/).
+Note that the entire package cannot be installed on Windows, but the scikit-image portion can. 
+This portion of cuCIM can be installed manually using
 ```
 pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
 ```
+or the tag v22.12.00 can be replaced with the most recent version
 
 # SIM reconstruction code
 ### [sim_reconstruction.py](mcsim/analysis/sim_reconstruction.py)
 Code for reconstructing SIM images from raw data using a Gustafsson/Heintzmann Wiener filter style reconstruction. Several
 reconstruction options are available, largely following either the approach of
 [openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980).
-To get started with reconstructing SIM data, see the example script [reconstruct_sim.py](examples/reconstruct_sim_experiment.py). 
+To get started with reconstructing SIM data, see the example scripts\
+[reconstruct_sim_simulated_single.py](examples/reconstruct_sim_simulated_single.py),
+[reconstruction_sim_simulated_timelapse.py](examples/reconstruction_sim_simulated_timelapse.py), and
+[reconstruct_sim_experiment_multichannel.py](examples/reconstruct_sim_experiment_multichannel.py). 
 
 # DMD simulation code
 ### [simulate_dmd.py](mcsim/analysis/simulate_dmd.py)

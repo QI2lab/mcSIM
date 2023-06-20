@@ -9,8 +9,8 @@ from pathlib import Path
 import tifffile
 from mcsim.analysis import sim_reconstruction as sim
 
-# load images
-fname_data = Path(r"C:\Users\q2ilab\Documents\mcsim_private\mcSIM\examples\data\synthetic_microtubules.tiff")
+# load images (images can be downloaded from Zenodo repository as described in README)
+fname_data = Path(r"data") / "synthetic_microtubules.tiff"
 imgs = tifffile.imread(fname_data)
 
 # imgs = imgs[..., :1450, :1450]
