@@ -585,6 +585,7 @@ class SimImageSet:
                                      meta=xp.array(())
                                      )
 
+
     def update_recon_settings(self,
                               wiener_parameter: float = 0.1,
                               frq_estimation_mode: str = "band-correlation",
@@ -717,6 +718,17 @@ class SimImageSet:
         else:
             self.phases_guess = None
 
+
+        self.bands_unmixed_ft_guess = da.map_blocks(unmix_bands,
+                                                    self.imgs_ft,
+                                                    self.phases_guess,
+                                                    mod_depths=np.ones((self.nangles)),
+                                                    dtype=complex,
+                                                    # meta = xp.array((), dtype=complex)
+                                                    )
+
+        # todo: compute cross-correlations so can guess frequencies from them
+
         if mod_depths_guess is not None:
             self.mod_depths_guess = np.array(mod_depths_guess)
         else:
@@ -818,7 +830,8 @@ class SimImageSet:
                     self.band1_frq_fit[ii],
                     self.dx,
                     frq_guess=frq_guess[ii],
-                    max_frq_shift=5 * self.dfx)
+                    max_frq_shift=5 * self.dfx,
+                    otf=self.otf[ii])
                 )
             results = dask.compute(*r)
             frqs, _, _ = zip(*results)
@@ -2084,7 +2097,8 @@ class SimImageSet:
                                         self.fmax,
                                         frqs_guess=frqs_guess[ii],
                                         figsize=figsize,
-                                        title=ttl)
+                                        title=ttl,
+                                        otf=self.otf[ii])
             figs.append(figh)
             fig_names.append(f"frq_fit_angle={ii:d}")
 
@@ -2521,6 +2535,8 @@ def fit_modulation_frq(ft1: np.ndarray,
                        mask: Optional[np.ndarray] = None,
                        frq_guess: Optional[tuple[float]] = None,
                        max_frq_shift: Optional[float] = None,
+                       otf: Optional[np.ndarray] = None,
+                       wiener_param: float = 0.3,
                        keep_guess_if_better: bool = True) -> (np.ndarray, np.ndarray, dict):
     """
     Find SIM frequency from image by maximizing the cross correlation between ft1 and ft2
@@ -2563,6 +2579,11 @@ def fit_modulation_frq(ft1: np.ndarray,
     if mask.shape != ft1.shape:
         raise ValueError("mask must have same shape as ft1")
 
+    # otf
+    if otf is None:
+        otf = 1.
+        wiener_param = 0.
+
     # get frequency data
     fxs = fft.fftshift(fft.fftfreq(ft1.shape[1], dxy))
     fys = fft.fftshift(fft.fftfreq(ft1.shape[0], dxy))
@@ -2573,17 +2594,25 @@ def fit_modulation_frq(ft1: np.ndarray,
         mask[np.sqrt((fxfx - frq_guess[0])**2 + (fyfy - frq_guess[1])**2) > max_frq_shift] = 0
 
     # ############################
-    # set initial guess
+    # set initial guess using cross-correlation
     # ############################
+    otf_factor = np.conj(otf) / (np.abs(otf) ** 2 + wiener_param ** 2)
+
     if frq_guess is None:
         # cross correlation of Fourier transforms
         # WARNING: correlate2d uses a different convention for the frequencies of the output, which will not agree with the fft convention
-        # take conjugates so this will give \sum ft1 * ft2.conj()
-        # scipy.signal.correlate(g1, g2)(fo) seems to compute \sum_f g1^*(f) x g2(f - fo), but I want g1^*(f) x g2(f+fo) # todo: is this right?
-        cc = np.abs(correlate(ft2, ft1, mode='same'))
+        # cc(k) = \sum_f ft2^*(f) x ft1(f + k)
+
+        cc = np.abs(correlate(ft2 * otf_factor,
+                              ft1 * otf_factor,
+                              mode='same'))
+
+        otf_cc = np.abs(correlate(otf_factor,
+                                  otf_factor,
+                                  mode='same'))
 
         # get initial frq_guess by looking at cc at discrete frequency set and finding max
-        subscript = np.unravel_index(np.argmax(cc * mask), cc.shape)
+        subscript = np.unravel_index(np.argmax(cc / otf_cc * mask), cc.shape)
 
         init_params = np.array([fxfx[subscript], fyfy[subscript]])
     else:
@@ -2601,12 +2630,12 @@ def fit_modulation_frq(ft1: np.ndarray,
     img2 = fft.fftshift(fft.ifft2(fft.ifftshift(ft2)))
 
     # compute ft2(f + fo)
-    def fft_shifted(f): return fft.fftshift(fft.fft2(np.exp(-1j*2*np.pi * (f[0] * xx + f[1] * yy)) * fft.ifftshift(img2)))
+    def fft_shifted(f): return fft.fftshift(fft.fft2(np.exp(-1j*2*np.pi * (f[0] * xx + f[1] * yy)) * fft.ifftshift(img2 * otf_factor)))
 
     # cross correlation
     # todo: conjugating ft2 instead of ft1, as in typical definition of cross correlation. Doesn't matter bc taking norm
-    def cc_fn(f): return np.sum(ft1 * fft_shifted(f).conj())
-    fft_norm = np.sum(np.abs(ft1) * np.abs(ft2))**2
+    def cc_fn(f): return np.sum(ft1 * otf_factor * fft_shifted(f).conj())
+    fft_norm = np.sum(np.abs(ft1 * otf_factor) * np.abs(ft2 * otf_factor))**2
     def min_fn(f): return -np.abs(cc_fn(f))**2 / fft_norm
 
     # ############################
@@ -2645,7 +2674,10 @@ def plot_correlation_fit(img1_ft: np.ndarray,
                          figsize=(20, 10),
                          title: str = "",
                          gamma: float = 0.1,
-                         cmap="bone") -> plt.figure:
+                         cmap="bone",
+                         otf: Optional[np.ndarray] = None,
+                         wiener_param: float = 0.3,
+                         ) -> plt.figure:
     """
     Display SIM parameter fitting results visually, in a way that is easy to inspect.
 
@@ -2674,9 +2706,22 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     extent = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
               fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]
 
+    if otf is None:
+        otf = 1.
+        wiener_param = 0.
+
     # power spectrum / cross correlation
     # cc = np.abs(scipy.signal.fftconvolve(img1_ft, img2_ft.conj(), mode='same'))
-    cc = np.abs(correlate(img2_ft, img1_ft, mode='same'))
+    # cc = np.abs(correlate(img2_ft, img1_ft, mode='same'))
+
+    otf_factor = np.conj(otf) / (np.abs(otf) ** 2 + wiener_param ** 2)
+
+    cc = np.abs(correlate(img2_ft * otf_factor,
+                          img1_ft * otf_factor,
+                          mode='same')) / \
+         np.abs(correlate(otf_factor,
+                          otf_factor,
+                          mode='same'))
 
     # compute peak values
     fx_sim, fy_sim = frqs
