@@ -62,7 +62,10 @@ or the tag v22.12.00 can be replaced with the most recent version
 Code for reconstructing SIM images from raw data using a Gustafsson/Heintzmann Wiener filter style reconstruction. Several
 reconstruction options are available, largely following either the approach of
 [openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980).
-To get started with reconstructing SIM data, see the example script [reconstruct_sim.py](examples/reconstruct_sim_experiment.py). 
+To get started with reconstructing SIM data, see the example scripts\
+[reconstruct_sim_simulated_single.py](examples/reconstruct_sim_simulated_single.py),
+[reconstruction_sim_simulated_timelapse.py](examples/reconstruction_sim_simulated_timelapse.py), and
+[reconstruct_sim_experiment_multichannel.py](examples/reconstruct_sim_experiment_multichannel.py). 
 
 # DMD simulation code
 ### [simulate_dmd.py](mcsim/analysis/simulate_dmd.py)
