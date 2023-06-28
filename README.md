@@ -44,7 +44,7 @@ Some functions can be optionally run on a GPU. This functionality has been teste
 first install [CuPy](https://cupy.dev/) manually, and then install mcSIM with pip. For example, if you are using a conda environment and
 CUDA toolkit 11.8
 ```
-conda install -c conda-forge cupy cudatoolkit=11.8
+conda install -c conda-forge cudatoolkit=11.8
 git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .[gpu]
