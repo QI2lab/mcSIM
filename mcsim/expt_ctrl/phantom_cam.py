@@ -1118,7 +1118,11 @@ class phantom_cam(camera):
         self.record_cine(0)  # stop recording
 
     def startContinuousSequenceAcquisition(self, exposure_ms: float = 0.):
-        self.setExposure(exposure_ms)
+
+        try:
+            self.setExposure(exposure_ms)
+        except Exception as e:
+            print(e)
 
     def getImageWidth(self):
         ch = ct.pointer(ct.c_int())
