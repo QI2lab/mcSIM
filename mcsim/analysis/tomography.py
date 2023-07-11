@@ -157,17 +157,20 @@ class tomography:
     def estimate_hologram_frqs(self,
                                roi_size_pix: int = 10,
                                save_dir: Optional[str] = None,
-                               use_gpufit: bool = False):
+                               use_gpufit: bool = False,
+                               use_fixed_frequencies: bool = False):
         """
         Estimate hologram frequencies from raw images.
         Guess values need to be within a few pixels for this to succeed. Can easily achieve this accuracy by
         looking at FFT
-        :param roi_size_pix: ROI size (in pixels) to do frequency fitting on
+        :param roi_size_pix: ROI size (in pixels) to use for frequency fitting
         :param save_dir:
-        :param use_gpufit:
+        :param use_gpufit: do fitting on GPU with gpufit. Otherwise use CPU
+        :param use_fixed_frequencies: determine single set of frequencies for all data/background images
         :return:
         """
         self.reconstruction_settings.update({"roi_size_pix": roi_size_pix})
+        self.reconstruction_settings.update({"use_fixed_frequencies": use_fixed_frequencies})
 
         saving = save_dir is not None
 
@@ -279,36 +282,43 @@ class tomography:
         # fit hologram frequencies for ALL chunks
         # ############################
 
-        # todo: fit background images also
         if not use_gpufit or not _gpufit_available:
             delayed_frqs = []
             delayed_frqs_bg = []
+
+            if not use_fixed_frequencies:
+                slices_bg = tuple([slice(None) for _ in range(self.nextra_dims)])
+            else:
+                slices_bg = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
+
             # loop over patterns
             for ii in range(self.npatterns):
                 n_multiplex_this_pattern = len(self.hologram_frqs[ii])
-                delayed_frqs.append(da.map_blocks(get_hologram_frqs,
-                                             self.imgs_raw[..., ii, :, :],
-                                             self.hologram_frqs[ii][:, 0],
-                                             self.hologram_frqs[ii][:, 1],
-                                             use_guess_init_params=False,
-                                             saving=saving,
-                                             roi_size_pix=roi_size_pix,
-                                             prefix=str(ii),
-                                             dtype=float,
-                                             chunks=(1,) * self.nextra_dims + (n_multiplex_this_pattern, 2),
-                                             drop_axis=(-1, -2),
-                                             new_axis=(-1, -2)
-                                             ))
+
+                if not use_fixed_frequencies:
+                    delayed_frqs.append(da.map_blocks(get_hologram_frqs,
+                                                      self.imgs_raw[..., ii, :, :],
+                                                      self.hologram_frqs[ii][:, 0],
+                                                      self.hologram_frqs[ii][:, 1],
+                                                      use_guess_init_params=False,
+                                                      saving=saving,
+                                                      roi_size_pix=roi_size_pix,
+                                                      prefix=str(ii),
+                                                      dtype=float,
+                                                      chunks=(1,) * self.nextra_dims + (n_multiplex_this_pattern, 2),
+                                                      drop_axis=(-1, -2),
+                                                      new_axis=(-1, -2)
+                                                      ))
 
                 if not self.use_average_as_background:
                     delayed_frqs_bg.append(da.map_blocks(get_hologram_frqs,
-                                             self.imgs_raw_bg[..., ii, :, :],
+                                             self.imgs_raw_bg[slices_bg][..., ii, :, :],
                                              self.hologram_frqs[ii][:, 0],
                                              self.hologram_frqs[ii][:, 1],
                                              use_guess_init_params=False,
                                              saving=saving,
                                              roi_size_pix=roi_size_pix,
-                                             prefix=str(ii),
+                                             prefix=f"background_{ii:d}",
                                              dtype=float,
                                              chunks=(1,) * self.nextra_dims + (n_multiplex_this_pattern, 2),
                                              drop_axis=(-1, -2),
@@ -327,6 +337,9 @@ class tomography:
 
             if self.use_average_as_background:
                 frqs_hologram_bg = frqs_hologram
+
+            if use_fixed_frequencies:
+                frqs_hologram = frqs_hologram_bg
 
         else:
             
@@ -688,8 +701,8 @@ class tomography:
             ref_frq_bg_da = ref_frq_da
         else:
             ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
-                                       chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
-                                       )
+                                          chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
+                                          )
 
         # #########################
         # get electric field from holograms
@@ -3446,6 +3459,7 @@ def display_tomography_recon(recon_fname: str,
                              compute: bool = False,
                              time_axis: int = 1,
                              time_range: Optional[list[int]] = None,
+                             phase_lim: float = 0.1,
                              block_while_display: bool = True):
     """
     Display reconstruction results and (optionally) raw data in Napari
@@ -3793,6 +3807,11 @@ def display_tomography_recon(recon_fname: str,
                          colormap="PiYG",
                          translate=(ny, nx_raw + 3 * nx))
 
+        viewer.add_image(da.abs(estack) - da.abs(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|e| - |e bg|", contrast_limits=[-500, 500],
+                         colormap="twilight_shifted",
+                         translate=(0, nx_raw + 4*nx))
+
         # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + 3*nx + nx // 2]])
         # viewer.add_points(points + offset,
         #                   features={"dphi": np.zeros(len(points)), },
@@ -3807,10 +3826,35 @@ def display_tomography_recon(recon_fname: str,
         pd = da.mod(da.angle(estack) - da.angle(ebg_stack), 2 * np.pi)
         pd_even = pd - 2*np.pi * (pd > np.pi)
         viewer.add_image(pd_even, scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e) - angle(e bg)", contrast_limits=[-0.1, 0.1],
+                         name="angle(e) - angle(e bg)", contrast_limits=[-phase_lim, phase_lim],
                          colormap="PiYG",
                          translate=(ny, 0)
                          )
+
+        label_pts = np.array([[0, nx_raw],
+                              [ny, nx_raw],
+                              [0, nx_raw + nx],
+                              [ny, nx_raw + nx],
+                              [0, nx_raw + 2 * nx],
+                              [ny, nx_raw + 2 * nx],
+                              [0, nx_raw + 3 * nx],
+                              [ny, nx_raw + 3 * nx],
+                              [0, nx_raw + 4 * nx],
+                              [ny, 0]
+                              ]) + np.array([ny / 10, nx / 2])
+        ttls = ["|e scatt|", "angle(e scatt)",
+                "|e rytov|", "angle(e rytov)",
+                "|e|", "angle(e)",
+                "|e bg|", "angle(e bg)",
+                "|e| - |e bg|",
+                "angle(e) - angle(e bg)"]
+
+        viewer.add_points(label_pts,
+                          features={"names": ttls},
+                          text={"string": "{names:s}",
+                                "size": 30,
+                                "color": "red"},
+                          )
 
     viewer.dims.axis_labels = ["position", "time", "", "", "pattern", "z", "y", "x"]
     # set to first position
