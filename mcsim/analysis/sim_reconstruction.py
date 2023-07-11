@@ -3860,8 +3860,8 @@ def get_hexagonal_patterns(dxy, ny, nx, frq_mag, phase1s, phase2s, use_gpu=False
     def efield_plane_wave(x, y, z, kvec): return xp.exp(1j * (kvec[0] * x + kvec[1] * y + kvec[2] * z))
 
     def e_hex(x, y, z, alpha_b, alpha_c): return efield_plane_wave(x, y, z, ka) + \
-        efield_plane_wave(x, y, z, kb) * xp.exp(1j * alpha_b) + \
-        efield_plane_wave(x, y, z, kc) * xp.exp(1j * alpha_c)
+                                                 efield_plane_wave(x, y, z, kb) * xp.exp(1j * alpha_b) + \
+                                                 efield_plane_wave(x, y, z, kc) * xp.exp(1j * alpha_c)
 
     patterns = xp.zeros((npatterns, ny, nx))
     for ii in range(npatterns):
