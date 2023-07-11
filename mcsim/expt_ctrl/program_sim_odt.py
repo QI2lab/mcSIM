@@ -5,14 +5,14 @@ Relies on DAQ line mapping scheme used in daq.py and daq_map.py
 """
 
 import numpy as np
+import re
 
 def get_sim_odt_sequence(daq_do_map: dict,
                          daq_ao_map: dict,
                          presets: dict,
-                         channels: list[str],
+                         acquisition_modes: list[dict],
                          odt_exposure_time: float,
                          sim_exposure_time: float,
-                         npatterns: int,
                          dt: float,
                          interval: float = 0,
                          n_odt_per_sim: int = 1,
@@ -27,7 +27,6 @@ def get_sim_odt_sequence(daq_do_map: dict,
                          use_dmd_as_odt_shutter: bool = False,
                          n_digital_ch: int = 16,
                          n_analog_ch: int = 4,
-                         acquisition_mode: str = None,
                          parameter_scan: dict = None):
     """
     Create DAQ program for SIM/ODT experiment
@@ -36,11 +35,13 @@ def get_sim_odt_sequence(daq_do_map: dict,
 
     :param daq_do_map: e.g. from daq_map.py
     :param daq_ao_map: e.g. from daq_map.py
-    :param channels:
-    :param presets:
+    :param presets: dictionary of preset channels
+    :param acquisition_modes: list of dictionary. Each dictionary contains the keys "channel", "patterns",
+       "pattern_mode", "camera", and "npatterns"
+    :param channels: list of channel names to be run. channels names refer to keys in presets
+    :param cameras: list of cameras to be used for each channel. These can be "cam1", "cam2", or "both"
     :param odt_exposure_time: odt exposure time in s
     :param sim_exposure_time: sim exposure time in s
-    :param npatterns: list which should match size of channels
     :param dt: daq time step
     :param interval: interval between images
     :param n_odt_per_sim: number of ODT images to take per each SIM image set
@@ -55,7 +56,6 @@ def get_sim_odt_sequence(daq_do_map: dict,
     :param bool use_dmd_as_odt_shutter:
     :param n_digital_ch:
     :param n_analog_ch:
-    :param acquisition_mode: "sim", "both", or "average", applies only to SIM sequence
     :param parameter_scan: dictionary defining parameter scan. These values will overwrite the values set in 'channels'
     :return:
     """
@@ -63,33 +63,42 @@ def get_sim_odt_sequence(daq_do_map: dict,
     if z_voltages is None:
         z_voltages = [0]
 
-    if interval != 0 and (len(channels) != 1 or len(z_voltages) != 1):
-        raise NotImplementedError("Interval is not implemented for more than one channel or for z-stacks")
+    if interval != 0 and len(z_voltages) != 1:
+        raise NotImplementedError("Interval is not implemented for z-stacks")
     # todo: can easily implement interval if no z-stack, but otherwise difficult since don't have a way
     # to stop the daq after a certain number of repeats
-
-    if acquisition_mode is None:
-        acquisition_mode = ["sim"] * len(channels)
-
-    if len(acquisition_mode) != len(channels):
-        raise ValueError(f"len(acquisition_mode)` and len(channels) must be equal, but they were {len(acquisition_mode):d} and {len(channels):d}")
-
-    if len(acquisition_mode) != len(npatterns):
-        raise ValueError(f"len(acquisition_mode)` and len(npatterns) must be equal, but they were {len(acquisition_mode):d} and {len(npatterns):d}")
 
     # programs for each channel
     digital_pgms = []
     analog_pgms = []
     info = ""
-    for ch, acq_mode, npat in zip(channels, acquisition_mode, npatterns):
-        if ch == "odt":
+    for ii, am in enumerate(acquisition_modes):
+
+        # assign interval only to last mode
+        if ii == len(acquisition_modes) - 1:
+            interval_now = interval
+        else:
+            interval_now = 0
+
+        # current exposure time
+        if am["camera"] == "cam1":
+            exposure_now = sim_exposure_time
+        elif am["camera"] == "cam2":
+            exposure_now = odt_exposure_time
+        elif am["camera"] == "both":
+            exposure_now = np.max([sim_exposure_time, odt_exposure_time])
+        else:
+            raise ValueError("")
+
+
+        if am["channel"] == "odt":
             d, a, i = get_odt_sequence(daq_do_map,
                                        daq_ao_map,
-                                       presets[ch],
-                                       odt_exposure_time,
-                                       npat,
+                                       presets[am["channel"]],
+                                       exposure_now,
+                                       am["npatterns"],
                                        dt=dt,
-                                       interval=interval,
+                                       interval=interval_now,
                                        nrepeats=n_odt_per_sim,
                                        n_trig_width=n_trig_width,
                                        dmd_delay=dmd_delay,
@@ -98,6 +107,8 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        shutter_delay_time=shutter_delay_time,
                                        n_digital_ch=n_digital_ch,
                                        n_analog_ch=n_analog_ch,
+                                       camera=am["camera"],
+                                       average_patterns=am["pattern_mode"] == "average",
                                        use_dmd_as_shutter=use_dmd_as_odt_shutter)
 
             info += i
@@ -106,11 +117,11 @@ def get_sim_odt_sequence(daq_do_map: dict,
         else:
             d, a, i = get_sim_sequence(daq_do_map,
                                        daq_ao_map,
-                                       presets[ch],
-                                       sim_exposure_time,
-                                       npat,
+                                       presets[am["channel"]],
+                                       exposure_now,
+                                       am["npatterns"],
                                        dt=dt,
-                                       interval=interval,
+                                       interval=interval_now,
                                        nrepeats=1,
                                        n_trig_width=n_trig_width,
                                        dmd_delay=dmd_delay,
@@ -121,10 +132,11 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        n_digital_ch=n_digital_ch,
                                        n_analog_ch=n_analog_ch,
                                        use_dmd_as_shutter=True,
-                                       acquisition_mode=acq_mode)
+                                       average_patterns=am["pattern_mode"] == "average",
+                                       camera=am["camera"])
 
             # if there is only one mode, keep SIM shutter open
-            if len(channels) == 1:
+            if len(acquisition_modes) == 1:
                 d[:, daq_do_map["sim_shutter"]] = 1
 
             info += i
@@ -144,7 +156,6 @@ def get_sim_odt_sequence(daq_do_map: dict,
     # #######################
     # z-stack logic
     # #######################
-
     # digital pgm are just repeated. We don't need to do anything
     # analog pgms must be repeated with correct z-voltages
     # get correct voltage for each step
@@ -181,7 +192,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
     # #######################
     # print information
     # #######################
-    info += "channels are:" + " ".join(channels) + "\n"
+    info += " ".join([repr(am) for am in acquisition_modes]) + "\n"
     info += f"full digital program = {digital_pgm_full.shape[0] * dt * 1e3: 0.3f}ms =" \
             f" {digital_pgm_full.shape[0]:d} clock cycles\n"
     info += f"full analog program = {analog_pgm_full.shape[0]} steps"
@@ -204,6 +215,8 @@ def get_odt_sequence(daq_do_map: dict,
                      shutter_delay_time: float = 50e-3,
                      n_digital_ch: int = 16,
                      n_analog_ch: int = 4,
+                     average_patterns: bool = False,
+                     camera: str = "cam2",
                      use_dmd_as_shutter: bool = False):
     """
     Create DAQ sequence for running optical diffraction tomography experiment. All times given in seconds.
@@ -224,12 +237,17 @@ def get_odt_sequence(daq_do_map: dict,
     :param shutter_delay_time: delay time to allow shutter to open
     :param n_digital_ch: number of digital lines
     :param n_analog_ch: number of analog lines
+    :param average_patterns:
+    :param camera:
     :param use_dmd_as_shutter: whether to assume there are 2x as many DMD patterns with "off" pattern interleaved
     between on patterns
     :return: do_odt, ao_odt, info
     """
 
     info = ""
+
+    if average_patterns:
+        raise NotImplementedError()
 
     # #########################
     # calculate number of clock cycles for different pieces of sequence
@@ -280,14 +298,26 @@ def get_odt_sequence(daq_do_map: dict,
     do_odt[:, daq_do_map["odt_laser"]] = 1
     # DMD enable trigger always on
     do_odt[:, daq_do_map["dmd_enable"]] = 1
-    # camera enable trigger (must be high for advance trigger)
-    do_odt[:, daq_do_map["odt_cam_enable"]] = 1 # photron/phantom camera
 
-    # set camera trigger, which starts after delay time for DMD to display pattern
-    do_odt[n_odt_stabilize:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
-    # for debugging, make trigger pulse longer to see on scope
-    for ii in range(n_trig_width):
-        do_odt[n_odt_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
+    if camera in ["cam2", "both"]:
+        # camera enable trigger (must be high for advance trigger)
+        do_odt[:, daq_do_map["odt_cam_enable"]] = 1 # photron/phantom camera
+
+        # set camera trigger, which starts after delay time for DMD to display pattern
+        do_odt[n_odt_stabilize:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
+        # for debugging, make trigger pulse longer to see on scope
+        for ii in range(n_trig_width):
+            do_odt[n_odt_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
+
+    if camera in ["cam1", "both"]:
+        # camera enable trigger (must be high for advance trigger)
+        # do_odt[:, daq_do_map["odt_cam_enable"]] = 1  # photron/phantom camera
+
+        # set camera trigger, which starts after delay time for DMD to display pattern
+        do_odt[n_odt_stabilize:nsteps_active:nsteps_frame, daq_do_map["sim_cam_sync"]] = 1
+        # for debugging, make trigger pulse longer to see on scope
+        for ii in range(n_trig_width):
+            do_odt[n_odt_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["sim_cam_sync"]] = 1
 
     # DMD advance trigger
     do_odt[n_odt_stabilize - n_dmd_pre_trigger:nsteps_active-nsteps_frame:nsteps_frame, daq_do_map["dmd_advance"]] = 1
@@ -299,7 +329,9 @@ def get_odt_sequence(daq_do_map: dict,
 
     # monitor lines
     do_odt[:, daq_do_map["signal_monitor"]] = do_odt[:, daq_do_map["dmd_advance"]]
-    do_odt[:, daq_do_map["camera_trigger_monitor"]] = do_odt[:, daq_do_map["odt_cam_sync"]]
+
+    do_odt[:, daq_do_map["camera_trigger_monitor"]] = np.logical_or(do_odt[:, daq_do_map["sim_cam_sync"]],
+                                                                    do_odt[:, daq_do_map["odt_cam_sync"]])
 
     # set analog channels to match given preset
     ao_odt = np.zeros((1, n_analog_ch))
@@ -332,8 +364,10 @@ def get_sim_sequence(daq_do_map: dict,
                      n_digital_ch: int = 16,
                      n_analog_ch: int = 4,
                      use_dmd_as_shutter: bool = True,
-                     acquisition_mode: str = "sim",
-                     force_equal_subpatterns: bool = True):
+                     average_patterns: bool = False,
+                     camera: str = "cam1",
+                     force_equal_subpatterns: bool = True,
+                     turn_laser_off_during_interval: bool = True):
     """
     Generate DAQ array for running a SIM experiment. Also supports taking a pseudo-widefield image by
     running through all SIM patterns during one camera exposure
@@ -355,7 +389,8 @@ def get_sim_sequence(daq_do_map: dict,
     :param n_digital_ch:
     :param n_analog_ch:
     :param use_dmd_as_shutter:
-    :param acquisition_mode: "sim", "both", or "average"
+    :param average_patterns:
+    :param camera: "cam1", "cam2", or "both"
     :return do_channel, ao_channel, info:
     """
 
@@ -368,7 +403,12 @@ def get_sim_sequence(daq_do_map: dict,
         raise NotImplementedError("only min_frame_time=0 is implemented")
 
     # if using "average" mode, all patterns displayed during one frame time
-    if acquisition_mode == "average":
+    # if acquisition_mode == "average":
+    #     npatterns_frame = npatterns
+    #     npatterns = 1
+    # else:
+    #     npatterns_frame = 1
+    if average_patterns:
         npatterns_frame = npatterns
         npatterns = 1
     else:
@@ -377,8 +417,6 @@ def get_sim_sequence(daq_do_map: dict,
     # delay between frames
     # todo: implement ... should be as simple as in ODT function
     nsteps_interval = int(np.ceil(interval / dt))
-    if interval != 0:
-        raise NotImplementedError("only nsteps_interval=0 is implemented")
 
     # time for camera to roll open/closed
     n_readout = int(np.round(cam_readout_time / dt))
@@ -402,7 +440,8 @@ def get_sim_sequence(daq_do_map: dict,
     if n_stabilize - n_sim_shutter_delay < 0:
         n_sim_shutter_delay = 0
 
-    nsteps = n_stabilize + nsteps_frame * npatterns
+    nsteps_active = n_stabilize + nsteps_frame * npatterns
+    nsteps = np.max([nsteps_active, nsteps_interval])
 
     # ######################################
     # create digital array
@@ -412,6 +451,13 @@ def get_sim_sequence(daq_do_map: dict,
     # initialize with values from preset ...
     for k in preset["digital"].keys():
         do[:, daq_do_map[k]] = preset["digital"][k]
+
+    # ######################################
+    # turn off laser during long intervals (optional)
+    # ######################################
+    if turn_laser_off_during_interval:
+        laser_line = [l for l, v in preset["digital"].items() if v and re.match(".*_laser", l)][0]
+        do[nsteps_active:, daq_do_map[laser_line]] = 0
 
     # ######################################
     # advance analog
@@ -427,23 +473,18 @@ def get_sim_sequence(daq_do_map: dict,
     # ######################################
     # trigger camera
     # ######################################
-    if acquisition_mode == "sim" or acquisition_mode == "average":
-        do[:, daq_do_map["sim_cam_sync"]] = 0
+    if camera in ["cam1", "both"]:
+        do[:nsteps_active, daq_do_map["sim_cam_sync"]] = 0
         for ii in range(n_trig_width):
-            do[n_stabilize + ii::nsteps_frame, daq_do_map["sim_cam_sync"]] = 1
+            do[n_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["sim_cam_sync"]] = 1
 
-    elif acquisition_mode == "both":
-        do[:, daq_do_map["sim_cam_sync"]] = 0
-        for ii in range(n_trig_width):
-            do[n_stabilize + ii::nsteps_frame, daq_do_map["sim_cam_sync"]] = 1
+    if camera in ["cam2", "both"]:
+        # camera enable trigger (must be high for advance trigger)
+        do[:, daq_do_map["odt_cam_enable"]] = 1 # photron/phantom camera
 
         do[:, daq_do_map["odt_cam_sync"]] = 0
         for ii in range(n_trig_width):
-            do[n_stabilize + ii::nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
-
-    else:
-        raise ValueError(f"camera must be `sim` `both`, or 'average' but was `{acquisition_mode:s}`")
-
+            do[n_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
 
     # ######################################
     # DMD enable trigger
@@ -465,18 +506,19 @@ def get_sim_sequence(daq_do_map: dict,
             # warmup offset time - pretrigger time + offset between sub-frame patterns + offset for trigger display
             start_index = n_stabilize + n_readout - n_dmd_pre_trigger + jj * nsteps_pattern_frame + ii
 
-            do[start_index::nsteps_frame, daq_do_map["dmd_advance"]] = 1
+            do[start_index:nsteps_active:nsteps_frame, daq_do_map["dmd_advance"]] = 1
 
             if use_dmd_as_shutter:
                 # display OFF pattern (only between frames)
-                do[n_stabilize + n_readout - n_dmd_pre_trigger + (nsteps_exposure - n_readout) + ii::nsteps_frame, daq_do_map["dmd_advance"]] = 1
+                do[n_stabilize + n_readout - n_dmd_pre_trigger + (nsteps_exposure - n_readout) + ii:nsteps_active:nsteps_frame, daq_do_map["dmd_advance"]] = 1
 
 
     # ######################################
     # monitor lines
     # ######################################
     do[:, daq_do_map["signal_monitor"]] = do[:, daq_do_map["dmd_advance"]]
-    do[:, daq_do_map["camera_trigger_monitor"]] = do[:, daq_do_map["sim_cam_sync"]]
+    do[:, daq_do_map["camera_trigger_monitor"]] = np.logical_or(do[:, daq_do_map["sim_cam_sync"]],
+                                                                do[:, daq_do_map["odt_cam_sync"]])
 
     # ######################################
     # analog channels
@@ -488,7 +530,7 @@ def get_sim_sequence(daq_do_map: dict,
     info += f"sim channel stabilize time = {n_stabilize * dt * 1e3:.3f}ms = {n_stabilize:d} clock cycles\n"
     info += f"sim exposure time = {nsteps_exposure * dt * 1e3:.3f}ms = {nsteps_exposure:d} clock cycles\n"
     info += f"sim one frame = {nsteps_frame * dt * 1e3:.3f}fms = {nsteps_frame:d} clock cycles\n"
-    info += f"sim one channel= {nsteps * dt * 1e3:.3f}fms = {nsteps:d} clock cycles\n"
+    info += f"sim one channel= {nsteps_active * dt * 1e3:.3f}fms = {nsteps_active:d} clock cycles\n"
 
     return do, ao, info
 
