@@ -3459,6 +3459,7 @@ def display_tomography_recon(recon_fname: str,
                              compute: bool = False,
                              time_axis: int = 1,
                              time_range: Optional[list[int]] = None,
+                             phase_lim: float = 0.1,
                              block_while_display: bool = True):
     """
     Display reconstruction results and (optionally) raw data in Napari
@@ -3806,6 +3807,11 @@ def display_tomography_recon(recon_fname: str,
                          colormap="PiYG",
                          translate=(ny, nx_raw + 3 * nx))
 
+        viewer.add_image(da.abs(estack) - da.abs(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
+                         name="|e| - |e bg|", contrast_limits=[-500, 500],
+                         colormap="twilight_shifted",
+                         translate=(0, nx_raw + 4*nx))
+
         # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + 3*nx + nx // 2]])
         # viewer.add_points(points + offset,
         #                   features={"dphi": np.zeros(len(points)), },
@@ -3820,10 +3826,35 @@ def display_tomography_recon(recon_fname: str,
         pd = da.mod(da.angle(estack) - da.angle(ebg_stack), 2 * np.pi)
         pd_even = pd - 2*np.pi * (pd > np.pi)
         viewer.add_image(pd_even, scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e) - angle(e bg)", contrast_limits=[-0.1, 0.1],
+                         name="angle(e) - angle(e bg)", contrast_limits=[-phase_lim, phase_lim],
                          colormap="PiYG",
                          translate=(ny, 0)
                          )
+
+        label_pts = np.array([[0, nx_raw],
+                              [ny, nx_raw],
+                              [0, nx_raw + nx],
+                              [ny, nx_raw + nx],
+                              [0, nx_raw + 2 * nx],
+                              [ny, nx_raw + 2 * nx],
+                              [0, nx_raw + 3 * nx],
+                              [ny, nx_raw + 3 * nx],
+                              [0, nx_raw + 4 * nx],
+                              [ny, 0]
+                              ]) + np.array([ny / 10, nx / 2])
+        ttls = ["|e scatt|", "angle(e scatt)",
+                "|e rytov|", "angle(e rytov)",
+                "|e|", "angle(e)",
+                "|e bg|", "angle(e bg)",
+                "|e| - |e bg|",
+                "angle(e) - angle(e bg)"]
+
+        viewer.add_points(label_pts,
+                          features={"names": ttls},
+                          text={"string": "{names:s}",
+                                "size": 30,
+                                "color": "red"},
+                          )
 
     viewer.dims.axis_labels = ["position", "time", "", "", "pattern", "z", "y", "x"]
     # set to first position
