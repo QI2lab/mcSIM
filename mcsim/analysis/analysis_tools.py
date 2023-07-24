@@ -311,7 +311,8 @@ def translate_pix(img: array,
 
 
 def translate_im(img: array,
-                 shift: tuple[float],
+                 xshift: np.ndarray,
+                 yshift: np.ndarray,
                  drs: tuple[float] = (1, 1)) -> array:
     """
     Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
@@ -320,40 +321,19 @@ def translate_im(img: array,
     then dx = 0.05 and shift = [0, 0.0366]
 
     :param img: NumPy or CuPy array, size ny x nx. If CuPy array will run on GPU
-    :param shift: [yo, xo], in same units as pixels
+    :param xshift: in same units as drs
+    :param yshift
     :param drs: (dy, dx) pixel size of image along y- and x-directions
     :return img_shifted:
     """
 
-    # todo: use same approach as translate_ft() to make this work with nD arrays only operating along last two dims
-
-    if img.ndim != 2:
-        raise ValueError("img must be 2D")
-
-    if isinstance(img, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
-
-    img = xp.asarray(img)
-    ny, nx = img.shape
-
+    ny, nx = img.shape[-2:]
     dy, dx = drs
 
-    # must use symmetric frequency representation to do correctly!
-    # we are using the FT shift theorem to approximate the Nyquist-Whittaker interpolation formula,
-    # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
-    fx = xp.asarray(xp.fft.fftfreq(nx, dx))
-    fy = xp.asarray(xp.fft.fftfreq(ny, dy))
-    fxfx, fyfy = xp.meshgrid(fx, fy)
+    xshift_mod = xshift / dx / nx
+    yshift_mod = yshift / dy / ny
 
-    # 1. ft
-    # 2. multiply by exponential factor
-    # 3. inverse ft
-    exp_factor = xp.exp(1j * 2 * np.pi * (shift[0] * fyfy + shift[1] * fxfx))
-    img_shifted = xp.fft.fftshift(xp.fft.ifft2(xp.asarray(exp_factor) * xp.fft.fft2(xp.fft.ifftshift(img))))
-
-    return img_shifted
+    return translate_ft(img, xshift_mod, yshift_mod, drs=(1., 1.))
 
 
 def translate_ft(img_ft: array,
@@ -364,7 +344,6 @@ def translate_ft(img_ft: array,
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
     using the FFT shift relationship, img_ft(f + shift_frq) = F[ exp(-2*pi*i * shift_frq * r) * img(r) ]
-
     This is an approximation to the Whittaker-Shannon interpolation formula which can be performed using only FFT's.
     In this sense, it is exact for band-limited functions.
 
@@ -379,7 +358,7 @@ def translate_ft(img_ft: array,
     :param fx: array of x-shift frequencies
       fx and fy should either be broadcastable to the same size as img_ft, or they should be of size
       n_{-m} x ... x n_{-3} where images along dimensions -m, ..., -3 are shifted in parallel
-    :param fy:
+    :param fy: array of y-shift frequencies
     :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
     :return: shifted images, same size as img_ft
     """
