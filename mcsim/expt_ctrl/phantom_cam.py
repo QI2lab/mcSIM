@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import dask
 import dask.array as da
+from typing import Optional
 
 # ###############################
 # Codes defined in PhFile.h
@@ -919,7 +920,31 @@ class phantom_cam(camera):
         if result != 0:
             raise Exception(self.get_error(result))
 
-    def save_cine(self, cine_no, fname, first_image=None, img_count=None):
+    def save_cine(self,
+                  cine_no: int,
+                  fname: str,
+                  first_image=None,
+                  img_count=None,
+                  file_type: str = "tif12"):
+
+        file_types = {"tif16": SIFILE_TIF16,
+                      "tif12": SIFILE_TIF12,
+                      "tif8": SIFILE_TIF8,
+                      # "raw": ct.c_int(SIFILE_RAW),
+                      "dng": SIFILE_DNG,
+                      "dpx": SIFILE_DPX,
+                      "cine raw": MIFILE_RAWCINE,
+                      "cine": MIFILE_CINE,
+                      "JPEG cine": MIFILE_JPEGCINE,
+                      "AVI": MIFILE_AVI,
+                      "multipage TIFF": MIFILE_TIFCINE,
+                      "MPEG": MIFILE_MPEG,
+                      "QTIME": MIFILE_QTIME,
+                      "MP4": MIFILE_MP4,
+                      }
+
+        if file_type not in file_types.keys():
+            raise ValueError(f"file type {file_type:s} is not supported")
 
         ch = ct.pointer(ct.c_int())
         result = getattr(self._phfile, "PhNewCineFromCamera")(self.cam_index, ct.c_int(cine_no), ct.byref(ch))
@@ -965,8 +990,9 @@ class phantom_cam(camera):
             raise Exception(self.get_error(result))
 
         # set save file type
-        file_type = ct.c_int(SIFILE_TIF12)
-        result = getattr(self._phfile, "PhSetCineInfo")(ch, ct.c_uint(GCI_SAVEFILETYPE), ct.byref(file_type))
+        # file_type = ct.c_int(SIFILE_TIF12)
+        file_type_int = ct.c_int(file_types[file_type])
+        result = getattr(self._phfile, "PhSetCineInfo")(ch, ct.c_uint(GCI_SAVEFILETYPE), ct.byref(file_type_int))
         if result != 0:
             raise Exception(self.get_error(result))
 
@@ -1230,12 +1256,15 @@ class phantom_cam(camera):
 # ###############################
 # load Cine
 # ###############################
-def imread_cine(fname):
+def imread_cine(fname: str,
+                start_index: int = 0,
+                end_index: Optional[int] = None,
+                read_setup_info: bool = False) -> (dask.array.core.Array, dict):
     """
     Read images saved in a grayscale Cine file using 12L packing
 
-    @param fname: File path
-    @return imgs: dask array of images
+    :param fname: File path
+    :return imgs, metadata: dask array of images
     """
 
     # first open file and read metadata
@@ -1244,342 +1273,404 @@ def imread_cine(fname):
         # ########################
         # read Cine file header
         # ########################
-        header = {}
+        file_type = f.read(2)
+        headersize = struct.unpack("<H", f.read(2))[0]
 
-        header["filetype"] = f.read(2)
-        header["headersize"] = struct.unpack("<H", f.read(2))[0]
-        header["compression"] = struct.unpack("<H", f.read(2))[0]
-        header["version"] = struct.unpack("<H", f.read(2))[0]
-        header["first_movie_image"] = struct.unpack("<i", f.read(4))[0]
-        header["total_image_count"] = struct.unpack("<I", f.read(4))[0]
-        header["first_image_no"] = struct.unpack("<i", f.read(4))[0]
-        header["image_count"] = struct.unpack("<I", f.read(4))[0]
-        header["off_image_header"] = struct.unpack("<I", f.read(4))[0]
-        header["off_setup"] = struct.unpack("<I", f.read(4))[0]
-        header["off_image_offsets"] = struct.unpack("<I", f.read(4))[0]
-        header["trigger_time"] = struct.unpack("<i", f.read(4))[0]
+        # read rest of info
+        header_bytes = f.read(headersize - 4)
+        header_info = struct.unpack("HHiIiIIIIi", header_bytes[:36])
+        header_names = ["compression",
+                        "version",
+                        "first_movie_image",
+                        "total_image_count",
+                        "first_image_no",
+                        "image_count",
+                        "off_image_header",
+                        "off_setup",
+                        "off_image_offsets",
+                        "trigger_time",
+                        ]
+
+        # info as dictionary
+        header = {"filetype": file_type,
+                  "headersize": headersize}
+        header.update(dict(zip(header_names, header_info)))
+
+        # ########################
+        # read image offsets
+        # ########################
+        f.seek(header["off_image_offsets"])
+        # pointers to image are 64 bits
+        offsets = np.frombuffer(f.read(header["image_count"] * 8), np.uint64)
 
         # ########################
         # read bit map info header
         # ########################
         f.seek(header["off_image_header"])
 
-        bit_map_info = {}
+        bit_map_i = struct.unpack("IiiHHIIiiII", f.read(40))
+        names = ["bi_size",
+                 "bi_width",
+                 "bi_height",
+                 "bi_planes",
+                 "bi_bit_count",
+                 "bi_compression",
+                 "bi_size_image",
+                 "bi_x_pels_per_meter",
+                 "bi_y_pels_per_meter",
+                 "bi_clr_used",
+                 "bi_clr_important"]
 
-        bit_map_info["bi_size"] = struct.unpack("<I", f.read(4))[0]
-        bit_map_info["bi_width"] = struct.unpack("<i", f.read(4))[0]
-        bit_map_info["bi_height"] = struct.unpack("<i", f.read(4))[0]
-        bit_map_info["bi_planes"] = struct.unpack("<H", f.read(2))[0]
-        bit_map_info["bi_bit_count"] = struct.unpack("<H", f.read(2))[0]
-        bit_map_info["bi_compression"] = struct.unpack("<I", f.read(4))[0]  # 1024 -> BI_PACKED12L
-        if bit_map_info["bi_compression"] != 1024:
-            raise NotImplementedError("bi_compression must be 1024, i.e. BI_PACKED12L")
-
-        bit_map_info["bi_size_image"] = struct.unpack("<I", f.read(4))[0]
-        bit_map_info["bi_x_pels_per_meter"] = struct.unpack("<i", f.read(4))[0]
-        bit_map_info["bi_y_pels_per_meter"] = struct.unpack("<i", f.read(4))[0]
-        bit_map_info["bi_clr_used"] = struct.unpack("<I", f.read(4))[0]
-        bit_map_info["bi_clr_important"] = struct.unpack("<I", f.read(4))[0]
+        bit_map_info = dict(zip(names, bit_map_i))
 
         # ########################n
         # read setup information
         # ########################
-        f.seek(header["off_setup"])
-
-        max_len_description_old = 121  # defined in
-        old_max_file_name = 65
-        max_len_description = 4096
-        max_std_str_sz = 256  # defined in phint.h
-
         setup_info = {}
-        # todo: store in a dictionary
 
-        setup_info["frame_rate"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["shutter"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["post_trigger"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["frame_delay"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["aspect_ratio"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["res7"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["res8"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["res9"] = struct.unpack("B", f.read(1))[0]
-        setup_info["res10"] = struct.unpack("B", f.read(1))[0]
-        setup_info["res11"] = struct.unpack("B", f.read(1))[0]
-        setup_info["trig_frame"] = struct.unpack("B", f.read(1))[0]
-        setup_info["res12"] = struct.unpack("B", f.read(1))[0]
+        if read_setup_info:
+            f.seek(header["off_setup"])
 
-        description_old_bytes = struct.unpack(max_len_description_old * "c", f.read(max_len_description_old))
-        setup_info["description_old_bytes"] = "".join(c.decode() for c in description_old_bytes if c != b"\x00")
+            max_len_description_old = 121  # defined in
+            old_max_file_name = 65
+            max_len_description = 4096
+            max_std_str_sz = 256  # defined in phint.h
 
-        setup_info["mark"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["length"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["res13"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["sig_option"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["bin_channels"] = struct.unpack("<h", f.read(2))[0]
-        setup_info["samples_per_image"] = struct.unpack("B", f.read(1))[0]
-        setup_info["bin_names"] = struct.unpack(8 * 11 * "c", f.read(8 * 11))
-        setup_info["ana_option"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["ana_channels"] = struct.unpack("<h", f.read(2))[0]
-        setup_info["res6"] = struct.unpack("<B", f.read(1))[0]
-        setup_info["ana_board"] = struct.unpack("<B", f.read(1))[0]
-        setup_info["ch_option"] = struct.unpack("H" * 8, f.read(2 * 8))
-        setup_info["ana_gain"] = struct.unpack("f" * 8, f.read(4 * 8))
-        setup_info["ana_unit"] = struct.unpack("c" * 8 * 6, f.read(8 * 6))
-        setup_info["ana_name"] = struct.unpack("c" * 8 * 11, f.read(8 * 11))
-        setup_info["lfirst_image"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["dw_image_count"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["nq_factor"] = struct.unpack("<h", f.read(2))[0]
-        setup_info["w_cine_file_type"] = struct.unpack("<H", f.read(2))[0]
+            # todo: store in a dictionary
+            # setup_bytes = f.read(10412)
 
-        sz_cine_path_bytes = struct.unpack("c" * 4 * old_max_file_name, f.read(4 * old_max_file_name))
-        setup_info["sz_cine_path"] = "".join(c.decode() for c in sz_cine_path_bytes if c != b"\x00")
+            # setup_i = list(struct.unpack("HHHHHHHBBBBB", setup_bytes))
+            #
+            # description_old_bytes = struct.unpack(max_len_description_old * "c", f.read(max_len_description_old))
+            # setup_i.append("".join(c.decode() for c in description_old_bytes if c != b"\x00"))
+            #
+            # setup_i += struct.unpack("", f.read())
 
-        setup_info["res14"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["res15"] = struct.unpack("B", f.read(1))[0]
-        setup_info["res16"] = struct.unpack("B", f.read(1))[0]
-        setup_info["res17"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["res18"] = struct.unpack("d", f.read(8))[0]
-        setup_info["res19"] = struct.unpack("d", f.read(8))[0]
-        setup_info["res20"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["res1"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["res2"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["res3"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["im_width"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["im_height"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["edr_shutter_16"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["serial"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["saturation"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["res5"] = struct.unpack("B", f.read(1))[0]
-        setup_info["auto_exposure"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["bfliph"] = struct.unpack("<i", f.read(4))[0] # bool32 = int
-        setup_info["bflipv"] = struct.unpack("<i", f.read(4))[0] # bool32
-        setup_info["grid"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["frame_rate"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["shutter"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["edr_shutter"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["post_trigger"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["frame_delay"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["b_enable_color"] = struct.unpack("<i", f.read(4))[0] # bool32
-        setup_info["camera_version"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["firmware_version"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["software_version"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["recording_time_zone"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["cfa"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["bright"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["contrast"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["gamma"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["res21"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["aut_exp_level"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["auto_exp_speed"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["auto_exp_rect"] = [struct.unpack("<i", f.read(4))[0],
+            setup_names = ["frame_rate",
+                           "shutter",
+                           "post_trigger",
+                           "frame_delay",
+                           "aspect_ratio",
+                           "res7",
+                           "res8",
+                           "res9",
+                           "res10",
+                           "res11",
+                           "trig_frame",
+                           "res12",
+                           "description_old_bytes"
+                           ]
+
+            setup_info["frame_rate"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["shutter"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["post_trigger"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["frame_delay"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["aspect_ratio"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["res7"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["res8"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["res9"] = struct.unpack("B", f.read(1))[0]
+            setup_info["res10"] = struct.unpack("B", f.read(1))[0]
+            setup_info["res11"] = struct.unpack("B", f.read(1))[0]
+            setup_info["trig_frame"] = struct.unpack("B", f.read(1))[0]
+            setup_info["res12"] = struct.unpack("B", f.read(1))[0]
+
+            description_old_bytes = struct.unpack(max_len_description_old * "c", f.read(max_len_description_old))
+            setup_info["description_old_bytes"] = "".join(c.decode() for c in description_old_bytes if c != b"\x00")
+
+            setup_info["mark"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["length"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["res13"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["sig_option"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["bin_channels"] = struct.unpack("<h", f.read(2))[0]
+            setup_info["samples_per_image"] = struct.unpack("B", f.read(1))[0]
+            setup_info["bin_names"] = struct.unpack(8 * 11 * "c", f.read(8 * 11))
+            setup_info["ana_option"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["ana_channels"] = struct.unpack("<h", f.read(2))[0]
+            setup_info["res6"] = struct.unpack("<B", f.read(1))[0]
+            setup_info["ana_board"] = struct.unpack("<B", f.read(1))[0]
+            setup_info["ch_option"] = struct.unpack("H" * 8, f.read(2 * 8))
+            setup_info["ana_gain"] = struct.unpack("f" * 8, f.read(4 * 8))
+            setup_info["ana_unit"] = struct.unpack("c" * 8 * 6, f.read(8 * 6))
+            setup_info["ana_name"] = struct.unpack("c" * 8 * 11, f.read(8 * 11))
+            setup_info["lfirst_image"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["dw_image_count"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["nq_factor"] = struct.unpack("<h", f.read(2))[0]
+            setup_info["w_cine_file_type"] = struct.unpack("<H", f.read(2))[0]
+
+            sz_cine_path_bytes = struct.unpack("c" * 4 * old_max_file_name, f.read(4 * old_max_file_name))
+            setup_info["sz_cine_path"] = "".join(c.decode() for c in sz_cine_path_bytes if c != b"\x00")
+
+            setup_info["res14"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["res15"] = struct.unpack("B", f.read(1))[0]
+            setup_info["res16"] = struct.unpack("B", f.read(1))[0]
+            setup_info["res17"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["res18"] = struct.unpack("d", f.read(8))[0]
+            setup_info["res19"] = struct.unpack("d", f.read(8))[0]
+            setup_info["res20"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["res1"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["res2"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["res3"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["im_width"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["im_height"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["edr_shutter_16"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["serial"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["saturation"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["res5"] = struct.unpack("B", f.read(1))[0]
+            setup_info["auto_exposure"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["bfliph"] = struct.unpack("<i", f.read(4))[0] # bool32 = int
+            setup_info["bflipv"] = struct.unpack("<i", f.read(4))[0] # bool32
+            setup_info["grid"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["frame_rate"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["shutter"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["edr_shutter"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["post_trigger"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["frame_delay"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["b_enable_color"] = struct.unpack("<i", f.read(4))[0] # bool32
+            setup_info["camera_version"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["firmware_version"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["software_version"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["recording_time_zone"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["cfa"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["bright"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["contrast"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["gamma"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["res21"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["aut_exp_level"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["auto_exp_speed"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["auto_exp_rect"] = [struct.unpack("<i", f.read(4))[0],
+                                           struct.unpack("<i", f.read(4))[0],
+                                           struct.unpack("<i", f.read(4))[0],
+                                           struct.unpack("<i", f.read(4))[0]] # left, top, right, bottom
+            setup_info["wbgain"] = struct.unpack("f" * 2 * 4, f.read(4 * 2 * 4)) # white balance gain correction for red/blue. each wbgain has two floats
+            setup_info["rotate"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["wbview"] = [struct.unpack("f", f.read(4))[0],
+                                    struct.unpack("f", f.read(4))[0]]
+            setup_info["realbpp"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["conv8min"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["conv8max"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["filter_code"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["filter_param"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["ufilter"] = [struct.unpack("<i", f.read(4))[0],
+                                     struct.unpack("<i", f.read(4))[0],
+                                     struct.unpack("<i", f.read(4))[0],
+                                     struct.unpack("i" * 5 * 5, f.read(4 * 5 * 5))
+                                     ] # imfilter = dim, shifts, bias, coefs
+            setup_info["black_cal_sver"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["white_cal_sver"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["gray_cal_sver"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["b_stamp_time"] = struct.unpack("<i", f.read(4))[0] # bool32
+            setup_info["sound_dest"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["frp_steps"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["frp_img_nr"] = struct.unpack("i" * 16, f.read(4 * 16))
+            setup_info["frp_rate"] = struct.unpack("I" * 16, f.read(4 * 16))
+            setup_info["frp_exp"] = struct.unpack("I" * 16, f.read(4 * 16))
+            setup_info["mc_cnt"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["mc_percent"] = struct.unpack("f" * 64, f.read(4 * 64))
+            setup_info["ci_calib"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["calib_width"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["calib_height"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["calib_rate"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["calib_exp"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["calib_edr"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["calib_temp"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["head_serial"] = struct.unpack("I" * 4, f.read(4 * 4))
+            setup_info["range_code"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["range_size"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["decimation"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["master_serial"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["sensor"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["shutter_ns"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["edr_shutter_ns"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["frame_dealy_ns"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["im_pos_x_acq"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["im_pos_y_acq"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["im_width_acq"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["im_height_acq"] = struct.unpack("<I", f.read(4))[0]
+
+            description_bytes = struct.unpack("c" * max_len_description, f.read(max_len_description))
+            setup_info["description"] = "".join(c.decode() for c in description_bytes if c != b"\x00")
+
+            setup_info["rising_edge"] = struct.unpack("<i", f.read(4))[0]  # bool32
+            setup_info["filter_time"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["long_ready"] = struct.unpack("<i", f.read(4))[0]  # bool 32
+            setup_info["shutter_off"] = struct.unpack("<i", f.read(4))[0]  #bool32
+            setup_info["res4"] = struct.unpack("B" * 16, f.read(16))
+            setup_info["b_meta_wb"] = struct.unpack("<i", f.read(4))[0]  #  bool 32
+            setup_info["hue"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["black_level"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["white_level"] = struct.unpack("<i", f.read(4))[0]
+
+            lens_description_bytes = struct.unpack("c" * 256, f.read(256))
+            setup_info["lens_description"] = "".join(c.decode() for c in lens_description_bytes if c != b"\x00")
+            setup_info["lens_aperture"] = struct.unpack("f", f.read(4))[0]
+            setup_info["lens_focus_distance"] = struct.unpack("f", f.read(4))[0]
+            setup_info["lens_focal_length"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_offset"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_gain"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_saturation"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_hue"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_gamma"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_gamma_r"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_gamma_b"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_flare"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_pedestal_r"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_pedestal_g"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_pedestabl_b"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_chroma"] = struct.unpack("f", f.read(4))[0]
+
+            tone_label_bytes = struct.unpack("c" * 256, f.read(256))
+            setup_info["tone_label"] = "".join(c.decode() for c in tone_label_bytes if c != b"\x00")
+
+            setup_info["tone_points"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["f_tone"] = struct.unpack("f" * 32 * 2, f.read(4 * 32 * 2))
+
+            user_matrix_label_bytes = struct.unpack("c" * 256, f.read(256))
+            setup_info["user_matrix_label"] = "".join(c.decode() for c in user_matrix_label_bytes if c != b"\x00")
+
+            setup_info["enable_matrices"] = struct.unpack("<i", f.read(4))[0]  # bool32
+            setup_info["cm_user"] = struct.unpack("f" * 9, f.read(4 * 9))
+            setup_info["enable_crop"] = struct.unpack("<i", f.read(4))[0]  # bool32
+            setup_info["crop_rect"] = [struct.unpack("<i", f.read(4))[0],
                                        struct.unpack("<i", f.read(4))[0],
                                        struct.unpack("<i", f.read(4))[0],
                                        struct.unpack("<i", f.read(4))[0]] # left, top, right, bottom
-        setup_info["wbgain"] = struct.unpack("f" * 2 * 4, f.read(4 * 2 * 4)) # white balance gain correction for red/blue. each wbgain has two floats
-        setup_info["rotate"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["wbview"] = [struct.unpack("f", f.read(4))[0],
-                                struct.unpack("f", f.read(4))[0]]
-        setup_info["realbpp"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["conv8min"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["conv8max"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["filter_code"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["filter_param"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["ufilter"] = [struct.unpack("<i", f.read(4))[0],
-                                 struct.unpack("<i", f.read(4))[0],
-                                 struct.unpack("<i", f.read(4))[0],
-                                 struct.unpack("i" * 5 * 5, f.read(4 * 5 * 5))
-                                 ] # imfilter = dim, shifts, bias, coefs
-        setup_info["black_cal_sver"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["white_cal_sver"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["gray_cal_sver"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["b_stamp_time"] = struct.unpack("<i", f.read(4))[0] # bool32
-        setup_info["sound_dest"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["frp_steps"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["frp_img_nr"] = struct.unpack("i" * 16, f.read(4 * 16))
-        setup_info["frp_rate"] = struct.unpack("I" * 16, f.read(4 * 16))
-        setup_info["frp_exp"] = struct.unpack("I" * 16, f.read(4 * 16))
-        setup_info["mc_cnt"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["mc_percent"] = struct.unpack("f" * 64, f.read(4 * 64))
-        setup_info["ci_calib"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["calib_width"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["calib_height"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["calib_rate"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["calib_exp"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["calib_edr"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["calib_temp"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["head_serial"] = struct.unpack("I" * 4, f.read(4 * 4))
-        setup_info["range_code"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["range_size"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["decimation"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["master_serial"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["sensor"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["shutter_ns"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["edr_shutter_ns"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["frame_dealy_ns"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["im_pos_x_acq"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["im_pos_y_acq"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["im_width_acq"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["im_height_acq"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["enable_resample"] = struct.unpack("<i", f.read(4))[0]  # bool 32
+            setup_info["resample_width"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["resample_height"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["f_gain16_8"] = struct.unpack("f", f.read(4))[0]
+            setup_info["frp_shape"] = struct.unpack("I" * 16, f.read(4 * 16))[0]
+            setup_info["trig_tc"] = f.read(4 + 4) # uint8_t fields packed into 4 bytes
+            setup_info["fpb_rate"] = struct.unpack("f", f.read(4))[0]
+            setup_info["ftc_rate"] = struct.unpack("f", f.read(4))[0]
 
-        description_bytes = struct.unpack("c" * max_len_description, f.read(max_len_description))
-        setup_info["description"] = "".join(c.decode() for c in description_bytes if c != b"\x00")
+            cine_name_bytes = struct.unpack("c" * 256, f.read(256))
+            setup_info["cine_name"] = "".join(c.decode() for c in cine_name_bytes if c != b"\x00")
 
-        setup_info["rising_edge"] = struct.unpack("<i", f.read(4))[0]  # bool32
-        setup_info["filter_time"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["long_ready"] = struct.unpack("<i", f.read(4))[0]  # bool 32
-        setup_info["shutter_off"] = struct.unpack("<i", f.read(4))[0]  #bool32
-        setup_info["res4"] = struct.unpack("B" * 16, f.read(16))
-        setup_info["b_meta_wb"] = struct.unpack("<i", f.read(4))[0]  #  bool 32
-        setup_info["hue"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["black_level"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["white_level"] = struct.unpack("<i", f.read(4))[0]
+            setup_info["f_gain_r"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_gain_g"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_gain_b"] = struct.unpack("f", f.read(4))[0]
+            setup_info["cm_calib"] = struct.unpack("f" * 9, f.read(4 * 9))
+            setup_info["f_wb_temp"] = struct.unpack("f", f.read(4))[0]
+            setup_info["f_wbc_c"] = struct.unpack("f", f.read(4))[0]
 
-        lens_description_bytes = struct.unpack("c" * 256, f.read(256))
-        setup_info["lens_description"] = "".join(c.decode() for c in lens_description_bytes if c != b"\x00")
-        setup_info["lens_aperture"] = struct.unpack("f", f.read(4))[0]
-        setup_info["lens_focus_distance"] = struct.unpack("f", f.read(4))[0]
-        setup_info["lens_focal_length"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_offset"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_gain"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_saturation"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_hue"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_gamma"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_gamma_r"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_gamma_b"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_flare"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_pedestal_r"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_pedestal_g"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_pedestabl_b"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_chroma"] = struct.unpack("f", f.read(4))[0]
+            calibration_info_bytes = struct.unpack("c" * 1024, f.read(1024))
+            setup_info["calibration_info"] = "".join(c.decode() for c in calibration_info_bytes if c != b"\x00")
 
-        tone_label_bytes = struct.unpack("c" * 256, f.read(256))
-        setup_info["tone_label"] = "".join(c.decode() for c in tone_label_bytes if c != b"\x00")
+            optical_filter_bytes = struct.unpack("c" * 1024, f.read(1024))
+            setup_info["optical_filter"] = "".join(c.decode() for c in optical_filter_bytes if c != b"\x00")
 
-        setup_info["tone_points"] = struct.unpack("<i", f.read(4))[0]
-        setup_info["f_tone"] = struct.unpack("f" * 32 * 2, f.read(4 * 32 * 2))
+            gps_info_bytes = struct.unpack("c" * max_std_str_sz, f.read(max_std_str_sz))
+            setup_info["gps_info"] = "".join(c.decode() for c in gps_info_bytes if c != b"\x00")
 
-        user_matrix_label_bytes = struct.unpack("c" * 256, f.read(256))
-        setup_info["user_matrix_label"] = "".join(c.decode() for c in user_matrix_label_bytes if c != b"\x00")
+            uuid_bytes = struct.unpack("c" * max_std_str_sz, f.read(max_std_str_sz))
+            setup_info["uuid"] = "".join(c.decode() for c in uuid_bytes if c != b"\x00")
 
-        setup_info["enable_matrices"] = struct.unpack("<i", f.read(4))[0]  # bool32
-        setup_info["cm_user"] = struct.unpack("f" * 9, f.read(4 * 9))
-        setup_info["enable_crop"] = struct.unpack("<i", f.read(4))[0]  # bool32
-        setup_info["crop_rect"] = [struct.unpack("<i", f.read(4))[0],
-                                   struct.unpack("<i", f.read(4))[0],
-                                   struct.unpack("<i", f.read(4))[0],
-                                   struct.unpack("<i", f.read(4))[0]] # left, top, right, bottom
-        setup_info["enable_resample"] = struct.unpack("<i", f.read(4))[0]  # bool 32
-        setup_info["resample_width"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["resample_height"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["f_gain16_8"] = struct.unpack("f", f.read(4))[0]
-        setup_info["frp_shape"] = struct.unpack("I" * 16, f.read(4 * 16))[0]
-        setup_info["trig_tc"] = f.read(4 + 4) # uint8_t fields packed into 4 bytes
-        setup_info["fpb_rate"] = struct.unpack("f", f.read(4))[0]
-        setup_info["ftc_rate"] = struct.unpack("f", f.read(4))[0]
+            created_by_bytes = struct.unpack("c" * max_std_str_sz, f.read(max_std_str_sz))
+            setup_info["created_by"] = "".join(c.decode() for c in created_by_bytes if c != b"\x00")
 
-        cine_name_bytes = struct.unpack("c" * 256, f.read(256))
-        setup_info["cine_name"] = "".join(c.decode() for c in cine_name_bytes if c != b"\x00")
+            setup_info["rec_bpp"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["lowest_format_bpp"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["lowest_format_q"] = struct.unpack("<H", f.read(2))[0]
+            setup_info["ftoe"] = struct.unpack("f", f.read(4))[0]
+            setup_info["log_mode"] = struct.unpack("<I", f.read(4))[0]
 
-        setup_info["f_gain_r"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_gain_g"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_gain_b"] = struct.unpack("f", f.read(4))[0]
-        setup_info["cm_calib"] = struct.unpack("f" * 9, f.read(4 * 9))
-        setup_info["f_wb_temp"] = struct.unpack("f", f.read(4))[0]
-        setup_info["f_wbc_c"] = struct.unpack("f", f.read(4))[0]
+            camera_model_bytes = struct.unpack("c" * max_std_str_sz, f.read(max_std_str_sz))
+            setup_info["camera_model"] = "".join(c.decode() for c in camera_model_bytes if c != b"\x00")
 
-        calibration_info_bytes = struct.unpack("c" * 1024, f.read(1024))
-        setup_info["calibration_info"] = "".join(c.decode() for c in calibration_info_bytes if c != b"\x00")
+            setup_info["wb_type"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["f_decimation"] = struct.unpack("f", f.read(4))[0]
+            setup_info["mag_serial"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["cs_serial"] = struct.unpack("<I", f.read(4))[0]
+            setup_info["d_frame_rate"] = struct.unpack("d", f.read(8))[0]
+            setup_info["sensor_mode"] = struct.unpack("<I", f.read(4))[0]
 
-        optical_filter_bytes = struct.unpack("c" * 1024, f.read(1024))
-        setup_info["optical_filter"] = "".join(c.decode() for c in optical_filter_bytes if c != b"\x00")
-
-        gps_info_bytes = struct.unpack("c" * max_std_str_sz, f.read(max_std_str_sz))
-        setup_info["gps_info"] = "".join(c.decode() for c in gps_info_bytes if c != b"\x00")
-
-        uuid_bytes = struct.unpack("c" * max_std_str_sz, f.read(max_std_str_sz))
-        setup_info["uuid"] = "".join(c.decode() for c in uuid_bytes if c != b"\x00")
-
-        created_by_bytes = struct.unpack("c" * max_std_str_sz, f.read(max_std_str_sz))
-        setup_info["created_by"] = "".join(c.decode() for c in created_by_bytes if c != b"\x00")
-
-        setup_info["rec_bpp"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["lowest_format_bpp"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["lowest_format_q"] = struct.unpack("<H", f.read(2))[0]
-        setup_info["ftoe"] = struct.unpack("f", f.read(4))[0]
-        setup_info["log_mode"] = struct.unpack("<I", f.read(4))[0]
-
-        camera_model_bytes = struct.unpack("c" * max_std_str_sz, f.read(max_std_str_sz))
-        setup_info["camera_model"] = "".join(c.decode() for c in camera_model_bytes if c != b"\x00")
-
-        setup_info["wb_type"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["f_decimation"] = struct.unpack("f", f.read(4))[0]
-        setup_info["mag_serial"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["cs_serial"] = struct.unpack("<I", f.read(4))[0]
-        setup_info["d_frame_rate"] = struct.unpack("d", f.read(8))[0]
-        setup_info["sensor_mode"] = struct.unpack("<I", f.read(4))[0]
-
-        # read image offsets
-        f.seek(header["off_image_offsets"])
-        # pointers to image are 64 bits
-        offsets = np.frombuffer(f.read(header["image_count"] * 8), np.uint64)
 
     def read_img(offset):
+
         with open(fname, "rb") as f:
             # read first image
-            f.seek(offset)
+            f.seek(int(offset))
             header_len = struct.unpack("<I", f.read(4))[0]
-            img_start = offset + np.array(header_len, dtype=np.uint64)
+            img_start = int(offset) + header_len
             f.seek(img_start)
             bytes = np.frombuffer(f.read(bit_map_info["bi_size_image"]), dtype=np.uint8)
 
         # convert to 12L packed (two 12-bit pixels packed into three bytes)
-        a_uint8 = bytes[::3].astype(np.uint16)
-        b_uint8 = bytes[1::3].astype(np.uint16)
-        c_uint8 = bytes[2::3].astype(np.uint16)
+        # a_uint8 = bytes[::3].astype(np.uint16)
+        # b_uint8 = bytes[1::3].astype(np.uint16)
+        # c_uint8 = bytes[2::3].astype(np.uint16)
+        #
+        # # middle byte contains least-significant bits of first integer and most-significant bits of second integer
+        # first_int = (a_uint8 << 4) + (b_uint8 >> 4)
+        # second_int = (np.bitwise_and(15, b_uint8) << 8) + c_uint8
 
-        # middle byte contains least-significant bits of first integer and most-significant bits of second integer
-        first_int = (a_uint8 << 4) + (b_uint8 >> 4)
-        second_int = (np.bitwise_and(15, b_uint8) << 8) + c_uint8
+        # img = np.stack((first_int, second_int), axis=1).reshape((bit_map_info["bi_height"], bit_map_info["bi_width"]))
 
-        return np.stack((first_int, second_int), axis=1).reshape((bit_map_info["bi_height"], bit_map_info["bi_width"]))
+        img = unpack12(bytes).reshape((bit_map_info["bi_height"], bit_map_info["bi_width"]))
 
-    # todo: overall this resulted in significant slow down
-    # function to read an image starting at given offset
-    # this speeds up ~25%
-    # @jit(nopython=True)
-    # def unpack(buffer):
-    #     # convert to 12L packed (two 12-bit pixels packed into three bytes)
-    #     a_uint8 = buffer[::3].astype(np.uint16)
-    #     b_uint8 = buffer[1::3].astype(np.uint16)
-    #     c_uint8 = buffer[2::3].astype(np.uint16)
-    #
-    #     # middle byte contains least-significant bits of first integer and most-significant bits of second integer
-    #     first_int = (a_uint8 << 4) + (b_uint8 >> 4)
-    #     second_int = (np.bitwise_and(15, b_uint8) << 8) + c_uint8
-    #
-    #     return np.stack((first_int, second_int), axis=1).reshape((bi_height, bi_width))
-    #
-    # def read_img(offset):
-    #     with open(fname, "rb") as f:
-    #         # read first image
-    #         f.seek(offset)
-    #         header_len = struct.unpack("<I", f.read(4))[0]
-    #         img_start = offset + np.array(header_len, dtype=np.uint64)
-    #         f.seek(img_start)
-    #         bytes = np.frombuffer(f.read(bi_size_image), dtype=np.uint8)
-    #
-    #     return unpack(bytes)
+        return np.expand_dims(img, axis=0)
 
     # combine all images into 3D dask array
-    # todo: list comprehension is slow
-    imgs = da.stack([da.from_delayed(dask.delayed(read_img)(o),
-                                     shape=(bit_map_info["bi_height"], bit_map_info["bi_width"]),
-                                     dtype="uint16") for o in offsets], axis=0)
+    if end_index is None or end_index > len(offsets):
+        end_index = len(offsets)
+
+    offsets_da = da.from_array(offsets[start_index:end_index], chunks=(1,))
+
+    imgs = da.map_blocks(read_img,
+                         offsets_da,
+                         new_axis=(1, 2),
+                         chunks=(1, bit_map_info["bi_height"], bit_map_info["bi_width"]),
+                         dtype=np.uint16,
+                         )
+
+    # imgs = da.concatenate([da.from_delayed(dask.delayed(read_img)(o),
+    #                                  shape=(bit_map_info["bi_height"], bit_map_info["bi_width"]),
+    #                                  dtype="uint16") for o in offsets[start_index:end_index]], axis=0)
 
     metadata = {"header_data": header,
                 "bitmap_info": bit_map_info,
                 "setup_info": setup_info}
 
     return imgs, metadata
+
+def pack12(data):
+    """
+    Convert data from uint16 integers to 12-bit packed format
+
+    :param data: even sized array of uint16
+    :return bytes:
+    """
+
+    # most significant 8 bits of first integer
+    first_bit = (data[::2] >> 4).astype(np.uint8)
+    # least significant 4 bits of first integer and most significant 4 bits of second
+    second_bit = ((np.bitwise_and(15, data[::2]) << 4) + (data[1::2] >> 8)).astype(np.uint8)
+    # least significant 8 bits of second integer
+    third_bit = np.bitwise_and(255, data[1::2]).astype(np.uint8)
+
+    return np.stack((first_bit, second_bit, third_bit), axis=1).ravel()
+
+def unpack12(data: np.ndarray) -> np.ndarray:
+    """
+    Convert data from 12-bit packed integers to uint16 integers
+
+    :param data: an array of uint8 integers
+    :return img: an array of uint16 integers
+    """
+
+    # convert from 12L packed (two 12-bit pixels packed into three bytes)
+    a_uint8 = data[::3].astype(np.uint16)
+    b_uint8 = data[1::3].astype(np.uint16)
+    c_uint8 = data[2::3].astype(np.uint16)
+
+    # middle byte contains least-significant bits of first integer
+    # and most-significant bits of second integer
+    first_int = (a_uint8 << 4) + (b_uint8 >> 4)
+    second_int = (np.bitwise_and(15, b_uint8) << 8) + c_uint8
+
+    img = np.stack((first_int, second_int), axis=1).ravel()
+
+    return img
 
 
 if __name__ == "__main__":
