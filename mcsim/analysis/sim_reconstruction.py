@@ -539,17 +539,17 @@ class SimImageSet:
         self.dfx_us = float(self.fx_us[1] - self.fx_us[0])
         self.dfy_us = float(self.fy_us[1] - self.fy_us[0])
 
-        # remove background and convert from ADU to photons
         # #############################################
+        # image preprocessing
+        # #############################################
+        # remove background and convert from ADU to photons
         # todo: this should probably be users responsibility
         self.imgs = (self.imgs_raw - self._preprocessing_settings["offset"]) / self._preprocessing_settings["gain"]
         self.imgs[self.imgs <= 0] = 1e-12
 
-        # #############################################
         # normalize histograms for each angle
-        # todo: should I rewrite this to handle full chunked images? Then avoid need to rechunk
-        # #############################################
         if self._preprocessing_settings["normalize_histograms"]:
+            # todo: should I rewrite this to handle full chunked images? Then avoid need to rechunk
             tstart_norm_histogram = time.perf_counter()
 
             matched_hists = da.map_blocks(match_histograms,
@@ -567,7 +567,7 @@ class SimImageSet:
             self.print_log(f"Normalizing histograms took {time.perf_counter() - tstart_norm_histogram:.2f}s")
 
         # #############################################
-        # Rechunk so working on single image at a time, which is necessary during reconstruction
+        # Rechunk so working on single SIM image at a time, which is necessary during reconstruction
         # #############################################
         new_chunks = list(self.imgs.chunksize)
         new_chunks[-4:] = self.imgs.shape[-4:]
@@ -579,6 +579,7 @@ class SimImageSet:
         apodization = xp.outer(xp.asarray(tukey(self.ny, alpha=0.1)),
                                xp.asarray(tukey(self.nx, alpha=0.1)))
 
+        # todo: want to do a real ft instead
         self.imgs_ft = da.map_blocks(_ft,
                                      self.imgs * apodization,
                                      dtype=complex,
@@ -746,12 +747,17 @@ class SimImageSet:
                     del self.__dict__[attr_name]
 
     def estimate_parameters(self,
-                            slices: Optional[tuple] = None):
+                            slices: Optional[tuple] = None,
+                            frq_max_shift: Optional[float] = None,
+                            frq_search_bounds: tuple[float] = (0., np.inf)):
         """
         Estimate SIM parameters from chosen slice
 
         :return:
         """
+
+        if frq_max_shift is None:
+            frq_max_shift = 5 * self.dfx
 
         tstart_param_est = time.perf_counter()
 
@@ -830,7 +836,8 @@ class SimImageSet:
                     self.band1_frq_fit[ii],
                     self.dx,
                     frq_guess=frq_guess[ii],
-                    max_frq_shift=5 * self.dfx,
+                    max_frq_shift=frq_max_shift,
+                    fbounds=frq_search_bounds,
                     otf=self.otf[ii])
                 )
             results = dask.compute(*r)
@@ -1108,7 +1115,8 @@ class SimImageSet:
                     compute_widefield: bool = False,
                     compute_os: bool = False,
                     compute_deconvolved: bool = False,
-                    compute_mcnr: bool = False):
+                    compute_mcnr: bool = False,
+                    compute_sr: bool = True):
         """
         SIM reconstruction
 
@@ -1117,6 +1125,7 @@ class SimImageSet:
         :param compute_os:
         :param compute_deconvolved:
         :param compute_mcnr:
+        :param compute_sr:
         :return:
         """
 
@@ -1134,6 +1143,12 @@ class SimImageSet:
         #     mempool = cp.get_default_memory_pool()
         #     self.print_log(f"used GPU memory = {(mempool.used_bytes()) / 1e9:.3f}GB")
         #     self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
+
+        # #############################################
+        # various types of "reconstruction"
+        # #############################################
+        tstart_recon = time.perf_counter()
+
         # #############################################
         # get widefield image
         # #############################################
@@ -1193,133 +1208,137 @@ class SimImageSet:
             self.print_log(f"estimated modulation-contrast-to-noise ratio in {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
-        # do band separation and then shift bands
-        # results are:
-        # [O(f)H(f), m*O(f - f_o)H(f), m*O(f + f_o)H(f)]
-        # [O(f)H(f), m*O(f)H(f + fo),  m*O(f)H(f - fo)]
+        # compute SR-SIM image
         # #############################################
-        tstart_recon = time.perf_counter()
+        if compute_sr:
+            # #############################################
+            # do band separation and then shift bands
+            # results are:
+            # [O(f)H(f), m*O(f - f_o)H(f), m*O(f + f_o)H(f)]
+            # [O(f)H(f), m*O(f)H(f + fo),  m*O(f)H(f - fo)]
+            # #############################################
 
-        exp_chunks = list(self.imgs_ft.chunksize)
-        exp_chunks[-1] *= self.upsample_fact
-        exp_chunks[-2] *= self.upsample_fact
+            exp_chunks = list(self.imgs_ft.chunksize)
+            exp_chunks[-1] *= self.upsample_fact
+            exp_chunks[-2] *= self.upsample_fact
 
-        # this approach saves ~5GB in memory pool
-        def proc_bands(bands, phases, amps, frqs, dy, dx, upsample_fact, use_gpu):
-            sb = shift_bands(unmix_bands(bands, phases, amps=amps), frqs, (dy, dx), upsample_fact)
+            # this approach saves ~5GB in memory pool
+            def proc_bands(bands, phases, amps, frqs, dy, dx, upsample_fact, use_gpu):
+                sb = shift_bands(unmix_bands(bands, phases, amps=amps), frqs, (dy, dx), upsample_fact)
 
-            # todo: need this line or have problem with memory ... but don't really understand why
-            # todo: thought this was some process issue where since dask is running a different process
-            # todo: the parent process doesn't know if can use the allocated and then freed memory which becomes
-            # todo: part of the pool, but other tests don't seem to support this
-            if use_gpu:
-                cp.get_default_memory_pool().free_all_blocks()
+                # todo: need this line or have problem with memory ... but don't really understand why
+                # todo: thought this was some process issue where since dask is running a different process
+                # todo: the parent process doesn't know if can use the allocated and then freed memory which becomes
+                # todo: part of the pool, but other tests don't seem to support this
+                if use_gpu:
+                    cp.get_default_memory_pool().free_all_blocks()
 
-            return sb
+                return sb
 
-        self.bands_shifted_ft = da.map_blocks(proc_bands,
-                                              self.imgs_ft,
-                                              self.phases,
-                                              self.amps,
-                                              self.frqs,
-                                              self.dy,
-                                              self.dx,
-                                              self.upsample_fact,
-                                              self.use_gpu,
-                                              dtype=complex,
-                                              chunks=exp_chunks,
-                                              meta=xp.array((), dtype=complex)
-                                              )
+            self.bands_shifted_ft = da.map_blocks(proc_bands,
+                                                  self.imgs_ft,
+                                                  self.phases,
+                                                  self.amps,
+                                                  self.frqs,
+                                                  self.dy,
+                                                  self.dx,
+                                                  self.upsample_fact,
+                                                  self.use_gpu,
+                                                  dtype=complex,
+                                                  chunks=exp_chunks,
+                                                  meta=xp.array((), dtype=complex)
+                                                  )
 
-        # #############################################
-        # shift OTFs
-        # #############################################
-        otf_us = resample_bandlimited_ft(self.otf,
-                                         (self.upsample_fact, self.upsample_fact),
-                                         axes=(-1, -2)) / self.upsample_fact / self.upsample_fact
+            # #############################################
+            # shift OTFs
+            # #############################################
+            otf_us = resample_bandlimited_ft(self.otf,
+                                             (self.upsample_fact, self.upsample_fact),
+                                             axes=(-1, -2)) / self.upsample_fact / self.upsample_fact
 
-        self.weights = xp.zeros((otf_us.shape[0], self.nbands, otf_us.shape[1], otf_us.shape[2]), dtype=complex)
-        for ii in range(self.nangles):
-            for jj, band_ind in enumerate(self.band_inds):
-                # compute otf(k + m * ko)
-                # todo: want to be able to run this with map_blocks() like tools.translate_ft()
-                self.weights[ii, jj] = tools.translate_pix(otf_us[ii],
-                                                           self.frqs[ii] * band_ind,
-                                                           dr=(self.dfx_us, self.dfy_us),
-                                                           axes=(1, 0),
-                                                           wrap=False)[0].conj()
+            self.weights = xp.zeros((otf_us.shape[0], self.nbands, otf_us.shape[1], otf_us.shape[2]), dtype=complex)
+            for ii in range(self.nangles):
+                for jj, band_ind in enumerate(self.band_inds):
+                    # compute otf(k + m * ko)
+                    # todo: want to be able to run this with map_blocks() like tools.translate_ft()
+                    self.weights[ii, jj] = tools.translate_pix(otf_us[ii],
+                                                               self.frqs[ii] * band_ind,
+                                                               dr=(self.dfx_us, self.dfy_us),
+                                                               axes=(1, 0),
+                                                               wrap=False)[0].conj()
 
-        # #############################################
-        # Get weights and do band-replacement
-        # #############################################
-        # "fill in missing cone" by using shifted bands instead of unshifted band for values near DC
-        if self._recon_settings["fmax_exclude_band0"] > 0:
-            fx_shift = xp.expand_dims(self.fx_us, axis=(0, 1, -2)) + \
-                       xp.expand_dims(xp.array(self.frqs[..., 0]), axis=(1, 2, 3)) * xp.expand_dims(xp.array(self.band_inds), axis=(0, -1, -2))
-            fy_shift = xp.expand_dims(self.fy_us, axis=(0, 1, -1)) + \
-                       xp.expand_dims(xp.array(self.frqs[..., 1]), axis=(1, 2, 3)) * xp.expand_dims(xp.array(self.band_inds), axis=(0, -1, -2))
-            self.weights *= (1 - xp.exp(-0.5 * (fx_shift**2 + fy_shift**2) / (self.fmax * self._recon_settings["fmax_exclude_band0"])**2))
+            # #############################################
+            # Get weights and do band-replacement
+            # #############################################
+            # "fill in missing cone" by using shifted bands instead of unshifted band for values near DC
+            if self._recon_settings["fmax_exclude_band0"] > 0:
+                fx_shift = xp.expand_dims(self.fx_us, axis=(0, 1, -2)) + \
+                           xp.expand_dims(xp.array(self.frqs[..., 0]), axis=(1, 2, 3)) * xp.expand_dims(xp.array(self.band_inds), axis=(0, -1, -2))
+                fy_shift = xp.expand_dims(self.fy_us, axis=(0, 1, -1)) + \
+                           xp.expand_dims(xp.array(self.frqs[..., 1]), axis=(1, 2, 3)) * xp.expand_dims(xp.array(self.band_inds), axis=(0, -1, -2))
+                self.weights *= (1 - xp.exp(-0.5 * (fx_shift**2 + fy_shift**2) / (self.fmax * self._recon_settings["fmax_exclude_band0"])**2))
 
-        self.weights_norm = self._recon_settings["wiener_parameter"] ** 2 + xp.nansum(xp.abs(self.weights) ** 2, axis=(0, 1), keepdims=True)
+            self.weights_norm = self._recon_settings["wiener_parameter"] ** 2 + xp.nansum(xp.abs(self.weights) ** 2, axis=(0, 1), keepdims=True)
 
-        # #############################################
-        # combine bands
-        # following the approach of FairSIM: https://doi.org/10.1038/ncomms10980
-        # #############################################
-        tstart_combine_bands = time.perf_counter()
+            # #############################################
+            # combine bands
+            # following the approach of FairSIM: https://doi.org/10.1038/ncomms10980
+            # #############################################
+            tstart_combine_bands = time.perf_counter()
 
-        # nangles x nphases
-        corr_mat = xp.concatenate((xp.ones((self.nangles, 1)),
-                                   xp.expand_dims(xp.exp(1j * self.phase_corrections) / self.mod_depths, axis=1),
-                                   xp.expand_dims(xp.exp(-1j * self.phase_corrections) / self.mod_depths, axis=1)),
-                                   axis=1)
+            # nangles x nphases
+            corr_mat = xp.concatenate((xp.ones((self.nangles, 1)),
+                                       xp.expand_dims(xp.exp(1j * self.phase_corrections) / self.mod_depths, axis=1),
+                                       xp.expand_dims(xp.exp(-1j * self.phase_corrections) / self.mod_depths, axis=1)),
+                                       axis=1)
 
-        # expand for xy dims
-        corr_mat = xp.expand_dims(corr_mat, axis=(-1, -2))
+            # expand for xy dims
+            corr_mat = xp.expand_dims(corr_mat, axis=(-1, -2))
 
-        # put in modulation depth and global phase corrections
-        # components array useful for diagnostic plots
-        # todo: if do not explicitely delete self.sim_sr_ft_components it will hold memory
-        # self.sim_sr_ft_components = self.bands_shifted_ft * self.weights * corr_mat / self.weights_norm
-        self.sim_sr_ft_components = self.bands_shifted_ft * corr_mat
-        self.sim_sr_ft_components *= self.weights
-        self.sim_sr_ft_components /= self.weights_norm
+            # put in modulation depth and global phase corrections
+            # components array useful for diagnostic plots
+            # todo: if do not explicitely delete self.sim_sr_ft_components it will hold memory
+            # self.sim_sr_ft_components = self.bands_shifted_ft * self.weights * corr_mat / self.weights_norm
+            self.sim_sr_ft_components = self.bands_shifted_ft * corr_mat
+            self.sim_sr_ft_components *= self.weights
+            self.sim_sr_ft_components /= self.weights_norm
 
-        # final FT image
-        self.sim_sr_ft = da.nansum(self.sim_sr_ft_components, axis=(-3, -4))
+            # final FT image
+            self.sim_sr_ft = da.nansum(self.sim_sr_ft_components, axis=(-3, -4))
 
-        # inverse FFT to get real-space reconstructed image
-        apodization = xp.outer(xp.asarray(tukey(self.sim_sr_ft.shape[-2], alpha=0.1)),
-                               xp.asarray(tukey(self.sim_sr_ft.shape[-1], alpha=0.1)))
+            # inverse FFT to get real-space reconstructed image
+            apodization = xp.outer(xp.asarray(tukey(self.sim_sr_ft.shape[-2], alpha=0.1)),
+                                   xp.asarray(tukey(self.sim_sr_ft.shape[-1], alpha=0.1)))
 
-        self.sim_sr = da.map_blocks(_ift,
-                                    self.sim_sr_ft * apodization,
-                                    dtype=float,
-                                    meta=xp.array((), dtype=float)
-                                    )
+            self.sim_sr = da.map_blocks(_ift,
+                                        self.sim_sr_ft * apodization,
+                                        dtype=float,
+                                        meta=xp.array((), dtype=float)
+                                        )
 
-        if self._recon_settings["enforce_positivity"]:
-            self.sim_sr[self.sim_sr < 0] = 0
+            if self._recon_settings["enforce_positivity"]:
+                self.sim_sr[self.sim_sr < 0] = 0
 
-        self.print_log(f"combining bands took {time.perf_counter() - tstart_combine_bands:.2f}s")
+            self.print_log(f"combining bands took {time.perf_counter() - tstart_combine_bands:.2f}s")
 
-        # #############################################
-        # widefield deconvolution
-        # #############################################
-        if compute_deconvolved:
-            tstart = time.perf_counter()
+            # #############################################
+            # widefield deconvolution
+            # NOTE: only computed if SR-SIM is also
+            # #############################################
+            if compute_deconvolved:
+                tstart = time.perf_counter()
 
-            weights_decon = otf_us
-            self.widefield_deconvolution_ft = da.nansum(weights_decon * self.bands_shifted_ft[..., 0, :, :], axis=-3) / \
-                                                  (self._recon_settings["wiener_parameter"]**2 + da.nansum(np.abs(weights_decon)**2, axis=-3))
+                weights_decon = otf_us
+                self.widefield_deconvolution_ft = da.nansum(weights_decon * self.bands_shifted_ft[..., 0, :, :], axis=-3) / \
+                                                      (self._recon_settings["wiener_parameter"]**2 + da.nansum(np.abs(weights_decon)**2, axis=-3))
 
-            self.widefield_deconvolution = da.map_blocks(_ift,
-                                                         self.widefield_deconvolution_ft * apodization,
-                                                         dtype=float,
-                                                         meta=xp.array((), dtype=float)
-                                                         )
+                self.widefield_deconvolution = da.map_blocks(_ift,
+                                                             self.widefield_deconvolution_ft * apodization,
+                                                             dtype=float,
+                                                             meta=xp.array((), dtype=float)
+                                                             )
 
-            self.print_log(f"Deconvolved widefield in {time.perf_counter() - tstart:.2f}s")
+                self.print_log(f"Deconvolved widefield in {time.perf_counter() - tstart:.2f}s")
 
         # #############################################
         # move arrays off GPU
@@ -1360,7 +1379,6 @@ class SimImageSet:
         # print per-angle data
         for ii in range(self.nangles):
             self.print_log(f"################ Angle {ii:d} ################")
-
             self.print_log(f"modulation depth = {self.mod_depths[ii]:0.3f}")
 
             amp_str = np.array2string(self.amps[ii], formatter={"float": lambda x: f"{x:05.3f}", "separator": ", "})
@@ -1375,13 +1393,17 @@ class SimImageSet:
                 angle_guess = np.angle(self.frqs_guess[ii, 0] + 1j * self.frqs_guess[ii, 1])
                 period_guess = 1 / np.linalg.norm(self.frqs_guess[ii])
                 frq_str = np.array2string(self.frqs_guess[ii], formatter=frq_formatter)
-                self.print_log(f"{'Frequency guess':15s} (fx, fy) = {frq_str:s}, period = {period_guess*1e3:.3f}nm, angle ={angle_guess*180/np.pi:7.3f}deg")
+                self.print_log(f"{'Frequency guess':15s} (fx, fy) = {frq_str:s},"
+                               f" period = {period_guess*1e3:.3f}nm,"
+                               f" angle ={angle_guess*180/np.pi:7.3f}deg")
 
             if self.frqs is not None:
                 angle = np.angle(self.frqs[ii, 0] + 1j * self.frqs[ii, 1])
                 period = 1 / np.linalg.norm(self.frqs[ii])
                 frq_str = np.array2string(self.frqs[ii], formatter=frq_formatter)
-                self.print_log(f"{'Frequency':15s} (fx, fy) = {frq_str:s}, period = {period * 1e3:.3f}nm, angle ={angle * 180 / np.pi:7.3f}deg")
+                self.print_log(f"{'Frequency':15s} (fx, fy) = {frq_str:s},"
+                               f" period = {period * 1e3:.3f}nm,"
+                               f" angle ={angle * 180 / np.pi:7.3f}deg")
 
             # phase information
             formatter = {"float": lambda x: f"{x:7.2f}", "separator": ", "}
@@ -2534,7 +2556,8 @@ def fit_modulation_frq(ft1: np.ndarray,
                        dxy: float,
                        mask: Optional[np.ndarray] = None,
                        frq_guess: Optional[tuple[float]] = None,
-                       max_frq_shift: Optional[float] = None,
+                       max_frq_shift: float = np.inf,
+                       fbounds: tuple[float] = (0., np.inf),
                        otf: Optional[np.ndarray] = None,
                        wiener_param: float = 0.3,
                        keep_guess_if_better: bool = True) -> (np.ndarray, np.ndarray, dict):
@@ -2558,6 +2581,7 @@ def fit_modulation_frq(ft1: np.ndarray,
        finding the maximum f_guess = argmax_f CC[ft1, ft2](f), where CC[ft1, ft2] is the discrete cross-correlation
        Currently roi_pix_size is only used internally to set max_frq_shift
     :param max_frq_shift: maximum frequency shift to consider vis-a-vis the guess frequency
+    :param fbounds: (min frq, max frq) bound search to
     :param keep_guess_if_better: keep the initial frequency guess if the cost function is more optimal
        at this point than after fitting
     :return fit_frqs, mask, fit_result:
@@ -2566,9 +2590,6 @@ def fit_modulation_frq(ft1: np.ndarray,
 
     if ft1.shape != ft2.shape:
         raise ValueError("must have ft1.shape = ft2.shape")
-
-    if max_frq_shift is None:
-        max_frq_shift = np.inf
 
     # mask
     if mask is None:
@@ -2589,10 +2610,6 @@ def fit_modulation_frq(ft1: np.ndarray,
     fys = fft.fftshift(fft.fftfreq(ft1.shape[0], dxy))
     fxfx, fyfy = np.meshgrid(fxs, fys)
 
-    # update mask to only consider region near frequency guess
-    if frq_guess is not None:
-        mask[np.sqrt((fxfx - frq_guess[0])**2 + (fyfy - frq_guess[1])**2) > max_frq_shift] = 0
-
     # ############################
     # set initial guess using cross-correlation
     # ############################
@@ -2610,6 +2627,12 @@ def fit_modulation_frq(ft1: np.ndarray,
         otf_cc = np.abs(correlate(otf_factor,
                                   otf_factor,
                                   mode='same'))
+
+        if fbounds[0] > 0:
+            mask[np.sqrt(fxfx ** 2 + fyfy ** 2) < fbounds[0]] = False
+
+        if fbounds[1] < np.inf:
+            mask[np.sqrt(fxfx ** 2 + fyfy ** 2) > fbounds[1]] = False
 
         # get initial frq_guess by looking at cc at discrete frequency set and finding max
         subscript = np.unravel_index(np.argmax(cc / otf_cc * mask), cc.shape)
