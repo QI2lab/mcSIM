@@ -6,6 +6,7 @@ Relies on DAQ line mapping scheme used in daq.py and daq_map.py
 
 import numpy as np
 import re
+from typing import Optional
 
 def get_sim_odt_sequence(daq_do_map: dict,
                          daq_ao_map: dict,
@@ -37,7 +38,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
     :param daq_ao_map: e.g. from daq_map.py
     :param presets: dictionary of preset channels
     :param acquisition_modes: list of dictionary. Each dictionary contains the keys "channel", "patterns",
-       "pattern_mode", "camera", and "npatterns"
+       "pattern_mode", "camera", and "npatterns", and "dmd_on_time"
     :param channels: list of channel names to be run. channels names refer to keys in presets
     :param cameras: list of cameras to be used for each channel. These can be "cam1", "cam2", or "both"
     :param odt_exposure_time: odt exposure time in s
@@ -109,7 +110,8 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        n_analog_ch=n_analog_ch,
                                        camera=am["camera"],
                                        average_patterns=am["pattern_mode"] == "average",
-                                       use_dmd_as_shutter=use_dmd_as_odt_shutter)
+                                       use_dmd_as_shutter=use_dmd_as_odt_shutter,
+                                       dmd_on_time=am["dmd_on_time"])
 
             info += i
             digital_pgms.append(d)
@@ -133,7 +135,8 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        n_analog_ch=n_analog_ch,
                                        use_dmd_as_shutter=True,
                                        average_patterns=am["pattern_mode"] == "average",
-                                       camera=am["camera"])
+                                       camera=am["camera"],
+                                       dmd_on_time=am["dmd_on_time"])
 
             # if there is only one mode, keep SIM shutter open
             if len(acquisition_modes) == 1:
@@ -217,7 +220,8 @@ def get_odt_sequence(daq_do_map: dict,
                      n_analog_ch: int = 4,
                      average_patterns: bool = False,
                      camera: str = "cam2",
-                     use_dmd_as_shutter: bool = False):
+                     use_dmd_as_shutter: bool = False,
+                     dmd_on_time: Optional[float] = None):
     """
     Create DAQ sequence for running optical diffraction tomography experiment. All times given in seconds.
 
@@ -247,7 +251,10 @@ def get_odt_sequence(daq_do_map: dict,
     info = ""
 
     if average_patterns:
-        raise NotImplementedError()
+        raise NotImplementedError("averaging patterns not implemented with ODT")
+
+    if dmd_on_time:
+        raise NotImplementedError("using dmd_on_time not implemented with ODT")
 
     # #########################
     # calculate number of clock cycles for different pieces of sequence
@@ -367,7 +374,8 @@ def get_sim_sequence(daq_do_map: dict,
                      average_patterns: bool = False,
                      camera: str = "cam1",
                      force_equal_subpatterns: bool = True,
-                     turn_laser_off_during_interval: bool = True):
+                     turn_laser_off_during_interval: bool = True,
+                     dmd_on_time: Optional[float] = None):
     """
     Generate DAQ array for running a SIM experiment. Also supports taking a pseudo-widefield image by
     running through all SIM patterns during one camera exposure
@@ -375,22 +383,27 @@ def get_sim_sequence(daq_do_map: dict,
     :param daq_do_map:
     :param daq_ao_map:
     :param preset:
-    :param exposure_time:
+    :param exposure_time: camera exposure time
     :param npatterns:
     :param dt:
-    :param interval:
+    :param interval: interval between camera images
     :param nrepeats:
-    :param n_trig_width:
-    :param dmd_delay:
+    :param n_trig_width: DMD trigger width signal in # of timesteps
+    :param dmd_delay: DMD should be pre-triggered by this amount to come on when desired
     :param stabilize_t:
     :param min_frame_time:
     :param cam_readout_time:
     :param shutter_delay_time:
     :param n_digital_ch:
     :param n_analog_ch:
-    :param use_dmd_as_shutter:
-    :param average_patterns:
+    :param use_dmd_as_shutter: if True, add extra trigger signal to advance DMD pattern to "OFF" state. In non-average
+    mode there is on display-pattern and on off-pattern per frame, and these alternate. In average mode there are
+    npatterns display-patterns followed by one off-pattern per frame.
+    :param average_patterns: display all patterns sequentially in frame
     :param camera: "cam1", "cam2", or "both"
+    :param force_equal_subpatterns:
+    :param turn_laser_off_during_interval:
+    :param dmd_on_time: time DMD is on
     :return do_channel, ao_channel, info:
     """
 
@@ -402,36 +415,11 @@ def get_sim_sequence(daq_do_map: dict,
     if min_frame_time != 0:
         raise NotImplementedError("only min_frame_time=0 is implemented")
 
-    # if using "average" mode, all patterns displayed during one frame time
-    # if acquisition_mode == "average":
-    #     npatterns_frame = npatterns
-    #     npatterns = 1
-    # else:
-    #     npatterns_frame = 1
-    if average_patterns:
-        npatterns_frame = npatterns
-        npatterns = 1
-    else:
-        npatterns_frame = 1
-
-    # delay between frames
-    # todo: implement ... should be as simple as in ODT function
-    nsteps_interval = int(np.ceil(interval / dt))
-
-    # time for camera to roll open/closed
-    n_readout = int(np.round(cam_readout_time / dt))
-
-    # exposure time
-    nsteps_exposure = int(np.ceil(exposure_time / dt))
-
-    if force_equal_subpatterns:
-        nsteps_exposure += nsteps_exposure % (npatterns_frame + 1)
-
-    # sub-frame pattern time
-    nsteps_pattern_frame = int(np.floor(nsteps_exposure / (npatterns_frame + 1)))
-
-    # frame time
-    nsteps_frame = nsteps_exposure + 2 * n_readout
+    # #################################
+    # total frame time
+    # #################################
+    # DMD pre-trigger time
+    n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
 
     # time to stabilize (laser power/mirror)
     n_stabilize = int(np.ceil(stabilize_t / dt))
@@ -440,13 +428,78 @@ def get_sim_sequence(daq_do_map: dict,
     if n_stabilize - n_sim_shutter_delay < 0:
         n_sim_shutter_delay = 0
 
-    nsteps_active = n_stabilize + nsteps_frame * npatterns
-    nsteps = np.max([nsteps_active, nsteps_interval])
+    # delay between frames
+    n_interval = int(np.ceil(interval / dt))
+
+    # time for camera to roll open/closed
+    # todo: probably prefer to take ceil(), but shouldn't matter much a long as dt is much smaller than exposure
+    n_readout = int(np.round(cam_readout_time / dt))
+
+    # camera exposure time
+    n_cam_exposure = int(np.ceil(exposure_time / dt))
+    n_cam_all_pixels_exposure = n_cam_exposure - 2 * n_readout
+
+    if n_cam_all_pixels_exposure < n_dmd_pre_trigger:
+        raise ValueError(f"Number of timesteps where all pixels are being exposed"
+                         f" is less than DMD pre-trigger timesteps {n_cam_all_pixels_exposure:d}<{n_dmd_pre_trigger:d}")
+
+    # todo: can this be less ... or is this the limit due to hardware triggering?
+    # frame time
+    n_frame = n_cam_exposure + 2 * n_readout
+
+    # #################################
+    # pattern times
+    # #################################
+
+    # if using "average" mode, all patterns displayed during one frame time
+    # note that these numbers do not account for off-frames used to shutter DMD
+    if average_patterns:
+        n_display_patterns_frame = npatterns
+        npatterns = 1
+    else:
+        n_display_patterns_frame = 1
+
+    # total number of patterns, including off patterns
+    if use_dmd_as_shutter:
+        n_total_patterns_frame = n_display_patterns_frame + 1
+    else:
+        n_total_patterns_frame = n_display_patterns_frame
+
+    if average_patterns and not use_dmd_as_shutter:
+        raise NotImplementedError("currently average_patterns required use_dmd_as_shutter also be selected")
+
+    # increase camera exposure time to cover an integer number of sub-frame patterns
+    if average_patterns and force_equal_subpatterns and dmd_on_time is None:
+        n_cam_exposure += n_cam_exposure % n_total_patterns_frame
+
+    # time to keep DMD on for each sub-frame pattern
+    if dmd_on_time is not None:
+        if not use_dmd_as_shutter:
+            raise ValueError("a value for dmd_on_time was provided, but the DMD is not being run as a shutter,"
+                             "so this cannot be implemented.")
+
+        # if using more than one pattern, have to correct for this
+        n_dmd_on = int(np.ceil(dmd_on_time / n_display_patterns_frame / dt))
+        n_dmd_off = n_cam_all_pixels_exposure - n_dmd_on * n_display_patterns_frame
+    else:
+        # n_dmd_on = int(np.floor(n_cam_exposure / (n_display_patterns_frame + 1)))
+        n_dmd_off = 3 * n_dmd_pre_trigger
+        n_dmd_on = int(np.floor((n_cam_all_pixels_exposure - n_dmd_off) / n_display_patterns_frame))
+
+    # check if DMD on time is supported
+    if n_dmd_on < n_dmd_pre_trigger:
+        raise ValueError(f"number of DMD on frames < number of DMD pre-trigger frames, {n_dmd_on:d}<{n_dmd_pre_trigger:d}")
+
+    if n_dmd_off < n_dmd_pre_trigger:
+        raise ValueError(f"number of DMD off frames < number of DMD pre-trigger frames, {n_dmd_off:d}<{n_dmd_pre_trigger:d}")
 
     # ######################################
-    # create digital array
+    # set total time and create digital array
     # ######################################
-    do = np.zeros((nsteps, n_digital_ch), dtype=np.uint8)
+    n_active = n_stabilize + n_frame * npatterns
+    n_total = np.max([n_active, n_interval])
+
+    do = np.zeros((n_total, n_digital_ch), dtype=np.uint8)
 
     # initialize with values from preset ...
     for k in preset["digital"].keys():
@@ -457,7 +510,7 @@ def get_sim_sequence(daq_do_map: dict,
     # ######################################
     if turn_laser_off_during_interval:
         laser_line = [l for l, v in preset["digital"].items() if v and re.match(".*_laser", l)][0]
-        do[nsteps_active:, daq_do_map[laser_line]] = 0
+        do[n_active:, daq_do_map[laser_line]] = 0
 
     # ######################################
     # advance analog
@@ -473,18 +526,22 @@ def get_sim_sequence(daq_do_map: dict,
     # ######################################
     # trigger camera
     # ######################################
+    # n_cam_trig_width = n_trig_width
+    # n_cam_trig_width = n_cam_all_pixels_exposure
+    n_cam_trig_width = n_cam_exposure
+
     if camera in ["cam1", "both"]:
-        do[:nsteps_active, daq_do_map["sim_cam_sync"]] = 0
-        for ii in range(n_trig_width):
-            do[n_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["sim_cam_sync"]] = 1
+        do[:n_active, daq_do_map["sim_cam_sync"]] = 0
+        for ii in range(n_cam_trig_width):
+            do[n_stabilize + ii:n_active:n_frame, daq_do_map["sim_cam_sync"]] = 1
 
     if camera in ["cam2", "both"]:
         # camera enable trigger (must be high for advance trigger)
         do[:, daq_do_map["odt_cam_enable"]] = 1 # photron/phantom camera
 
         do[:, daq_do_map["odt_cam_sync"]] = 0
-        for ii in range(n_trig_width):
-            do[n_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["odt_cam_sync"]] = 1
+        for ii in range(n_cam_trig_width):
+            do[n_stabilize + ii:n_active:n_frame, daq_do_map["odt_cam_sync"]] = 1
 
     # ######################################
     # DMD enable trigger
@@ -497,20 +554,24 @@ def get_sim_sequence(daq_do_map: dict,
     # number of steps for dmd pre-trigger
     do[:, daq_do_map["dmd_advance"]] = 0
 
-    n_dmd_pre_trigger = int(np.round(dmd_delay / dt))
     for ii in range(n_trig_width):
-        for jj in range(npatterns_frame):
+        for jj in range(n_display_patterns_frame):
 
             # display SIM pattern
-            # do[n_stabilize + n_readout - n_dmd_pre_trigger + ii::nsteps_frame, daq_do_map["dmd_advance"]] = 1
             # warmup offset time - pretrigger time + offset between sub-frame patterns + offset for trigger display
-            start_index = n_stabilize + n_readout - n_dmd_pre_trigger + jj * nsteps_pattern_frame + ii
+            on_start_index = n_stabilize + n_readout - n_dmd_pre_trigger
+            # id_now = on_start_index + jj * n_pattern_frame + ii
+            id_now = on_start_index + jj * n_dmd_on + ii
 
-            do[start_index:nsteps_active:nsteps_frame, daq_do_map["dmd_advance"]] = 1
+            do[id_now:n_active:n_frame, daq_do_map["dmd_advance"]] = 1
 
             if use_dmd_as_shutter:
-                # display OFF pattern (only between frames)
-                do[n_stabilize + n_readout - n_dmd_pre_trigger + (nsteps_exposure - n_readout) + ii:nsteps_active:nsteps_frame, daq_do_map["dmd_advance"]] = 1
+                # display OFF pattern. Only display between frames, i.e. not between sub-frame patterns
+                # off_start_index = on_start_index + (n_cam_exposure - n_readout) + ii
+
+                off_start_index = on_start_index + n_display_patterns_frame * n_dmd_on + ii
+
+                do[off_start_index:n_active:n_frame, daq_do_map["dmd_advance"]] = 1
 
 
     # ######################################
@@ -528,9 +589,9 @@ def get_sim_sequence(daq_do_map: dict,
         ao[:, daq_ao_map[k]] = preset["analog"][k]
 
     info += f"sim channel stabilize time = {n_stabilize * dt * 1e3:.3f}ms = {n_stabilize:d} clock cycles\n"
-    info += f"sim exposure time = {nsteps_exposure * dt * 1e3:.3f}ms = {nsteps_exposure:d} clock cycles\n"
-    info += f"sim one frame = {nsteps_frame * dt * 1e3:.3f}fms = {nsteps_frame:d} clock cycles\n"
-    info += f"sim one channel= {nsteps_active * dt * 1e3:.3f}fms = {nsteps_active:d} clock cycles\n"
+    info += f"sim exposure time = {n_cam_exposure * dt * 1e3:.3f}ms = {n_cam_exposure:d} clock cycles\n"
+    info += f"sim one frame = {n_frame * dt * 1e3:.3f}fms = {n_frame:d} clock cycles\n"
+    info += f"sim one channel= {n_active * dt * 1e3:.3f}fms = {n_active:d} clock cycles\n"
 
     return do, ao, info
 
