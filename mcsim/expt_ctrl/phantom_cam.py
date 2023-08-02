@@ -925,7 +925,7 @@ class phantom_cam(camera):
                   fname: str,
                   first_image=None,
                   img_count=None,
-                  file_type: str = "tif12"):
+                  file_type: str = "cine raw"):
 
         file_types = {"tif16": SIFILE_TIF16,
                       "tif12": SIFILE_TIF12,
@@ -1253,6 +1253,7 @@ class phantom_cam(camera):
     def getCameraDevice(self):
         return self.name
 
+
 # ###############################
 # load Cine
 # ###############################
@@ -1273,7 +1274,7 @@ def imread_cine(fname: str,
         # ########################
         # read Cine file header
         # ########################
-        file_type = f.read(2)
+        file_type = f.read(2).decode()
         headersize = struct.unpack("<H", f.read(2))[0]
 
         # read rest of info
@@ -1383,15 +1384,27 @@ def imread_cine(fname: str,
             setup_info["sig_option"] = struct.unpack("<H", f.read(2))[0]
             setup_info["bin_channels"] = struct.unpack("<h", f.read(2))[0]
             setup_info["samples_per_image"] = struct.unpack("B", f.read(1))[0]
-            setup_info["bin_names"] = struct.unpack(8 * 11 * "c", f.read(8 * 11))
+
+            # setup_info["bin_names"] = struct.unpack(8 * 11 * "c", f.read(8 * 11))
+            bin_names = struct.unpack(8 * 11 * "c", f.read(8 * 11))
+            setup_info["bin_names"] = "".join(c.decode() for c in bin_names if c != b"\x00")
+
             setup_info["ana_option"] = struct.unpack("<H", f.read(2))[0]
             setup_info["ana_channels"] = struct.unpack("<h", f.read(2))[0]
             setup_info["res6"] = struct.unpack("<B", f.read(1))[0]
             setup_info["ana_board"] = struct.unpack("<B", f.read(1))[0]
             setup_info["ch_option"] = struct.unpack("H" * 8, f.read(2 * 8))
             setup_info["ana_gain"] = struct.unpack("f" * 8, f.read(4 * 8))
-            setup_info["ana_unit"] = struct.unpack("c" * 8 * 6, f.read(8 * 6))
-            setup_info["ana_name"] = struct.unpack("c" * 8 * 11, f.read(8 * 11))
+
+
+            # setup_info["ana_unit"] = struct.unpack("c" * 8 * 6, f.read(8 * 6))
+            ana_unit = struct.unpack("c" * 8 * 6, f.read(8 * 6))
+            setup_info["ana_unit"] = "".join(c.decode() for c in ana_unit if c != b"\x00")
+
+            # setup_info["ana_name"] = struct.unpack("c" * 8 * 11, f.read(8 * 11))
+            ana_name = struct.unpack("c" * 8 * 11, f.read(8 * 11))
+            setup_info["ana_name"] = "".join(c.decode() for c in ana_name if c != b"\x00")
+
             setup_info["lfirst_image"] = struct.unpack("<i", f.read(4))[0]
             setup_info["dw_image_count"] = struct.unpack("<I", f.read(4))[0]
             setup_info["nq_factor"] = struct.unpack("<h", f.read(2))[0]
@@ -1539,7 +1552,12 @@ def imread_cine(fname: str,
             setup_info["resample_height"] = struct.unpack("<I", f.read(4))[0]
             setup_info["f_gain16_8"] = struct.unpack("f", f.read(4))[0]
             setup_info["frp_shape"] = struct.unpack("I" * 16, f.read(4 * 16))[0]
-            setup_info["trig_tc"] = f.read(4 + 4) # uint8_t fields packed into 4 bytes
+
+            # todo ... how to unpack this?
+            trig_tc = struct.unpack("c" * 8, f.read(4 + 4)) # uint8_t fields packed into 4 bytes
+            setup_info["trig_tc"] = "".join(c.decode() for c in trig_tc)
+
+
             setup_info["fpb_rate"] = struct.unpack("f", f.read(4))[0]
             setup_info["ftc_rate"] = struct.unpack("f", f.read(4))[0]
 
