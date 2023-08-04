@@ -30,6 +30,7 @@ import zarr
 from localize_psf import fit, rois, camera, affine
 import mcsim.analysis.analysis_tools as tools
 from mcsim.analysis import field_prop
+from mcsim.analysis.field_prop import _ft2, _ift2
 
 _gpu_available = True
 try:
@@ -441,7 +442,7 @@ class tomography:
         """
 
         bxys = [f - np.expand_dims(self.reference_frq, axis=-2) for f in self.hologram_frqs]
-        bzs = [get_fz(bxy[..., 0], bxy[..., 1], self.no, self.wavelength) for bxy in bxys]
+        bzs = [field_prop.get_fzs(bxy[..., 0], bxy[..., 1], self.no, self.wavelength) for bxy in bxys]
         beam_frqs = [np.stack((bxy[..., 0], bxy[..., 1], bz), axis=-1) for bxy, bz in zip(bxys, bzs)]
 
         return beam_frqs
@@ -903,7 +904,7 @@ class tomography:
         """
         Reconstruct refractive index
 
-        :param mode: "born", "rytov", or "bpm"
+        :param mode: "born", "rytov", "bpm", or "ssnp"
         :param scattered_field_regularization:
         :param niters: number of iterations
         :param reconstruction_regularizer:
@@ -1063,9 +1064,10 @@ class tomography:
                 #  disadvantage is harder to access from outside ... although still easy to compute
 
                 nextra_dims = v_fts.ndim - 3
+                dims = tuple(range(nextra_dims))
 
-                results = grad_descent(v_fts.squeeze(axis=tuple(range(nextra_dims))),
-                                       efield_scattered_ft.squeeze(axis=tuple(range(nextra_dims))),
+                results = grad_descent(v_fts.squeeze(axis=dims),
+                                       efield_scattered_ft.squeeze(axis=dims),
                                        model,
                                        no,
                                        wavelength,
@@ -1103,7 +1105,7 @@ class tomography:
             xform_recon_pix2coords = affine.params2xform([drs_n[-1], 0, -(n_size[-1] // 2) * drs_n[-1],
                                                           drs_n[-2], 0, -(n_size[-2] // 2) * drs_n[-2]])
 
-        elif mode == "bpm":
+        elif mode == "bpm" or mode == "ssnp":
             # before binning
             n_start_size = (size_ideal[0], self.holograms_ft.shape[-2], self.holograms_ft.shape[-1])
             drs_n_start = (drs_ideal[0], self.dxy, self.dxy)
@@ -1148,7 +1150,7 @@ class tomography:
             apodization_n = xp.outer(xp.asarray(tukey(n_size[-2], alpha=0.1)),
                                      xp.asarray(tukey(n_size[-1], alpha=0.1)))
 
-            def recon(v_ft, efields_ft, efields_bg_ft, masks, no, wavelength, dz_final, atf, apod, step):
+            def recon(v_ft, efields_ft, efields_bg_ft, masks, no, wavelength, dz_final, atf, apod, step, optimizer):
                 nextra_dims = v_ft.ndim - 3
                 dims = tuple(range(nextra_dims))
                 # array of size 1 x 1 x ... x 1 x nz x ny x nx
@@ -1162,30 +1164,42 @@ class tomography:
                 efields = camera.bin(efields, [nbin, nbin], mode="mean")
                 efields_bg = camera.bin(efields_bg, [nbin, nbin], mode="mean")
 
-                results = grad_descent_bpm(n_start,
-                                           efields,
-                                           efields_bg,
-                                           no,
-                                           wavelength,
-                                           dz_final,
-                                           drs_n,
-                                           model="bpm",
-                                           step=step,
-                                           niters=niters,
-                                           tau_tv=tau_tv,
-                                           tau_lasso=tau_lasso,
-                                           use_imaginary_constraint=use_imaginary_constraint,
-                                           use_real_constraint=use_real_constraint,
-                                           atf=atf,
-                                           masks=masks,
-                                           stochastic_descent=stochastic_descent,
-                                           nmax_stochastic_descent=nmax_stochastic_descent,
-                                           apodization=apod,
-                                           compute_cost=compute_cost)
+                model = optimizer(efields,
+                                  efields_bg,
+                                  no,
+                                  wavelength,
+                                  drs_e=None,
+                                  drs_n=drs_n,
+                                  shape_n=n_start.shape,
+                                  dz_final=dz_final,
+                                  atf=atf,
+                                  apodization=apod,
+                                  tau_tv_real=tau_tv,
+                                  tau_tv_imag=tau_tv,
+                                  tau_l1_real=tau_lasso,
+                                  tau_l1_imag=tau_lasso,
+                                  use_imaginary_constraint=use_imaginary_constraint,
+                                  use_real_constraint=use_real_constraint)
+
+                results = model.run(n_start,
+                                    step=step,
+                                    max_iterations=niters,
+                                    use_fista=True,
+                                    stochastic_descent=stochastic_descent,
+                                    nmax_stochastic_descent=nmax_stochastic_descent,
+                                    verbose=False,
+                                    compute_cost=compute_cost,
+                                    line_search=False,
+                                    )
 
                 n = results["x"].reshape((1,) * nextra_dims + n_start.shape[-3:])
 
                 return n
+
+            if mode == "bpm":
+                optimizer = BPM
+            else:
+                optimizer = SSNP
 
             n = da.map_blocks(recon,
                               v_ft_start,  # initial guess
@@ -1198,6 +1212,7 @@ class tomography:
                               atf,
                               apodization_n,
                               step,
+                              optimizer,
                               chunks=(1,) * self.nextra_dims + n_size,
                               dtype=complex,
                               meta=xp.array(())
@@ -1697,22 +1712,6 @@ class tomography:
 
 
 # FFT idioms
-def _ft2(m):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-    return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-
-def _ift2(m):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-    return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-
 def _ft3(m):
     if isinstance(m, cp.ndarray) and _gpu_available:
         xp = cp
@@ -1750,7 +1749,7 @@ def soft_threshold(t: float,
 
 
 def grad_descent(v_ft_start: array,
-                 e_measured_ft: array,
+                 e_scattered_ft: array,
                  model: csr_matrix,
                  no: float,
                  wavelength: float,
@@ -1766,9 +1765,10 @@ def grad_descent(v_ft_start: array,
                  compute_cost: bool = True) -> dict:
     """
     Perform gradient descent using a linear model
+    todo: replace with LinearScatt()
 
     :param v_ft_start:
-    :param e_measured_ft: npatterns x ny x nx array
+    :param e_scattered_ft: npatterns x ny x nx array
     :param model: CSR matrix mapping from vft to electric field
     :param step: step-size used in gradient descent
     :param niters: number of iterations
@@ -1798,11 +1798,11 @@ def grad_descent(v_ft_start: array,
     v_ft_start_preserved = v_ft_start.copy()
 
     v_ft_start = xp.asarray(v_ft_start)
-    e_measured_ft = xp.asarray(e_measured_ft)
+    e_scattered_ft = xp.asarray(e_scattered_ft)
     step = xp.asarray(step)
 
     # prepare arguments
-    npatterns, ny, nx = e_measured_ft.shape
+    npatterns, ny, nx = e_scattered_ft.shape
 
     # model information
     model_csc = model.tocsc(copy=True)
@@ -1816,7 +1816,7 @@ def grad_descent(v_ft_start: array,
 
         # operations should be written as methods of arrays (as opposed to numpy functions)
         # to be portable between numpy,cupy, dask.array
-        costs = (abs(model.dot(v_ft.ravel()) - e_measured_ft.ravel()) ** 2).reshape([npatterns, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
+        costs = (abs(model.dot(v_ft.ravel()) - e_scattered_ft.ravel()) ** 2).reshape([npatterns, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
 
         if use_gpu:
             costs = costs.get()
@@ -1827,7 +1827,7 @@ def grad_descent(v_ft_start: array,
         # first division is average
         # second division converts Fourier space to real-space sum
         # factor of 0.5 in cost function killed by derivative factor of 2
-        dc_dm = (model.dot(v_ft.ravel()) - e_measured_ft.ravel()) / (npatterns * ny * nx) / (ny * nx)
+        dc_dm = (model.dot(v_ft.ravel()) - e_scattered_ft.ravel()) / (npatterns * ny * nx) / (ny * nx)
         dc_dv = (dc_dm[None, :].conj() * model_csc)[0].conj()
 
         return dc_dv
@@ -1977,267 +1977,6 @@ def grad_descent(v_ft_start: array,
     return results
 
 
-def grad_descent_bpm(n_start: array,
-                     e_measured: array,
-                     e_measured_bg: array,
-                     no: float,
-                     wavelength: float,
-                     dz_final: float,
-                     drs: float,
-                     model: str,
-                     step: float,
-                     niters: int = 100,
-                     use_fista: bool = True,
-                     tau_tv: float = 0.,
-                     tau_lasso: float = 0.,
-                     use_imaginary_constraint: bool = True,
-                     use_real_constraint: bool = False,
-                     masks: Optional[array] = None,
-                     verbose: bool = False,
-                     compute_cost: bool = False,
-                     stochastic_descent: bool = False,
-                     nmax_stochastic_descent: Optional[int] = None,
-                     atf: array = 1.,
-                     apodization: Optional[array] = None) -> dict:
-    """
-    Suppose we have a 3D grid with nz voxels along the propagation direction. We define the electric field
-    at the points before and after each voxel, and in an additional plane to account for the imaging. So we have
-    nz + 2 electric field planes.
-
-    :param n_start: refractive index to initialize
-    :param e_measured: measured electric fields
-    :param e_measured_bg: measured background electric fields
-    :param no: background index of refractin
-    :param wavelength: wavelength of light
-    :param dz_final: distance to propagate field after last surfaces
-    :param drs: (dz, dy, dx)
-    :param model: currently only "bpm" is supported
-    :param step: step-size
-    :param niters: number of iteractions
-    :param use_fista:
-    :param tau_tv:
-    :param tau_lasso:
-    :param use_imaginary_constraint: enforce im(n) > 0
-    :param use_real_constraint: enforce re(n) > no
-    :param masks: mask off regions of electric field and do not consider in cost function
-    :param verbose: print iteration info
-    :param compute_cost: optionally compute and store the cost
-    :param stochastic_descent:
-    :param atf: amplitude transfer function
-    :param apodization: apodization to be applied with each Fourier transform
-    :return results: dictionary
-    """
-
-    # put on gpu optionally
-    use_gpu = isinstance(n_start, cp.ndarray) and _gpu_available
-    if use_gpu:
-        xp = cp
-        denoise_tv = denoise_tv_chambolle_gpu
-    else:
-        xp = np
-        denoise_tv = denoise_tv_chambolle
-
-    # ensure all arrays on CPU/GPU
-    e_measured = xp.asarray(e_measured)
-    e_measured_bg = xp.asarray(e_measured_bg)
-    step = xp.asarray(step)
-
-    npatterns, ny, nx = e_measured.shape
-    nz = n_start.shape[-3]
-    dz = drs[0]
-
-    # backpropogate measured fields through homogeneous to get starting fields
-    efield_start = field_prop.propagate_homogeneous(e_measured_bg,
-                                                    -np.array([float(dz_final) + float(dz) * nz]),
-                                                    no,
-                                                    drs[1:],
-                                                    wavelength)[..., 0, :, :]
-
-    def cost(n):
-        forward = field_prop.propagate_inhomogeneous(efield_start,
-                                                     n,
-                                                     no,
-                                                     drs,
-                                                     wavelength,
-                                                     dz_final,
-                                                     atf=atf,
-                                                     apodization=apodization,
-                                                     model=model)
-
-        costs = 0.5 * (abs(forward[:, -1, :, :] - e_measured) ** 2).mean(axis=(-1, -2))
-
-        if use_gpu:
-            costs = costs.get()
-
-        return costs
-
-    def grad(n, inds=None):
-
-        if inds is None:
-            inds = list(range(efield_start.shape[0]))
-
-        # forward propagation
-        e_fwd = field_prop.propagate_inhomogeneous(efield_start[inds],
-                                                   n,
-                                                   no,
-                                                   drs,
-                                                   wavelength,
-                                                   dz_final,
-                                                   atf=atf,
-                                                   apodization=apodization,
-                                                   model=model)
-        # back propagation
-        e_back = field_prop.backpropagate_inhomogeneous(e_fwd[:, -1, :, :] - e_measured[inds],
-                                                        n,
-                                                        no,
-                                                        drs,
-                                                        wavelength,
-                                                        dz_final,
-                                                        atf=atf,
-                                                        apodization=apodization,
-                                                        model=model)
-
-        # cost function gradient
-        dc_dn = -(1j * (2 * np.pi / wavelength) * dz / (nx * ny) * e_back[:, 1:-1, :, :] * e_fwd[:, 1:-1, :, :].conj())
-
-        return dc_dn
-
-    # initialize
-    tstart = time.perf_counter()
-    costs = np.zeros((niters + 1, npatterns)) * np.nan
-    q_last = 1
-    n_start_preserved = xp.array(n_start, copy=True)
-    n = n_start
-
-    if nmax_stochastic_descent is None or nmax_stochastic_descent > npatterns:
-        nmax_stochastic_descent = npatterns
-
-    if compute_cost:
-        costs[0] = cost(n)
-
-    timing_names = ["iteration", "grad calculation", "TV", "L1", "positivity", "fista", "cost"]
-    timing = np.zeros((niters, len(timing_names)))
-
-    for ii in range(niters):
-        # gradient descent
-        tstart_grad = time.perf_counter()
-
-        if stochastic_descent:
-            # select random subset of angles
-            num = random.sample(range(1, nmax_stochastic_descent + 1), 1)[0]
-            inds = random.sample(range(npatterns), num)
-        else:
-            inds = list(range(npatterns))
-
-        # compute gradient. Do it this way to potentially reuse
-        n -= step * xp.mean(grad(n, inds=inds), axis=0)
-
-        tend_grad = time.perf_counter()
-
-        # apply TV proximity operators
-        tstart_tv = time.perf_counter()
-        if tau_tv != 0:
-            n_real = denoise_tv(n.real, weight=tau_tv, channel_axis=None)
-            n_imag = denoise_tv(n.imag, weight=tau_tv, channel_axis=None)
-        else:
-            n_real = n.real
-            n_imag = n.imag
-
-        tend_tv = time.perf_counter()
-
-        # apply L1 proximity operators
-        tstart_l1 = time.perf_counter()
-
-        if tau_lasso != 0:
-            n_real = soft_threshold(tau_lasso, n_real - no) + no
-            n_imag = soft_threshold(tau_lasso, n_imag)
-
-        tend_l1 = time.perf_counter()
-
-        # apply projection onto constraints (proximity operators)
-        tstart_constraints = time.perf_counter()
-
-        if use_imaginary_constraint:
-            n_imag[n_imag < 0] = 0
-
-        if use_real_constraint:
-            n_real[n_real < no] = no
-
-        tend_constraints = time.perf_counter()
-
-        # prox value
-        n_prox = n_real + 1j * n_imag
-
-        # update step
-        tstart_update = time.perf_counter()
-
-        q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
-
-        # todo: is it better to apply the proximal operator last or do FISTA as usual?
-        if ii == 0 or ii == (niters - 1) or not use_fista:
-            n = n_prox
-        else:
-            n = n_prox + (q_last - 1) / q_now * (n_prox - n_prox_last)
-
-        tend_update = time.perf_counter()
-
-        # if ii >= 0:
-        #     dn = abs(n - n_prox_last) / abs(n)
-
-        # compute cost
-        tstart_err = time.perf_counter()
-
-        if compute_cost:
-            costs[ii + 1] = cost(n)
-
-        tend_err = time.perf_counter()
-
-        # update for next gradient-descent/FISTA iteration
-        q_last = q_now
-        n_prox_last = n_prox
-
-        # print information
-        tend_iter = time.perf_counter()
-        timing[ii, 0] = tend_iter - tstart_grad
-        timing[ii, 1] = tend_grad - tstart_grad
-        timing[ii, 2] = tend_tv - tstart_tv
-        timing[ii, 3] = tend_l1 - tstart_l1
-        timing[ii, 4] = tend_constraints - tstart_constraints
-        timing[ii, 5] = tend_update - tstart_update
-        timing[ii, 6] = tend_err - tstart_err
-
-        if verbose:
-            print(
-                f"iteration {ii + 1:d}/{niters:d},"
-                f" cost={np.mean(costs[ii + 1]):.3g},"
-                f" grad={tend_grad - tstart_grad:.2f}s,"                
-                f" TV={tend_tv - tstart_tv:.2f}s,"
-                f" projection={tend_constraints - tstart_constraints:.2f}s,"                
-                f" update={tend_update - tstart_update:.2f}s,"
-                f" cost={tend_err - tstart_err:.2f}s,"
-                f" iter={tend_iter - tstart_grad:.2f}s,"
-                f" total={time.perf_counter() - tstart:.2f}s",
-                end="\r")
-
-    # store summary results
-    results = {"step_size": step,
-               "niterations": niters,
-               "use_fista": use_fista,
-               "use_gpu": use_gpu,
-               "tau_tv": tau_tv,
-               "tau_l1": tau_lasso,
-               "use_imaginary_constraint": use_imaginary_constraint,
-               "use_real_constraint": use_real_constraint,
-               "timing": timing,
-               "timing_column_names": timing_names,
-               "costs": costs,
-               "x_init": n_start_preserved,
-               "x": n
-               }
-
-    return results
-
-
 def cut_mask(img: array,
              mask: array,
              mask_val: float = 0) -> array:
@@ -2267,26 +2006,6 @@ def cut_mask(img: array,
 
 
 # helper functions
-def get_fz(fx: np.ndarray,
-           fy: np.ndarray,
-           no: float,
-           wavelength: float) -> np.ndarray:
-    """
-    Get z-component of frequency given fx, fy
-
-    :param fx: nfrqs
-    :param fy:
-    :param no: index of refraction
-    :param wavelength: wavelength
-    :return frqs_3d:
-    """
-
-    with np.errstate(invalid="ignore"):
-        fzs = np.sqrt(no**2 / wavelength ** 2 - fx**2 - fy**2)
-
-    return fzs
-
-
 def get_angles(frqs: np.ndarray,
                no: float,
                wavelength: float):
@@ -2533,7 +2252,7 @@ def get_rytov_phase(efields_ft: array,
 
 def get_scattered_field(eimgs_ft: array,
                         eimgs_bg_ft: array,
-                        regularization: float) -> array:
+                        regularization: float = 0.) -> array:
     """
     Compute estimate of scattered electric field with regularization. This function only operates on the
     last two dimensions of the array
@@ -2802,7 +2521,7 @@ def fwd_model_linear(beam_fx: array,
             detectable = xp.sqrt(fx ** 2 + fy ** 2)[0] <= (na_det / wavelength)
             detectable = xp.tile(detectable, [nimgs, 1, 1])
 
-            fz = xp.tile(get_fz(fx, fy, no, wavelength), [nimgs, 1, 1])
+            fz = xp.tile(field_prop.get_fzs(fx, fy, no, wavelength), [nimgs, 1, 1])
 
             # construct frequencies where we have data about the 3D scattering potentials
             # frequencies of the sample F = f - no/lambda * beam_vec
@@ -2835,10 +2554,10 @@ def fwd_model_linear(beam_fx: array,
             fx_rytov = Fx + xp.expand_dims(beam_fx, axis=(1, 2))
             fy_rytov = Fy + xp.expand_dims(beam_fy, axis=(1, 2))
 
-            fz = get_fz(fx_rytov,
-                        fy_rytov,
-                        no,
-                        wavelength)
+            fz = field_prop.get_fzs(fx_rytov,
+                                    fy_rytov,
+                                    no,
+                                    wavelength)
 
             Fz = fz - xp.expand_dims(beam_fz, axis=(1, 2))
 
@@ -3233,7 +2952,7 @@ def plot_odt_sampling(frqs: np.ndarray,
         # if na_excite is immersion objective and beam undergoes TIR at interface for full NA
         alpha_exc = np.pi/2
 
-    fzs = get_fz(frqs[:, 0], frqs[:, 1], ni, wavelength)
+    fzs = field_prop.get_fzs(frqs[:, 0], frqs[:, 1], ni, wavelength)
     frqs_3d = np.concatenate((frqs, np.expand_dims(fzs, axis=1)), axis=1)
 
 
@@ -3800,3 +3519,694 @@ def display_tomography_recon(recon_fname: str,
     viewer.show(block=block_while_display)
 
     return viewer
+
+
+class Optimizer():
+    def __init__(self):
+        self.n_samples = None
+        self.prox_parameters = {}
+
+    def cost(self, x, inds=None):
+        pass
+
+    def gradient(self, x, inds=None):
+        pass
+
+    def test_gradient(self, x, jind=0, inds=None, dx=1e-5):
+        """
+
+        :param x: point to compute gradient at
+        :param jind: 1D index into x to compute gradient at
+        :param inds: samples to compute gradient at
+        :param dx: gradient step size
+        :return grad, grad_numerical:
+        """
+
+        use_gpu = isinstance(x, cp.ndarray) and _gpu_available
+        if use_gpu:
+            xp = cp
+        else:
+            xp = np
+
+        # in case x is multi dimensional, unravel
+        xind = np.unravel_index(jind, x.shape)
+
+        # compute gradient numerically
+        x1 = xp.array(x, copy=True)
+        x1[xind] -= 0.5 * dx
+        c1 = self.cost(x1, inds=inds)
+
+        x2 = xp.array(x, copy=True)
+        x2[xind] += 0.5 * dx
+        c2 = self.cost(x2, inds=inds)
+
+        gn = (c2 - c1) / dx
+
+        # if x is complex, compute "complex gradient"
+        if xp.iscomplexobj(x):
+            x1c = xp.array(x, copy=True)
+            x1c[xind] -= 0.5 * dx * 1j
+            c1c = self.cost(x1c, inds=inds)
+
+            x2c = xp.array(x, copy=True)
+            x2c[xind] += 0.5 * dx * 1j
+            c2c = self.cost(x2c, inds=inds)
+
+            gn = gn + (c2c - c1c) / dx * 1j
+
+        # compute gradient
+        slices = [slice(None)] + [slice(i, i+1) for i in xind]
+        g = self.gradient(x, inds=inds)[tuple(slices)].ravel()
+
+        return g, gn
+
+
+    def prox(self, x):
+        pass
+
+    def guess_step(self, x):
+        pass
+
+    def run(self,
+            x_start: array,
+            step: float,
+            max_iterations: int = 100,
+            use_fista: bool = True,
+            stochastic_descent: bool = True,
+            nmax_stochastic_descent: int = np.inf,
+            verbose: bool = False,
+            compute_cost: bool = False,
+            line_search: bool = False,
+            line_search_factor: float = 0.5,
+            xtol: float = 1e-8) -> dict:
+        """
+        Proximal gradient descent on model starting from initial guess
+
+        :param x_start: initial guess
+        :param step: step-size
+        :param max_iterations:
+        :param use_fista:
+        :param stochastic_descent: either select random subset of samples to use at each time step or use
+          average of all samples at each time-step
+        :param nmax_stochastic_descent: maximum size of random subset
+        :param verbose: print iteration info
+        :param compute_cost: optionally compute and store the cost. This can make optimization slower
+        :param line_search: use line search to shrink step-size as necessary
+        :param line_search_factor: factor to shrink step-size if line-search determines step too large
+        :param xtol: TODO: unused
+        :return results: dictionary containing results
+        """
+
+        use_gpu = isinstance(x_start, cp.ndarray) and _gpu_available
+        if use_gpu:
+            xp = cp
+        else:
+            xp = np
+
+        if nmax_stochastic_descent is None or nmax_stochastic_descent > self.n_samples:
+            nmax_stochastic_descent = self.n_samples
+
+        # ###################################
+        # initialize
+        # ###################################
+        results = {"n_samples": self.n_samples,
+                   "step_size": step,
+                   "niterations": max_iterations,
+                   "use_fista": use_fista,
+                   "use_gpu": use_gpu,
+                   "x_init": xp.array(x_start, copy=True),
+                   "prox_parameters": self.prox_parameters
+                   }
+
+        timing = {"iteration": np.zeros(0),
+                  "grad": np.zeros(0),
+                  "prox":  np.zeros(0),
+                  "update":  np.zeros(0),
+                  "cost":  np.zeros(0),
+                  }
+
+        tstart = time.perf_counter()
+        costs = np.zeros((max_iterations + 1, self.n_samples)) * np.nan
+        steps = np.ones(max_iterations) * step
+        q_last = 1
+        x = xp.array(x_start, copy=True)
+
+        def to_cpu(m):
+            if _gpu_available and isinstance(m, cp.ndarray):
+                return m.get()
+            else:
+                return m
+
+        for ii in range(max_iterations):
+            # ###################################
+            # compute cost
+            # ###################################
+            tstart_err = time.perf_counter()
+
+            if compute_cost:
+                costs[ii] = to_cpu(self.cost(x))
+
+            timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
+
+            # ###################################
+            # proximal gradient descent
+            # ###################################
+            tstart_grad = time.perf_counter()
+
+            if stochastic_descent:
+                # select random subset of angles
+                num = random.sample(range(1, nmax_stochastic_descent + 1), 1)[0]
+                inds = random.sample(range(self.n_samples), num)
+            else:
+                inds = list(range(self.n_samples))
+
+            if not line_search:
+                # ###################################
+                # compute gradient
+                # ###################################
+                x -= steps[ii] * xp.mean(self.gradient(x, inds=inds), axis=0)
+
+                timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
+
+                # ###################################
+                # prox operator
+                # ###################################
+                tstart_prox = time.perf_counter()
+                y = self.prox(x)
+
+                timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
+
+            else:
+                # gradient and cost at current point
+                gx = xp.mean(self.gradient(x, inds=inds), axis=0)
+                cx = xp.mean(self.cost(x, inds=inds), axis=0)
+                timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
+
+                # initialize line-search
+                tstart_prox = time.perf_counter()
+
+                if ii != 0:
+                    steps[ii] = steps[ii - 1]
+
+                y = self.prox(x - steps[ii] * gx)
+
+                def lipschitz_condition(y, cx, gx):
+                    cy = xp.mean(self.cost(y, inds=inds), axis=0)
+                    return cy > cx + xp.sum(gx.real * (y - x).real + gx.imag * (y - x).imag) + 0.5 / steps[ii] * xp.linalg.norm(y - x)**2
+
+                # iterate ... at each point check if we violate Lipschitz continuous gradient condition
+                while lipschitz_condition(y, cx, gx):
+                    steps[ii] *= line_search_factor
+                    y = self.prox(x - steps[ii] * gx)
+
+                # not exclusively prox ... but good enough for now
+                timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
+
+            # ###################################
+            # update step
+            # ###################################
+            tstart_update = time.perf_counter()
+
+            q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
+            if ii == 0 or ii == (max_iterations - 1) or not use_fista:
+                x = y
+            else:
+                x = y + (q_last - 1) / q_now * (y - y_last)
+
+            # update for next gradient-descent/FISTA iteration
+            q_last = q_now
+            y_last = y
+
+            timing["update"] = np.concatenate((timing["update"], np.array([time.perf_counter() - tstart_update])))
+            timing["iteration"] = np.concatenate((timing["iteration"], np.array([time.perf_counter() - tstart_err])))
+
+            # print information
+            if verbose:
+                print(
+                    f"iteration {ii + 1:d}/{max_iterations:d},"
+                    f" cost={np.mean(costs[ii]):.3g},"
+                    f" grad={timing['grad'][ii]:.3f}s,"
+                    f" prox={timing['prox'][ii]:.3f}s,"                    
+                    f" update={timing['update'][ii]:.3f}s,"
+                    f" cost={timing['cost'][ii]:.2f}s,"
+                    f" iter={timing['iteration'][ii]:.2f}s,"
+                    f" total={time.perf_counter() - tstart:.2f}s",
+                    end="\r")
+
+        # compute final cost
+        if compute_cost:
+            costs[ii + 1] = to_cpu(self.cost(x))
+
+        # store results
+        results.update({"timing": timing,
+                        "costs": costs,
+                        "steps": steps,
+                        "x": x})
+
+        return results
+
+
+class RIOptimizer(Optimizer):
+    def __init__(self,
+                 e_measured: array,
+                 e_measured_bg: array,
+                 no: float,
+                 wavelength: float,
+                 drs_e: tuple[float],
+                 drs_n: tuple[float],
+                 shape_n: tuple[int],
+                 dz_final: float,
+                 atf: Optional[array] = 1.,
+                 apodization: Optional[array] = None,
+                 tau_tv_real: float = 0,
+                 tau_tv_imag: float = 0,
+                 tau_l1_real: float = 0,
+                 tau_l1_imag: float = 0,
+                 use_imaginary_constraint: bool = False,
+                 use_real_constraint: bool = False
+                 ):
+
+        super(RIOptimizer, self).__init__()
+
+        self.e_measured = e_measured
+        self.e_measured_bg = e_measured_bg
+        self.n_samples = self.e_measured.shape[-3]
+        self.no = no
+        self.wavelength = wavelength
+        self.drs_e = drs_e
+        self.drs_n = drs_n
+        self.shape_n = shape_n
+        self.dz_final = dz_final
+        self.atf = atf
+        self.apodization = apodization
+
+        self.set_prox(tau_tv_real,
+                      tau_tv_imag,
+                      tau_l1_real,
+                      tau_l1_imag,
+                      use_imaginary_constraint,
+                      use_real_constraint)
+
+
+    def set_prox(self,
+                 tau_tv_real: float = 0,
+                 tau_tv_imag: float = 0,
+                 tau_l1_real: float = 0,
+                 tau_l1_imag: float = 0,
+                 use_imaginary_constraint: bool = False,
+                 use_real_constraint: bool = False
+                 ):
+
+        self.prox_parameters = {"tau_tv_real": float(tau_tv_real),
+                                "tau_tv_imag": float(tau_tv_imag),
+                                "tau_l1_real": float(tau_l1_real),
+                                "tau_l1_imag": float(tau_l1_imag),
+                                "use_imaginary_constraint": bool(use_imaginary_constraint),
+                                "use_real_constraint": bool(use_real_constraint),
+                                }
+
+    def prox(self, x):
+        if isinstance(x, cp.ndarray) and _gpu_available:
+            denoise_tv = denoise_tv_chambolle_gpu
+        else:
+            denoise_tv = denoise_tv_chambolle
+
+        # apply TV proximal operators
+        if self.prox_parameters["tau_tv_real"] != 0:
+            x_real = denoise_tv(x.real, weight=self.prox_parameters["tau_tv_real"], channel_axis=None)
+        else:
+            x_real = x.real
+
+        if self.prox_parameters["tau_tv_imag"] != 0:
+            x_imag = denoise_tv(x.imag, weight=self.prox_parameters["tau_tv_imag"], channel_axis=None)
+        else:
+            x_imag = x.imag
+
+        # apply L1 proximal operators
+        if self.prox_parameters["tau_l1_real"] != 0:
+            x_real = soft_threshold(self.prox_parameters["tau_l1_real"], x_real - self.no) + self.no
+
+        if self.prox_parameters["tau_l1_imag"] != 0:
+            x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"], x_imag)
+
+        # projection onto constraints
+        if self.prox_parameters["use_imaginary_constraint"]:
+            x_imag[x_imag < 0] = 0
+
+        if self.prox_parameters["use_real_constraint"]:
+            x_real[x_real < self.no] = self.no
+
+
+        return x_real + 1j * x_imag
+
+
+class LinearScatt(RIOptimizer):
+    def __init__(self,
+                 e_measured: array,
+                 e_measured_bg: array,
+                 no: float,
+                 wavelength: float,
+                 drs_e: tuple[float],
+                 drs_n: tuple[float],
+                 shape_n: tuple[int],
+                 dz_final: float = 0,
+                 atf: Optional[array] = 1.,
+                 apodization: Optional[array] = None,
+                 tau_tv_real: float = 0,
+                 tau_tv_imag: float = 0,
+                 tau_l1_real: float = 0,
+                 tau_l1_imag: float = 0,
+                 use_imaginary_constraint: bool = False,
+                 use_real_constraint: bool = False,
+                 mode: str = "rytov",
+                 scattering_regularization: float = 0,
+                 beam_frqs: array = None,
+                 na_det: float = 1.3,
+                 ):
+
+        super(LinearScatt, self).__init__(e_measured,
+                                          e_measured_bg,
+                                          no,
+                                          wavelength,
+                                          drs_e,
+                                          drs_n,
+                                          shape_n,
+                                          dz_final,
+                                          atf,
+                                          apodization,
+                                          tau_tv_real,
+                                          tau_tv_imag,
+                                          tau_l1_real,
+                                          tau_l1_imag,
+                                          use_imaginary_constraint,
+                                          use_real_constraint)
+
+        self.mode = mode
+        self.scattering_regularization = scattering_regularization
+        self.na_det = na_det
+        self.beam_frqs = beam_frqs
+
+        # todo: change fns to not take any internal fts
+        if self.mode == "born":
+            self.e_scattered_ft = get_scattered_field(_ft2(self.e_measured),
+                                                      _ft2(self.e_measured_bg),
+                                                      regularization=self.scattering_regularization)
+        elif self.mode == "rytov":
+            self.e_scattered_ft = get_rytov_phase(_ft2(self.e_measured),
+                                                  _ft2(self.e_measured_bg),
+                                                  regularization=self.scattering_regularization)
+        else:
+            raise ValueError(f"mode must be 'born' or 'rytov' but was '{mode:s}'")
+
+        use_gpu = isinstance(self.e_measured, cp.ndarray) and _gpu_available
+        self.model = fwd_model_linear(self.beam_frqs[..., 0],
+                                      self.beam_frqs[..., 1],
+                                      self.beam_frqs[..., 2],
+                                      self.no,
+                                      na_det,
+                                      self.wavelength,
+                                      self.e_measured[0].shape,
+                                      self.drs_e,
+                                      self.shape_n,
+                                      self.drs_n,
+                                      mode=self.mode,
+                                      interpolate=True,
+                                      use_gpu=use_gpu
+                                      )
+
+        self.model_csc = self.model.tocsc()
+
+    def gradient(self, x, inds=None):
+        ny, nx = self.drs_e
+        # first division is average
+        # second division converts Fourier space to real-space sum
+        # factor of 0.5 in cost function killed by derivative factor of 2
+        dc_dm = (self.model.dot(x.ravel()) - self.e_scattered_ft.ravel()) / (self.nsamples * ny * nx) / (ny * nx)
+        dc_dv = (dc_dm[None, :].conj() * self.model_csc)[0].conj()
+
+        return dc_dv
+
+    def cost(self, x, inds=None):
+        ny, nx = self.drs_e
+        return (abs(self.model.dot(x.ravel()) - self.e_scattered_ft.ravel()) ** 2).reshape([self.nsamples, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
+
+    def guess_step(self, x=None):
+        ny, nx = self.drs_e
+        u, s, vh = sp.linalg.svds(self.model, k=1, which='LM')
+        lipschitz_estimate = s ** 2 / (self.nsamples * ny * nx) / (ny * nx)
+        return float(1 / lipschitz_estimate)
+
+    def prox(self, x):
+        # apply proximal operators to n not V
+        n = get_n(x, self.no, self.wavelength)
+        n_prox = super(LinearScatt, self).prox(n)
+        return get_v(n_prox, self.no, self.wavelength)
+
+    def run(self, x_start, **kwargs):
+        return super(LinearScatt, self).run(x_start, **kwargs)
+
+
+class BPM(RIOptimizer):
+    """
+    Beam propagation method (BPM)
+    """
+
+    def __init__(self,
+                 e_measured: array,
+                 e_measured_bg: array,
+                 no: float,
+                 wavelength: float,
+                 drs_e: tuple[float],
+                 drs_n: tuple[float],
+                 shape_n: tuple[int],
+                 dz_final: float,
+                 atf: Optional[array] = 1.,
+                 apodization: Optional[array] = None,
+                 tau_tv_real: float = 0,
+                 tau_tv_imag: float = 0,
+                 tau_l1_real: float = 0,
+                 tau_l1_imag: float = 0,
+                 use_imaginary_constraint: bool = False,
+                 use_real_constraint: bool = False
+                 ):
+        """
+        Suppose we have a 3D grid with nz voxels along the propagation direction. We define the electric field
+        at the points before and after each voxel, and in an additional plane to account for the imaging. So we have
+        nz + 2 electric field planes.
+
+        :param e_measured: measured electric fields
+        :param e_measured_bg: measured background electric fields
+        :param nz: number of voxels along z in refractive index
+        :param no: background index of refraction
+        :param wavelength: wavelength of light
+        :param dz_final: distance to propagate field after last surface
+        :param drs_n: (dz, dy, dx)
+        :param atf: coherent transfer function
+        :param apodization: apodization used during FFTs
+        :param tau_tv_real:
+        :param tau_tv_imag:
+        :param tau_l1_real:
+        :param tau_l1_imag:
+        :param use_imaginary_constraint: enforce im(n) > 0
+        :param use_real_constraint:  enforce re(n) > no
+        """
+
+        super(BPM, self).__init__(e_measured,
+                                  e_measured_bg,
+                                  no,
+                                  wavelength,
+                                  drs_e,
+                                  drs_n,
+                                  shape_n,
+                                  dz_final,
+                                  atf,
+                                  apodization,
+                                  tau_tv_real,
+                                  tau_tv_imag,
+                                  tau_l1_real,
+                                  tau_l1_imag,
+                                  use_imaginary_constraint,
+                                  use_real_constraint)
+
+        # starting field
+        nz = self.shape_n[0]
+        dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * nz])
+        self.e_start = field_prop.propagate_homogeneous(self.e_measured_bg,
+                                                        dz_back,
+                                                        self.no,
+                                                        self.drs_n[1:],
+                                                        self.wavelength)[..., 0, :, :]
+
+    def gradient(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.nsamples))
+
+
+        # forward propagation
+        e_fwd = field_prop.propagate_bpm(self.e_start[inds],
+                                         x,
+                                         self.no,
+                                         self.drs_n,
+                                         self.wavelength,
+                                         self.dz_final,
+                                         atf=self.atf,
+                                         apodization=self.apodization)
+        # back propagation
+        e_back = field_prop.backpropagate_bpm(e_fwd[:, -1, :, :] - self.e_measured[inds],
+                                              x,
+                                              self.no,
+                                              self.drs_n,
+                                              self.wavelength,
+                                              self.dz_final,
+                                              atf=self.atf,
+                                              apodization=self.apodization)
+
+        # cost function gradient
+        dz = self.drs_n[0]
+        ny, nx = x.shape[-2:]
+        dc_dn = -(1j * (2 * np.pi / self.wavelength) * dz / (nx * ny) * e_back[:, 1:-1, :, :] * e_fwd[:, 1:-1, :, :].conj())
+
+        return dc_dn
+
+    def cost(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.nsamples))
+
+        e_fwd = field_prop.propagate_bpm(self.e_start[inds],
+                                         x,
+                                         self.no,
+                                         self.drs_n,
+                                         self.wavelength,
+                                         self.dz_final,
+                                         atf=self.atf,
+                                         apodization=self.apodization)
+
+        costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+
+        return costs
+
+
+class SSNP(RIOptimizer):
+    def __init__(self,
+                 e_measured: array,
+                 e_measured_bg: array,
+                 nz: int,
+                 no: float,
+                 wavelength: float,
+                 drs_e: tuple[float],
+                 drs_n: tuple[float],
+                 shape_n: tuple[int],
+                 dz_final: float,
+                 atf: Optional[array] = 1.,
+                 apodization: Optional[array] = None,
+                 tau_tv_real: float = 0,
+                 tau_tv_imag: float = 0,
+                 tau_l1_real: float = 0,
+                 tau_l1_imag: float = 0,
+                 use_imaginary_constraint: bool = False,
+                 use_real_constraint: bool = False
+                 ):
+
+        super(SSNP, self).__init__(e_measured,
+                                   e_measured_bg,
+                                   no,
+                                   wavelength,
+                                   drs_e,
+                                   drs_n,
+                                   shape_n,
+                                   dz_final,
+                                   atf,
+                                   apodization,
+                                   tau_tv_real,
+                                   tau_tv_imag,
+                                   tau_l1_real,
+                                   tau_l1_imag,
+                                   use_imaginary_constraint,
+                                   use_real_constraint)
+
+        # starting field
+        nz = self.shape_n[0]
+        dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * nz])
+        self.e_start = field_prop.propagate_homogeneous(self.e_measured_bg,
+                                                        dz_back,
+                                                        self.no,
+                                                        self.drs_n[1:],
+                                                        self.wavelength)[..., 0, :, :]
+
+        # starting derivative (assume field is forward propagating only)
+        dz, dy, dx = self.drs_n
+        ny, nx = e_measured.shape[-2:]
+
+        fx = np.fft.fftshift(np.fft.fftfreq(nx, dx))
+        fy = np.fft.fftshift(np.fft.fftfreq(ny, dy))
+        fxfx, fyfy = np.meshgrid(fx, fy)
+
+        if isinstance(self.e_start, cp.ndarray) and _gpu_available:
+            xp = cp
+        else:
+            xp = np
+
+        kz = xp.asarray(2 * np.pi * field_prop.get_fzs(fxfx, fyfy, self.no, self.wavelength))
+        self.de_dz_start = _ift2(1j * kz * _ft2(self.e_start))
+
+    def gradient(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.nsamples))
+
+        # put on gpu optionally
+        use_gpu = isinstance(x, cp.ndarray) and _gpu_available
+        if use_gpu:
+            xp = cp
+        else:
+            xp = np
+
+        # forward propagation
+        phi_fwd = field_prop.propagate_ssnp(self.e_start[inds],
+                                            self.de_dz_start[inds],
+                                            x,
+                                            self.no,
+                                            self.drs_n,
+                                            self.wavelength,
+                                            self.dz_final,
+                                            atf=self.atf,
+                                            apodization=self.apodization)
+
+        # back propagation
+        phi_back = field_prop.backpropagate_ssnp(phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds],
+                                                 x,
+                                                 self.no,
+                                                 self.drs_n,
+                                                 self.wavelength,
+                                                 self.dz_final,
+                                                 atf=self.atf,
+                                                 apodization=self.apodization)
+
+        # cost function gradient
+        ny, nx = x.shape[-2:]
+        dz = self.drs_n[0]
+        ko = 2 * np.pi / self.wavelength
+        # from phi_back, take derivative part
+        # from phi_fwd, take the electric field part
+        # todo: though I needed another .conj() of whole thing, but numerical testing says no
+        dc_dn = (phi_back[:, 1:-1, :, :, 1] * (-2 * ko ** 2 * dz * x.conj()) * phi_fwd[:, :-2, :, :, 0].conj()) / nx / ny
+
+        return dc_dn
+
+
+    def cost(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.nsamples))
+
+        e_fwd = field_prop.propagate_ssnp(self.e_start[inds],
+                                          self.de_dz_start[inds],
+                                          x,
+                                          self.no,
+                                          self.drs_n,
+                                          self.wavelength,
+                                          self.dz_final,
+                                          atf=self.atf,
+                                          apodization=self.apodization)[..., 0]
+
+        costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+
+        return costs
