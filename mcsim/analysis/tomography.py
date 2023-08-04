@@ -2006,9 +2006,9 @@ def cut_mask(img: array,
 
 
 # helper functions
-def get_angles(frqs: np.ndarray,
-               no: float,
-               wavelength: float):
+def frqs2angles(frqs: np.ndarray,
+                no: float,
+                wavelength: float):
     """
     Convert from frequency vectors to angle vectors. Frequency vectors should be normalized to no / wavelength
     :param frqs: (fx, fy, fz), expect |frqs| = no / wavelength
