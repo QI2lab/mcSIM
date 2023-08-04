@@ -1060,6 +1060,7 @@ class tomography:
 
             # todo: add masks
             def recon(v_fts, efield_scattered_ft, masks, no, wavelength, step):
+                # def recon(efields_ft, efields_bg_ft, masks, no, wavelength, dz_final, atf, apod, step, optimizer):
                 # todo: might be cleaner to compute starting points and scattered fields in this function
                 #  disadvantage is harder to access from outside ... although still easy to compute
 
@@ -1079,6 +1080,42 @@ class tomography:
                                        use_real_constraint=use_real_constraint,
                                        masks=masks,
                                        compute_cost=compute_cost)
+
+                # todo: replace with this
+                # efields = _ift2(efields_ft).squeeze(axis=dims)
+                # efields_bg = _ift2(efields_bg_ft).squeeze(axis=dims)
+                # v_fts_start = v_fts.squeeze(axis=dims)
+                #
+                # model = LinearScatt(efields,
+                #                     efields_bg,
+                #                     no,
+                #                     wavelength,
+                #                     drs_e,
+                #                     drs_n,
+                #                     v_fts_start.shape,
+                #                     dz_final=None,
+                #                     tau_tv_real=tau_tv,
+                #                     tau_tv_imag=tau_tv,
+                #                     tau_l1_real=tau_lasso,
+                #                     tau_l1_imag=tau_lasso,
+                #                     use_imaginary_constraint=use_imaginary_constraint,
+                #                     use_real_constraint=use_real_constraint,
+                #                     mode=mode,
+                #                     scattering_regularization=scattering_regularization,
+                #                     beam_frqs=beam_frqs,
+                #                     na_det=na_det)
+                #
+                # results = model.run(v_fts_start,
+                #                     step=step,
+                #                     max_iterations=niters,
+                #                     use_fista=True,
+                #                     stochastic_descent=stochastic_descent,
+                #                     nmax_stochastic_descent=nmax_stochastic_descent,
+                #                     verbose=False,
+                #                     compute_cost=compute_cost,
+                #                     line_search=False,
+                #                     )
+
 
                 # get result
                 v_out_ft = results["x"].reshape((1,) * nextra_dims + n_size)
@@ -1166,6 +1203,7 @@ class tomography:
 
                 model = optimizer(efields,
                                   efields_bg,
+                                  None,
                                   no,
                                   wavelength,
                                   drs_e=None,
@@ -1198,7 +1236,7 @@ class tomography:
 
             if mode == "bpm":
                 optimizer = BPM
-            else:
+            elif mode == "ssnp":
                 optimizer = SSNP
 
             n = da.map_blocks(recon,
@@ -2152,6 +2190,153 @@ def fit_phase_ramp(imgs_ft: array,
 
     return fit_params
 
+def fit_ref_frq(img_ft: np.ndarray,
+                dxy: float,
+                fmax_int: float,
+                search_rad_fraction: float = 1,
+                npercentiles: int = 50,
+                filter_size=0,
+                dilate_erode_footprint_size: int = 10,
+                show_figure: bool = False):
+    """
+    Determine the hologram reference frequency from a single image, based on the regions in the hologram beyond the
+    maximum imaging frequency that have information. These are expected to be circles centered around the reference
+    frequency.
+
+    The fitting strategy is this
+    (1) determine a threshold value for which points have signal in the image. To do this, first make a plot of
+    thresholds versus percentiles. This should look like two piecewise lines
+    (2) after thresholding the image, fit to circles.
+
+    Note: when the beam angle is non-zero, the dominant tomography frequency component will not be centered
+    on this circle, but will be at position f_ref - f_beam
+    :param img_ft:
+    :param dxy:
+    :param fmax_int:
+    :param search_rad_fraction:
+    :param npercentiles:
+    :param filter_size:
+    :param dilate_erode_footprint_size:
+    :param show_figure:
+    :return results, circ_dbl_fn, figh: results["fit_params"] = [cx, cy, radius]
+    """
+    ny, nx = img_ft.shape
+
+    # filter image
+    img_ft = gaussian_filter(img_ft, (filter_size, filter_size))
+
+    # get frequency data
+    fxs = fft.fftshift(fft.fftfreq(nx, dxy))
+    dfx = fxs[1] - fxs[0]
+    fys = fft.fftshift(fft.fftfreq(ny, dxy))
+    dfy = fys[1] - fys[0]
+    fxfx, fyfy = np.meshgrid(fxs, fys)
+    ff_perp = np.sqrt(fxfx**2 + fyfy**2)
+
+    extent_fxy = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
+                  fys[0] - 0.5 * dfy, fys[-1] + 0.5 * dfy]
+
+    # #########################
+    # find threshold using expected volume of area above threshold
+    # #########################
+    # only search outside of this
+    frad_search = search_rad_fraction * fmax_int
+    search_region = ff_perp > frad_search
+
+    frq_area = (fxfx[0, -1] - fxfx[0, 0]) * (fyfy[-1, 0] - fyfy[0, 0])
+    expected_area = 2 * (np.pi * (0.5 * fmax_int)**2) / (frq_area - np.pi * frad_search**2)
+    # thresh = np.percentile(np.abs(img_ft_bin[search_region]), 100 * (1 - expected_area))
+
+    # find thresholds for different percentiles and look or plateau like behavior
+    percentiles = np.linspace(0, 99, npercentiles)
+    thresh_all = np.percentile(np.abs(img_ft[search_region]), percentiles)
+
+    init_params_thresh = [0, thresh_all[0],
+                          (thresh_all[-1] - thresh_all[-2]) / (percentiles[-1] - percentiles[-2]),
+                          100 * (1 - expected_area)]
+    results_thresh = fit.fit_model(thresh_all, lambda p: fit.line_piecewise(percentiles, p), init_params_thresh)
+
+    thresh_ind = np.argmin(np.abs(percentiles - results_thresh["fit_params"][-1]))
+    thresh = thresh_all[thresh_ind]
+
+    # masked image
+    img_ft_ref_mask = np.logical_and(np.abs(img_ft) > thresh, ff_perp > frad_search)
+
+    # dilate and erode
+    footprint = np.ones((dilate_erode_footprint_size, dilate_erode_footprint_size), dtype=bool)
+    # dilate to remove holes
+    img_ft_ref_mask = maximum_filter(img_ft_ref_mask, footprint=footprint)
+    # remove to get back to original size
+    img_ft_ref_mask = minimum_filter(img_ft_ref_mask, footprint=footprint)
+
+    # #########################
+    # define fitting function and get initial guesses
+    # #########################
+
+    def circ_dbl_fn(x, y, p):
+        p = np.array([p[0], p[1], p[2], 1, 0, np.sqrt(dfx * dfy)])
+        p2 = np.array(p, copy=True)
+        p2[0] *= -1
+        p2[1] *= -1
+        circd = fit.circle(x, y, p) + fit.circle(x, y, p2)
+        circd[circd > 1] = 1
+        return circd
+
+    # guess based on maximum pixel value. This actually gives f_ref - f_beam, but should be a close enough starting point
+    guess_ind_1d = np.argmax(np.abs(img_ft) * (fyfy <= 0) * (ff_perp > fmax_int))
+    guess_ind = np.unravel_index(guess_ind_1d, img_ft.shape)
+
+    # do fitting
+    # init_params = [np.mean(fxfx_bin[img_ft_ref_mask]), np.mean(fyfy_bin[img_ft_ref_mask]), 0.5 * fmax_int]
+    init_params = [fxfx[guess_ind], fyfy[guess_ind], 0.5 * fmax_int]
+    results = fit.fit_model(img_ft_ref_mask, lambda p: circ_dbl_fn(fxfx, fyfy, p), init_params)
+
+    # #########################
+    # plot
+    # #########################
+    if show_figure:
+        figh = plt.figure(figsize=(16, 8))
+        grid = figh.add_gridspec(2, 3)
+
+        fp_ref = results["fit_params"]
+        ax = figh.add_subplot(grid[0, 0])
+        ax.set_title("img ft")
+        ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
+        ax.plot(fp_ref[0], fp_ref[1], 'kx')
+        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+
+        ax = figh.add_subplot(grid[0, 1])
+        ax.set_title("img ft binned")
+        ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
+        ax.plot(fp_ref[0], fp_ref[1], 'kx')
+        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+
+        ax = figh.add_subplot(grid[0, 2])
+        ax.set_title("img ft binned mask")
+        ax.imshow(img_ft_ref_mask, norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
+        ax.plot(fp_ref[0], fp_ref[1], 'kx')
+        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
+        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
+        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
+
+        ax = figh.add_subplot(grid[1, 0])
+        ax.plot(percentiles, thresh_all, 'rx')
+        ax.plot(percentiles, fit.line_piecewise(percentiles, results_thresh["fit_params"]))
+        ax.set_xlabel("percentile")
+        ax.set_ylabel("threshold (counts)")
+        ax.set_title('threshold = %.0f' % results_thresh["fit_params"][-1])
+    else:
+        figh = None
+
+    return results, circ_dbl_fn, figh
+
 
 # convert between index of refraction and scattering potential
 def get_n(v: array,
@@ -2773,155 +2958,6 @@ def inverse_model_linear(efield_fts: array,
     v_ft = xp.expand_dims(v_ft, axis=tuple(range(n_leading_dims)))
 
     return v_ft
-
-
-# fit frequencies
-def fit_ref_frq(img_ft: np.ndarray,
-                dxy: float,
-                fmax_int: float,
-                search_rad_fraction: float = 1,
-                npercentiles: int = 50,
-                filter_size=0,
-                dilate_erode_footprint_size: int = 10,
-                show_figure: bool = False):
-    """
-    Determine the hologram reference frequency from a single image, based on the regions in the hologram beyond the
-    maximum imaging frequency that have information. These are expected to be circles centered around the reference
-    frequency.
-
-    The fitting strategy is this
-    (1) determine a threshold value for which points have signal in the image. To do this, first make a plot of
-    thresholds versus percentiles. This should look like two piecewise lines
-    (2) after thresholding the image, fit to circles.
-
-    Note: when the beam angle is non-zero, the dominant tomography frequency component will not be centered
-    on this circle, but will be at position f_ref - f_beam
-    :param img_ft:
-    :param dxy:
-    :param fmax_int:
-    :param search_rad_fraction:
-    :param npercentiles:
-    :param filter_size:
-    :param dilate_erode_footprint_size:
-    :param show_figure:
-    :return results, circ_dbl_fn, figh: results["fit_params"] = [cx, cy, radius]
-    """
-    ny, nx = img_ft.shape
-
-    # filter image
-    img_ft = gaussian_filter(img_ft, (filter_size, filter_size))
-
-    # get frequency data
-    fxs = fft.fftshift(fft.fftfreq(nx, dxy))
-    dfx = fxs[1] - fxs[0]
-    fys = fft.fftshift(fft.fftfreq(ny, dxy))
-    dfy = fys[1] - fys[0]
-    fxfx, fyfy = np.meshgrid(fxs, fys)
-    ff_perp = np.sqrt(fxfx**2 + fyfy**2)
-
-    extent_fxy = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
-                  fys[0] - 0.5 * dfy, fys[-1] + 0.5 * dfy]
-
-    # #########################
-    # find threshold using expected volume of area above threshold
-    # #########################
-    # only search outside of this
-    frad_search = search_rad_fraction * fmax_int
-    search_region = ff_perp > frad_search
-
-    frq_area = (fxfx[0, -1] - fxfx[0, 0]) * (fyfy[-1, 0] - fyfy[0, 0])
-    expected_area = 2 * (np.pi * (0.5 * fmax_int)**2) / (frq_area - np.pi * frad_search**2)
-    # thresh = np.percentile(np.abs(img_ft_bin[search_region]), 100 * (1 - expected_area))
-
-    # find thresholds for different percentiles and look or plateau like behavior
-    percentiles = np.linspace(0, 99, npercentiles)
-    thresh_all = np.percentile(np.abs(img_ft[search_region]), percentiles)
-
-    init_params_thresh = [0, thresh_all[0],
-                          (thresh_all[-1] - thresh_all[-2]) / (percentiles[-1] - percentiles[-2]),
-                          100 * (1 - expected_area)]
-    results_thresh = fit.fit_model(thresh_all, lambda p: fit.line_piecewise(percentiles, p), init_params_thresh)
-
-    thresh_ind = np.argmin(np.abs(percentiles - results_thresh["fit_params"][-1]))
-    thresh = thresh_all[thresh_ind]
-
-    # masked image
-    img_ft_ref_mask = np.logical_and(np.abs(img_ft) > thresh, ff_perp > frad_search)
-
-    # dilate and erode
-    footprint = np.ones((dilate_erode_footprint_size, dilate_erode_footprint_size), dtype=bool)
-    # dilate to remove holes
-    img_ft_ref_mask = maximum_filter(img_ft_ref_mask, footprint=footprint)
-    # remove to get back to original size
-    img_ft_ref_mask = minimum_filter(img_ft_ref_mask, footprint=footprint)
-
-    # #########################
-    # define fitting function and get initial guesses
-    # #########################
-
-    def circ_dbl_fn(x, y, p):
-        p = np.array([p[0], p[1], p[2], 1, 0, np.sqrt(dfx * dfy)])
-        p2 = np.array(p, copy=True)
-        p2[0] *= -1
-        p2[1] *= -1
-        circd = fit.circle(x, y, p) + fit.circle(x, y, p2)
-        circd[circd > 1] = 1
-        return circd
-
-    # guess based on maximum pixel value. This actually gives f_ref - f_beam, but should be a close enough starting point
-    guess_ind_1d = np.argmax(np.abs(img_ft) * (fyfy <= 0) * (ff_perp > fmax_int))
-    guess_ind = np.unravel_index(guess_ind_1d, img_ft.shape)
-
-    # do fitting
-    # init_params = [np.mean(fxfx_bin[img_ft_ref_mask]), np.mean(fyfy_bin[img_ft_ref_mask]), 0.5 * fmax_int]
-    init_params = [fxfx[guess_ind], fyfy[guess_ind], 0.5 * fmax_int]
-    results = fit.fit_model(img_ft_ref_mask, lambda p: circ_dbl_fn(fxfx, fyfy, p), init_params)
-
-    # #########################
-    # plot
-    # #########################
-    if show_figure:
-        figh = plt.figure(figsize=(16, 8))
-        grid = figh.add_gridspec(2, 3)
-
-        fp_ref = results["fit_params"]
-        ax = figh.add_subplot(grid[0, 0])
-        ax.set_title("img ft")
-        ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
-        ax.plot(fp_ref[0], fp_ref[1], 'kx')
-        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
-        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
-
-        ax = figh.add_subplot(grid[0, 1])
-        ax.set_title("img ft binned")
-        ax.imshow(np.abs(img_ft), norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
-        ax.plot(fp_ref[0], fp_ref[1], 'kx')
-        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
-        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
-
-        ax = figh.add_subplot(grid[0, 2])
-        ax.set_title("img ft binned mask")
-        ax.imshow(img_ft_ref_mask, norm=PowerNorm(gamma=0.1), cmap='bone', extent=extent_fxy, origin="lower")
-        ax.plot(fp_ref[0], fp_ref[1], 'kx')
-        ax.plot(-fp_ref[0], -fp_ref[1], 'kx')
-        ax.add_artist(Circle((fp_ref[0], fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-        ax.add_artist(Circle((-fp_ref[0], -fp_ref[1]), radius=fp_ref[2], facecolor="none", edgecolor='k'))
-        ax.add_artist(Circle((0, 0), radius=fmax_int, facecolor="none", edgecolor="k"))
-
-        ax = figh.add_subplot(grid[1, 0])
-        ax.plot(percentiles, thresh_all, 'rx')
-        ax.plot(percentiles, fit.line_piecewise(percentiles, results_thresh["fit_params"]))
-        ax.set_xlabel("percentile")
-        ax.set_ylabel("threshold (counts)")
-        ax.set_title('threshold = %.0f' % results_thresh["fit_params"][-1])
-    else:
-        figh = None
-
-    return results, circ_dbl_fn, figh
 
 
 # plotting functions
@@ -3767,16 +3803,19 @@ class Optimizer():
 
 
 class RIOptimizer(Optimizer):
+
+    # todo: add beam_frqs as argument?
     def __init__(self,
                  e_measured: array,
                  e_measured_bg: array,
+                 beam_frqs: array,
                  no: float,
                  wavelength: float,
                  drs_e: tuple[float],
                  drs_n: tuple[float],
                  shape_n: tuple[int],
-                 dz_final: float,
-                 atf: Optional[array] = 1.,
+                 dz_final: float = 0.,
+                 atf: Optional[array] = None,
                  apodization: Optional[array] = None,
                  tau_tv_real: float = 0,
                  tau_tv_imag: float = 0,
@@ -3790,6 +3829,7 @@ class RIOptimizer(Optimizer):
 
         self.e_measured = e_measured
         self.e_measured_bg = e_measured_bg
+        self.beam_frqs = beam_frqs
         self.n_samples = self.e_measured.shape[-3]
         self.no = no
         self.wavelength = wavelength
@@ -3864,6 +3904,7 @@ class LinearScatt(RIOptimizer):
     def __init__(self,
                  e_measured: array,
                  e_measured_bg: array,
+                 beam_frqs: array,
                  no: float,
                  wavelength: float,
                  drs_e: tuple[float],
@@ -3879,13 +3920,13 @@ class LinearScatt(RIOptimizer):
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
                  mode: str = "rytov",
-                 scattering_regularization: float = 0,
-                 beam_frqs: array = None,
+                 scattering_regularization: float = 0.,
                  na_det: float = 1.3,
                  ):
 
         super(LinearScatt, self).__init__(e_measured,
                                           e_measured_bg,
+                                          beam_frqs,
                                           no,
                                           wavelength,
                                           drs_e,
@@ -3904,7 +3945,6 @@ class LinearScatt(RIOptimizer):
         self.mode = mode
         self.scattering_regularization = scattering_regularization
         self.na_det = na_det
-        self.beam_frqs = beam_frqs
 
         # todo: change fns to not take any internal fts
         if self.mode == "born":
@@ -3941,19 +3981,19 @@ class LinearScatt(RIOptimizer):
         # first division is average
         # second division converts Fourier space to real-space sum
         # factor of 0.5 in cost function killed by derivative factor of 2
-        dc_dm = (self.model.dot(x.ravel()) - self.e_scattered_ft.ravel()) / (self.nsamples * ny * nx) / (ny * nx)
+        dc_dm = (self.model.dot(x.ravel()) - self.e_scattered_ft.ravel()) / (self.n_samples * ny * nx) / (ny * nx)
         dc_dv = (dc_dm[None, :].conj() * self.model_csc)[0].conj()
 
         return dc_dv
 
     def cost(self, x, inds=None):
         ny, nx = self.drs_e
-        return (abs(self.model.dot(x.ravel()) - self.e_scattered_ft.ravel()) ** 2).reshape([self.nsamples, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
+        return (abs(self.model.dot(x.ravel()) - self.e_scattered_ft.ravel()) ** 2).reshape([self.n_samples, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
 
     def guess_step(self, x=None):
         ny, nx = self.drs_e
         u, s, vh = sp.linalg.svds(self.model, k=1, which='LM')
-        lipschitz_estimate = s ** 2 / (self.nsamples * ny * nx) / (ny * nx)
+        lipschitz_estimate = s ** 2 / (self.n_samples * ny * nx) / (ny * nx)
         return float(1 / lipschitz_estimate)
 
     def prox(self, x):
@@ -3974,18 +4014,19 @@ class BPM(RIOptimizer):
     def __init__(self,
                  e_measured: array,
                  e_measured_bg: array,
+                 beam_frqs: array,
                  no: float,
                  wavelength: float,
                  drs_e: tuple[float],
                  drs_n: tuple[float],
                  shape_n: tuple[int],
-                 dz_final: float,
-                 atf: Optional[array] = 1.,
+                 dz_final: float = 0.,
+                 atf: Optional[array] = None,
                  apodization: Optional[array] = None,
-                 tau_tv_real: float = 0,
-                 tau_tv_imag: float = 0,
-                 tau_l1_real: float = 0,
-                 tau_l1_imag: float = 0,
+                 tau_tv_real: float = 0.,
+                 tau_tv_imag: float = 0.,
+                 tau_l1_real: float = 0.,
+                 tau_l1_imag: float = 0.,
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False
                  ):
@@ -3996,11 +4037,12 @@ class BPM(RIOptimizer):
 
         :param e_measured: measured electric fields
         :param e_measured_bg: measured background electric fields
-        :param nz: number of voxels along z in refractive index
         :param no: background index of refraction
         :param wavelength: wavelength of light
+        :param drs_e: (dy, dx) of the electric field
+        :param drs_n: (dz, dy, dx) of the refractive index
+        :param shape_n: (nz, ny, nx)
         :param dz_final: distance to propagate field after last surface
-        :param drs_n: (dz, dy, dx)
         :param atf: coherent transfer function
         :param apodization: apodization used during FFTs
         :param tau_tv_real:
@@ -4013,20 +4055,27 @@ class BPM(RIOptimizer):
 
         super(BPM, self).__init__(e_measured,
                                   e_measured_bg,
+                                  beam_frqs,
                                   no,
                                   wavelength,
                                   drs_e,
                                   drs_n,
                                   shape_n,
                                   dz_final,
-                                  atf,
-                                  apodization,
-                                  tau_tv_real,
-                                  tau_tv_imag,
-                                  tau_l1_real,
-                                  tau_l1_imag,
-                                  use_imaginary_constraint,
-                                  use_real_constraint)
+                                  atf=atf,
+                                  apodization=apodization,
+                                  tau_tv_real=tau_tv_real,
+                                  tau_tv_imag=tau_tv_imag,
+                                  tau_l1_real=tau_l1_real,
+                                  tau_l1_imag=tau_l1_imag,
+                                  use_imaginary_constraint=use_imaginary_constraint,
+                                  use_real_constraint=use_real_constraint)
+
+        # cosines
+        if self.beam_frqs is not None:
+            self.thetas, _ = frqs2angles(self.beam_frqs, self.no, self.wavelength)
+        else:
+            self.thetas = np.zeros((self.n_samples,))
 
         # starting field
         nz = self.shape_n[0]
@@ -4039,8 +4088,7 @@ class BPM(RIOptimizer):
 
     def gradient(self, x, inds=None):
         if inds is None:
-            inds = list(range(self.nsamples))
-
+            inds = list(range(self.n_samples))
 
         # forward propagation
         e_fwd = field_prop.propagate_bpm(self.e_start[inds],
@@ -4050,7 +4098,8 @@ class BPM(RIOptimizer):
                                          self.wavelength,
                                          self.dz_final,
                                          atf=self.atf,
-                                         apodization=self.apodization)
+                                         apodization=self.apodization,
+                                         thetas=self.thetas[inds])
         # back propagation
         e_back = field_prop.backpropagate_bpm(e_fwd[:, -1, :, :] - self.e_measured[inds],
                                               x,
@@ -4059,18 +4108,28 @@ class BPM(RIOptimizer):
                                               self.wavelength,
                                               self.dz_final,
                                               atf=self.atf,
-                                              apodization=self.apodization)
+                                              apodization=self.apodization,
+                                              thetas=self.thetas[inds])
 
         # cost function gradient
+        if isinstance(x, cp.ndarray) and _gpu_available:
+            xp = cp
+        else:
+            xp = np
+
+        thetas = xp.asarray(self.thetas[inds])
+        if thetas.ndim == 1:
+            thetas = xp.expand_dims(thetas, axis=(-1, -2, -3))
+
         dz = self.drs_n[0]
         ny, nx = x.shape[-2:]
-        dc_dn = -(1j * (2 * np.pi / self.wavelength) * dz / (nx * ny) * e_back[:, 1:-1, :, :] * e_fwd[:, 1:-1, :, :].conj())
+        dc_dn = -(1j * (2 * np.pi / self.wavelength) * dz / xp.cos(thetas) / (nx * ny) * e_back[:, 1:-1, :, :] * e_fwd[:, 1:-1, :, :].conj())
 
         return dc_dn
 
     def cost(self, x, inds=None):
         if inds is None:
-            inds = list(range(self.nsamples))
+            inds = list(range(self.n_samples))
 
         e_fwd = field_prop.propagate_bpm(self.e_start[inds],
                                          x,
@@ -4079,7 +4138,8 @@ class BPM(RIOptimizer):
                                          self.wavelength,
                                          self.dz_final,
                                          atf=self.atf,
-                                         apodization=self.apodization)
+                                         apodization=self.apodization,
+                                         thetas=self.thetas[inds])
 
         costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
 
@@ -4090,7 +4150,7 @@ class SSNP(RIOptimizer):
     def __init__(self,
                  e_measured: array,
                  e_measured_bg: array,
-                 nz: int,
+                 beam_frqs: array,
                  no: float,
                  wavelength: float,
                  drs_e: tuple[float],
@@ -4109,24 +4169,23 @@ class SSNP(RIOptimizer):
 
         super(SSNP, self).__init__(e_measured,
                                    e_measured_bg,
+                                   beam_frqs,
                                    no,
                                    wavelength,
                                    drs_e,
                                    drs_n,
                                    shape_n,
-                                   dz_final,
-                                   atf,
-                                   apodization,
-                                   tau_tv_real,
-                                   tau_tv_imag,
-                                   tau_l1_real,
-                                   tau_l1_imag,
-                                   use_imaginary_constraint,
-                                   use_real_constraint)
-
+                                   dz_final=dz_final,
+                                   atf=atf,
+                                   apodization=apodization,
+                                   tau_tv_real=tau_tv_real,
+                                   tau_tv_imag=tau_tv_imag,
+                                   tau_l1_real=tau_l1_real,
+                                   tau_l1_imag=tau_l1_imag,
+                                   use_imaginary_constraint=use_imaginary_constraint,
+                                   use_real_constraint=use_real_constraint)
         # starting field
-        nz = self.shape_n[0]
-        dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * nz])
+        dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
         self.e_start = field_prop.propagate_homogeneous(self.e_measured_bg,
                                                         dz_back,
                                                         self.no,
@@ -4151,14 +4210,7 @@ class SSNP(RIOptimizer):
 
     def gradient(self, x, inds=None):
         if inds is None:
-            inds = list(range(self.nsamples))
-
-        # put on gpu optionally
-        use_gpu = isinstance(x, cp.ndarray) and _gpu_available
-        if use_gpu:
-            xp = cp
-        else:
-            xp = np
+            inds = list(range(self.n_samples))
 
         # forward propagation
         phi_fwd = field_prop.propagate_ssnp(self.e_start[inds],
@@ -4195,7 +4247,7 @@ class SSNP(RIOptimizer):
 
     def cost(self, x, inds=None):
         if inds is None:
-            inds = list(range(self.nsamples))
+            inds = list(range(self.n_samples))
 
         e_fwd = field_prop.propagate_ssnp(self.e_start[inds],
                                           self.de_dz_start[inds],
