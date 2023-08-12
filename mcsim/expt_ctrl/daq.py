@@ -80,6 +80,8 @@ class nidaq(daq):
 
         self.dev_name = dev_name
 
+        # todo: can I read lines from device like this? daqmx.GetDevTerminals()
+
         # digital output lines
         self.digital_lines = f"/{dev_name}/{digital_lines}" # todo: get rid of in favor of digital_lines_addresses
         self.n_digital_lines = 16 # todo: want to detect not hard code
@@ -107,6 +109,7 @@ class nidaq(daq):
         self._task_ao = None
         self._task_di = None
         self._task_ai = None
+        self._task_ct = None
 
         # any code which requires device to already be present should go inside this block
         self.initialized = initialize
@@ -399,7 +402,10 @@ class nidaq(daq):
                      di_export_line: Optional[str] = None,
                      continuous: bool = True,
                      nrepeats: Optional[int] = None,
-                     analog_read: bool = True):
+                     analog_read: bool = True,
+                     pause_trigger_line: str = "/Dev1/PFI12",
+                     interval: float = 0.,
+                     pause_every_n: int = 1):
         """
         Set a sequence of digital (and optionally also analog) commands to the DAQ.
 
@@ -410,22 +416,27 @@ class nidaq(daq):
         :param sample_rate_hz: sample rate at which digital samples will be generated
         :param digital_clock_source: clock source used for the digital task
         :param analog_clock_source: clock source used for the analog task
-        :param digital_input_source: optional external line of which to read an input signal. Typically this is done
-          so that a clock signal for the analog task can be input on a PFI port
-        :param di_export_line: export the signal digital_input_source to a different line. Typically this
-          port will be used as the input clock source for the analog task
+        :param digital_input_source: optional external line to perform edge detection on. The edge detection
+          signal will be routed to di_export_line
+        :param di_export_line: The edge detection signal read from digital_input_source is routed to this line. This
+          line can then be used as a reference trigger for another line. Typically, this is used to trigger
+          the analog program. In that cause analog_clock_source should be set to the same value as di_export_line
         :param continuous: if True, then sequence will be run repeatedly. If False, sequence will be run once.
         :param nrepeats: useful for specifying how much data to acquire with analog read
         :param analog_read: read all analog in ports during sequence
+        :param pause_trigger_line: line which is used to pause the sequence when running with an interval of time
+          between repeats
+        :param interval: interval of time between repeats
+        :param pause_every_n: perform n-repeats, then wait interval, then perform n more repeats
         :return:
 
         examples
         ####################
-        # digital + analog sequence
+        # digital + analog sequences with same number of steps
         >>> daq = nidaq()
-        >>> digital_array = np.array((10, 16)) # create digital array
+        >>> digital_array = np.zeros((10, 16)) # create digital array
         >>> digital_array[::2, 12] = 1 # alternative 0 and 1 on line 12
-        >>> analog_array = np.array((10, 4)) # create analog array
+        >>> analog_array = np.zeros((10, 4)) # create analog array
         >>> analog_array[::2] = 3.0 # alternate all lines between 0 and 3 volts
         >>> dt = 100e-6 # time step in seconds
         >>> daq.set_sequence(digital_array, analog_array, 1/dt)
@@ -433,11 +444,11 @@ class nidaq(daq):
         >>> time.sleep(1)
         >>> daq.stop_sequence()
 
-        # digital + analog sequence and using one of the digital lines to advance the analog
+        # digital + analog sequence and using one of the digital lines to advance the analog sequence
         >>> daq = nidaq()
-        >>> digital_array = np.array((10, 16)) # create digital array
+        >>> digital_array = np.zeros((10, 16)) # create digital array
         >>> digital_array[::2, 12] = 1 # alternative 0 and 1 on line 12. We will use this as the clock source for the analog signal
-        >>> analog_array = np.array((5, 4)) # create analog array
+        >>> analog_array = np.zeros((5, 4)) # create analog array
         >>> analog_array[::2] = 3.0 # alternate all lines between 0 and 3 volts
         >>> dt = 100e-6 # time step in seconds
         >>> # assume that we hook up digital line 12 to the PFI1 input port
@@ -452,6 +463,7 @@ class nidaq(daq):
             nrepeats = 1
 
         start_trigger = f"/{self.dev_name}/do/StartTrigger"
+        counter = f"/{self.dev_name}/ctr0"
 
         # ######################
         # digital task
@@ -487,7 +499,58 @@ class nidaq(daq):
                                         None)
 
         # ######################
-        # if analog trigger source is a PFI port, then need to create a digital input task
+        # create pause trigger
+        # when running a continuous sequence, this will be used to freeze sequence for an interval after each iteration
+        # this supports sequences with high time resolution AND long time intervals between iterations
+        # ######################
+        if interval == 0:
+            # ensure no pause trigger
+            self._task_do.ResetPauseTrigType()
+            interval_real = None
+            self._task_ct = None
+        else:
+            # set pause trigger for digital line
+            self._task_do.SetPauseTrigType(daqmx.Val_DigLvl)
+            self._task_do.SetDigLvlPauseTrigSrc(pause_trigger_line)
+            self._task_do.SetDigLvlPauseTrigWhen(daqmx.Val_High)
+
+            # math for interval
+            dt = 1 / sample_rate_hz
+            N = int(interval // dt)
+            interval_real = N * dt
+            n = digital_array.shape[0]
+
+            # pause trigger goes high for second half of last time-step in sequence
+            delay = (n * pause_every_n - 0.5) * dt
+            # pause triggers stays high until the second half of the last time-step before the next cycle
+            duty_cycle = (N - n * pause_every_n) / N
+
+            if duty_cycle <= 0:
+                raise ValueError(f"Requested interval of {N:d} time steps is shorter"
+                                 f" than sequence length = {n * pause_every_n:d} steps."
+                                 " You must select a longer interval.")
+
+            # configure counter to be used as pause trigger
+            self._task_ct = daqmx.Task()
+
+            self._task_ct.CreateCOPulseChanFreq(counter,
+                                                "",
+                                                daqmx.Val_Hz,
+                                                daqmx.Val_Low,
+                                                delay,
+                                                1 / interval_real,
+                                                duty_cycle)
+            self._task_ct.CfgImplicitTiming(daqmx.DAQmx_Val_ContSamps, 0)
+            self._task_ct.CfgDigEdgeStartTrig(start_trigger, daqmx.DAQmx_Val_Rising)
+            self._task_ct.SetCOPulseTerm("", pause_trigger_line)
+
+
+        # ######################
+        # set up analog trigger line
+        # if analog trigger source is not internal, then need to setup a digital input task that perform edge detection
+        # on the digital_input_source port. Then, the edge detections must be routed to the analog trigger source port
+        #
+        # currently I manually route one of the digital out lines to the digital_input_source using a wire
         # ######################
         if digital_input_source is not None:
             self._task_di = daqmx.Task()
@@ -503,8 +566,8 @@ class nidaq(daq):
                                                    None,
                                                    daqmx.DAQmx_Val_ContSamps,
                                                    0)
-            # export signal to another pin, so can use it to trigger or etc.
 
+            # export signal to another pin, so can use it to trigger or etc.
             if di_export_line is not None:
                 self._task_di.ExportSignal(daqmx.DAQmx_Val_ChangeDetectionEvent, di_export_line)
 
@@ -582,6 +645,7 @@ class nidaq(daq):
                                               daqmx.DAQmx_Val_Rising)
 
         # todo: give option to block/wait for sequence to finish
+        return interval_real
 
     def start_sequence(self):
         """
@@ -589,7 +653,8 @@ class nidaq(daq):
 
         :return:
         """
-
+        if self._task_ct is not None:
+            self._task_ct.StartTask()
         if self._task_di is not None:
             self._task_di.StartTask()
         if self._task_ao is not None:
@@ -624,6 +689,14 @@ class nidaq(daq):
             try:
                 self._task_di.StopTask()
                 self._task_di.ClearTask()
+            except (daqmx.DAQmxFunctions.InvalidTaskError, AttributeError):
+                pass
+
+        # stop counter
+        if self._task_ct is not None:
+            try:
+                self._task_ct.StopTask()
+                self._task_ct.ClearTask()
             except (daqmx.DAQmxFunctions.InvalidTaskError, AttributeError):
                 pass
 
