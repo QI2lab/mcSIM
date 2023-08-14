@@ -28,7 +28,8 @@ def get_sim_odt_sequence(daq_do_map: dict,
                          use_dmd_as_odt_shutter: bool = False,
                          n_digital_ch: int = 16,
                          n_analog_ch: int = 4,
-                         parameter_scan: dict = None):
+                         parameter_scan: dict = None,
+                         turn_lasers_off_interval: bool = False):
     """
     Create DAQ program for SIM/ODT experiment
 
@@ -64,8 +65,8 @@ def get_sim_odt_sequence(daq_do_map: dict,
     if z_voltages is None:
         z_voltages = [0]
 
-    if interval != 0 and len(z_voltages) != 1:
-        raise NotImplementedError("Interval is not implemented for z-stacks")
+    # if interval != 0 and len(z_voltages) != 1:
+    #     raise NotImplementedError("Interval is not implemented for z-stacks")
     # todo: can easily implement interval if no z-stack, but otherwise difficult since don't have a way
     # to stop the daq after a certain number of repeats
 
@@ -146,15 +147,16 @@ def get_sim_odt_sequence(daq_do_map: dict,
             digital_pgms.append(d)
             analog_pgms.append(a)
 
-    digital_pgm_full = np.vstack(digital_pgms)
+    # programs for each z/parameter scanned
+    digital_pgm_one_z = np.vstack(digital_pgms)
     analog_pgms_one_z = np.vstack(analog_pgms)
 
     # check correct number of analog program steps and analog triggers
-    if not analog_pgms_one_z.shape[0] == np.sum(digital_pgm_full[:, daq_do_map["analog_trigger"]]):
+    if not analog_pgms_one_z.shape[0] == np.sum(digital_pgm_one_z[:, daq_do_map["analog_trigger"]]):
         raise AssertionError(f"size of analog program="
                              f"{analog_pgms_one_z.shape[0]:d}"
                              f" should equal number of analog triggers="
-                             f"{np.sum(digital_pgm_full[:, daq_do_map['analog_trigger']]):d}")
+                             f"{np.sum(digital_pgm_one_z[:, daq_do_map['analog_trigger']]):d}")
 
     # #######################
     # z-stack logic
@@ -163,6 +165,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
     # analog pgms must be repeated with correct z-voltages
     # get correct voltage for each step
     analog_pgms_per_z = []
+    nz = len(z_voltages)
     for v in z_voltages:
         pgm_temp = np.array(analog_pgms_one_z, copy=True)
         pgm_temp[:, daq_ao_map["z_stage"]] = v
@@ -191,6 +194,18 @@ def get_sim_odt_sequence(daq_do_map: dict,
             analog_pgms_per_parameter.append(pgm_temp)
 
         analog_pgm_full = np.vstack(analog_pgms_per_parameter)
+    else:
+        nparams = 1
+
+    # #######################
+    # full digital program
+    # #######################
+    digital_pgm_full = np.concatenate([digital_pgm_one_z] * nz * nparams, axis=0)
+
+    if turn_lasers_off_interval:
+        digital_pgm_full[-1, daq_do_map["red_laser"]] = 0
+        digital_pgm_full[-1, daq_do_map["blue_laser"]] = 0
+        digital_pgm_full[-1, daq_do_map["green_laser"]] = 0
 
     # #######################
     # print information
