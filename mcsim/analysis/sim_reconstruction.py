@@ -74,7 +74,7 @@ array = Union[np.ndarray, cp.ndarray]
 #         self.phase_offsets = phase_offsets
 #         self.modulation_depths = modulation_depths
 
-def _ft(m: array) -> array:
+def _ft(m: array, axes: tuple=(-1, -2)) -> array:
     """
     2D Fourier transform which can use either CPU or GPU and using specific shifting idiom
 
@@ -89,7 +89,7 @@ def _ft(m: array) -> array:
     else:
         xp = np
 
-    result = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+    result = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=axes), axes=axes), axes=axes)
 
     if use_gpu:
         cache = cp.fft.config.get_plan_cache()
@@ -97,7 +97,24 @@ def _ft(m: array) -> array:
 
     return result
 
-def _ift(m: array) -> array:
+def _ift(m: array, axes: tuple=(-1, -2)) -> array:
+    use_gpu = isinstance(m, cp.ndarray) and _cupy_available
+
+    if use_gpu:
+        xp = cp
+        cp.fft._cache.PlanCache(memsize=0)  # avoid issues like https://github.com/cupy/cupy/issues/6355
+    else:
+        xp = np
+
+    result = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=axes), axes=axes), axes=axes)
+
+    if use_gpu:
+        cache = cp.fft.config.get_plan_cache()
+        cache.clear()
+
+    return result
+
+def _irft(m: array, axes: tuple=(-1, -2)) -> array:
     """
     2D inverse real Fourier transform which can use either CPU or GPU
 
@@ -117,7 +134,7 @@ def _ift(m: array) -> array:
 
     # irfft2 ~2X faster than ifft2
     # # Have to keep full -2 axis because need two full quadrants for complete fft info
-    one_sided = xp.fft.ifftshift(m, axes=(-1, -2))[..., :m.shape[-1] // 2 + 1]
+    one_sided = xp.fft.ifftshift(m, axes=axes)[..., :m.shape[-1] // 2 + 1]
 
     # note: for irfft2 must match shape and axes, so order important
     result = xp.fft.fftshift(xp.fft.irfft2(one_sided, s=m.shape[-2:], axes=(-2, -1)), axes=(-1, -2))
@@ -1310,7 +1327,7 @@ class SimImageSet:
             apodization = xp.outer(xp.asarray(tukey(self.sim_sr_ft.shape[-2], alpha=0.1)),
                                    xp.asarray(tukey(self.sim_sr_ft.shape[-1], alpha=0.1)))
 
-            self.sim_sr = da.map_blocks(_ift,
+            self.sim_sr = da.map_blocks(_irft,
                                         self.sim_sr_ft * apodization,
                                         dtype=float,
                                         meta=xp.array((), dtype=float)
@@ -1332,7 +1349,7 @@ class SimImageSet:
                 self.widefield_deconvolution_ft = da.nansum(weights_decon * self.bands_shifted_ft[..., 0, :, :], axis=-3) / \
                                                       (self._recon_settings["wiener_parameter"]**2 + da.nansum(np.abs(weights_decon)**2, axis=-3))
 
-                self.widefield_deconvolution = da.map_blocks(_ift,
+                self.widefield_deconvolution = da.map_blocks(_irft,
                                                              self.widefield_deconvolution_ft * apodization,
                                                              dtype=float,
                                                              meta=xp.array((), dtype=float)
@@ -1896,9 +1913,12 @@ class SimImageSet:
 
             # 6 diagnostic images + 4 extra columns for colorbars
             grid = fig.add_gridspec(nrows=self.nphases,
-                                    ncols=5 + 4,
-                                    width_ratios=[1] * 3 + [0.2, 0.2] + [1] + [0.2, 0.2] + [1],
+                                    ncols=8,
+                                    width_ratios=[1, 1, 0.2, 0.2] + [1, 0.2, 0.2] + [2],
                                     wspace=0.1)
+
+            vmax = np.max(np.abs(imgs_ft))
+            vmin = 1e-5 * vmax
 
             for jj in range(self.nphases):
                 # ####################
@@ -1910,7 +1930,7 @@ class SimImageSet:
                 to_plot = np.abs(imgs_ft[ii, jj])
                 to_plot[to_plot <= 0] = np.nan
 
-                im = ax.imshow(to_plot, norm=LogNorm(), extent=extent, cmap="bone")
+                im = ax.imshow(to_plot, norm=LogNorm(vmin=vmin, vmax=vmax), extent=extent, cmap="bone")
 
                 if parameters_estimated:
                     ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
@@ -1942,14 +1962,8 @@ class SimImageSet:
                     cs_ft_toplot = np.abs(bands_shifted_ft[ii, jj])
                     cs_ft_toplot[cs_ft_toplot <= 0] = np.nan
 
-                    im = ax.imshow(cs_ft_toplot, norm=LogNorm(), extent=extent_upsampled, cmap="bone")
-                    clim = im.get_clim()
-                    if clim[0] < 1e-12 and clim[1] < 1e-12:
-                        clim = (0, 1)
-                    im.set_clim(clim)
-
                     # to keep same color scale, must correct for upsampled normalization change
-                    im.set_clim(tuple([4 * c for c in clim]))
+                    ax.imshow(cs_ft_toplot, norm=LogNorm(vmin=4*vmin, vmax=4*vmax), extent=extent_upsampled, cmap="bone")
 
                     ax.scatter(0, 0, edgecolor='k', facecolor='none')
 
@@ -1962,11 +1976,11 @@ class SimImageSet:
                     if jj == 1:
                         ax.set_title('m*O(f)otf(f+fo)')
                         ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
-                        ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
+                        ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='m', fill=0, ls='--'))
                     elif jj == 2:
                         ax.set_title('m*O(f)otf(f-fo)')
                         ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
-                        ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
+                        ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='m', fill=0, ls='--'))
                     if jj == (self.nphases - 1):
                         ax.set_xlabel("$f_x$")
 
@@ -1975,56 +1989,29 @@ class SimImageSet:
                     ax.set_xticks([])
                     ax.set_yticks([])
 
-                    # ####################
-                    # unnormalized weights
-                    # ####################
-                    ax = fig.add_subplot(grid[jj, 2])
+                    # colorbar
                     if jj == 0:
-                        ax.set_title(r"$w(k)$")
-
-                    im2 = ax.imshow(np.abs(weights[ii, jj]),
-                                    norm=PowerNorm(gamma=0.1, vmin=0),
-                                    extent=extent_upsampled,
-                                    cmap="bone")
-                    im2.set_clim([1e-5, 1])
-
-                    ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
-                    if jj == 1:
-                        ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
-                    elif jj == 2:
-                        ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
-
-                    if jj == (self.nphases - 1):
-                        ax.set_xlabel("$f_x$")
-
-                    ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
-                    ax.set_ylim([2 * self.fmax, -2 * self.fmax])
-                    ax.set_xticklabels([])
-                    ax.set_yticklabels([])
-                    ax.set_xticks([])
-                    ax.set_yticks([])
-
-                    ax = fig.add_subplot(grid[jj, 3])
-                    fig.colorbar(im2, cax=ax, format="%0.2g", ticks=[1, 0.1, 1e-2, 1e-3, 1e-4, 1e-5])
+                        # colorbar refers to unshifted components raw values (related to shifted by factor of 4)
+                        ax = fig.add_subplot(grid[:, 2])
+                        plt.colorbar(im, cax=ax)
 
                     # ####################
                     # normalized weights
                     # ####################
-                    ax = fig.add_subplot(grid[jj, 5])
+                    ax = fig.add_subplot(grid[jj, 4])
                     if jj == 0:
                         ax.set_title(r"$\frac{w_i(k)}{\sum_j |w_j(k)|^2 + \eta^2}$")
 
                     im2 = ax.imshow(np.abs(weights[ii, jj] / weights_norm),
-                                    norm=PowerNorm(gamma=0.1, vmin=0),
+                                    norm=PowerNorm(gamma=0.1, vmin=1e-5, vmax=10),
                                     extent=extent_upsampled,
                                     cmap="bone")
-                    im2.set_clim([1e-5, 10])
 
                     ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
                     if jj == 1:
-                        ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
+                        ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='m', fill=0, ls='--'))
                     elif jj == 2:
-                        ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='r', fill=0, ls='--'))
+                        ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='m', fill=0, ls='--'))
 
                     if jj == (self.nphases - 1):
                         ax.set_xlabel("$f_x$")
@@ -2038,14 +2025,16 @@ class SimImageSet:
                     ax.set_yticks([])
 
                     # colorbar
-                    ax = fig.add_subplot(grid[jj, 6])
-                    fig.colorbar(im2, cax=ax, format="%0.2g", ticks=[10, 1, 0.1, 1e-2, 1e-3, 1e-4, 1e-5])
+                    if jj == 0:
+                        ax = fig.add_subplot(grid[:, 5])
+                        fig.colorbar(im2, cax=ax, format="%0.2g", ticks=[10, 1, 0.1, 1e-2, 1e-3, 1e-4, 1e-5])
 
             if reconstructed_already:
                 # real space bands
-                band0 = fft.fftshift(fft.ifft2(fft.ifftshift(sim_sr_ft_components[ii, 0]))).real
-                band1 = fft.fftshift(fft.ifft2(fft.ifftshift(sim_sr_ft_components[ii, 1] + sim_sr_ft_components[ii, 2]))).real
+                band0 = _irft(sim_sr_ft_components[ii, 0]).real
+                band1 = _irft(sim_sr_ft_components[ii, 1] + sim_sr_ft_components[ii, 2]).real
 
+                # combine as dual color
                 color0 = np.array([0, 1, 1]) * 0.75  # cyan
                 color1 = np.array([1, 0, 1]) * 0.75  # magenta
 
@@ -2061,28 +2050,28 @@ class SimImageSet:
                 # ######################################
                 # plot real space version of 0th and +/- 1st bands
                 # ######################################
-                ax = fig.add_subplot(grid[0, 8])
-                ax.set_title("combined")
+                ax = fig.add_subplot(grid[:, 7])
+                ax.set_title("band 0 (cyan) and band 1 (magenta)")
 
                 ax.imshow(img0 + img1, extent=extent_upsampled_real)
                 ax.yaxis.tick_right()
                 ax.yaxis.set_label_position("right")
                 ax.set_ylabel("y-position ($\mu m$)")
 
-                ax = fig.add_subplot(grid[1, 8])
-                ax.set_title("band 0")
-                ax.imshow(img0, extent=extent_upsampled_real)
-                ax.yaxis.tick_right()
-                ax.yaxis.set_label_position("right")
-                ax.set_ylabel("y-position ($\mu m$)")
-
-                ax = fig.add_subplot(grid[2, 8])
-                ax.set_title("band 1")
-                ax.imshow(img1, extent=extent_upsampled_real)
-                ax.yaxis.tick_right()
-                ax.yaxis.set_label_position("right")
-                ax.set_xlabel("x-position ($\mu m$)")
-                ax.set_ylabel("y-position ($\mu m$)")
+                # ax = fig.add_subplot(grid[1, 7])
+                # ax.set_title("band 0")
+                # ax.imshow(img0, extent=extent_upsampled_real)
+                # ax.yaxis.tick_right()
+                # ax.yaxis.set_label_position("right")
+                # ax.set_ylabel("y-position ($\mu m$)")
+                #
+                # ax = fig.add_subplot(grid[2, 7])
+                # ax.set_title("band 1")
+                # ax.imshow(img1, extent=extent_upsampled_real)
+                # ax.yaxis.tick_right()
+                # ax.yaxis.set_label_position("right")
+                # ax.set_xlabel("x-position ($\mu m$)")
+                # ax.set_ylabel("y-position ($\mu m$)")
 
             #
             figs.append(fig)
@@ -2212,7 +2201,8 @@ class SimImageSet:
                   format: str = "tiff",
                   save_patterns: bool = False,
                   save_raw_data: bool = False,
-                  save_processed_data: bool = False):
+                  save_processed_data: bool = False,
+                  attributes: Optional[dict] = None):
         """
         Save SIM results and metadata to file
 
@@ -2220,16 +2210,17 @@ class SimImageSet:
         :param save_suffix:
         :param save_prefix:
         :param format: "tiff", "zarr" or "hdf5". If tiff is used, metadata will be saved in a .json file
-        :param save_patterns:
-        :param save_raw_data:
-        :param save_processed_data:
-        :return:
+        :param save_patterns: save estimated patterns
+        :param save_raw_data: save raw image data
+        :param save_processed_data: save processed image data
+        :param dictionary: dictionary passing extra attributes which will be saved with SIM data. This data
+          must be json serializable
+        :return metadata_fname: when saving as tiff, this will be an auxilliary json file. For zarr and hdf5,
+          it will be the zarr or hdf5 file
         """
 
-        # #############################################
-        # print parameters
-        # #############################################
-        # self.print_parameters()
+        if attributes is None:
+            attributes = {}
 
         # #############################################
         #  handle save_dir
@@ -2254,6 +2245,8 @@ class SimImageSet:
                     "reconstruction_settings": self._recon_settings,
                     "preprocessing_settings": self._preprocessing_settings
                     }
+
+        metadata.update(attributes)
 
         # ###############################n
         # reconstruction parameters
@@ -2371,6 +2364,7 @@ class SimImageSet:
 
         self.print_log(f"saving SIM images took {time.perf_counter() - tstart_save:.2f}s")
 
+        return fname
 
 def show_sim_napari(fname_zarr: str,
                     block: bool = True,
@@ -2650,7 +2644,7 @@ def fit_modulation_frq(ft1: np.ndarray,
     y = fft.ifftshift(dxy * (np.arange(ny) - (ny // 2)))
     xx, yy = np.meshgrid(x, y)
 
-    img2 = fft.fftshift(fft.ifft2(fft.ifftshift(ft2)))
+    img2 = _ift(ft2)
 
     # compute ft2(f + fo)
     def fft_shifted(f): return fft.fftshift(fft.fft2(np.exp(-1j*2*np.pi * (f[0] * xx + f[1] * yy)) * fft.ifftshift(img2 * otf_factor)))
