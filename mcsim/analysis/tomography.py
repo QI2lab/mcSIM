@@ -966,30 +966,8 @@ class tomography:
                                                  meta=xp.array(())
                                                  )
 
-        # ############################
-        # define scattered field
-        # ############################
-        self.efield_scattered_ft = da.map_blocks(get_scattered_field,
-                                                 self.holograms_ft,
-                                                 self.holograms_ft_bg,
-                                                 scattered_field_regularization,
-                                                 dtype=complex,
-                                                 meta=xp.array(())
-                                                 )
 
-        # todo: not if do rytov then phase unwrapping not on GPU
-        self.phi_rytov_ft = da.map_blocks(get_rytov_phase,
-                                          self.holograms_ft,
-                                          self.holograms_ft_bg,
-                                          scattered_field_regularization,
-                                          dtype=complex,
-                                          meta=xp.array(())
-                                          )
 
-        # ############################
-        # scattering potential from measured data
-        # ############################
-        # get sampling so can determine output size
         drs_ideal, size_ideal = get_reconstruction_sampling(self.no,
                                                         self.na_detection,
                                                         self.na_excitation,
@@ -1008,198 +986,195 @@ class tomography:
             drs_n = drs_ideal
             n_size = size_ideal
 
-            if mode == "born":
-                eraw_start = self.efield_scattered_ft
-            else:
-                eraw_start = self.phi_rytov_ft
-
-            # reconstruction starting point
-            if use_constant_n_start:
-                v_ft_start = da.zeros(self.efield_scattered_ft.shape[:-3] + n_size,
-                                      dtype=complex,
-                                      meta=xp.array(()),
-                                      chunks=self.efield_scattered_ft.chunksize[:-3] + n_size)
-            else:
-                v_ft_start = da.map_blocks(inverse_model_linear,
-                                           eraw_start,
-                                           mean_beam_frqs_arr[0, ..., 0],
-                                           mean_beam_frqs_arr[0, ..., 1],
-                                           mean_beam_frqs_arr[0, ..., 2],
-                                           self.no,
-                                           self.na_detection,
-                                           self.wavelength,
-                                           self.dxy,
-                                           drs_n,
-                                           n_size,
-                                           regularization=reconstruction_regularizer,
-                                           mode=mode,
-                                           no_data_value=0,
-                                           dtype=complex,
-                                           meta=xp.array(()),
-                                           chunks=eraw_start.chunksize[:-3] + n_size)
-
-            # define forward model
-            model = fwd_model_linear(mean_beam_frqs_arr[..., 0],
-                                     mean_beam_frqs_arr[..., 1],
-                                     mean_beam_frqs_arr[..., 2],
-                                     self.no,
-                                     self.na_detection,
-                                     self.wavelength,
-                                     (self.ny, self.nx),
-                                     (self.dxy, self.dxy),
-                                     n_size,
-                                     drs_n,
-                                     mode=mode,
-                                     interpolate=True)
-
-            # set step size. Lipschitz constant of \nabla cost is given by the largest singular value of linear model
-            # (also the square root of the largest eigenvalue of model^t * model)
-            u, s, vh = sp.linalg.svds(model, k=1, which='LM')
-            lipschitz_estimate = s ** 2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
-            step = float(1 / lipschitz_estimate)
-
-            # todo: add masks
-            def recon(v_fts, efield_scattered_ft, masks, no, wavelength, step):
-                # def recon(efields_ft, efields_bg_ft, masks, no, wavelength, dz_final, atf, apod, step, optimizer):
-                # todo: might be cleaner to compute starting points and scattered fields in this function
-                #  disadvantage is harder to access from outside ... although still easy to compute
-
-                nextra_dims = v_fts.ndim - 3
-                dims = tuple(range(nextra_dims))
-
-                results = grad_descent(v_fts.squeeze(axis=dims),
-                                       efield_scattered_ft.squeeze(axis=dims),
-                                       model,
-                                       no,
-                                       wavelength,
-                                       step,
-                                       niters=niters,
-                                       tau_tv=tau_tv,
-                                       tau_lasso=tau_lasso,
-                                       use_imaginary_constraint=use_imaginary_constraint,
-                                       use_real_constraint=use_real_constraint,
-                                       masks=masks,
-                                       compute_cost=compute_cost)
-
-                # todo: replace with this
-                # efields = _ift2(efields_ft).squeeze(axis=dims)
-                # efields_bg = _ift2(efields_bg_ft).squeeze(axis=dims)
-                # v_fts_start = v_fts.squeeze(axis=dims)
-                #
-                # model = LinearScatt(efields,
-                #                     efields_bg,
-                #                     no,
-                #                     wavelength,
-                #                     drs_e,
-                #                     drs_n,
-                #                     v_fts_start.shape,
-                #                     dz_final=None,
-                #                     tau_tv_real=tau_tv,
-                #                     tau_tv_imag=tau_tv,
-                #                     tau_l1_real=tau_lasso,
-                #                     tau_l1_imag=tau_lasso,
-                #                     use_imaginary_constraint=use_imaginary_constraint,
-                #                     use_real_constraint=use_real_constraint,
-                #                     mode=mode,
-                #                     scattering_regularization=scattering_regularization,
-                #                     beam_frqs=beam_frqs,
-                #                     na_det=na_det)
-                #
-                # results = model.run(v_fts_start,
-                #                     step=step,
-                #                     max_iterations=niters,
-                #                     use_fista=True,
-                #                     stochastic_descent=stochastic_descent,
-                #                     nmax_stochastic_descent=nmax_stochastic_descent,
-                #                     verbose=False,
-                #                     compute_cost=compute_cost,
-                #                     line_search=False,
-                #                     )
-
-
-                # get result
-                v_out_ft = results["x"].reshape((1,) * nextra_dims + n_size)
-                # inverse FFT and convert to n
-                return get_n(_ift3(v_out_ft), no, wavelength)
-
-            # get refractive index
-            n = da.map_blocks(recon,
-                              v_ft_start,  # initial guess
-                              eraw_start,  # data
-                              None, # todo: add masks
-                              self.no,
-                              self.wavelength,
-                              step,
-                              chunks=v_ft_start.chunksize[:-3] + n_size,
-                              dtype=complex,
-                              meta=xp.array(()),
-                              )
-
             # affine transformation from reconstruction coordinates to pixel indices
             # for reconstruction, using FFT induced coordinates, i.e. zero is at array index (ny // 2, nx // 2)
             # for matrix, using image coordinates (0, 1, ..., N - 1)
             # note, due to order of operations -n//2 =/= - (n//2) when nx is odd
             xform_recon_pix2coords = affine.params2xform([drs_n[-1], 0, -(n_size[-1] // 2) * drs_n[-1],
                                                           drs_n[-2], 0, -(n_size[-2] // 2) * drs_n[-2]])
-
+            optimizer = mode
         elif mode == "bpm" or mode == "ssnp":
-            # before binning
-            n_start_size = (size_ideal[0], self.holograms_ft.shape[-2], self.holograms_ft.shape[-1])
-            drs_n_start = (drs_ideal[0], self.dxy, self.dxy)
             # after binning
             n_size = (size_ideal[0], self.holograms_ft.shape[-2] // nbin, self.holograms_ft.shape[-1] // nbin)
             drs_n = (drs_ideal[0], self.dxy * nbin, self.dxy * nbin)
-
-            # reconstruction starting point
-            if use_constant_n_start:
-                v_ft_start = da.zeros(self.efield_scattered_ft.shape[:-3] + n_start_size,
-                                      dtype=complex,
-                                      meta=xp.array(()),
-                                      chunks=self.efield_scattered_ft.chunksize[:-3] + n_start_size)
-            else:
-                v_ft_start = da.map_blocks(inverse_model_linear,
-                                           self.phi_rytov_ft,
-                                           mean_beam_frqs_arr[0, ..., 0],
-                                           mean_beam_frqs_arr[0, ..., 1],
-                                           mean_beam_frqs_arr[0, ..., 2],
-                                           self.no,
-                                           self.na_detection,
-                                           self.wavelength,
-                                           self.dxy,
-                                           drs_n_start,
-                                           n_start_size,
-                                           regularization=reconstruction_regularizer,
-                                           mode="rytov",
-                                           no_data_value=0,
-                                           dtype=complex,
-                                           meta=xp.array(()),
-                                           chunks=self.phi_rytov_ft.chunksize[:-3] + n_start_size
-                                           )
-
-            # position z=0 in the middle of the volume
+            # position z=0 in the middle of the volume, accounting for the fact the efields and n are shifted by dz/2
             dz_final = -drs_n[0] * ((n_size[0] - 1) - n_size[0] // 2 + 0.5)
 
-            # generate ATF ... ultimately want to do this based on pupil function defined in init
-            fx_atf = fft.fftshift(fft.fftfreq(n_size[-1], ))[None, :]
-            fy_atf = fft.fftshift(fft.fftfreq(n_size[-2]))[:, None]
-            atf = (np.sqrt(fx_atf ** 2 + fy_atf ** 2) <= self.fmax).astype(complex)
+            # affine transformation from reconstruction coordinates to pixel indices
+            # coordinates in finer coordinates
+            # todo: check this?
+            x = (xp.arange(self.nx) - (self.nx // 2)) * self.dxy
+            y = (xp.arange(self.ny) - (self.ny // 2)) * self.dxy
+            xb = camera.bin(x, [nbin], mode="mean")
+            yb = camera.bin(y, [nbin], mode="mean")
 
-            apodization_n = xp.outer(xp.asarray(tukey(n_size[-2], alpha=0.1)),
-                                     xp.asarray(tukey(n_size[-1], alpha=0.1)))
+            xform_recon_pix2coords = affine.params2xform([drs_n[-1], 0, float(xb[0]),
+                                                          drs_n[-2], 0, float(yb[0])])
 
-            def recon(v_ft, efields_ft, efields_bg_ft, masks, no, wavelength, dz_final, atf, apod, step, optimizer):
-                nextra_dims = v_ft.ndim - 3
-                dims = tuple(range(nextra_dims))
-                # array of size 1 x 1 x ... x 1 x nz x ny x nx
-                v = _ift3(v_ft).squeeze(axis=dims)
-                # array of size 1 x 1 ... x 1 x npatterns x ny x nx
-                efields = _ift2(efields_ft).squeeze(axis=dims)
-                efields_bg = _ift2(efields_bg_ft).squeeze(axis=dims)
+            if mode == "bpm":
+                optimizer = BPM
+            elif mode == "ssnp":
+                optimizer = SSNP
+        else:
+            raise ValueError(f"mode must be ..., but was {mode:s}")
 
+        # generate ATF ... ultimately want to do this based on pupil function defined in init
+        fx_atf = fft.fftshift(fft.fftfreq(n_size[-1], ))[None, :]
+        fy_atf = fft.fftshift(fft.fftfreq(n_size[-2]))[:, None]
+        atf = (np.sqrt(fx_atf ** 2 + fy_atf ** 2) <= self.fmax).astype(complex)
+
+        # apodization
+        apodization_n = xp.outer(xp.asarray(tukey(n_size[-2], alpha=0.1)),
+                                 xp.asarray(tukey(n_size[-1], alpha=0.1)))
+
+        if mode == "born":
+            guess_mode = "born"
+        else:
+            guess_mode = "rytov"
+
+        linear_model = fwd_model_linear(mean_beam_frqs_arr[..., 0],
+                                        mean_beam_frqs_arr[..., 1],
+                                        mean_beam_frqs_arr[..., 2],
+                                        self.no,
+                                        self.na_detection,
+                                        self.wavelength,
+                                        (self.ny, self.nx),
+                                        (self.dxy, self.dxy),
+                                        n_size,
+                                        drs_n,
+                                        mode=guess_mode,
+                                        interpolate=True,
+                                        use_gpu=False)
+
+        linear_model_no_interp = fwd_model_linear(mean_beam_frqs_arr[..., 0],
+                                                  mean_beam_frqs_arr[..., 1],
+                                                  mean_beam_frqs_arr[..., 2],
+                                                  self.no,
+                                                  self.na_detection,
+                                                  self.wavelength,
+                                                  (self.ny, self.nx),
+                                                  (self.dxy, self.dxy),
+                                                  n_size,
+                                                  drs_n,
+                                                  mode=guess_mode,
+                                                  interpolate=False,
+                                                  use_gpu=False)
+
+        dxy = self.dxy
+
+        def recon(efields_ft,
+                  efields_bg_ft,
+                  masks,
+                  no,
+                  wavelength,
+                  dz_final,
+                  atf,
+                  apod,
+                  step,
+                  optimizer):
+            # todo: might be cleaner to compute starting points and scattered fields in this function
+            #  disadvantage is harder to access from outside ... although still easy to compute
+
+            nextra_dims = efields_ft.ndim - 3
+            dims = tuple(range(nextra_dims))
+            efields_ft = efields_ft.squeeze(axis=dims)
+            efields_bg_ft = efields_bg_ft.squeeze(axis=dims)
+
+            if optimizer == "born":
+                efield_scattered_ft = _ft2(get_scattered_field(_ift2(efields_ft),
+                                                               _ift2(efields_bg_ft),
+                                                               scattered_field_regularization))
+            else:
+                efield_scattered_ft = _ft2(get_rytov_phase(_ift2(efields_ft),
+                                                           _ift2(efields_bg_ft),
+                                                           scattered_field_regularization))
+
+            # initial guess
+            v_fts = inverse_model_linear(efield_scattered_ft,
+                                         linear_model_no_interp,
+                                         n_size,
+                                         regularization=reconstruction_regularizer,
+                                         no_data_value=0.)
+
+            if optimizer == "born" or optimizer == "rytov":
+                # define forward model
+                # model = fwd_model_linear(mean_beam_frqs_arr[..., 0],
+                #                          mean_beam_frqs_arr[..., 1],
+                #                          mean_beam_frqs_arr[..., 2],
+                #                          no,
+                #                          na_detection,
+                #                          wavelength,
+                #                          (self.ny, self.nx),
+                #                          (dxy, dxy),
+                #                          n_size,
+                #                          drs_n,
+                #                          mode=mode,
+                #                          interpolate=True,
+                #                          use_gpu=False)
+                #
+                # # set step size. Lipschitz constant of \nabla cost is given by the largest singular value of linear model
+                # # (also the square root of the largest eigenvalue of model^t * model)
+                # u, s, vh = sp.linalg.svds(model, k=1, which='LM')
+                # lipschitz_estimate = s ** 2 / (self.npatterns * self.ny * self.nx) / (self.ny * self.nx)
+                # step = float(1 / lipschitz_estimate)
+                #
+                # results = grad_descent(v_fts.squeeze(axis=dims),
+                #                        efield_scattered_ft.squeeze(axis=dims),
+                #                        model,
+                #                        no,
+                #                        wavelength,
+                #                        step,
+                #                        niters=niters,
+                #                        tau_tv=tau_tv,
+                #                        tau_lasso=tau_lasso,
+                #                        use_imaginary_constraint=use_imaginary_constraint,
+                #                        use_real_constraint=use_real_constraint,
+                #                        masks=masks,
+                #                        compute_cost=compute_cost)
+                #
+                # # get result
+                # v_out_ft = results["x"].reshape((1,) * nextra_dims + n_size)
+                # # inverse FFT and convert to n
+                # n = get_n(_ift3(v_out_ft), no, wavelength)
+
+                # todo: replace with this ... ran out of GPU memory?
+                opt = LinearScatt(efield_scattered_ft,
+                                  linear_model,
+                                  mean_beam_frqs_arr,
+                                  no,
+                                  wavelength,
+                                  (dxy, dxy),
+                                  drs_n,
+                                  v_fts.shape,
+                                  tau_tv_real=tau_tv,
+                                  tau_tv_imag=tau_tv,
+                                  tau_l1_real=tau_lasso,
+                                  tau_l1_imag=tau_lasso,
+                                  use_imaginary_constraint=use_imaginary_constraint,
+                                  use_real_constraint=use_real_constraint,
+                                  )
+
+                # todo: should I move this outside this function and use one value for all?
+                step = opt.guess_step()
+
+                results = opt.run(v_fts,
+                                  step=step,
+                                  max_iterations=niters,
+                                  use_fista=True,
+                                  stochastic_descent=stochastic_descent,
+                                  nmax_stochastic_descent=nmax_stochastic_descent,
+                                  verbose=False,
+                                  compute_cost=compute_cost,
+                                  line_search=False,
+                                  )
+
+                n = get_n(results["x"], no, wavelength)
+
+            else:
                 # bin if desired
-                n_start = get_n(camera.bin(v, [nbin, nbin], mode="mean"), no, wavelength)
-                efields = camera.bin(efields, [nbin, nbin], mode="mean")
-                efields_bg = camera.bin(efields_bg, [nbin, nbin], mode="mean")
+                n_start = get_n(_ift3(v_fts), no, wavelength)
+                efields = camera.bin(_ift2(efields_ft), [nbin, nbin], mode="mean")
+                efields_bg = camera.bin(_ift2(efields_bg_ft), [nbin, nbin], mode="mean")
 
                 model = optimizer(efields,
                                   efields_bg,
@@ -1232,54 +1207,25 @@ class tomography:
 
                 n = results["x"].reshape((1,) * nextra_dims + n_start.shape[-3:])
 
-                return n
+            return n
 
-            if mode == "bpm":
-                optimizer = BPM
-            elif mode == "ssnp":
-                optimizer = SSNP
+        # get refractive index
+        n = da.map_blocks(recon,
+                          self.holograms_ft,  # data
+                          self.holograms_ft_bg,  # background
+                          None, # masks
+                          self.no,
+                          self.wavelength,
+                          dz_final,
+                          atf,
+                          apodization_n,
+                          step,
+                          optimizer,
+                          chunks=(1,) * self.nextra_dims + n_size,
+                          dtype=complex,
+                          meta=xp.array(())
+                          )
 
-            n = da.map_blocks(recon,
-                              v_ft_start,  # initial guess
-                              self.holograms_ft,  # data
-                              self.holograms_ft_bg,  # background
-                              None, # masks
-                              self.no,
-                              self.wavelength,
-                              dz_final,
-                              atf,
-                              apodization_n,
-                              step,
-                              optimizer,
-                              chunks=(1,) * self.nextra_dims + n_size,
-                              dtype=complex,
-                              meta=xp.array(())
-                              )
-
-            # affine transformation from reconstruction coordinates to pixel indices
-            # coordinates in finer coordinates
-            # todo: correct this?
-            x = (xp.arange(self.nx) - (self.nx // 2)) * self.dxy
-            y = (xp.arange(self.ny) - (self.ny // 2)) * self.dxy
-            xb = camera.bin(x, [nbin], mode="mean")
-            yb = camera.bin(y, [nbin], mode="mean")
-
-            xform_recon_pix2coords = affine.params2xform([drs_n[-1], 0, float(xb[0]),
-                                                          drs_n[-2], 0, float(yb[0])])
-
-        else:
-            raise ValueError(f"mode must be ..., but was {mode:s}")
-
-        def get_nstart(v_ft, no, wavelength): return get_n(camera.bin(_ift3(v_ft), [nbin, nbin], mode="mean"), no, wavelength)
-
-        self.n_start = da.map_blocks(get_nstart,
-                                     v_ft_start,
-                                     self.no,
-                                     self.wavelength,
-                                     dtype=complex,
-                                     meta=xp.array(()),
-                                     chunks=(1,) * self.nextra_dims + n_size
-                                     )
 
         self.reconstruction_settings.update({"mode": mode,
                                              "scattered_field_regularization": scattered_field_regularization,
@@ -1738,7 +1684,11 @@ class tomography:
             # ######################
             ax = figh.add_subplot(grid[0, 5])
             ax.set_title("$ang[E(r)] - ang[E_{bg}(r)]$")
-            im = ax.imshow(np.angle(holo) - np.angle(holo_bg), extent=extent, cmap="RdBu", vmin=-2*np.pi, vmax=2*np.pi)
+
+            ang_diff = np.mod(np.angle(holo) - np.angle(holo_bg), 2*np.pi)
+            ang_diff[ang_diff > np.pi] -= 2*np.pi
+
+            im = ax.imshow(ang_diff, extent=extent, cmap="RdBu", vmin=-np.pi, vmax=np.pi)
 
             ax = figh.add_subplot(grid[1, 5])
             plt.colorbar(im, cax=ax, location="bottom")
@@ -1767,6 +1717,12 @@ def _ift3(m):
 
     return xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(m, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
 
+
+def _to_cpu(m):
+    if _gpu_available and isinstance(m, cp.ndarray):
+        return m.get()
+    else:
+        return m
 
 def soft_threshold(t: float,
                    x: array) -> array:
@@ -2375,8 +2331,8 @@ def get_v(n: array,
     return v
 
 
-def get_rytov_phase(efields_ft: array,
-                    efields_bg_ft: array,
+def get_rytov_phase(eimgs: array,
+                    eimgs_bg: array,
                     regularization: float = 0.) -> array:
     """
     Compute rytov phase from field and background field. The Rytov phase is \psi_s(r) where
@@ -2392,18 +2348,20 @@ def get_rytov_phase(efields_ft: array,
     :return psi_rytov:
     """
 
-    use_gpu = isinstance(efields_ft, cp.ndarray) and _gpu_available
+    use_gpu = isinstance(eimgs, cp.ndarray) and _gpu_available
     if use_gpu:
         xp = cp
+        def uwrap(m): return xp.array(unwrap_phase(m.get()))
     else:
         xp = np
+        def uwrap(m): return unwrap_phase(m)
 
-    efields_ft = xp.asarray(efields_ft)
-    efields_bg_ft = xp.asarray(efields_bg_ft)
+    eimgs = xp.asarray(eimgs)
+    eimgs_bg = xp.asarray(eimgs_bg)
 
     # broadcast arrays
-    eimgs_bg = _ift2(efields_bg_ft)
-    eimgs = _ift2(efields_ft)
+    # eimgs_bg = _ift2(efields_bg_ft)
+    # eimgs = _ift2(efields_ft)
     eimgs, eimgs_bg = xp.broadcast_arrays(eimgs, eimgs_bg)
 
     # output values
@@ -2413,14 +2371,10 @@ def get_rytov_phase(efields_ft: array,
 
     # set real parts
     psi_rytov = xp.log(abs(eimgs) / (abs(eimgs_bg))) + 1j * 0
-    # set imaginary parts
-    if use_gpu:
-        def uwrap(m): return xp.array(unwrap_phase(m.get()))
-    else:
-        def uwrap(m): return unwrap_phase(m)
 
+    # set imaginary parts
     # loop over all dimensions except the last two
-    nextra_shape = efields_ft.shape[:-2]
+    nextra_shape = eimgs.shape[:-2]
     nextra = np.prod(nextra_shape)
     for ii in range(nextra):
         ind = np.unravel_index(ii, nextra_shape)
@@ -2429,14 +2383,11 @@ def get_rytov_phase(efields_ft: array,
     # regularization
     psi_rytov[abs(eimgs_bg) < regularization] = 0
 
-    # Fourier transform
-    psi_rytov_ft = _ft2(psi_rytov)
-
-    return psi_rytov_ft
+    return psi_rytov
 
 
-def get_scattered_field(eimgs_ft: array,
-                        eimgs_bg_ft: array,
+def get_scattered_field(holograms: array,
+                        holograms_bg: array,
                         regularization: float = 0.) -> array:
     """
     Compute estimate of scattered electric field with regularization. This function only operates on the
@@ -2450,21 +2401,10 @@ def get_scattered_field(eimgs_ft: array,
     # todo: could also define this sensibly for the rytov case. In that case, would want to take rytov phase shift
     #   and shift it back to the correct place in phase space ... since scattered field Es = E_o * psi_rytov is the approximation
 
-    if isinstance(eimgs_ft, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
     # compute scattered field in real space
-    holograms_bg = _ift2(xp.asarray(eimgs_bg_ft))
-    holograms = _ift2(xp.asarray(eimgs_ft))
-    efield_scattered = (holograms - holograms_bg) / (xp.abs(holograms_bg) + regularization)
+    efield_scattered = (holograms - holograms_bg) / (abs(holograms_bg) + regularization)
 
-    # Fourier transform
-    efield_scattered_ft_raw = _ft2(efield_scattered)
-
-    return efield_scattered_ft_raw
-
+    return efield_scattered
 
 # holograms
 def unmix_hologram(img: array,
@@ -2545,7 +2485,9 @@ def get_reconstruction_sampling(no: float,
                                 dz_sampling_factor: float = 1.,
                                 dxy_sampling_factor: float = 1.) -> (tuple[float], tuple[int]):
     """
-    Get information about pixel grid scattering potential will be reconstructed on
+    Helper function for computing Nyquist sampled grid size for scattering potential based on incoming beam angles.
+    Note that this may not always be the ideal grid size, especially for multislice methods where the accuracy
+    of the beam propagation depends on the choice of voxel size
 
     :param no: background index of refraction
     :param na_det: numerical aperture of detection objective
@@ -2614,6 +2556,8 @@ def fwd_model_linear(beam_fx: array,
     Forward model from scattering potential v(k) to imaged electric field E(k) after interacting with object.
     Assumes plane wave illumination and linear scattering model (Born or Rytov)
 
+    # todo: replace na_det with coherent transfer function
+
     :param beam_fx: beam frequencies. Either of size npatterns or nmultiplex x npatterns. If not all patterns
       use the same degree of multiplexing, then nmultiplex should be the maximum degree of multiplexing for all patterns
       and the extra frequences associated with patterns with a lower degree of multiplexing can be set to np.inf
@@ -2649,8 +2593,6 @@ def fwd_model_linear(beam_fx: array,
         model = sum(models)
 
     else:
-        # todo: want to support multiple beam angles?
-
         if use_gpu and _gpu_available:
             xp = cp
             spm = sp_gpu
@@ -2848,17 +2790,9 @@ def fwd_model_linear(beam_fx: array,
 
 
 def inverse_model_linear(efield_fts: array,
-                         beam_fx: array,
-                         beam_fy: array,
-                         beam_fz: array,
-                         no: float,
-                         na_det: float,
-                         wavelength: float,
-                         dxy: float,
-                         drs_v: tuple[float],
+                         model: csr_matrix,
                          v_shape: tuple[int],
                          regularization: float = 0.1,
-                         mode: str = "rytov",
                          no_data_value: float = np.nan) -> array:
     """
     Given a set of holograms obtained using ODT, put the hologram information back in the correct locations in
@@ -2868,18 +2802,8 @@ def inverse_model_linear(efield_fts: array,
     Any points in efield_fts which are NaN will be ignored. efield_fts can have an arbitrary number of leading
     singleton dimensions, but must have at least three dimensions.
     i.e. it should have shape 1 x ... x 1 x nimgs x ny x nx
-    :param beam_fx: beam frqs must satify each is [vx, vy, vz] and vx**2 + vy**2 + vz**2 = n**2 / wavelength**2.
-     Divide these into three arguments to make this function easier to use with dask map_blocks()
-    :param beam_fy:
-    :param beam_fz:
-    :param no: background index of refraction
-    :param na_det: detection numerical aperture
-    :param wavelength:
-    :param dxy: pixel size
-    :param drs_v: (dz_v, dy_v, dx_v) pixel size for scattering potential reconstruction grid
-    :param v_shape: (nz_v, ny_v, nx_v) grid size for scattering potential reconstruction grid
+    :param model: forward model matrix. Generated from fwd_model_linear(). Should have interpolate=False
     :param regularization: regularization factor
-    :param mode: "born" or "rytov"
     :param no_data_value: value of any points in v_ft where no data is available
     :return v_ft:
     """
@@ -2898,19 +2822,6 @@ def inverse_model_linear(efield_fts: array,
     # ###########################
     # put information back in Fourier space
     # ###########################
-    model = fwd_model_linear(beam_fx,
-                             beam_fy,
-                             beam_fz,
-                             no,
-                             na_det,
-                             wavelength,
-                             (ny, nx),
-                             (dxy, dxy),
-                             v_shape,
-                             drs_v,
-                             mode=mode,
-                             interpolate=False)
-
     model = model.tocoo()
     data = xp.asarray(model.data)
     col_index = xp.asarray(model.col)
@@ -3632,6 +3543,7 @@ class Optimizer():
             nmax_stochastic_descent: int = np.inf,
             verbose: bool = False,
             compute_cost: bool = False,
+            compute_all_costs: bool = False,
             line_search: bool = False,
             line_search_factor: float = 0.5,
             xtol: float = 1e-8) -> dict:
@@ -3649,7 +3561,7 @@ class Optimizer():
         :param compute_cost: optionally compute and store the cost. This can make optimization slower
         :param line_search: use line search to shrink step-size as necessary
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
-        :param xtol: TODO: unused
+        :param xtol: TODO: stop when change in x is small
         :return results: dictionary containing results
         """
 
@@ -3670,7 +3582,7 @@ class Optimizer():
                    "niterations": max_iterations,
                    "use_fista": use_fista,
                    "use_gpu": use_gpu,
-                   "x_init": xp.array(x_start, copy=True),
+                   "x_init": _to_cpu(xp.array(x_start, copy=True)),
                    "prox_parameters": self.prox_parameters
                    }
 
@@ -3687,20 +3599,26 @@ class Optimizer():
         q_last = 1
         x = xp.array(x_start, copy=True)
 
-        def to_cpu(m):
-            if _gpu_available and isinstance(m, cp.ndarray):
-                return m.get()
-            else:
-                return m
-
         for ii in range(max_iterations):
+            # select which subsets of views/angles to use
+            if stochastic_descent:
+                # select random subset of angles
+                num = random.sample(range(1, nmax_stochastic_descent + 1), 1)[0]
+                inds = random.sample(range(self.n_samples), num)
+            else:
+                # use all angles
+                inds = list(range(self.n_samples))
+
             # ###################################
             # compute cost
             # ###################################
             tstart_err = time.perf_counter()
 
             if compute_cost:
-                costs[ii] = to_cpu(self.cost(x))
+                if compute_all_costs:
+                    costs[ii] = _to_cpu(self.cost(x))
+                else:
+                    costs[ii, inds] = _to_cpu(self.cost(x, inds=inds))
 
             timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
 
@@ -3708,13 +3626,6 @@ class Optimizer():
             # proximal gradient descent
             # ###################################
             tstart_grad = time.perf_counter()
-
-            if stochastic_descent:
-                # select random subset of angles
-                num = random.sample(range(1, nmax_stochastic_descent + 1), 1)[0]
-                inds = random.sample(range(self.n_samples), num)
-            else:
-                inds = list(range(self.n_samples))
 
             if not line_search:
                 # ###################################
@@ -3738,20 +3649,19 @@ class Optimizer():
                 cx = xp.mean(self.cost(x, inds=inds), axis=0)
                 timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
 
-                # initialize line-search
                 tstart_prox = time.perf_counter()
 
+                # initialize line-search
                 if ii != 0:
                     steps[ii] = steps[ii - 1]
-
                 y = self.prox(x - steps[ii] * gx)
 
-                def lipschitz_condition(y, cx, gx):
+                def lipschitz_condition_violated(y, cx, gx):
                     cy = xp.mean(self.cost(y, inds=inds), axis=0)
                     return cy > cx + xp.sum(gx.real * (y - x).real + gx.imag * (y - x).imag) + 0.5 / steps[ii] * xp.linalg.norm(y - x)**2
 
                 # iterate ... at each point check if we violate Lipschitz continuous gradient condition
-                while lipschitz_condition(y, cx, gx):
+                while lipschitz_condition_violated(y, cx, gx):
                     steps[ii] *= line_search_factor
                     y = self.prox(x - steps[ii] * gx)
 
@@ -3771,6 +3681,7 @@ class Optimizer():
 
             # update for next gradient-descent/FISTA iteration
             q_last = q_now
+            # todo: do I need to make a copy?
             y_last = y
 
             timing["update"] = np.concatenate((timing["update"], np.array([time.perf_counter() - tstart_update])))
@@ -3780,7 +3691,7 @@ class Optimizer():
             if verbose:
                 print(
                     f"iteration {ii + 1:d}/{max_iterations:d},"
-                    f" cost={np.mean(costs[ii]):.3g},"
+                    f" cost={np.nanmean(costs[ii]):.3g},"
                     f" grad={timing['grad'][ii]:.3f}s,"
                     f" prox={timing['prox'][ii]:.3f}s,"                    
                     f" update={timing['update'][ii]:.3f}s,"
@@ -3791,7 +3702,10 @@ class Optimizer():
 
         # compute final cost
         if compute_cost:
-            costs[ii + 1] = to_cpu(self.cost(x))
+            if compute_all_costs:
+                costs[ii + 1] = _to_cpu(self.cost(x))
+            else:
+                costs[ii + 1, inds] = _to_cpu(self.cost(x, inds=inds))
 
         # store results
         results.update({"timing": timing,
@@ -3804,7 +3718,6 @@ class Optimizer():
 
 class RIOptimizer(Optimizer):
 
-    # todo: add beam_frqs as argument?
     def __init__(self,
                  e_measured: array,
                  e_measured_bg: array,
@@ -3822,7 +3735,8 @@ class RIOptimizer(Optimizer):
                  tau_l1_real: float = 0,
                  tau_l1_imag: float = 0,
                  use_imaginary_constraint: bool = False,
-                 use_real_constraint: bool = False
+                 use_real_constraint: bool = False,
+                 max_imaginary_part: float = np.inf,
                  ):
 
         super(RIOptimizer, self).__init__()
@@ -3845,7 +3759,8 @@ class RIOptimizer(Optimizer):
                       tau_l1_real,
                       tau_l1_imag,
                       use_imaginary_constraint,
-                      use_real_constraint)
+                      use_real_constraint,
+                      max_imaginary_part)
 
 
     def set_prox(self,
@@ -3854,7 +3769,8 @@ class RIOptimizer(Optimizer):
                  tau_l1_real: float = 0,
                  tau_l1_imag: float = 0,
                  use_imaginary_constraint: bool = False,
-                 use_real_constraint: bool = False
+                 use_real_constraint: bool = False,
+                 max_imaginary_part: float = np.inf
                  ):
 
         self.prox_parameters = {"tau_tv_real": float(tau_tv_real),
@@ -3863,6 +3779,7 @@ class RIOptimizer(Optimizer):
                                 "tau_l1_imag": float(tau_l1_imag),
                                 "use_imaginary_constraint": bool(use_imaginary_constraint),
                                 "use_real_constraint": bool(use_real_constraint),
+                                "max_imaginary_part": float(max_imaginary_part)
                                 }
 
     def prox(self, x):
@@ -3871,7 +3788,9 @@ class RIOptimizer(Optimizer):
         else:
             denoise_tv = denoise_tv_chambolle
 
-        # apply TV proximal operators
+        # ###########################
+        # TV proximal operators
+        # ###########################
         if self.prox_parameters["tau_tv_real"] != 0:
             x_real = denoise_tv(x.real, weight=self.prox_parameters["tau_tv_real"], channel_axis=None)
         else:
@@ -3882,125 +3801,122 @@ class RIOptimizer(Optimizer):
         else:
             x_imag = x.imag
 
-        # apply L1 proximal operators
+        # ###########################
+        # L1 proximal operators (softmax)
+        # ###########################
         if self.prox_parameters["tau_l1_real"] != 0:
             x_real = soft_threshold(self.prox_parameters["tau_l1_real"], x_real - self.no) + self.no
 
         if self.prox_parameters["tau_l1_imag"] != 0:
             x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"], x_imag)
 
-        # projection onto constraints
+        # ###########################
+        # projection constraints
+        # ###########################
         if self.prox_parameters["use_imaginary_constraint"]:
             x_imag[x_imag < 0] = 0
 
+        if self.prox_parameters["max_imaginary_part"] != np.inf:
+            x_imag[x_imag > self.prox_parameters["max_imaginary_part"]] = self.prox_parameters["max_imaginary_part"]
+
         if self.prox_parameters["use_real_constraint"]:
             x_real[x_real < self.no] = self.no
-
 
         return x_real + 1j * x_imag
 
 
 class LinearScatt(RIOptimizer):
     def __init__(self,
-                 e_measured: array,
-                 e_measured_bg: array,
+                 eft: array,
+                 model: csr_matrix,
                  beam_frqs: array,
                  no: float,
                  wavelength: float,
                  drs_e: tuple[float],
                  drs_n: tuple[float],
                  shape_n: tuple[int],
-                 dz_final: float = 0,
-                 atf: Optional[array] = 1.,
-                 apodization: Optional[array] = None,
                  tau_tv_real: float = 0,
                  tau_tv_imag: float = 0,
                  tau_l1_real: float = 0,
                  tau_l1_imag: float = 0,
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
-                 mode: str = "rytov",
-                 scattering_regularization: float = 0.,
-                 na_det: float = 1.3,
+                 max_imaginary_part: float = np.inf
                  ):
+        """
+        Born and Rytov optimizer
 
-        super(LinearScatt, self).__init__(e_measured,
-                                          e_measured_bg,
+        :param eft: Fourier-transform of the electric field. This will be either the scattered field or the
+          Rytov phase depending on the linear model chosen.
+        :param model: The matrix relating the measured field and the scattering potential. This should be generated
+          with fwd_model_linear()
+        :param beam_frqs: currently not used
+        :param no:
+        :param wavelength:
+        :param drs_e:
+        :param drs_n:
+        :param shape_n:
+        :param tau_tv_real:
+        :param tau_tv_imag:
+        :param tau_l1_real:
+        :param tau_l1_imag:
+        :param use_imaginary_constraint:
+        :param use_real_constraint:
+        """
+
+        # note that have made different choices for LinearScatt optimzers vs. the multislice
+        # but still inheriting from RIOptimizer for convenience in constructing proximal operator
+        super(LinearScatt, self).__init__(eft,
+                                          None,
                                           beam_frqs,
                                           no,
                                           wavelength,
                                           drs_e,
                                           drs_n,
                                           shape_n,
-                                          dz_final,
-                                          atf,
-                                          apodization,
+                                          None,
+                                          None,
+                                          None,
                                           tau_tv_real,
                                           tau_tv_imag,
                                           tau_l1_real,
                                           tau_l1_imag,
                                           use_imaginary_constraint,
-                                          use_real_constraint)
+                                          use_real_constraint,
+                                          max_imaginary_part)
 
-        self.mode = mode
-        self.scattering_regularization = scattering_regularization
-        self.na_det = na_det
-
-        # todo: change fns to not take any internal fts
-        if self.mode == "born":
-            self.e_scattered_ft = get_scattered_field(_ft2(self.e_measured),
-                                                      _ft2(self.e_measured_bg),
-                                                      regularization=self.scattering_regularization)
-        elif self.mode == "rytov":
-            self.e_scattered_ft = get_rytov_phase(_ft2(self.e_measured),
-                                                  _ft2(self.e_measured_bg),
-                                                  regularization=self.scattering_regularization)
-        else:
-            raise ValueError(f"mode must be 'born' or 'rytov' but was '{mode:s}'")
-
-        use_gpu = isinstance(self.e_measured, cp.ndarray) and _gpu_available
-        self.model = fwd_model_linear(self.beam_frqs[..., 0],
-                                      self.beam_frqs[..., 1],
-                                      self.beam_frqs[..., 2],
-                                      self.no,
-                                      na_det,
-                                      self.wavelength,
-                                      self.e_measured[0].shape,
-                                      self.drs_e,
-                                      self.shape_n,
-                                      self.drs_n,
-                                      mode=self.mode,
-                                      interpolate=True,
-                                      use_gpu=use_gpu
-                                      )
-
+        self.model = model
         self.model_csc = self.model.tocsc()
 
     def gradient(self, x, inds=None):
-        ny, nx = self.drs_e
+        # todo: implement inds
+        ny, nx = self.e_measured.shape[-2:]
         # first division is average
         # second division converts Fourier space to real-space sum
         # factor of 0.5 in cost function killed by derivative factor of 2
-        dc_dm = (self.model.dot(x.ravel()) - self.e_scattered_ft.ravel()) / (self.n_samples * ny * nx) / (ny * nx)
+        dc_dm = (self.model.dot(x.ravel()) - self.e_measured.ravel()) / (self.n_samples * ny * nx) / (ny * nx)
         dc_dv = (dc_dm[None, :].conj() * self.model_csc)[0].conj()
 
         return dc_dv
 
     def cost(self, x, inds=None):
-        ny, nx = self.drs_e
-        return (abs(self.model.dot(x.ravel()) - self.e_scattered_ft.ravel()) ** 2).reshape([self.n_samples, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
+        # todo: implexment inds
+        ny, nx = self.e_measured.shape[-2:]
+        return (abs(self.model.dot(x.ravel()) - self.e_measured.ravel()) ** 2).reshape([self.n_samples, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
 
     def guess_step(self, x=None):
-        ny, nx = self.drs_e
+        ny, nx = self.e_measured.shape[-2:]
         u, s, vh = sp.linalg.svds(self.model, k=1, which='LM')
         lipschitz_estimate = s ** 2 / (self.n_samples * ny * nx) / (ny * nx)
         return float(1 / lipschitz_estimate)
 
     def prox(self, x):
-        # apply proximal operators to n not V
-        n = get_n(x, self.no, self.wavelength)
+        # convert from V to n
+        n = get_n(_ift3(x), self.no, self.wavelength)
+        # apply proximal operator on n
         n_prox = super(LinearScatt, self).prox(n)
-        return get_v(n_prox, self.no, self.wavelength)
+
+        return _ft3(get_v(n_prox, self.no, self.wavelength))
 
     def run(self, x_start, **kwargs):
         return super(LinearScatt, self).run(x_start, **kwargs)
@@ -4028,7 +3944,8 @@ class BPM(RIOptimizer):
                  tau_l1_real: float = 0.,
                  tau_l1_imag: float = 0.,
                  use_imaginary_constraint: bool = False,
-                 use_real_constraint: bool = False
+                 use_real_constraint: bool = False,
+                 max_imaginary_part: float = np.inf
                  ):
         """
         Suppose we have a 3D grid with nz voxels along the propagation direction. We define the electric field
@@ -4069,7 +3986,8 @@ class BPM(RIOptimizer):
                                   tau_l1_real=tau_l1_real,
                                   tau_l1_imag=tau_l1_imag,
                                   use_imaginary_constraint=use_imaginary_constraint,
-                                  use_real_constraint=use_real_constraint)
+                                  use_real_constraint=use_real_constraint,
+                                  max_imaginary_part=max_imaginary_part)
 
         # cosines
         if self.beam_frqs is not None:
@@ -4164,7 +4082,8 @@ class SSNP(RIOptimizer):
                  tau_l1_real: float = 0,
                  tau_l1_imag: float = 0,
                  use_imaginary_constraint: bool = False,
-                 use_real_constraint: bool = False
+                 use_real_constraint: bool = False,
+                 max_imaginary_part: float = np.inf
                  ):
 
         super(SSNP, self).__init__(e_measured,
@@ -4183,7 +4102,8 @@ class SSNP(RIOptimizer):
                                    tau_l1_real=tau_l1_real,
                                    tau_l1_imag=tau_l1_imag,
                                    use_imaginary_constraint=use_imaginary_constraint,
-                                   use_real_constraint=use_real_constraint)
+                                   use_real_constraint=use_real_constraint,
+                                   max_imaginary_part=max_imaginary_part)
         # starting field
         dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
         self.e_start = field_prop.propagate_homogeneous(self.e_measured_bg,
