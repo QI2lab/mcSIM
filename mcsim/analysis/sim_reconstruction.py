@@ -248,7 +248,7 @@ class SimImageSet:
         :param trim_negative_values: set values in SIM-SR reconstruction which are less than zero to zero
         :param use_gpu:
         :param print_to_terminal:
-        :param axes_names:
+        :param axes_names: axes names for all input dimensions.
         """
         
         tstart = time.perf_counter()
@@ -2243,7 +2243,8 @@ class SimImageSet:
                     "band_inds": self.band_inds.tolist(),
                     "nbands": self.nbands,
                     "reconstruction_settings": self._recon_settings,
-                    "preprocessing_settings": self._preprocessing_settings
+                    "preprocessing_settings": self._preprocessing_settings,
+                    "axes_names": self.axes_names
                     }
 
         metadata.update(attributes)
