@@ -130,8 +130,6 @@ class tomography:
         # electric fields
         self.holograms_ft = None
         self.holograms_ft_bg = None
-        self.efield_scattered_ft = None
-        self.phi_rytov_ft = None
 
         # coordinates of ground truth image
         self.dxy = dxy
@@ -151,7 +149,6 @@ class tomography:
 
         # settings
         self.reconstruction_settings = {}
-        self.n_start = None
 
     def estimate_hologram_frqs(self,
                                roi_size_pix: int = 11,
@@ -594,7 +591,7 @@ class tomography:
     def unmix_holograms(self,
                         bg_average_axes: tuple[int],
                         kernel_size: Optional[int] = None,
-                        mask: Optional[np.ndarray] = None,
+                        fourier_mask: Optional[np.ndarray] = None,
                         fit_phases: bool = False,
                         correct_amplitudes: bool = True,
                         fit_translations: bool = False,
@@ -608,7 +605,7 @@ class tomography:
         :param bg_average_axes: axes to average along when producing background images
         :param kernel_size: when averaging time points to generate a background image, this is the number of
         time points that will be used
-        :param mask: area to be cut out of hologrms
+        :param fourier_mask: area to be cut out of holograms
         :param fit_phases: whether to fit phase differences between image and background holograms
         :param correct_amplitudes:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
@@ -628,7 +625,7 @@ class tomography:
         if apodization is None:
             apodization = np.outer(tukey(self.ny, alpha=0.1), tukey(self.nx, alpha=0.1))
 
-        # make ref_frq_da[..., ii] broadcastable to same size as raw images so can use with dask array
+        # make broadcastable to same size as raw images so can use with dask array
         ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
                                    chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
                                    )
@@ -653,12 +650,12 @@ class tomography:
                                          dtype=complex)
 
         # cut off region using mask
-        if mask is None:
+        if fourier_mask is None:
             holograms_ft = holograms_ft_raw
         else:
             # ensure masks has same dims and chunks as holograms_ft_raw
-            masks_da = da.from_array(xp.expand_dims(xp.array(mask),
-                                                    axis=tuple(range(0, self.imgs_raw.ndim - mask.ndim))),
+            masks_da = da.from_array(xp.expand_dims(xp.array(fourier_mask),
+                                                    axis=tuple(range(0, self.imgs_raw.ndim - fourier_mask.ndim))),
                                      chunks=holograms_ft_raw.chunksize)
 
             holograms_ft = da.map_blocks(cut_mask,
@@ -682,13 +679,13 @@ class tomography:
                                                 apodization=apodization,
                                                 dtype=complex)
 
-            if mask is None:
+            if fourier_mask is None:
                 holograms_ft_bg = holograms_ft_raw_bg
             else:
                 # ensure masks has same dims and chunks as holograms_ft_raw
-                masks_da_bg = da.from_array(xp.expand_dims(xp.array(mask),
-                                                           axis=tuple(range(0, self.imgs_raw.ndim - mask.ndim))),
-                                         chunks=holograms_ft_raw_bg.chunksize)
+                masks_da_bg = da.from_array(xp.expand_dims(xp.array(fourier_mask),
+                                                           axis=tuple(range(0, self.imgs_raw.ndim - fourier_mask.ndim))),
+                                            chunks=holograms_ft_raw_bg.chunksize)
                 holograms_ft_bg = da.map_blocks(cut_mask,
                                                 holograms_ft_raw_bg,
                                                 masks_da_bg,
@@ -884,43 +881,34 @@ class tomography:
     def reconstruct_n(self,
                       mode: str = "rytov",
                       scattered_field_regularization: float = 50,
-                      niters: int = 100,
                       reconstruction_regularizer: float = 0.1,
                       dxy_sampling_factor: float = 1.,
                       dz_sampling_factor: float = 1.,
                       z_fov: float = 20,
                       nbin: int = 1,
-                      mask: Optional[np.ndarray] = None,
-                      tau_tv: float = 0,
-                      tau_lasso: float = 0,
-                      use_imaginary_constraint: bool = True,
-                      use_real_constraint: bool = False,
+                      realspace_mask: Optional[np.ndarray] = None,
                       step: float = 1e-5,
-                      stochastic_descent: bool = True,
-                      nmax_stochastic_descent: Optional[int] = None,
+                      use_gpu: bool = False,
                       use_constant_n_start: bool = False,
-                      compute_cost: bool = False,
-                      use_gpu: bool = False):
+                      **kwargs):
+
         """
-        Reconstruct refractive index
+        Reconstruct refractive index using one of a several different models
 
         :param mode: "born", "rytov", "bpm", or "ssnp"
-        :param scattered_field_regularization:
-        :param niters: number of iterations
+        :param scattered_field_regularization: regularization used in computing scattered field
+          or Rytov phase
         :param reconstruction_regularizer:
         :param dxy_sampling_factor:
         :param dz_sampling_factor:
-        :param z_fov:
+        :param z_fov: z-field of view in microns
         :param nbin: for BPM, bin image by this factor
-        :param mask:
-        :param tau_tv:
-        :param tau_lasso:
-        :param use_imaginary_constraint:
-        :param use_real_constraint:
-        :param step: ignored unless mode = "bpm"
-        :param stochastic_descent:
-        :param compute_cost:
+        :param realspace_mask: indicate which parts of image to exclude/keep
+        :param step: ignored if mode is "born" or "rytov"
         :param use_gpu:
+        :param **kwargs: passed through to both the constructor and the run() method of the optimizer.
+          These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
+          Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details
         :return n, drs_n, xform_recon_pix2coords:
         """
 
@@ -952,35 +940,28 @@ class tomography:
             raise ValueError("")
 
         # ############################
-        # ensure on GPU
+        # get size information
         # ############################
-        if use_gpu:
-            self.holograms_ft = da.map_blocks(xp.asarray,
-                                              self.holograms_ft,
-                                              dtype=complex,
-                                              meta=xp.array(())
-                                              )
-            self.holograms_ft_bg = da.map_blocks(xp.asarray,
-                                                 self.holograms_ft_bg,
-                                                 dtype=complex,
-                                                 meta=xp.array(())
-                                                 )
+        # todo: set pixel size directly
+        drs_ideal, size_ideal = get_reconstruction_nyquist_sampling(self.no,
+                                                                    self.na_detection,
+                                                                    self.na_excitation,
+                                                                    self.wavelength,
+                                                                    self.dxy,
+                                                                    self.holograms_ft.shape[-2:],
+                                                                    z_fov,
+                                                                    dz_sampling_factor=dz_sampling_factor,
+                                                                    dxy_sampling_factor=dxy_sampling_factor)
 
-
-
-        drs_ideal, size_ideal = get_reconstruction_sampling(self.no,
-                                                        self.na_detection,
-                                                        self.na_excitation,
-                                                        self.wavelength,
-                                                        self.dxy,
-                                                        self.holograms_ft.shape[-2:],
-                                                        z_fov,
-                                                        dz_sampling_factor=dz_sampling_factor,
-                                                        dxy_sampling_factor=dxy_sampling_factor)
+        # generate ATF ... ultimately want to do this based on pupil function defined in init
+        e_size = (self.holograms_ft.shape[-2] // nbin, self.holograms_ft.shape[-1] // nbin)
+        fx_atf = xp.fft.fftshift(xp.fft.fftfreq(e_size[-1], self.dxy * nbin))[None, :]
+        fy_atf = xp.fft.fftshift(xp.fft.fftfreq(e_size[-2], self.dxy * nbin))[:, None]
+        atf = (xp.sqrt(fx_atf ** 2 + fy_atf ** 2) <= self.fmax).astype(complex)
 
         if mode == "born" or mode == "rytov":
             if nbin != 1:
-                warnings.warn(f"nbin={nbin:d}, but only nbin=1 is supported for mode {mode:s}")
+                raise NotImplementedError(f"nbin={nbin:d}, but only nbin=1 is supported for mode {mode:s}")
 
             dz_final = None
             drs_n = drs_ideal
@@ -1040,20 +1021,21 @@ class tomography:
         else:
             raise ValueError(f"mode must be ..., but was {mode:s}")
 
-        # generate ATF ... ultimately want to do this based on pupil function defined in init
-        fx_atf = fft.fftshift(fft.fftfreq(n_size[-1], ))[None, :]
-        fy_atf = fft.fftshift(fft.fftfreq(n_size[-2]))[:, None]
-        atf = (np.sqrt(fx_atf ** 2 + fy_atf ** 2) <= self.fmax).astype(complex)
-
-        # apodization
-        apodization_n = xp.outer(xp.asarray(tukey(n_size[-2], alpha=0.1)),
-                                 xp.asarray(tukey(n_size[-1], alpha=0.1)))
+        # general info
+        if self.verbose:
+            print(f"computing index of refraction for {np.prod(self.imgs_raw.shape[:-3]):d} images "
+                  f"using mode {mode:s}. "
+                  f"Image size = {self.npatterns} x {self.ny:d} x {self.nx:d}, "
+                  f"reconstruction size = {n_size[0]:d} x {n_size[1]:d} x {n_size[2]:d}")
 
         # model for computing guess
         if mode == "born":
             guess_mode = "born"
         else:
             guess_mode = "rytov"
+
+        if self.verbose:
+            tstart_linear_model = time.perf_counter()
 
         linear_model_no_interp = fwd_model_linear(mean_beam_frqs_arr[..., 0],
                                                   mean_beam_frqs_arr[..., 1],
@@ -1069,25 +1051,55 @@ class tomography:
                                                   interpolate=False,
                                                   use_gpu=use_gpu)
 
-        dxy = self.dxy
+        if self.verbose:
+            print(f"Generated linear model for initial guess in {time.perf_counter() - tstart_linear_model:.2f}s")
+
+        # apodization
+        apodization_n = xp.outer(xp.asarray(tukey(n_size[-2], alpha=0.1)),
+                                 xp.asarray(tukey(n_size[-1], alpha=0.1)))
 
         def recon(efields_ft,
                   efields_bg_ft,
-                  masks,
+                  beam_frqs,
+                  rmask,
+                  dxy,
                   no,
                   wavelength,
                   dz_final,
                   atf,
                   apod,
                   step,
-                  optimizer):
+                  optimizer,
+                  verbose,
+                  block_id=None):
             # todo: might be cleaner to compute starting points and scattered fields in this function
             #  disadvantage is harder to access from outside ... although still easy to compute
+
+            # mempool = cp.get_default_memory_pool()
+            # pinned_mempool = cp.get_default_pinned_memory_pool()
+            # # memory_start = mempool.used_bytes()
+            # memory_start = 0
+            # mempool.free_all_blocks()
+            # print(f"used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB, memory pool = {mempool.total_bytes() / 1e9:.3f}GB")
+            # # fourier plan cache
+            # cache = cp.fft.config.get_plan_cache()
+            # cache.show_info()
+
+            if use_gpu:
+                # ensure not holding large FFT planes in the cache
+                # todo: caching 2D FFT's not a problem, but caching the 3D FFT can be!
+                cache = cp.fft.config.get_plan_cache()
+                cache.set_size(0)
+                # cache.set_memsize(0)
 
             nextra_dims = efields_ft.ndim - 3
             dims = tuple(range(nextra_dims))
             efields_ft = efields_ft.squeeze(axis=dims)
             efields_bg_ft = efields_bg_ft.squeeze(axis=dims)
+
+            if use_gpu:
+                efields_ft = xp.asarray(efields_ft)
+                efields_bg_ft = xp.asarray(efields_bg_ft)
 
             if optimizer == "born":
                 efield_scattered_ft = _ft2(get_scattered_field(_ift2(efields_ft),
@@ -1099,51 +1111,56 @@ class tomography:
                                                            scattered_field_regularization))
 
             # initial guess
-            v_fts_start = inverse_model_linear(efield_scattered_ft,
-                                               linear_model_no_interp,
-                                               n_size,
-                                               regularization=reconstruction_regularizer,
-                                               no_data_value=0.)
+            if use_constant_n_start:
+                v_fts_start = xp.zeros(n_size, dtype=complex)
+            else:
+                v_fts_start = inverse_model_linear(efield_scattered_ft,
+                                                   linear_model_no_interp,
+                                                   n_size,
+                                                   regularization=reconstruction_regularizer,
+                                                   no_data_value=0.)
 
             if optimizer == "born" or optimizer == "rytov":
                 opt = LinearScatt(efield_scattered_ft,
                                   linear_model,
-                                  mean_beam_frqs_arr,
                                   no,
                                   wavelength,
                                   (dxy, dxy),
                                   drs_n,
                                   v_fts_start.shape,
-                                  tau_tv_real=tau_tv,
-                                  tau_tv_imag=tau_tv,
-                                  tau_l1_real=tau_lasso,
-                                  tau_l1_imag=tau_lasso,
-                                  use_imaginary_constraint=use_imaginary_constraint,
-                                  use_real_constraint=use_real_constraint,
+                                  **kwargs
                                   )
 
                 results = opt.run(v_fts_start,
                                   step=step,
-                                  max_iterations=niters,
-                                  use_fista=True,
-                                  stochastic_descent=stochastic_descent,
-                                  nmax_stochastic_descent=nmax_stochastic_descent,
-                                  verbose=False,
-                                  compute_cost=compute_cost,
-                                  line_search=False,
+                                  verbose=verbose,
+                                  **kwargs
                                   )
 
                 n = get_n(_ift3(results["x"]), no, wavelength).reshape((1,) * nextra_dims + v_fts_start.shape[-3:])
 
             else:
+                # delete variables we no longer need
+                del efield_scattered_ft
+
                 # bin if desired
                 n_start = get_n(_ift3(v_fts_start), no, wavelength)
+                del v_fts_start
+
                 efields = camera.bin(_ift2(efields_ft), [nbin, nbin], mode="mean")
+                del efields_ft
+
                 efields_bg = camera.bin(_ift2(efields_bg_ft), [nbin, nbin], mode="mean")
+                del efields_bg_ft
+
+                if beam_frqs.shape[0] == 1:
+                    bf = beam_frqs[0]
+                else:
+                    bf = None
 
                 model = optimizer(efields,
                                   efields_bg,
-                                  None,
+                                  bf,
                                   no,
                                   wavelength,
                                   drs_e=None,
@@ -1152,33 +1169,31 @@ class tomography:
                                   dz_final=dz_final,
                                   atf=atf,
                                   apodization=apod,
-                                  tau_tv_real=tau_tv,
-                                  tau_tv_imag=tau_tv,
-                                  tau_l1_real=tau_lasso,
-                                  tau_l1_imag=tau_lasso,
-                                  use_imaginary_constraint=use_imaginary_constraint,
-                                  use_real_constraint=use_real_constraint)
+                                  **kwargs)
 
                 results = model.run(n_start,
                                     step=step,
-                                    max_iterations=niters,
-                                    use_fista=True,
-                                    stochastic_descent=stochastic_descent,
-                                    nmax_stochastic_descent=nmax_stochastic_descent,
-                                    verbose=False,
-                                    compute_cost=compute_cost,
-                                    line_search=False,
+                                    verbose=verbose,
+                                    **kwargs
                                     )
 
                 n = results["x"].reshape((1,) * nextra_dims + n_start.shape[-3:])
 
-            return n
+            # newline to preserve optimizer printout
+            if verbose:
+                print("")
 
+            return _to_cpu(n)
+
+        # #######################
         # get refractive index
+        # #######################
         n = da.map_blocks(recon,
                           self.holograms_ft,  # data
-                          self.holograms_ft_bg,  # background
-                          None, # masks
+                          self.holograms_ft_bg, # background
+                          mean_beam_frqs_arr,
+                          realspace_mask, # masks
+                          self.dxy,
                           self.no,
                           self.wavelength,
                           dz_final,
@@ -1186,30 +1201,25 @@ class tomography:
                           apodization_n,
                           step,
                           optimizer,
+                          self.verbose,
                           chunks=(1,) * self.nextra_dims + n_size,
                           dtype=complex,
-                          meta=xp.array(())
                           )
 
 
         self.reconstruction_settings.update({"mode": mode,
                                              "scattered_field_regularization": scattered_field_regularization,
-                                             "niters": niters,
                                              "reconstruction_regularizer": reconstruction_regularizer,
                                              "dxy_sampling_factor": dxy_sampling_factor,
                                              "dz_sampling_factor": dz_sampling_factor,
                                              "z_fov": z_fov,
                                              "dz_final": dz_final,
-                                             "nbin": nbin,
-                                             "tau_tv": tau_tv,
-                                             "tau_lasso": tau_lasso,
-                                             "use_imaginary_constraint": use_imaginary_constraint,
-                                             "use_real_constraint": use_real_constraint,
-                                             "step": step,
-                                             "stochastic_descent": stochastic_descent,
-                                             "use_gpu": use_gpu
+                                             "nbin": nbin,                                             
+                                             "use_gpu": use_gpu,
+                                             "use_contant_n_start": use_constant_n_start
                                              }
                                             )
+        self.reconstruction_settings.update(kwargs)
 
         return n, drs_n, xform_recon_pix2coords
 
@@ -2211,15 +2221,15 @@ def get_fmax(no: float,
     return fmax
 
 
-def get_reconstruction_sampling(no: float,
-                                na_det: float,
-                                na_exc: float,
-                                wavelength: float,
-                                dxy: float,
-                                img_size: tuple[int],
-                                z_fov: float,
-                                dz_sampling_factor: float = 1.,
-                                dxy_sampling_factor: float = 1.) -> (tuple[float], tuple[int]):
+def get_reconstruction_nyquist_sampling(no: float,
+                                        na_det: float,
+                                        na_exc: float,
+                                        wavelength: float,
+                                        dxy: float,
+                                        img_size: tuple[int],
+                                        z_fov: float,
+                                        dz_sampling_factor: float = 1.,
+                                        dxy_sampling_factor: float = 1.) -> (tuple[float], tuple[int]):
     """
     Helper function for computing Nyquist sampled grid size for scattering potential based on incoming beam angles.
     Note that this may not always be the ideal grid size, especially for multislice methods where the accuracy
@@ -2287,8 +2297,7 @@ def fwd_model_linear(beam_fx: array,
                      drs_v: tuple[float],
                      mode: str = "born",
                      interpolate: bool = False,
-                     use_gpu: bool = False,
-                     atf: Optional[array] = None) -> csr_matrix:
+                     use_gpu: bool = False) -> csr_matrix:
     """
     Forward model from scattering potential v(k) to imaged electric field E(k) after interacting with object.
     Assumes plane wave illumination and linear scattering model (Born or Rytov)
@@ -2323,7 +2332,16 @@ def fwd_model_linear(beam_fx: array,
             m = fwd_model_linear(beam_fx[ii],
                                  beam_fy[ii],
                                  beam_fz[ii],
-                                 no, na_det, wavelength, e_shape, drs_e, v_shape, drs_v, mode, interpolate, use_gpu)
+                                 no,
+                                 na_det,
+                                 wavelength,
+                                 e_shape,
+                                 drs_e,
+                                 v_shape,
+                                 drs_v,
+                                 mode,
+                                 interpolate,
+                                 use_gpu)
             models.append(m)
 
         # add models to get multiplexed model
@@ -2378,8 +2396,10 @@ def fwd_model_linear(beam_fx: array,
         # ##################################
         if mode == "born":
             # ##################################
-            # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
+            # V(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * Es(fx, fy)
             # ##################################
+
+            # atf = xp.tile(atf, [nimgs, 1, 1])
 
             # logical array, which frqs in detection NA
             detectable = xp.sqrt(fx ** 2 + fy ** 2)[0] <= (na_det / wavelength)
@@ -2404,8 +2424,8 @@ def fwd_model_linear(beam_fx: array,
             yind = Fy / dfy_v + ny_v // 2
             xind = Fx / dfx_v + nx_v // 2
         elif mode == "rytov":
-            # F(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * psi_s(fx - n/lambda * nx, fy - n/lambda * ny)
-            # F(Fx, Fy, Fz) = 2*i * (2*pi*fz) * psi_s(Fx, Fy)
+            # V(fx - n/lambda * nx, fy - n/lambda * ny, fz - n/lambda * nz) = 2*i * (2*pi*fz) * psi_s(fx - n/lambda * nx, fy - n/lambda * ny)
+            # V(Fx, Fy, Fz) = 2*i * (2*pi*fz) * psi_s(Fx, Fy)
             # so want to change variables and take (Fx, Fy) -> (fx, fy)
             # But have one problem: (Fx, Fy, Fz) do not form a normalized vector like (fx, fy, fz)
             # so although we can use fx, fy to stand in, we need to calculate the new z-component
@@ -2424,6 +2444,12 @@ def fwd_model_linear(beam_fx: array,
                                     wavelength)
 
             Fz = fz - xp.expand_dims(beam_fz, axis=(1, 2))
+
+            # atf at f_rytov
+            # basis for applying the ATF in rytov case ... psi is a frequency shifted
+            # version of scattered field, hence should nominally see effect of atf
+            # atf = xp.tile(atf, [nimgs, 1, 1])
+            # atf = tools.translate_ft(atf, beam_fx, beam_fy, drs=(dy, dx))
 
             # take care of frequencies which do not contain signal
             detectable = (fx_rytov ** 2 + fy_rytov ** 2) <= (na_det / wavelength) ** 2
@@ -2496,7 +2522,12 @@ def fwd_model_linear(beam_fx: array,
             # construct sparse matrix values
             interp_weights_to_use = xp.concatenate([w[to_use] for w in interp_weights])
 
-            data = interp_weights_to_use / (2 * 1j * (2 * np.pi * np.tile(fz[to_use], 8))) * dx_v * dy_v * dz_v / (dx * dy)
+            # since using DFT's instead of FT's have to adjust the normalization
+            # FT ~ DFT * dr1 * ... * drn
+            data = interp_weights_to_use / (2 * 1j * (2 * np.pi * xp.tile(fz[to_use], 8))) * dx_v * dy_v * dz_v / (dx * dy)
+
+            # if atf is not None:
+            #     data *= xp.tile(atf[to_use], 8)
 
         else:
             # find indices in bounds. CuPy does not support reduce()
@@ -2515,7 +2546,12 @@ def fwd_model_linear(beam_fx: array,
             column_index = xp.ravel_multi_index(inds_round, v_shape)
 
             # matrix values
+            # since using DFT's instead of FT's have to adjust the normalization
+            # FT ~ DFT * dr1 * ... * drn
             data = xp.ones(len(row_index)) / (2 * 1j * (2 * np.pi * fz[to_use])) * dx_v * dy_v * dz_v / (dx * dy)
+
+            # if atf is not None:
+            #     data *= atf[to_use]
 
         # construct sparse matrix
         # E(k) = model * V(k)
@@ -2587,9 +2623,7 @@ def inverse_model_linear(efield_fts: array,
         einds_angle = (e_ind[0][this_angle], e_ind[1][this_angle], e_ind[2][this_angle])
         data_angle = data[this_angle]
 
-        # assuming at most one point for each ... otherwise haveproblems
-        # since using DFT's instead of FT's have to adjust the normalization
-        # FT ~ DFT * dr1 * ... * drn
+        # assuming at most one point for each ... otherwise have problems
         v_ft[vinds_angle] += efield_fts[einds_angle] / data_angle
 
         num_pts_all[vinds_angle] += 1
@@ -3264,7 +3298,6 @@ class Optimizer():
 
         return g, gn
 
-
     def prox(self, x):
         pass
 
@@ -3283,7 +3316,9 @@ class Optimizer():
             compute_all_costs: bool = False,
             line_search: bool = False,
             line_search_factor: float = 0.5,
-            xtol: float = 1e-8) -> dict:
+            xtol: float = 1e-8,
+            **kwargs) -> dict:
+
         """
         Proximal gradient descent on model starting from initial guess
 
@@ -3320,7 +3355,7 @@ class Optimizer():
                    "use_fista": use_fista,
                    "use_gpu": use_gpu,
                    "x_init": _to_cpu(xp.array(x_start, copy=True)),
-                   "prox_parameters": self.prox_parameters
+                   "prox_parameters": self.prox_parameters,
                    }
 
         timing = {"iteration": np.zeros(0),
@@ -3333,6 +3368,7 @@ class Optimizer():
         tstart = time.perf_counter()
         costs = np.zeros((max_iterations + 1, self.n_samples)) * np.nan
         steps = np.ones(max_iterations) * step
+        line_search_iters = np.ones(max_iterations, dtype=int)
         q_last = 1
         x = xp.array(x_start, copy=True)
 
@@ -3364,6 +3400,7 @@ class Optimizer():
             # ###################################
             tstart_grad = time.perf_counter()
 
+            liters = 0
             if not line_search:
                 # ###################################
                 # compute gradient
@@ -3384,11 +3421,15 @@ class Optimizer():
                 # gradient and cost at current point
                 gx = xp.mean(self.gradient(x, inds=inds), axis=0)
                 cx = xp.mean(self.cost(x, inds=inds), axis=0)
+
+                # grab costs, since computing anyways
+                costs[ii, inds] = _to_cpu(cx)
                 timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
 
                 tstart_prox = time.perf_counter()
 
                 # initialize line-search
+                liters += 1
                 if ii != 0:
                     steps[ii] = steps[ii - 1]
                 y = self.prox(x - steps[ii] * gx)
@@ -3401,9 +3442,12 @@ class Optimizer():
                 while lipschitz_condition_violated(y, cx, gx):
                     steps[ii] *= line_search_factor
                     y = self.prox(x - steps[ii] * gx)
+                    liters += 1
 
                 # not exclusively prox ... but good enough for now
                 timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
+
+            line_search_iters[ii] = liters
 
             # ###################################
             # update step
@@ -3429,12 +3473,13 @@ class Optimizer():
                 print(
                     f"iteration {ii + 1:d}/{max_iterations:d},"
                     f" cost={np.nanmean(costs[ii]):.3g},"
+                    f" step={steps[ii]:.3g},"
+                    f" line search iters={line_search_iters[ii]:d},"
                     f" grad={timing['grad'][ii]:.3f}s,"
-                    f" prox={timing['prox'][ii]:.3f}s,"                    
-                    f" update={timing['update'][ii]:.3f}s,"
-                    f" cost={timing['cost'][ii]:.2f}s,"
-                    f" iter={timing['iteration'][ii]:.2f}s,"
-                    f" total={time.perf_counter() - tstart:.2f}s",
+                    f" prox={timing['prox'][ii]:.3f}s,"                                        
+                    f" cost={timing['cost'][ii]:.3f}s,"
+                    f" iter={timing['iteration'][ii]:.3f}s,"
+                    f" total={time.perf_counter() - tstart:.3f}s",
                     end="\r")
 
         # compute final cost
@@ -3448,6 +3493,7 @@ class Optimizer():
         results.update({"timing": timing,
                         "costs": costs,
                         "steps": steps,
+                        "line_search_iterations": line_search_iters,
                         "x": x})
 
         return results
@@ -3474,7 +3520,28 @@ class RIOptimizer(Optimizer):
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
                  max_imaginary_part: float = np.inf,
+                 **kwargs
                  ):
+        """
+
+        :param e_measured:
+        :param e_measured_bg:
+        :param beam_frqs:
+        :param no:
+        :param wavelength:
+        :param drs_e:
+        :param drs_n:
+        :param shape_n:
+        :param dz_final:
+        :param atf: amplitude (coherent) transfer function
+        :param apodization:
+        :param tau_tv_real: weight for TV proximal operator applied to real-part
+        :param tau_tv_imag: weight for TV proximal operator applied to imaginary-part
+        :param tau_l1_real:
+        :param tau_l1_imag:
+        :param use_imaginary_constraint: enforce im(n) > 0
+        :param use_real_constraint:  enforce re(n) > no
+        """
 
         super(RIOptimizer, self).__init__()
 
@@ -3528,13 +3595,19 @@ class RIOptimizer(Optimizer):
         # ###########################
         # TV proximal operators
         # ###########################
+
+        # note cucim TV implementation requires ~10x memory as array does
         if self.prox_parameters["tau_tv_real"] != 0:
-            x_real = denoise_tv(x.real, weight=self.prox_parameters["tau_tv_real"], channel_axis=None)
+            x_real = denoise_tv(x.real,
+                                weight=self.prox_parameters["tau_tv_real"],
+                                channel_axis=None)
         else:
             x_real = x.real
 
         if self.prox_parameters["tau_tv_imag"] != 0:
-            x_imag = denoise_tv(x.imag, weight=self.prox_parameters["tau_tv_imag"], channel_axis=None)
+            x_imag = denoise_tv(x.imag,
+                                weight=self.prox_parameters["tau_tv_imag"],
+                                channel_axis=None)
         else:
             x_imag = x.imag
 
@@ -3566,64 +3639,42 @@ class LinearScatt(RIOptimizer):
     def __init__(self,
                  eft: array,
                  model: csr_matrix,
-                 beam_frqs: array,
                  no: float,
                  wavelength: float,
                  drs_e: tuple[float],
                  drs_n: tuple[float],
                  shape_n: tuple[int],
-                 atf: Optional[array] = None,
-                 tau_tv_real: float = 0,
-                 tau_tv_imag: float = 0,
-                 tau_l1_real: float = 0,
-                 tau_l1_imag: float = 0,
-                 use_imaginary_constraint: bool = False,
-                 use_real_constraint: bool = False,
-                 max_imaginary_part: float = np.inf
+                 **kwargs
                  ):
         """
-        Born and Rytov optimizer
+        Born and Rytov optimizer.
 
         :param eft: Fourier-transform of the electric field. This will be either the scattered field or the
           Rytov phase depending on the linear model chosen.
         :param model: The matrix relating the measured field and the scattering potential. This should be generated
-          with fwd_model_linear()
-        :param beam_frqs: currently not used
+          with fwd_model_linear(). Note that the effect of beam frqs and the atf is incorporated in model
         :param no:
         :param wavelength:
         :param drs_e:
         :param drs_n:
         :param shape_n:
-        :param tau_tv_real:
-        :param tau_tv_imag:
-        :param tau_l1_real:
-        :param tau_l1_imag:
-        :param use_imaginary_constraint:
-        :param use_real_constraint:
+        :param **kwargs: parameters passed through to RIOptimizer, including parameters for proximal operator
         """
-
-        # todo: include effect of atf
 
         # note that have made different choices for LinearScatt optimizers vs. the multislice
         # but still inheriting from RIOptimizer for convenience in constructing proximal operator
         super(LinearScatt, self).__init__(eft,
                                           None,
-                                          beam_frqs,
+                                          None,
                                           no,
                                           wavelength,
                                           drs_e,
                                           drs_n,
                                           shape_n,
                                           None,
-                                          atf,
                                           None,
-                                          tau_tv_real,
-                                          tau_tv_imag,
-                                          tau_l1_real,
-                                          tau_l1_imag,
-                                          use_imaginary_constraint,
-                                          use_real_constraint,
-                                          max_imaginary_part)
+                                          None,
+                                          **kwargs)
 
         if isinstance(self.e_measured, cp.ndarray) and _gpu_available:
             self.model = sp_gpu.csr_matrix(model)
@@ -3643,15 +3694,16 @@ class LinearScatt(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-
         models = [self.model[slice(ny*nx*ii, ny*nx*(ii + 1)), :] for ii in inds]
         nind = len(inds)
 
         # first division is average
         # second division converts Fourier space to real-space sum
         # factor of 0.5 in cost function killed by derivative factor of 2
-        dc_dm = (spnow.vstack(models).dot(x.ravel()).reshape([nind, ny, nx]) - self.e_measured[inds]) / (ny * nx) / (ny * nx)
-        dc_dv = xp.stack([(dc_dm[ii].conj().ravel()[None, :] * m.tocsc()).conj().reshape(x.shape) for ii, m in enumerate(models)], axis=0)
+        efwd = spnow.vstack(models).dot(x.ravel()).reshape([nind, ny, nx])
+        dc_dm = (efwd - self.e_measured[inds]) / (ny * nx) / (ny * nx)
+
+        dc_dv = xp.stack([((dc_dm[ii].conj()).ravel()[None, :] * m.tocsc()).conj().reshape(x.shape) for ii, m in enumerate(models)], axis=0)
 
         return dc_dv
 
@@ -3670,7 +3722,10 @@ class LinearScatt(RIOptimizer):
             model = spnow.vstack([self.model[slice(ny * nx * ii, ny * nx * (ii + 1)), :] for ii in inds])
             ninds = len(inds)
 
-        return (abs(model.dot(x.ravel()) - self.e_measured[inds].ravel()) ** 2).reshape([ninds, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
+        efwd = model.dot(x.ravel()).reshape([ninds, ny, nx])
+
+        # return (abs(model.dot(x.ravel()) - self.e_measured[inds].ravel()) ** 2).reshape([ninds, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
+        return 0.5 * (abs(efwd - self.e_measured[inds]) ** 2).mean(axis=(-1, -2)) / (nx * ny)
 
     def guess_step(self, x=None):
         ny, nx = self.e_measured.shape[-2:]
@@ -3712,14 +3767,9 @@ class BPM(RIOptimizer):
                  dz_final: float = 0.,
                  atf: Optional[array] = None,
                  apodization: Optional[array] = None,
-                 tau_tv_real: float = 0.,
-                 tau_tv_imag: float = 0.,
-                 tau_l1_real: float = 0.,
-                 tau_l1_imag: float = 0.,
-                 use_imaginary_constraint: bool = False,
-                 use_real_constraint: bool = False,
-                 max_imaginary_part: float = np.inf,
-                 use_modified_bpm: bool = True
+                 mask: array = None,
+                 use_modified_bpm: bool = True,
+                 **kwargs
                  ):
         """
         Suppose we have a 3D grid with nz voxels along the propagation direction. We define the electric field
@@ -3728,6 +3778,7 @@ class BPM(RIOptimizer):
 
         :param e_measured: measured electric fields
         :param e_measured_bg: measured background electric fields
+        :param beam_frqs:
         :param no: background index of refraction
         :param wavelength: wavelength of light
         :param drs_e: (dy, dx) of the electric field
@@ -3736,12 +3787,9 @@ class BPM(RIOptimizer):
         :param dz_final: distance to propagate field after last surface
         :param atf: coherent transfer function
         :param apodization: apodization used during FFTs
-        :param tau_tv_real:
-        :param tau_tv_imag:
-        :param tau_l1_real:
-        :param tau_l1_imag:
-        :param use_imaginary_constraint: enforce im(n) > 0
-        :param use_real_constraint:  enforce re(n) > no
+        :param use_modified_bpm: allow use of modified BPM with extra cosine obliquity factor. Note that this
+          option will only be used if there is no multiplexing of pattern angle. The degree of multiplexing
+          is determined by looking at the beam_frqs
         """
 
         super(BPM, self).__init__(e_measured,
@@ -3755,13 +3803,9 @@ class BPM(RIOptimizer):
                                   dz_final,
                                   atf=atf,
                                   apodization=apodization,
-                                  tau_tv_real=tau_tv_real,
-                                  tau_tv_imag=tau_tv_imag,
-                                  tau_l1_real=tau_l1_real,
-                                  tau_l1_imag=tau_l1_imag,
-                                  use_imaginary_constraint=use_imaginary_constraint,
-                                  use_real_constraint=use_real_constraint,
-                                  max_imaginary_part=max_imaginary_part)
+                                  **kwargs)
+
+        self.mask = mask
 
         # include cosine oblique factor
         self.use_modified_bpm = use_modified_bpm
@@ -3774,19 +3818,20 @@ class BPM(RIOptimizer):
 
         # starting field
         nz = self.shape_n[0]
-        dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * nz])
-        self.e_start = field_prop.propagate_homogeneous(self.e_measured_bg,
-                                                        dz_back,
-                                                        self.no,
-                                                        self.drs_n[1:],
-                                                        self.wavelength)[..., 0, :, :]
+        self.dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * nz])
 
     def gradient(self, x, inds=None):
         if inds is None:
             inds = list(range(self.n_samples))
 
+        e_start = field_prop.propagate_homogeneous(self.e_measured_bg[inds],
+                                                   self.dz_back,
+                                                   self.no,
+                                                   self.drs_n[1:],
+                                                   self.wavelength)[..., 0, :, :]
+
         # forward propagation
-        e_fwd = field_prop.propagate_bpm(self.e_start[inds],
+        e_fwd = field_prop.propagate_bpm(e_start,
                                          x,
                                          self.no,
                                          self.drs_n,
@@ -3795,8 +3840,9 @@ class BPM(RIOptimizer):
                                          atf=self.atf,
                                          apodization=self.apodization,
                                          thetas=self.thetas[inds])
-        # back propagation
-        e_back = field_prop.backpropagate_bpm(e_fwd[:, -1, :, :] - self.e_measured[inds],
+
+        # back propagation ... build the gradient from this to save memory
+        dc_dn = field_prop.backpropagate_bpm(e_fwd[:, -1, :, :] - self.e_measured[inds],
                                               x,
                                               self.no,
                                               self.drs_n,
@@ -3804,7 +3850,7 @@ class BPM(RIOptimizer):
                                               self.dz_final,
                                               atf=self.atf,
                                               apodization=self.apodization,
-                                              thetas=self.thetas[inds])
+                                              thetas=self.thetas[inds])[:, 1:-1, :, :]
 
         # cost function gradient
         if isinstance(x, cp.ndarray) and _gpu_available:
@@ -3818,7 +3864,8 @@ class BPM(RIOptimizer):
 
         dz = self.drs_n[0]
         ny, nx = x.shape[-2:]
-        dc_dn = -(1j * (2 * np.pi / self.wavelength) * dz / xp.cos(thetas) / (nx * ny) * e_back[:, 1:-1, :, :] * e_fwd[:, 1:-1, :, :].conj())
+        dc_dn *= -1j * (2 * np.pi / self.wavelength) * dz / xp.cos(thetas) / (nx * ny)
+        dc_dn *= e_fwd[:, 1:-1, :, :].conj()
 
         return dc_dn
 
@@ -3826,7 +3873,13 @@ class BPM(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_fwd = field_prop.propagate_bpm(self.e_start[inds],
+        e_start = field_prop.propagate_homogeneous(self.e_measured_bg[inds],
+                                                   self.dz_back,
+                                                   self.no,
+                                                   self.drs_n[1:],
+                                                   self.wavelength)[..., 0, :, :]
+
+        e_fwd = field_prop.propagate_bpm(e_start,
                                          x,
                                          self.no,
                                          self.drs_n,
@@ -3852,15 +3905,10 @@ class SSNP(RIOptimizer):
                  drs_n: tuple[float],
                  shape_n: tuple[int],
                  dz_final: float,
-                 atf: Optional[array] = 1.,
+                 atf: Optional[array] = None,
                  apodization: Optional[array] = None,
-                 tau_tv_real: float = 0,
-                 tau_tv_imag: float = 0,
-                 tau_l1_real: float = 0,
-                 tau_l1_imag: float = 0,
-                 use_imaginary_constraint: bool = False,
-                 use_real_constraint: bool = False,
-                 max_imaginary_part: float = np.inf
+                 mask: Optional[array] = None,
+                 **kwargs
                  ):
 
         super(SSNP, self).__init__(e_measured,
@@ -3874,44 +3922,46 @@ class SSNP(RIOptimizer):
                                    dz_final=dz_final,
                                    atf=atf,
                                    apodization=apodization,
-                                   tau_tv_real=tau_tv_real,
-                                   tau_tv_imag=tau_tv_imag,
-                                   tau_l1_real=tau_l1_real,
-                                   tau_l1_imag=tau_l1_imag,
-                                   use_imaginary_constraint=use_imaginary_constraint,
-                                   use_real_constraint=use_real_constraint,
-                                   max_imaginary_part=max_imaginary_part)
-        # starting field
-        dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
-        self.e_start = field_prop.propagate_homogeneous(self.e_measured_bg,
-                                                        dz_back,
-                                                        self.no,
-                                                        self.drs_n[1:],
-                                                        self.wavelength)[..., 0, :, :]
+                                   **kwargs)
 
-        # starting derivative (assume field is forward propagating only)
+        self.mask = mask
+
+        # distance to backpropagate to get starting field
+        self.dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
+
+        # compute kzs, which need to get starting field derivative
         dz, dy, dx = self.drs_n
-        ny, nx = e_measured.shape[-2:]
+        ny, nx = self.e_measured.shape[-2:]
 
         fx = np.fft.fftshift(np.fft.fftfreq(nx, dx))
         fy = np.fft.fftshift(np.fft.fftfreq(ny, dy))
         fxfx, fyfy = np.meshgrid(fx, fy)
 
-        if isinstance(self.e_start, cp.ndarray) and _gpu_available:
+        if isinstance(self.e_measured, cp.ndarray) and _gpu_available:
             xp = cp
         else:
             xp = np
 
         kz = xp.asarray(2 * np.pi * field_prop.get_fzs(fxfx, fyfy, self.no, self.wavelength))
-        self.de_dz_start = _ift2(1j * kz * _ft2(self.e_start))
+        kz[xp.isnan(kz)] = 0
+        self.kz = kz
 
     def gradient(self, x, inds=None):
         if inds is None:
             inds = list(range(self.n_samples))
 
+        # initial field
+        e_start = field_prop.propagate_homogeneous(self.e_measured_bg[inds],
+                                                   self.dz_back,
+                                                   self.no,
+                                                   self.drs_n[1:],
+                                                   self.wavelength)[..., 0, :, :]
+        # assume initial field is foward propagating only
+        de_dz_start = _ift2(1j * self.kz * _ft2(e_start))
+
         # forward propagation
-        phi_fwd = field_prop.propagate_ssnp(self.e_start[inds],
-                                            self.de_dz_start[inds],
+        phi_fwd = field_prop.propagate_ssnp(e_start,
+                                            de_dz_start,
                                             x,
                                             self.no,
                                             self.drs_n,
@@ -3921,14 +3971,16 @@ class SSNP(RIOptimizer):
                                             apodization=self.apodization)
 
         # back propagation
-        phi_back = field_prop.backpropagate_ssnp(phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds],
-                                                 x,
-                                                 self.no,
-                                                 self.drs_n,
-                                                 self.wavelength,
-                                                 self.dz_final,
-                                                 atf=self.atf,
-                                                 apodization=self.apodization)
+        # this is the backpropagated field, but we will eventually transform it into the gradient
+        # do things this way to reduce memory overhead
+        dc_dn = field_prop.backpropagate_ssnp(phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds],
+                                              x,
+                                              self.no,
+                                              self.drs_n,
+                                              self.wavelength,
+                                              self.dz_final,
+                                              atf=self.atf,
+                                              apodization=self.apodization)[:, 1:-1, :, :, 1]
 
         # cost function gradient
         ny, nx = x.shape[-2:]
@@ -3936,7 +3988,8 @@ class SSNP(RIOptimizer):
         ko = 2 * np.pi / self.wavelength
         # from phi_back, take derivative part
         # from phi_fwd, take the electric field part
-        dc_dn = (phi_back[:, 1:-1, :, :, 1] * (-2 * ko ** 2 * dz * x.conj()) * phi_fwd[:, :-2, :, :, 0].conj()) / nx / ny
+        dc_dn *= (-2 * ko ** 2 * dz * x.conj()) / nx / ny
+        dc_dn *= phi_fwd[:, :-2, :, :, 0].conj()
 
         return dc_dn
 
@@ -3945,8 +3998,17 @@ class SSNP(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_fwd = field_prop.propagate_ssnp(self.e_start[inds],
-                                          self.de_dz_start[inds],
+        # initial field
+        e_start = field_prop.propagate_homogeneous(self.e_measured_bg[inds],
+                                                   self.dz_back,
+                                                   self.no,
+                                                   self.drs_n[1:],
+                                                   self.wavelength)[..., 0, :, :]
+        # assume initial field is foward propagating only
+        de_dz_start = _ift2(1j * self.kz * _ft2(e_start))
+
+        e_fwd = field_prop.propagate_ssnp(e_start,
+                                          de_dz_start,
                                           x,
                                           self.no,
                                           self.drs_n,
