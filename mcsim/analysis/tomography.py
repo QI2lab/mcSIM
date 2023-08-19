@@ -1100,6 +1100,7 @@ class tomography:
             if use_gpu:
                 efields_ft = xp.asarray(efields_ft)
                 efields_bg_ft = xp.asarray(efields_bg_ft)
+                rmask = xp.asarray(rmask)
 
             if optimizer == "born":
                 efield_scattered_ft = _ft2(get_scattered_field(_ift2(efields_ft),
@@ -1169,6 +1170,7 @@ class tomography:
                                   dz_final=dz_final,
                                   atf=atf,
                                   apodization=apod,
+                                  mask=rmask,
                                   **kwargs)
 
                 results = model.run(n_start,
@@ -2151,6 +2153,7 @@ def get_scattered_field(holograms: array,
     efield_scattered = (holograms - holograms_bg) / (abs(holograms_bg) + regularization)
 
     return efield_scattered
+
 
 # holograms
 def unmix_hologram(img: array,
@@ -3383,28 +3386,29 @@ class Optimizer():
                 inds = list(range(self.n_samples))
 
             # ###################################
-            # compute cost
-            # ###################################
-            tstart_err = time.perf_counter()
-
-            if compute_cost:
-                if compute_all_costs:
-                    costs[ii] = _to_cpu(self.cost(x))
-                else:
-                    costs[ii, inds] = _to_cpu(self.cost(x, inds=inds))
-
-            timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
-
-            # ###################################
             # proximal gradient descent
             # ###################################
-            tstart_grad = time.perf_counter()
 
             liters = 0
             if not line_search:
                 # ###################################
+                # compute cost
+                # ###################################
+                tstart_err = time.perf_counter()
+
+                if compute_cost:
+                    if compute_all_costs:
+                        costs[ii] = _to_cpu(self.cost(x))
+                    else:
+                        costs[ii, inds] = _to_cpu(self.cost(x, inds=inds))
+
+                timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
+
+                # ###################################
                 # compute gradient
                 # ###################################
+                tstart_grad = time.perf_counter()
+
                 x -= steps[ii] * xp.mean(self.gradient(x, inds=inds), axis=0)
 
                 timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
@@ -3418,14 +3422,27 @@ class Optimizer():
                 timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
 
             else:
-                # gradient and cost at current point
-                gx = xp.mean(self.gradient(x, inds=inds), axis=0)
-                cx = xp.mean(self.cost(x, inds=inds), axis=0)
+                # cost at current point
+                # always grab costs, since computing anyways for line-search
+                tstart_err = time.perf_counter()
 
-                # grab costs, since computing anyways
-                costs[ii, inds] = _to_cpu(cx)
+                if compute_all_costs:
+                    c_all = self.cost(x)
+                    costs[ii, inds] = _to_cpu(c_all)
+                    cx = xp.mean(c_all[inds], axis=0)
+                else:
+                    c_now = self.cost(x, inds=inds)
+                    costs[ii, inds] = _to_cpu(c_now)
+                    cx = xp.mean(c_now, axis=0)
+
+                timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
+
+                # gradient at current point
+                tstart_grad = time.perf_counter()
+                gx = xp.mean(self.gradient(x, inds=inds), axis=0)
                 timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
 
+                # line-search
                 tstart_prox = time.perf_counter()
 
                 # initialize line-search
@@ -3513,6 +3530,7 @@ class RIOptimizer(Optimizer):
                  dz_final: float = 0.,
                  atf: Optional[array] = None,
                  apodization: Optional[array] = None,
+                 mask: Optional[array] = None,
                  tau_tv_real: float = 0,
                  tau_tv_imag: float = 0,
                  tau_l1_real: float = 0,
@@ -3557,6 +3575,11 @@ class RIOptimizer(Optimizer):
         self.dz_final = dz_final
         self.atf = atf
         self.apodization = apodization
+
+        if mask is not None:
+            if mask.dtype.kind != "b":
+                raise ValueError("mask must be `None` or a boolean array")
+        self.mask = mask
 
         self.set_prox(tau_tv_real,
                       tau_tv_imag,
@@ -3787,6 +3810,8 @@ class BPM(RIOptimizer):
         :param dz_final: distance to propagate field after last surface
         :param atf: coherent transfer function
         :param apodization: apodization used during FFTs
+        :param mask: 2D array. Where true, these spatial pixels will be included in the cost function. Where false,
+          they will not
         :param use_modified_bpm: allow use of modified BPM with extra cosine obliquity factor. Note that this
           option will only be used if there is no multiplexing of pattern angle. The degree of multiplexing
           is determined by looking at the beam_frqs
@@ -3803,9 +3828,8 @@ class BPM(RIOptimizer):
                                   dz_final,
                                   atf=atf,
                                   apodization=apodization,
+                                  mask=mask,
                                   **kwargs)
-
-        self.mask = mask
 
         # include cosine oblique factor
         self.use_modified_bpm = use_modified_bpm
@@ -3824,11 +3848,7 @@ class BPM(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_start = field_prop.propagate_homogeneous(self.e_measured_bg[inds],
-                                                   self.dz_back,
-                                                   self.no,
-                                                   self.drs_n[1:],
-                                                   self.wavelength)[..., 0, :, :]
+        e_start = self.get_estart(inds=inds)
 
         # forward propagation
         e_fwd = field_prop.propagate_bpm(e_start,
@@ -3842,15 +3862,22 @@ class BPM(RIOptimizer):
                                          thetas=self.thetas[inds])
 
         # back propagation ... build the gradient from this to save memory
-        dc_dn = field_prop.backpropagate_bpm(e_fwd[:, -1, :, :] - self.e_measured[inds],
-                                              x,
-                                              self.no,
-                                              self.drs_n,
-                                              self.wavelength,
-                                              self.dz_final,
-                                              atf=self.atf,
-                                              apodization=self.apodization,
-                                              thetas=self.thetas[inds])[:, 1:-1, :, :]
+        dtemp = e_fwd[:, -1, :, :] - self.e_measured[inds]
+        if self.mask is not None:
+            dtemp *= self.mask
+
+
+        dc_dn = field_prop.backpropagate_bpm(dtemp,
+                                             x,
+                                             self.no,
+                                             self.drs_n,
+                                             self.wavelength,
+                                             self.dz_final,
+                                             atf=self.atf,
+                                             apodization=self.apodization,
+                                             thetas=self.thetas[inds])[:, 1:-1, :, :]
+
+        del dtemp
 
         # cost function gradient
         if isinstance(x, cp.ndarray) and _gpu_available:
@@ -3864,7 +3891,12 @@ class BPM(RIOptimizer):
 
         dz = self.drs_n[0]
         ny, nx = x.shape[-2:]
-        dc_dn *= -1j * (2 * np.pi / self.wavelength) * dz / xp.cos(thetas) / (nx * ny)
+        if self.mask is None:
+            denom = ny * nx
+        else:
+            denom = self.mask.sum()
+
+        dc_dn *= -1j * (2 * np.pi / self.wavelength) * dz / xp.cos(thetas) / denom
         dc_dn *= e_fwd[:, 1:-1, :, :].conj()
 
         return dc_dn
@@ -3873,11 +3905,7 @@ class BPM(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_start = field_prop.propagate_homogeneous(self.e_measured_bg[inds],
-                                                   self.dz_back,
-                                                   self.no,
-                                                   self.drs_n[1:],
-                                                   self.wavelength)[..., 0, :, :]
+        e_start = self.get_estart(inds=inds)
 
         e_fwd = field_prop.propagate_bpm(e_start,
                                          x,
@@ -3889,9 +3917,23 @@ class BPM(RIOptimizer):
                                          apodization=self.apodization,
                                          thetas=self.thetas[inds])
 
-        costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+        if self.mask is None:
+            costs = 0.5 * (abs(e_fwd[:, -1] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+        else:
+            costs = 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
 
         return costs
+
+    def get_estart(self, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        return field_prop.propagate_homogeneous(self.e_measured_bg[inds],
+                                                self.dz_back,
+                                                self.no,
+                                                self.drs_n[1:],
+                                                self.wavelength)[..., 0, :, :]
+
 
 
 class SSNP(RIOptimizer):
@@ -3922,9 +3964,8 @@ class SSNP(RIOptimizer):
                                    dz_final=dz_final,
                                    atf=atf,
                                    apodization=apodization,
+                                   mask=mask,
                                    **kwargs)
-
-        self.mask = mask
 
         # distance to backpropagate to get starting field
         self.dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
@@ -3951,13 +3992,7 @@ class SSNP(RIOptimizer):
             inds = list(range(self.n_samples))
 
         # initial field
-        e_start = field_prop.propagate_homogeneous(self.e_measured_bg[inds],
-                                                   self.dz_back,
-                                                   self.no,
-                                                   self.drs_n[1:],
-                                                   self.wavelength)[..., 0, :, :]
-        # assume initial field is foward propagating only
-        de_dz_start = _ift2(1j * self.kz * _ft2(e_start))
+        e_start, de_dz_start = self.get_estart(inds=inds)
 
         # forward propagation
         phi_fwd = field_prop.propagate_ssnp(e_start,
@@ -3973,7 +4008,12 @@ class SSNP(RIOptimizer):
         # back propagation
         # this is the backpropagated field, but we will eventually transform it into the gradient
         # do things this way to reduce memory overhead
-        dc_dn = field_prop.backpropagate_ssnp(phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds],
+        dtemp = phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds]
+
+        if self.mask is not None:
+            dtemp *= self.mask
+
+        dc_dn = field_prop.backpropagate_ssnp(dtemp,
                                               x,
                                               self.no,
                                               self.drs_n,
@@ -3982,19 +4022,49 @@ class SSNP(RIOptimizer):
                                               atf=self.atf,
                                               apodization=self.apodization)[:, 1:-1, :, :, 1]
 
+        del dtemp
+
         # cost function gradient
         ny, nx = x.shape[-2:]
         dz = self.drs_n[0]
         ko = 2 * np.pi / self.wavelength
         # from phi_back, take derivative part
         # from phi_fwd, take the electric field part
-        dc_dn *= (-2 * ko ** 2 * dz * x.conj()) / nx / ny
+        if self.mask is None:
+            denom = ny * nx
+        else:
+            denom = self.mask.sum()
+
+        dc_dn *= (-2 * ko ** 2 * dz * x.conj()) / denom
         dc_dn *= phi_fwd[:, :-2, :, :, 0].conj()
 
         return dc_dn
 
 
     def cost(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        e_start, de_dz_start = self.get_estart(inds=inds)
+
+        e_fwd = field_prop.propagate_ssnp(e_start,
+                                          de_dz_start,
+                                          x,
+                                          self.no,
+                                          self.drs_n,
+                                          self.wavelength,
+                                          self.dz_final,
+                                          atf=self.atf,
+                                          apodization=self.apodization)[..., 0]
+
+        if self.mask is None:
+            costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+        else:
+            costs = 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
+
+        return costs
+
+    def get_estart(self, inds=None):
         if inds is None:
             inds = list(range(self.n_samples))
 
@@ -4007,16 +4077,4 @@ class SSNP(RIOptimizer):
         # assume initial field is foward propagating only
         de_dz_start = _ift2(1j * self.kz * _ft2(e_start))
 
-        e_fwd = field_prop.propagate_ssnp(e_start,
-                                          de_dz_start,
-                                          x,
-                                          self.no,
-                                          self.drs_n,
-                                          self.wavelength,
-                                          self.dz_final,
-                                          atf=self.atf,
-                                          apodization=self.apodization)[..., 0]
-
-        costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
-
-        return costs
+        return e_start, de_dz_start

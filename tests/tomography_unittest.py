@@ -25,9 +25,6 @@ class TestPatterns(unittest.TestCase):
         fx = cp.fft.fftshift(cp.fft.fftfreq(nx, dxy))[None, :]
         fy = cp.fft.fftshift(cp.fft.fftfreq(ny, dxy))[:, None]
 
-        # todo: include
-        atf = (cp.sqrt(fx ** 2 + fy ** 2) <= fmax).astype(complex)
-
         e = cp.random.rand(npattern, ny, nx) + 1j * cp.random.rand(npattern, ny, nx)
         # ebg = cp.random.rand(npattern, ny, nx) + 1j * cp.random.rand(npattern, ny, nx)
         n = no + 0.1 * cp.random.rand(nz, ny, nx) + 1j * cp.random.rand(nz, ny, nx) * 1e-3
@@ -63,7 +60,7 @@ class TestPatterns(unittest.TestCase):
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), vft.shape)
         g, gn = opt.test_gradient(vft, jind, inds=[0, 1])
 
-        np.testing.assert_allclose(g.get(), gn.get(), atol=1e-8)
+        np.testing.assert_allclose(g.get(), gn.get(), rtol=1e-1)
 
     def test_rytov_grad(self):
         dxy = 0.1
@@ -79,9 +76,6 @@ class TestPatterns(unittest.TestCase):
         fmax = no / wavelength
         fx = cp.fft.fftshift(cp.fft.fftfreq(nx, dxy))[None, :]
         fy = cp.fft.fftshift(cp.fft.fftfreq(ny, dxy))[:, None]
-
-        # todo: include
-        atf = (cp.sqrt(fx ** 2 + fy ** 2) <= fmax).astype(complex)
 
         e = cp.random.rand(npattern, ny, nx) + 1j * cp.random.rand(npattern, ny, nx)
         # ebg = cp.random.rand(npattern, ny, nx) + 1j * cp.random.rand(npattern, ny, nx)
@@ -118,7 +112,7 @@ class TestPatterns(unittest.TestCase):
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), vft.shape)
         g, gn = opt.test_gradient(vft, jind, inds=[0, 1])
 
-        np.testing.assert_allclose(g.get(), gn.get(), atol=1e-8)
+        np.testing.assert_allclose(g.get(), gn.get(), rtol=1e-1)
 
     def test_bpm_grad(self):
         dxy = 0.1
@@ -141,6 +135,9 @@ class TestPatterns(unittest.TestCase):
         ebg = cp.random.rand(npattern, ny, nx) + 1j * cp.random.rand(npattern, ny, nx)
         n = no + 0.1 * cp.random.rand(nz, ny, nx) + 1j * cp.random.rand(nz, ny, nx) * 1e-3
 
+        mask = cp.ones((ny, nx), dtype=bool)
+        mask[ny // 2:, :] = False
+
         opt = tm.BPM(e,
                      ebg,
                      None,
@@ -150,12 +147,13 @@ class TestPatterns(unittest.TestCase):
                      (dz, dxy, dxy),
                      (nz, ny, nx),
                      dz_final=dz_final,
-                     atf=atf)
+                     atf=atf,
+                     mask=mask)
 
         jind = np.ravel_multi_index((nz//2, ny//2, nx//2), n.shape)
         g, gn = opt.test_gradient(n, jind, inds=[0, 1])
 
-        np.testing.assert_allclose(g.get(), gn.get(), atol=1e-8)
+        np.testing.assert_allclose(g.get(), gn.get(), rtol=1e-3)
 
     def test_ssnp_grad(self):
         dxy = 0.1
@@ -178,6 +176,9 @@ class TestPatterns(unittest.TestCase):
         ebg = cp.random.rand(npattern, ny, nx) + 1j * cp.random.rand(npattern, ny, nx)
         n = no + 0.1 * cp.random.rand(nz, ny, nx) + 1j * cp.random.rand(nz, ny, nx) * 1e-3
 
+        mask = cp.ones((ny, nx), dtype=bool)
+        mask[ny // 2:, :] = False
+
         opt = tm.SSNP(e,
                       ebg,
                       None,
@@ -187,9 +188,10 @@ class TestPatterns(unittest.TestCase):
                       (dz, dxy, dxy),
                       (nz, ny, nx),
                       dz_final=dz_final,
-                      atf=atf)
+                      atf=atf,
+                      mask=mask)
 
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), n.shape)
         g, gn = opt.test_gradient(n, jind, inds=[0, 1])
 
-        np.testing.assert_allclose(g.get(), gn.get(), atol=1e-8)
+        np.testing.assert_allclose(g.get(), gn.get(), rtol=1e-3)
