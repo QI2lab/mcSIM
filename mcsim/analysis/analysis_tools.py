@@ -367,7 +367,12 @@ def translate_ft(img_ft: array,
 
     if use_gpu:
         xp = cp
-        cp.fft._cache.PlanCache(memsize=0)  # avoid issues like https://github.com/cupy/cupy/issues/6355
+        # todo: probably better to set this outside of this function ... let user decide!
+        # todo: better to access like this?
+        cache = cp.fft.config.get_plan_cache()
+        cache.set_size(0)
+        cache.set_memsize(0)
+        # cp.fft._cache.PlanCache(memsize=0)  # avoid issues like https://github.com/cupy/cupy/issues/6355
     else:
         xp = np
 
@@ -398,7 +403,7 @@ def translate_ft(img_ft: array,
             raise ValueError(f"fx and shift_frq have incompatible shapes {fx.shape} and {img_ft.shape}")
 
         # exponential phase ramp. Should be broadcastable to shape of img_ft
-        axis_expand_frq = list(range(n_extra_dims - fx.ndim)) + [-2, -1]
+        axis_expand_frq = tuple(list(range(n_extra_dims - fx.ndim)) + [-2, -1])
         fx = xp.expand_dims(fx, axis=axis_expand_frq)
         fy = xp.expand_dims(fy, axis=axis_expand_frq)
 
@@ -414,7 +419,6 @@ def translate_ft(img_ft: array,
             drs = (1, 1)
         dy, dx = drs
 
-        # todo: only need to expand y and only by axis -1
         # must use symmetric frequency representation to do shifting correctly!
         # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
         # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
@@ -436,7 +440,6 @@ def translate_ft(img_ft: array,
                                       axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
         if use_gpu:
-            cache = cp.fft.config.get_plan_cache()
             cache.clear()
 
         return img_ft_shifted
