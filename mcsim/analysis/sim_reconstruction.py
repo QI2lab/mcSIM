@@ -2304,24 +2304,30 @@ class SimImageSet:
                 json.dump(metadata, f, indent="\t")
 
             def save_delayed(attr):
-                fname = save_dir / f"{save_prefix:s}{attr:s}{save_suffix:s}.tif"
+                def _save():
+                    img = np.array(getattr(self, attr).astype(np.float32))
 
-                if getattr(self, attr).shape[0] == self.nx:
-                    factor = 1
-                else:
-                    factor = self.upsample_fact
+                    if img.shape[0] == self.nx:
+                        factor = 1
+                    else:
+                        factor = self.upsample_fact
 
-                d = dask.delayed(tifffile.imwrite)(fname,
-                                                   getattr(self, attr).astype(np.float32),
-                                                   imagej=True,
-                                                   resolution=(1 / self.dy / factor, 1 / self.dx / factor),
-                                                    metadata={"Info": attr,
-                                                              "unit": "um",
-                                                              'min': 0,
-                                                              'max': np.max(getattr(self, attr))
-                                                              }
-                                                  )
-                return d
+                    # if imagej_axes_order:
+                    #     use_imagej = True
+                    #     img = tifffile.transpose_axes(img, axes=imagej_axes_order, asaxes="TZCYXS")
+
+                    tifffile.imwrite(save_dir / f"{save_prefix:s}{attr:s}{save_suffix:s}.tif",
+                                     img,
+                                     imagej=False,
+                                     resolution=(1 / self.dy / factor, 1 / self.dx / factor),
+                                     metadata={"Info": f"array type = {attr:s}, axes names = {', '.join(self.axes_names):s}",
+                                               "unit": "um",
+                                               'min': 0,
+                                               'max': float(np.max(img))
+                                               }
+                                     )
+
+                return dask.delayed(_save)()
         else:
             raise ValueError(f"format was {format:s}, but the allowed values are {['tiff', 'zarr', 'hd5f']}")
 
@@ -2360,9 +2366,9 @@ class SimImageSet:
         # ###############################
         future = [save_delayed(a) for a in attrs]
 
+        self.print_log("saving images...")
         with ProgressBar():
             dask.compute(future)
-
         self.print_log(f"saving SIM images took {time.perf_counter() - tstart_save:.2f}s")
 
         return fname
@@ -2379,9 +2385,12 @@ def show_sim_napari(fname_zarr: str,
     :return viewer:
     """
 
+    # todo: want to work for tiff also
+
     import napari
 
     imgz = zarr.open(fname_zarr, "r")
+
     wf = imgz.widefield
 
     dxy = imgz.attrs["dx"]
@@ -2394,8 +2403,9 @@ def show_sim_napari(fname_zarr: str,
 
     # translate to put FFT zero coordinates at origin
     if hasattr(imgz, "sim_os"):
+        sim_os = np.expand_dims(imgz.sim_os, axis=-3)
 
-        viewer.add_image(np.expand_dims(imgz.sim_os, axis=-3),
+        viewer.add_image(sim_os,
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="SIM-OS")
