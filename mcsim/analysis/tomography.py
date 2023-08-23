@@ -1100,7 +1100,9 @@ class tomography:
             if use_gpu:
                 efields_ft = xp.asarray(efields_ft)
                 efields_bg_ft = xp.asarray(efields_bg_ft)
-                rmask = xp.asarray(rmask)
+
+                if rmask is not None:
+                    rmask = xp.asarray(rmask)
 
             if optimizer == "born":
                 efield_scattered_ft = _ft2(get_scattered_field(_ift2(efields_ft),
@@ -2108,12 +2110,10 @@ def get_rytov_phase(eimgs: array,
     eimgs_bg = xp.asarray(eimgs_bg)
 
     # broadcast arrays
-    # eimgs_bg = _ift2(efields_bg_ft)
-    # eimgs = _ift2(efields_ft)
     eimgs, eimgs_bg = xp.broadcast_arrays(eimgs, eimgs_bg)
 
     # output values
-    phase_diff = np.mod(xp.angle(eimgs) - xp.angle(eimgs_bg), 2 * np.pi)
+    phase_diff = xp.mod(xp.angle(eimgs) - xp.angle(eimgs_bg), 2 * np.pi)
     # convert phase difference from interval [0, 2*np.pi) to [-np.pi, np.pi)
     phase_diff[phase_diff >= np.pi] -= 2 * np.pi
 
@@ -2822,27 +2822,39 @@ def plot_odt_sampling(frqs: np.ndarray,
 
 def display_tomography_recon(recon_fname: str,
                              raw_data_fname: Optional[str] = None,
+                             raw_data_component: str = "cam2/odt",
+                             show_n: bool = True,
                              show_raw: bool = True,
                              show_raw_ft: bool = False,
-                             show_v_fft: bool = False,
                              show_efields: bool = False,
                              compute: bool = False,
                              time_axis: int = 1,
                              time_range: Optional[list[int]] = None,
-                             phase_lim: float = 0.1,
-                             block_while_display: bool = True):
+                             phase_lim: float = np.pi,
+                             block_while_display: bool = True,
+                             real_cmap="bone",
+                             phase_cmap="RdBu"):
     """
     Display reconstruction results and (optionally) raw data in Napari
 
     :param recon_fname: refractive index reconstruction stored in zarr file
     :param raw_data_fname: raw data stored in zar file
+    :param raw_data_component:
+    :param show_n:
     :param show_raw:
     :param show_raw_ft:
-    :param show_v_fft:
     :param show_efields:
+    :param compute:
+    :param time_axis:
+    :param time_range:
+    :param phase_lim:
     :param block_while_display:
-    :return:
+    :param real_cmap:
+    :param phase_cmap:
+    :return: viewer
     """
+
+    # todo: accept slice argument?
 
     import napari
 
@@ -2853,10 +2865,11 @@ def display_tomography_recon(recon_fname: str,
 
     # load data
     img_z = zarr.open(recon_fname, "r")
-    if not hasattr(img_z, "efield_bg_ft") or not hasattr(img_z, "efield_scattered_ft") or not hasattr(img_z, "efields_ft"):
+    if not hasattr(img_z, "efield_bg_ft") or not hasattr(img_z, "efields_ft"):
         show_efields = False
 
-    dxy = img_z.attrs["camera_path_attributes"]["dx_um"]
+    # raw data sizes
+    dxy_cam = img_z.attrs["camera_path_attributes"]["dx_um"]
     proc_roi = img_z.attrs["processing roi"]
     ny = proc_roi[1] - proc_roi[0]
     nx = proc_roi[3] - proc_roi[2]
@@ -2869,117 +2882,78 @@ def display_tomography_recon(recon_fname: str,
         ny_raw = ny
         nx_raw = nx
 
-    try:
-        dz_v = img_z.attrs["dz"]
-        dxy_v = img_z.attrs["dx"]
-    except KeyError:
-        dz_v, dxy_v, _ = img_z.attrs["dr"]
 
-    nz_sp = img_z.n.shape[-4]
-    ny_sp = img_z.n.shape[-2]
-    nx_sp = img_z.n.shape[-1]
-    npatterns = len(img_z.attrs["beam_frqs"])
+    drs_n = img_z.attrs["dr"]
+    n_axis_names = img_z.attrs["dimensions"]
     wavelength = img_z.attrs["wavelength"]
     no = img_z.attrs["no"]
-
-    try:
-        tau_tv = img_z.attrs["tv_tau"]
-    except KeyError:
-        tau_tv = img_z.attrs["reconstruction_settings"]["tau_tv"]
-
-    try:
-        tau_lasso = img_z.attrs["l1_tau"]
-    except KeyError:
-        tau_lasso = img_z.attrs["reconstruction_settings"]["tau_lasso"]
 
     # load affine xforms
     # Napari is using convention (y, x) whereas I'm using (x, y), so need to swap these dimensions in affine xforms
     swap_xy = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
-    affine_recon2cam = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
+    affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
+    affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
 
-    # load images
-    # plot index of refraction
-    n_extra_dims = img_z.n.ndim - 4
-    slices = []
-    for ii in range(n_extra_dims):
-        if ii == time_axis:
-            if time_range is not None:
-                slices.append(slice(time_range[0], time_range[1]))
+    # ######################
+    # prepare n
+    # ######################
+    if show_n:
+        n_extra_dims = img_z.n.ndim - 3
+        slices = []
+        for ii in range(n_extra_dims):
+            if ii == time_axis:
+                if time_range is not None:
+                    slices.append(slice(time_range[0], time_range[1]))
+                else:
+                    slices.append(slice(None))
             else:
                 slices.append(slice(None))
-        else:
-            slices.append(slice(None))
-    slices = tuple(slices)
+        slices = tuple(slices)
 
-    slices_n = slices + (slice(None), slice(None), slice(None), slice(None))
+        slices_n = slices + (slice(None), slice(None), slice(None))
 
-    n = da.from_zarr(img_z.n).rechunk((1,) * n_extra_dims + (1, 1, ny_sp, nx_sp))[slices_n]
-    n_r = n[..., 0, :, :]
-    n_im = n[..., 1, :, :]
-
-    # broadcasting
-    dummy_shape_array = da.from_array(np.zeros((1,) * n_extra_dims + (npatterns, nz_sp, 1, 1)))
-
-    if compute:
-        print("loading n")
-        with ProgressBar():
-            c = dask.compute([n_r, n_im])
-            n_r, n_im = c[0]
-            n_im_stack, n_r_stack, _ = np.broadcast_arrays(np.expand_dims(n_im, axis=-4),
-                                                           np.expand_dims(n_r, axis=-4),
-                                                           dummy_shape_array.compute())
+        n = da.expand_dims(da.from_zarr(img_z.n)[slices_n], axis=-4)
+        if compute:
+            print("loading n")
+            with ProgressBar():
+                n = n.compute()
     else:
-        n_im_stack, n_r_stack, _ = da.broadcast_arrays(da.expand_dims(n_im, axis=-4),
-                                                       da.expand_dims(n_r, axis=-4),
-                                                       dummy_shape_array)
+        n = np.ones(1)
 
+    n_real = n.real - no
+    n_imag = n.imag
 
+    # ######################
+    # prepare raw images
+    # ######################
+    slices_raw = slices + (slice(None), slice(None), slice(None))
     if show_raw:
-        slices_img = slices + (slice(None), slice(None), slice(None))
-
-        imgs = da.from_zarr(raw_data.cam2.odt)[slices_img]
-        imgs_raw_ft = da.fft.fftshift(da.fft.fft2(da.fft.ifftshift(imgs, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+        imgs = da.expand_dims(da.from_zarr(raw_data[raw_data_component])[slices_raw], axis=-3)
+        imgs_raw_ft = da.map_blocks(_ft2, imgs, dtype=complex)
 
         if compute:
             print("loading raw images")
             with ProgressBar():
                 c = dask.compute([imgs, imgs_raw_ft])
-                imgs, img_raw_ft = c[0]
+                imgs, imgs_raw_ft = c[0]
+    else:
+        imgs = np.ones(1)
+        imgs_raw_ft = np.ones(1)
 
-                ims_raw_stack, img_raw_ft_stack, _ = np.broadcast_arrays(np.expand_dims(imgs, axis=-3),
-                                                                         np.expand_dims(imgs_raw_ft, axis=-3),
-                                                                         dummy_shape_array.compute())
-
-        else:
-            ims_raw_stack, img_raw_ft_stack, _ = da.broadcast_arrays(da.expand_dims(imgs, axis=-3),
-                                                                     da.expand_dims(imgs_raw_ft, axis=-3),
-                                                                     dummy_shape_array)
+    imgs_raw_ft_abs = da.abs(imgs_raw_ft)
 
 
+    # ######################
+    # prepare electric fields
+    # ######################
     if show_efields:
-        csize = list(img_z.efield_scattered_ft.chunks)
-        csize[-3] = img_z.efield_scattered_ft.shape[-3]
-
-        slices_e = slices + (slice(None), slice(None), slice(None))
-
-        # scattered field
-        escatt_load = da.from_zarr(img_z.efield_scattered_ft).rechunk(csize)[slices_e]
-        escatt = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(escatt_load, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
         # measured field
-        e_load_ft = da.from_zarr(img_z.efields_ft).rechunk(csize)[slices_e]
-        e = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(e_load_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+        e_load_ft = da.expand_dims(da.from_zarr(img_z.efields_ft), axis=-3)
+        e = da.map_blocks(_ift2, e_load_ft, dtype=complex)
 
         # background field
-        ebg_load_ft = da.from_zarr(img_z.efield_bg_ft).rechunk(csize)[slices_e]
-        ebg = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(ebg_load_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-        # rytov phi
-        try:
-            erytov_ft = da.from_zarr(img_z.phi_rytov_ft).rechunk(csize)[slices_e]
-            erytov = da.fft.fftshift(da.fft.ifft2(da.fft.ifftshift(erytov_ft, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-        except:
-            erytov = da.zeros(e.shape, chunks=e.chunksize)
+        ebg_load_ft = da.expand_dims(da.from_zarr(img_z.efield_bg_ft), axis=-3)
+        ebg = da.map_blocks(_ift2, ebg_load_ft, dtype=complex)
 
         # compute electric field power
         efield_power = da.mean(da.abs(e), axis=(-1, -2), keepdims=True)
@@ -2987,92 +2961,114 @@ def display_tomography_recon(recon_fname: str,
         if compute:
             print("loading electric fields")
             with ProgressBar():
-                c = dask.compute([escatt, e, ebg, erytov])
-                escatt, e, ebg, erytov = c[0]
+                c = dask.compute([e, ebg, efield_power])
+                e, ebg, efield_power = c[0]
+    else:
+        e = np.ones(1)
+        ebg = np.ones(1)
 
-                efield_power_stack, _ = np.broadcast_arrays(np.expand_dims(efield_power, axis=-3), dummy_shape_array.compute())
+    e_abs = da.abs(e)
+    e_angle = da.angle(e)
+    ebg_abs = da.abs(ebg)
+    ebg_angle = da.angle(ebg)
+    e_ebg_abs_diff = e_abs - ebg_abs
 
-            escatt_stack, estack, ebg_stack, erytov_stack, _ = np.broadcast_arrays(np.expand_dims(escatt, axis=-3),
-                                                                                   np.expand_dims(e, axis=-3),
-                                                                                   np.expand_dims(ebg, axis=-3),
-                                                                                   np.expand_dims(erytov, axis=-3),
-                                                                                   dummy_shape_array)
+    pd = da.mod(da.angle(e) - da.angle(ebg), 2 * np.pi)
+    e_ebg_phase_diff = pd - 2 * np.pi * (pd > np.pi)
 
-        else:
-            efield_power_stack, _ = da.broadcast_arrays(da.expand_dims(efield_power, axis=-3), dummy_shape_array)
+    # ######################
+    # broadcasting
+    # ######################
 
-            escatt_stack, estack, ebg_stack, erytov_stack, _ = da.broadcast_arrays(da.expand_dims(escatt, axis=-3),
-                                                                                   da.expand_dims(e, axis=-3),
-                                                                                   da.expand_dims(ebg, axis=-3),
-                                                                                   da.expand_dims(erytov, axis=-3),
-                                                                                   dummy_shape_array)
+    # NOTE: cannot operate on these arrays after broadcasting otherwise memory use will explode
+    if compute:
+        # broadcasting does not cause memory size expansion
+        n_real, n_imag, imgs, imgs_raw_ft_abs, e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff = \
+            np.broadcast_arrays(n_real,
+                                n_imag,
+                                imgs,
+                                imgs_raw_ft_abs,
+                                e_abs,
+                                e_angle,
+                                ebg_abs,
+                                ebg_angle,
+                                e_ebg_abs_diff,
+                                e_ebg_phase_diff)
 
     # ######################
     # create viewer
     # ######################
     viewer = napari.Viewer(title=str(recon_fname))
 
+    scale = (drs_n[0] / drs_n[1], 1, 1)
+
     # ######################
     # raw data
     # ######################
     # todo: maybe better to rewrite with da.brodcast_arrays() instead of tiling
     if show_raw:
-        viewer.add_image(ims_raw_stack, scale=(dz_v / dxy_v, 1, 1),
-                         # translate=(0, tm_set.nx * tm_set.dxy),
-                         name="raw images", contrast_limits=[0, 4096])
+        viewer.add_image(imgs,
+                         scale=scale,
+                         name="raw images",
+                         colormap=real_cmap,
+                         contrast_limits=[0, 4096])
 
         if show_raw_ft:
-            # imgs_raw_ft = da.fft.fftshift(da.fft.fft2(da.fft.ifftshift(imgs, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-            # img_raw_ft_stack = da.stack([imgs_raw_ft] * nz_sp, axis=-3)
-            viewer.add_image(da.abs(img_raw_ft_stack), scale=(dz_v / dxy_v, 1, 1),
+            viewer.add_image(imgs_raw_ft_abs,
+                             scale=scale,
                              name="raw images ft",
                              gamma=0.2,
+                             colormap=real_cmap,
                              translate=(ny_raw, 0))
 
     # ######################
     # reconstructed index of refraction
     # ######################
 
-    # for convenience of affine xforms, keep xy in pixels
-    viewer.add_image(n_im_stack,
-                     scale=(dz_v / dxy_v, 1, 1),
-                     name="n.imaginary",
-                     affine=swap_xy.dot(affine_recon2cam.dot(swap_xy)),
-                     contrast_limits=[0, 0.05],
-                     visible=False)
+    if show_n:
+        # for convenience of affine xforms, keep xy in pixels
+        viewer.add_image(n_imag,
+                         scale=scale,
+                         name=f"n.imaginary",
+                         affine=affine_recon2cam,
+                         contrast_limits=[0, 0.05],
+                         colormap=real_cmap,
+                         visible=False)
 
-    viewer.add_image(n_r_stack - no,
-                     scale=(dz_v / dxy_v, 1, 1),
-                     name=f"n-no, tv={tau_tv:.3f}, l1={tau_lasso:.3f}",
-                     affine=swap_xy.dot(affine_recon2cam.dot(swap_xy)),
-                     contrast_limits=[0, 0.05])
-
+        viewer.add_image(n_real,
+                         scale=scale,
+                         name=f"n-no",
+                         affine=affine_recon2cam,
+                         colormap=real_cmap,
+                         contrast_limits=[0, 0.05])
 
     # ######################
     # display phase shifts and power on points layer
     # ######################
-    # add (1, 1) for xy dimensions
-    coords = np.meshgrid(*[np.arange(d) for d in n_r_stack.shape[:-2] + (1, 1)], indexing="ij")
-    coords = [c.ravel() for c in coords]
-    points = np.stack(coords, axis=1)
-
-    dphi = da.from_zarr(img_z.phase_shifts)[slices + (slice(None), slice(None), slice(None))]
-    dphi_stack = da.stack([dphi] * nz_sp, axis=-3)
-
-    if show_efields:
-        epower = efield_power_stack.compute().ravel()
-    else:
-        epower = np.zeros(dphi_stack.shape).ravel() * np.nan
-
-    viewer.add_points(points,
-                      features={"dphi": dphi_stack.compute().ravel(),
-                                "epower": epower},
-                      text={"string": "phi={dphi:.3f}, epower={epower:.3f}",
-                            "size": 10,
-                            "color": "red"
-                            },
-                      scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
-                      )
+    # todo: fix this!
+    # if show_raw or show_efields:
+    #     # add (1, 1) for xy dimensions
+    #     coords = np.meshgrid(*[np.arange(d) for d in n_stack.shape[:-3] + (1, 1)], indexing="ij")
+    #     coords = [c.ravel() for c in coords]
+    #     points = np.stack(coords, axis=1)
+    #
+    #     dphi = da.from_zarr(img_z.phase_shifts)[slices + (slice(None), slice(None), slice(None))]
+    #     dphi_stack = da.stack([dphi] * nz_sp, axis=-3)
+    #
+    #     if show_efields:
+    #         epower = efield_power_stack.compute().ravel()
+    #     else:
+    #         epower = np.zeros(dphi_stack.shape).ravel() * np.nan
+    #
+    #     viewer.add_points(points,
+    #                       features={"dphi": dphi_stack.compute().ravel(),
+    #                                 "epower": epower},
+    #                       text={"string": "phi={dphi:.3f}, epower={epower:.3f}",
+    #                             "size": 10,
+    #                             "color": "red"
+    #                             },
+    #                       scale=(1,) * (points.shape[-1] - 3) + scale
+    #                       )
 
     # ######################
     # show ROI in image
@@ -3084,153 +3080,88 @@ def display_tomography_recon(recon_fname: str,
                                    [proc_roi[1], proc_roi[3]],
                                    [proc_roi[1], proc_roi[2] - 1]
                                    ]])
-        viewer.add_shapes(proc_roi_rect, shape_type="polygon", name="processing ROI", edge_width=1,
-                          edge_color=[1, 0, 0, 1], face_color=[0, 0, 0, 0])
 
-    # ######################
-    # Fts
-    # ######################
-    if show_v_fft:
-        # plot Fourier transform of scattering potential
-        n_full = n_r + 1j * n_im
-
-        v = da.map_blocks(get_v, n_full, img_z.attrs["no"], wavelength, dtype=complex)
-        v_ft = da.fft.fftshift(da.fft.fftn(da.fft.ifftshift(v, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
-        v_ft_stack = da.stack([v_ft] * npatterns, axis=-4)
-
-        v_ft_start = da.abs(da.from_zarr(img_z.v_ft_start))
-        v_ft_start_stack = da.stack([v_ft_start] * npatterns, axis=-4)
-
-        viewer.add_image(da.abs(v_ft_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|v ft|", gamma=0.1, visible=False)
-        viewer.add_image(da.abs(v_ft_start_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|v ft| start", gamma=0.1, visible=False)
+        viewer.add_shapes(proc_roi_rect,
+                          shape_type="polygon",
+                          name="processing ROI",
+                          edge_width=1,
+                          edge_color=[1, 0, 0, 1],
+                          face_color=[0, 0, 0, 0])
 
     # ######################
     # electric fields
     # ######################
     if show_efields:
-        # E scattered field
-        viewer.add_image(da.abs(escatt_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|e scatt|", contrast_limits=[0, 1.2],
-                         translate=(0, nx_raw))
+        translations = np.array([[0, nx_raw],
+                                 [ny, nx_raw],
+                                 [0, nx_raw + nx],
+                                 [ny, nx_raw + nx],
+                                 [0, nx_raw + 2 * nx],
+                                 [ny, nx_raw + 2 * nx]
+                                 ])
 
-        #
-        viewer.add_image(da.angle(escatt_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e scatt)", contrast_limits=[-np.pi, np.pi],
-                         colormap="PiYG",
-                         translate=(ny, nx_raw))
-
-        # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + nx // 2]])
-        # viewer.add_points(points + offset,
-        #                   features={"dphi": np.zeros(len(points)),},
-        #                   text={"string": "{dphi:.0f} E scattered",
-        #                         "size": 10,
-        #                         "color": "red"
-        #                         },
-        #                   scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
-        #                   )
-
-        # rytov
-        viewer.add_image(da.abs(erytov_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|e rytov|", contrast_limits=[0, 1.2],
-                         translate=(0, nx_raw + nx))
-
-        viewer.add_image(da.angle(erytov_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e rytov)", contrast_limits=[-np.pi, np.pi],
-                         colormap="PiYG",
-                         translate=(ny, nx_raw + nx))
-
-        # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + nx + nx // 2]])
-        # viewer.add_points(points + offset,
-        #                   features={"dphi": np.zeros(len(points)), },
-        #                   text={"string": "{dphi:.0f} E Rytov",
-        #                         "size": 10,
-        #                         "color": "red"
-        #                         },
-        #                   scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
-        #                   )
-
-        # measured field
-        viewer.add_image(da.abs(estack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|e|", contrast_limits=[0, 500],
-                         translate=(0, nx_raw + 2*nx))
-
-        viewer.add_image(da.angle(estack), scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e)", contrast_limits=[-np.pi, np.pi],
-                         colormap="PiYG",
-                         translate=(ny, nx_raw + 2*nx))
-
-        # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + 2*nx + nx // 2]])
-        # viewer.add_points(points + offset,
-        #                   features={"dphi": np.zeros(len(points)), },
-        #                   text={"string": "{dphi:.0f} E",
-        #                         "size": 10,
-        #                         "color": "red"
-        #                         },
-        #                   scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
-        #                   )
-
-        # background field
-        viewer.add_image(da.abs(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|e bg|", contrast_limits=[0, 500],
-                         translate=(0, nx_raw + 3 * nx))
-
-        viewer.add_image(da.angle(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e bg)", contrast_limits=[-np.pi, np.pi],
-                         colormap="PiYG",
-                         translate=(ny, nx_raw + 3 * nx))
-
-        viewer.add_image(da.abs(estack) - da.abs(ebg_stack), scale=(dz_v / dxy_v, 1, 1),
-                         name="|e| - |e bg|", contrast_limits=[-500, 500],
-                         colormap="twilight_shifted",
-                         translate=(0, nx_raw + 4*nx))
-
-        # offset = np.array([[0] * (points.shape[-1] - 2) + [-10, nx_raw + 3*nx + nx // 2]])
-        # viewer.add_points(points + offset,
-        #                   features={"dphi": np.zeros(len(points)), },
-        #                   text={"string": "{dphi:.0f} E background",
-        #                         "size": 10,
-        #                         "color": "red"
-        #                         },
-        #                   scale=(1,) * (points.shape[-1] - 3) + (dz_v / dxy_v, 1, 1)
-        #                   )
-
-        # phase difference between measured and bg
-        pd = da.mod(da.angle(estack) - da.angle(ebg_stack), 2 * np.pi)
-        pd_even = pd - 2*np.pi * (pd > np.pi)
-        viewer.add_image(pd_even, scale=(dz_v / dxy_v, 1, 1),
-                         name="angle(e) - angle(e bg)", contrast_limits=[-phase_lim, phase_lim],
-                         colormap="PiYG",
-                         translate=(ny, 0)
-                         )
-
-        label_pts = np.array([[0, nx_raw],
-                              [ny, nx_raw],
-                              [0, nx_raw + nx],
-                              [ny, nx_raw + nx],
-                              [0, nx_raw + 2 * nx],
-                              [ny, nx_raw + 2 * nx],
-                              [0, nx_raw + 3 * nx],
-                              [ny, nx_raw + 3 * nx],
-                              [0, nx_raw + 4 * nx],
-                              [ny, 0]
-                              ]) + np.array([ny / 10, nx / 2])
-        ttls = ["|e scatt|", "angle(e scatt)",
-                "|e rytov|", "angle(e rytov)",
-                "|e|", "angle(e)",
-                "|e bg|", "angle(e bg)",
+        ttls = ["|e|",
+                "angle(e)",
+                "|e bg|",
+                "angle(e bg)",
                 "|e| - |e bg|",
                 "angle(e) - angle(e bg)"]
 
-        viewer.add_points(label_pts,
+        # measured field
+        viewer.add_image(e_abs,
+                         scale=scale,
+                         name=ttls[0],
+                         contrast_limits=[0, 500],
+                         colormap=real_cmap,
+                         translate=translations[0])
+
+        viewer.add_image(e_angle,
+                         scale=scale,
+                         name=ttls[1],
+                         contrast_limits=[-np.pi, np.pi],
+                         colormap=phase_cmap,
+                         translate=translations[1])
+
+        # background field
+        viewer.add_image(ebg_abs,
+                         scale=scale,
+                         name=ttls[2],
+                         contrast_limits=[0, 500],
+                         colormap=real_cmap,
+                         translate=translations[2])
+
+        viewer.add_image(ebg_angle,
+                         scale=scale,
+                         name=ttls[3],
+                         contrast_limits=[-np.pi, np.pi],
+                         colormap=phase_cmap,
+                         translate=translations[3])
+
+        viewer.add_image(e_ebg_abs_diff,
+                         scale=scale,
+                         name=ttls[4],
+                         contrast_limits=[-500, 500],
+                         colormap=phase_cmap,
+                         translate=translations[4])
+
+        # phase difference between measured and bg
+        viewer.add_image(e_ebg_phase_diff,
+                         scale=scale,
+                         name=ttls[5],
+                         contrast_limits=[-phase_lim, phase_lim],
+                         colormap=phase_cmap,
+                         translate=translations[5]
+                         )
+
+        viewer.add_points(translations + np.array([ny / 10, nx / 2]),
                           features={"names": ttls},
                           text={"string": "{names:s}",
                                 "size": 30,
                                 "color": "red"},
                           )
 
-    viewer.dims.axis_labels = ["position", "time", "", "", "pattern", "z", "y", "x"]
+    viewer.dims.axis_labels = n_axis_names[:n_extra_dims + 1] + ["pattern", "z", "y", "x"]
+
     # set to first position
     viewer.dims.set_current_step(axis=0, value=0)
     # set to first time
