@@ -708,7 +708,7 @@ class SimImageSet:
             otf = xp.tile(otf, [self.nangles, 1, 1])
 
         if otf.shape[-2:] != self.imgs_raw.shape[-2:]:
-            raise ValueError(f"OTF shape {self.otf.shape} and image shape {self.imgs_raw.shape} are not compatible")
+            raise ValueError(f"OTF shape {otf.shape} and image shape {self.imgs_raw.shape} are not compatible")
 
         self.otf = otf
 
