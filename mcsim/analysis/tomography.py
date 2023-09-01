@@ -15,6 +15,8 @@ import scipy.sparse as sp
 from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
 from scipy.signal.windows import tukey, hann
 from skimage.restoration import unwrap_phase, denoise_tv_chambolle
+# from unwrap import unwrap
+from mcsim.analysis.phase_unwrap import phase_unwrap as weighted_phase_unwrap
 import dask
 import dask.array as da
 from dask.diagnostics import ProgressBar
@@ -380,22 +382,32 @@ class tomography:
         self.hologram_frqs_bg = frqs_hologram_bg
 
     def estimate_reference_frq(self,
-                               mode: str = "fit",
-                               save_dir: Optional[str] = None):
+                               mode: str = "average",
+                               frq: Optional[array] = None,
+                               ):
         """
         Estimate hologram reference frequency
         :param mode: if "fit" fit the residual speckle pattern to try and estimate the reference frequency.
-         If "average" take the average of self.hologram_frqs as the reference frequency
-        :param save_dir:
-        :return:
+         If "average" take the average of self.hologram_frqs as the reference frequency.
+         If "set" use the frequency argument to set the value
+        :param frq: set reference frequency to this value
+        :return figure: a diagnostic figure is generated if mode is "fit", otherwise None is returned
         """
         
         self.reconstruction_settings.update({"reference_frequency_mode": mode})
+        figh_ref_frq = None
 
-        if mode == "fit":
+        if mode == "average":
+            frq_ref = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
+            frq_ref_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
+        elif mode == "set":
+            if frq is None:
+                raise ValueError("mode was 'set' so a reference frequency must be supplied")
+            frq_ref = frq
+            frq_ref_bg = frq
+
+        elif mode == "fit":
             raise NotImplementedError("mode 'fit' not implemented after multiplexing code update")
-
-            saving = save_dir is not None
 
             # load one slice of background data to get frequency reference. Load the first slice along all dimensions
             slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
@@ -417,19 +429,13 @@ class tomography:
 
             frq_ref_bg = frq_ref
 
-            if saving:
-                save_dir = Path(save_dir)
-                save_dir.mkdir(exist_ok=True)
-
-                figh_ref_frq.savefig(Path(save_dir, "frequency_reference_diagnostic.png"))
-        elif mode == "average":
-            frq_ref = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
-            frq_ref_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
         else:
             raise ValueError(f"'mode' must be '{mode:s}' but must be 'fit' or 'average'")
 
         self.reference_frq = frq_ref
         self.reference_frq_bg = frq_ref_bg
+
+        return figh_ref_frq
 
     def get_beam_frqs(self):
         """
@@ -605,7 +611,7 @@ class tomography:
         :param bg_average_axes: axes to average along when producing background images
         :param kernel_size: when averaging time points to generate a background image, this is the number of
         time points that will be used
-        :param fourier_mask: area to be cut out of holograms
+        :param fourier_mask: regions where this mask is True will be set to 0 during hologram unmixing
         :param fit_phases: whether to fit phase differences between image and background holograms
         :param correct_amplitudes:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
@@ -889,7 +895,8 @@ class tomography:
                       realspace_mask: Optional[np.ndarray] = None,
                       step: float = 1e-5,
                       use_gpu: bool = False,
-                      use_constant_n_start: bool = False,
+                      f_radius_factor: float = 0.15,
+                      n_guess: Optional[array] = None,
                       **kwargs):
 
         """
@@ -929,6 +936,12 @@ class tomography:
         for aaa in range(self.npatterns):
             mean_beam_frqs_arr[:, aaa, :] = mean_beam_frqs[aaa]
 
+        # beam frequencies ravelled
+        mean_beam_frqs_no_multi = np.zeros([self.npatterns * nmax_multiplex, 3])
+        for ii in range(self.npatterns):
+            for jj in range(nmax_multiplex):
+                mean_beam_frqs_no_multi[ii * nmax_multiplex + jj, :] = mean_beam_frqs_arr[jj, ii]
+
         # ############################
         # check arrays are chunked by volume
         # ############################
@@ -955,9 +968,10 @@ class tomography:
 
         # generate ATF ... ultimately want to do this based on pupil function defined in init
         e_size = (self.holograms_ft.shape[-2] // nbin, self.holograms_ft.shape[-1] // nbin)
-        fx_atf = xp.fft.fftshift(xp.fft.fftfreq(e_size[-1], self.dxy * nbin))[None, :]
-        fy_atf = xp.fft.fftshift(xp.fft.fftfreq(e_size[-2], self.dxy * nbin))[:, None]
-        atf = (xp.sqrt(fx_atf ** 2 + fy_atf ** 2) <= self.fmax).astype(complex)
+        fx_atf = xp.fft.fftshift(xp.fft.fftfreq(e_size[-1], self.dxy * nbin))
+        fy_atf = xp.fft.fftshift(xp.fft.fftfreq(e_size[-2], self.dxy * nbin))
+        atf = (xp.sqrt(fx_atf[None, :] ** 2 + fy_atf[:, None] ** 2) <= self.fmax).astype(complex)
+        fxfx, fyfy = xp.meshgrid(fx_atf, fy_atf)
 
         if mode == "born" or mode == "rytov":
             if nbin != 1:
@@ -1024,8 +1038,8 @@ class tomography:
         # general info
         if self.verbose:
             print(f"computing index of refraction for {np.prod(self.imgs_raw.shape[:-3]):d} images "
-                  f"using mode {mode:s}. "
-                  f"Image size = {self.npatterns} x {self.ny:d} x {self.nx:d}, "
+                  f"using mode {mode:s}.\n"
+                  f"Image size = {self.npatterns} x {self.ny:d} x {self.nx:d},\n"
                   f"reconstruction size = {n_size[0]:d} x {n_size[1]:d} x {n_size[2]:d}")
 
         # model for computing guess
@@ -1037,19 +1051,37 @@ class tomography:
         if self.verbose:
             tstart_linear_model = time.perf_counter()
 
-        linear_model_no_interp = fwd_model_linear(mean_beam_frqs_arr[..., 0],
-                                                  mean_beam_frqs_arr[..., 1],
-                                                  mean_beam_frqs_arr[..., 2],
-                                                  self.no,
-                                                  self.na_detection,
-                                                  self.wavelength,
-                                                  (self.ny, self.nx),
-                                                  (self.dxy, self.dxy),
-                                                  n_size,
-                                                  drs_n,
-                                                  mode=guess_mode,
-                                                  interpolate=False,
-                                                  use_gpu=use_gpu)
+
+        if nmax_multiplex == 1:
+            linear_model_invert = fwd_model_linear(mean_beam_frqs_arr[..., 0],
+                                                      mean_beam_frqs_arr[..., 1],
+                                                      mean_beam_frqs_arr[..., 2],
+                                                      self.no,
+                                                      self.na_detection,
+                                                      self.wavelength,
+                                                      (self.ny, self.nx),
+                                                      (self.dxy, self.dxy),
+                                                      n_size,
+                                                      drs_n,
+                                                      mode=guess_mode,
+                                                      interpolate=False,
+                                                      use_gpu=use_gpu)
+        else:
+            linear_model_invert = fwd_model_linear(mean_beam_frqs_no_multi[..., 0],
+                                                   mean_beam_frqs_no_multi[..., 1],
+                                                   mean_beam_frqs_no_multi[..., 2],
+                                                   self.no,
+                                                   self.na_detection,
+                                                   self.wavelength,
+                                                   (self.ny, self.nx),
+                                                   (self.dxy, self.dxy),
+                                                   n_size,
+                                                   drs_n,
+                                                   mode=guess_mode,
+                                                   interpolate=False,
+                                                   use_gpu=use_gpu)
+
+
 
         if self.verbose:
             print(f"Generated linear model for initial guess in {time.perf_counter() - tstart_linear_model:.2f}s")
@@ -1065,12 +1097,14 @@ class tomography:
                   dxy,
                   no,
                   wavelength,
+                  na_detection,
                   dz_final,
                   atf,
                   apod,
                   step,
                   optimizer,
                   verbose,
+                  n_guess=None,
                   block_id=None):
             # todo: might be cleaner to compute starting points and scattered fields in this function
             #  disadvantage is harder to access from outside ... although still easy to compute
@@ -1097,6 +1131,8 @@ class tomography:
             efields_ft = efields_ft.squeeze(axis=dims)
             efields_bg_ft = efields_bg_ft.squeeze(axis=dims)
 
+            nimgs, ny, nx = efields_ft.shape
+
             if use_gpu:
                 efields_ft = xp.asarray(efields_ft)
                 efields_bg_ft = xp.asarray(efields_bg_ft)
@@ -1104,21 +1140,56 @@ class tomography:
                 if rmask is not None:
                     rmask = xp.asarray(rmask)
 
+            # todo: get initial fields
             if optimizer == "born":
-                efield_scattered_ft = _ft2(get_scattered_field(_ift2(efields_ft),
-                                                               _ift2(efields_bg_ft),
-                                                               scattered_field_regularization))
+                scatt_fn = get_scattered_field
             else:
-                efield_scattered_ft = _ft2(get_rytov_phase(_ift2(efields_ft),
-                                                           _ift2(efields_bg_ft),
-                                                           scattered_field_regularization))
+                scatt_fn = get_rytov_phase
+
+            tstart_scatt = time.perf_counter()
+            if nmax_multiplex == 1:
+                efield_scattered_ft = _ft2(scatt_fn(_ift2(efields_ft),
+                                                    _ift2(efields_bg_ft),
+                                                    scattered_field_regularization))
+            else:
+                tstart_demultiplex = time.perf_counter()
+
+                # todo: not this is not implemented for case where multiplexing is different for different images
+                e_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
+                ebg_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
+                for ii in range(nimgs):
+                    for jj in range(nmax_multiplex):
+                        if verbose:
+                            print(f"demultiplexing image {ii + 1:d}/{nimgs:d},"
+                                  f" order {jj + 1:d}/{nmax_multiplex:d} in "
+                                  f"{time.perf_counter() - tstart_demultiplex:.2f}s", end="\r")
+
+                        mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
+                                       (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
+                                (f_radius_factor * na_detection / wavelength)
+
+                        e_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_ft[ii], mask))
+                        ebg_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_bg_ft[ii], mask))
+
+                if verbose:
+                    print("")
+
+                efield_scattered_ft = _ft2(scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization))
+
+                if optimizer == "born":
+                    raise NotImplementedError()
+                else:
+                    efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
+
+            if verbose:
+                print(f"computing scattered field took {time.perf_counter() - tstart_scatt:.2f}s")
 
             # initial guess
-            if use_constant_n_start:
-                v_fts_start = xp.zeros(n_size, dtype=complex)
+            if n_guess is not None:
+                v_fts_start = _ft3(get_v(n_guess, no, wavelength))
             else:
                 v_fts_start = inverse_model_linear(efield_scattered_ft,
-                                                   linear_model_no_interp,
+                                                   linear_model_invert,
                                                    n_size,
                                                    regularization=reconstruction_regularizer,
                                                    no_data_value=0.)
@@ -1200,12 +1271,14 @@ class tomography:
                           self.dxy,
                           self.no,
                           self.wavelength,
+                          self.na_detection,
                           dz_final,
                           atf,
                           apodization_n,
                           step,
                           optimizer,
                           self.verbose,
+                          n_guess=n_guess,
                           chunks=(1,) * self.nextra_dims + n_size,
                           dtype=complex,
                           )
@@ -1220,7 +1293,7 @@ class tomography:
                                              "dz_final": dz_final,
                                              "nbin": nbin,                                             
                                              "use_gpu": use_gpu,
-                                             "use_contant_n_start": use_constant_n_start
+                                             "n_guess": n_guess
                                              }
                                             )
         self.reconstruction_settings.update(kwargs)
@@ -1268,7 +1341,7 @@ class tomography:
         ax.set_title("x-position")
 
         ax = figh.add_subplot(1, 2, 2)
-        ax.plot(translations[..., 1], label="sig")
+        ax.plot(translations[..., 1], '.-', label="sig")
         ax.plot(translations_bg[..., 1], label="bg")
         ax.set_xlabel("time step")
         ax.set_ylabel("y-position (um)")
@@ -1725,12 +1798,12 @@ def cut_mask(img: array,
              mask: array,
              mask_val: float = 0) -> array:
     """
-    Mask points in image and set to a given value. Designed to be used with dask.array map_blocks()
+    Mask points in image and set to a given value
 
-    :param img:
-    :param mask:
-    :param mask_val: At any position where mask is True, replace the value of img with this value
-    :return: img_masked
+    :param img: image
+    :param mask: At any position where mask is True, replace the value of the image with mask_val
+    :param mask_val:
+    :return img_masked:
     """
     if isinstance(img, cp.ndarray) and _gpu_available:
         xp = cp
@@ -2083,7 +2156,8 @@ def get_v(n: array,
 
 def get_rytov_phase(eimgs: array,
                     eimgs_bg: array,
-                    regularization: float = 0.) -> array:
+                    regularization: float = 0.,
+                    use_weighted_unwrap: bool = True) -> array:
     """
     Compute rytov phase from field and background field. The Rytov phase is \psi_s(r) where
     U_total(r) = exp[\psi_o(r) + \psi_s(r)]
@@ -2101,10 +2175,8 @@ def get_rytov_phase(eimgs: array,
     use_gpu = isinstance(eimgs, cp.ndarray) and _gpu_available
     if use_gpu:
         xp = cp
-        def uwrap(m): return xp.array(unwrap_phase(m.get()))
     else:
         xp = np
-        def uwrap(m): return unwrap_phase(m)
 
     eimgs = xp.asarray(eimgs)
     eimgs_bg = xp.asarray(eimgs_bg)
@@ -2126,7 +2198,13 @@ def get_rytov_phase(eimgs: array,
     nextra = np.prod(nextra_shape)
     for ii in range(nextra):
         ind = np.unravel_index(ii, nextra_shape)
-        psi_rytov[ind] += 1j * uwrap(phase_diff[ind])
+
+        if use_weighted_unwrap:
+            psi_rytov[ind] += 1j * weighted_phase_unwrap(phase_diff[ind],
+                                                         weight=xp.abs(eimgs_bg[ind]))
+        else:
+            # no cucim/cupy GPU implementation of unwrapping, so must do it on CPU
+            psi_rytov[ind] += 1j * xp.asarray(unwrap_phase(_to_cpu(phase_diff[ind])))
 
     # regularization
     psi_rytov[abs(eimgs_bg) < regularization] = 0
@@ -2568,7 +2646,7 @@ def fwd_model_linear(beam_fx: array,
 def inverse_model_linear(efield_fts: array,
                          model: csr_matrix,
                          v_shape: tuple[int],
-                         regularization: float = 0.1,
+                         regularization: float = 0.,
                          no_data_value: float = np.nan) -> array:
     """
     Given a set of holograms obtained using ODT, put the hologram information back in the correct locations in
@@ -2622,9 +2700,22 @@ def inverse_model_linear(efield_fts: array,
         #     raise NotImplementedError("reconstruction only implemented for one angle mapping")
 
         this_angle = e_ind[0] == ii
-        vinds_angle = (v_ind[0][this_angle], v_ind[1][this_angle], v_ind[2][this_angle])
+
+        # ignore any nans in electric field
+        # todo: can I do this without first constructing einds_angle?
         einds_angle = (e_ind[0][this_angle], e_ind[1][this_angle], e_ind[2][this_angle])
-        data_angle = data[this_angle]
+        is_not_nan_angle = xp.logical_not(xp.isnan(efield_fts[einds_angle]))
+
+        # final indices
+        einds_angle = (e_ind[0][this_angle][is_not_nan_angle],
+                       e_ind[1][this_angle][is_not_nan_angle],
+                       e_ind[2][this_angle][is_not_nan_angle]
+                       )
+        vinds_angle = (v_ind[0][this_angle][is_not_nan_angle],
+                       v_ind[1][this_angle][is_not_nan_angle],
+                       v_ind[2][this_angle][is_not_nan_angle]
+                       )
+        data_angle = data[this_angle][is_not_nan_angle]
 
         # assuming at most one point for each ... otherwise have problems
         v_ft[vinds_angle] += efield_fts[einds_angle] / data_angle
@@ -3250,6 +3341,7 @@ class Optimizer():
             compute_all_costs: bool = False,
             line_search: bool = False,
             line_search_factor: float = 0.5,
+            stop_on_nan: bool = True,
             xtol: float = 1e-8,
             **kwargs) -> dict:
 
@@ -3290,6 +3382,7 @@ class Optimizer():
                    "use_gpu": use_gpu,
                    "x_init": _to_cpu(xp.array(x_start, copy=True)),
                    "prox_parameters": self.prox_parameters,
+                   "stop_condition": "ok"
                    }
 
         timing = {"iteration": np.zeros(0),
@@ -3315,6 +3408,11 @@ class Optimizer():
             else:
                 # use all angles
                 inds = list(range(self.n_samples))
+
+            # if any nans, break
+            if xp.any(xp.isnan(x)):
+                results["stop_condition"] = "stopped on NaN"
+                break
 
             # ###################################
             # proximal gradient descent
@@ -3410,7 +3508,6 @@ class Optimizer():
 
             # update for next gradient-descent/FISTA iteration
             q_last = q_now
-            # todo: do I need to make a copy?
             y_last = y
 
             timing["update"] = np.concatenate((timing["update"], np.array([time.perf_counter() - tstart_update])))
