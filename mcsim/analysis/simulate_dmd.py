@@ -1013,6 +1013,7 @@ def dmd_uvec2opt_axis_uvec(dmd_uvecs,
     dmd_uvecs = bx * ex + by * ey + bz * ez
     to expression relative to the optical axis coordinate system
     opt_axis_uvecs = bxp * exp + byp * eyp + bzp * ezp
+    For refractive index n = 1, can also be thought of as freq * wavelength
 
     :param dmd_uvecs:
     :param opt_axis_vec:

@@ -148,4 +148,5 @@ Example scripts which are useful for controlling various instruments during test
 [set_dmd_odt_pattern.py](mcsim/expt_ctrl/set_dmd_odt_pattern.py)
 
 # Instrument design
-A [parts list](parts/parts_list.md) and mechanical drawings of some parts used in the setup are included in the [parts](parts) directory. For a more complete description of the optical path, see our BOE paper linked above.
+A [parts list](parts_list.md) is available here. Mechanical drawings and 3D models of custom parts such as the DMD mount 
+are available on Zenodo (coming soon!). For a more complete description of the optical path, see our BOE paper linked above.

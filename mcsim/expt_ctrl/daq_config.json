@@ -1,5 +1,5 @@
 {
-	"timestamp": "2023_05_11_13;09;39",
+	"timestamp": "2023_08_21_17;27;34",
 	"analog_map": {
 		"vc_mirror_x": 0,
 		"vc_mirror_y": 1,
@@ -52,8 +52,8 @@
 				"red_laser": 0
 			},
 			"analog": {
-				"vc_mirror_x": 0.045,
-				"vc_mirror_y": 0.1
+				"vc_mirror_x": -0.015,
+				"vc_mirror_y": 0.0
 			}
 		},
 		"green": {
@@ -66,8 +66,8 @@
 				"red_laser": 0
 			},
 			"analog": {
-				"vc_mirror_x": -4.768,
-				"vc_mirror_y": -0.01
+				"vc_mirror_x": -4.738,
+				"vc_mirror_y": -0.03
 			}
 		},
 		"red": {
@@ -80,8 +80,8 @@
 				"red_laser": 1
 			},
 			"analog": {
-				"vc_mirror_x": -0.366,
-				"vc_mirror_y": 0.08
+				"vc_mirror_x": -0.386,
+				"vc_mirror_y": -0.04
 			}
 		},
 		"odt": {
