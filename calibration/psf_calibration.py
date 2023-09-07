@@ -10,17 +10,37 @@ import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import datetime
-import napari
 from pathlib import Path
 import numpy as np
-import dask.array as da
 import zarr
-from localize_psf import localize, affine, fit_psf
 import tifffile
+from localize_psf import localize, fit_psf, fit
 
 # data path
 fname = Path(r"I:\2023_08_23\001_psf_blue\sim_odt.zarr")
 component = "cam1/widefield_blue"
+
+# physical parameters
+wavelength = 0.515
+na = 1.3
+ni = 1.51
+
+# set filtering
+filter_sigma_small = None
+filter_sigma_large = (5., 3., 3.) # in um
+threshold = 2000 # only consider points above this value in max filter. Threshold is applied after filtering
+min_spot_sep = (1.0, 0.2) # in um. Regard spots closer than this as duplicates
+
+# set fit rejection thresholds
+amp_bounds = (1000., 10000.) # (min, max)
+sxy_bounds = (0.05, 0.5) # (min, max) um
+sz_bounds = (0.2, 0.5) # (min, max) um
+fit_distance_max_err = (2., 0.2) # (sz, sxy) um
+fit_roi_size = (1.75, 0.65, 0.65) # (sz, sy, sx) in um
+
+# ########################################
+# localization
+# ########################################
 
 # load data
 z = zarr.open(fname, "r")
@@ -29,10 +49,6 @@ img = np.array(z[component]).squeeze()
 
 dz = z.attrs["dz_um"]
 dxy = z.cam1.attrs["dx_um"]
-wavelength = 0.515
-na = 1.3
-ni = 1.51
-
 
 # save directory
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
@@ -40,28 +56,35 @@ save_dir = fname.parent / f"{tstamp:s}_psf_calibration"
 save_dir.mkdir(exist_ok=True)
 
 
-
-
-# simple filter
-# local coords
+# coordinates
 coords_3d = localize.get_coords(img.shape, (dz, dxy, dxy))
 coords_2d = localize.get_coords(img.shape[1:], (dxy, dxy))
+
+# simple filter
+model = fit_psf.gaussian3d_psf_model()
 filter = localize.get_param_filter(coords_3d,
-                                   fit_dist_max_err=(2., 0.2),
-                                   min_spot_sep=(1., 0.2),
-                                   amp_bounds=(1000., 10000),
-                                   sigma_bounds=((0.2, 0.05), (0.5, 0.5))
+                                   fit_dist_max_err=fit_distance_max_err,
+                                   min_spot_sep=min_spot_sep,
+                                   amp_bounds=amp_bounds,
+                                   sigma_bounds=((sz_bounds[0], sxy_bounds[0]),
+                                                 (sz_bounds[1], sxy_bounds[1]))
                                    )
 
+# todo: replace with this
+# filter = localize.get_param_filter_model(model,
+#                                          fit_dist_max_err=(2., 0.2),
+#                                          min_spot_sep=(1., 0.2),
+#                                          param_bounds=
+#                                          )
+
 # localize
-model = fit_psf.gaussian3d_psf_model()
 _, r, img_filtered = localize.localize_beads_generic(img,
                                                      (dz, dxy, dxy),
-                                                     threshold=2000,
-                                                     roi_size=(1.75, 0.65, 0.65),
-                                                     filter_sigma_small=None,
-                                                     filter_sigma_large=(5., 3., 3.),
-                                                     min_spot_sep=(1., 0.2),
+                                                     threshold=threshold,
+                                                     roi_size=fit_roi_size,
+                                                     filter_sigma_small=filter_sigma_small,
+                                                     filter_sigma_large=filter_sigma_large,
+                                                     min_spot_sep=min_spot_sep,
                                                      model=model,
                                                      filter=filter,
                                                      use_gpu_fit=True,
@@ -93,15 +116,25 @@ grad_mag = np.sqrt(lsq_params[1]**2 + lsq_params[2]**2)
 grad_angle = np.arctan2(lsq_params[2], lsq_params[1])
 
 # ###############################
+# fit field curvature after removing gradient
+# ###############################
+def curvature_model_fn(p):
+    return p[2] * ((p[0] - cx)**2 + (p[1] - cy)**2)
+#
+init_params = np.array([np.mean(cx), np.mean(cy), 0])
+results = fit.fit_model(cz - zf_fit, curvature_model_fn, init_params)
+fp_curve = results["fit_params"]
+
+# ###############################
 # plot gradient in z-positions
 # ###############################
-width_ratios = [1, 0.05, 0.05, 1, 0.05, 0.05]
+width_ratios = [1, 0.05, 0.05, 1, 0.05, 0.05, 1, 0.05, 0.05]
 wspace = 0.2 / np.mean(width_ratios)
 
-figh_focus = plt.figure(figsize=(20, 10))
+figh_focus = plt.figure(figsize=(30, 10))
 figh_focus.suptitle("Focus gradient and field curvature")
 grid = figh_focus.add_gridspec(nrows=1,
-                               ncols=6,
+                               ncols=len(width_ratios),
                                width_ratios=width_ratios,
                                wspace=wspace)
 axes = []
@@ -114,6 +147,7 @@ title = f"grad={grad_mag * 1e2:.3g}um/ 100um, " \
         f"offset={lsq_params[0]:.2f}um"
 
 # raw z-position
+z_color_limits = [[np.percentile(cz, 1), np.percentile(cz, 99)]]
 localize.plot_bead_locations(np.max(img, axis=0),
                              centers,
                              coords=coords_2d,
@@ -121,20 +155,38 @@ localize.plot_bead_locations(np.max(img, axis=0),
                              color_lists=["hsv"],
                              weights=cz,
                              cbar_labels=[r"$c_z$ (um)"],
+                             color_limits=z_color_limits,
                              gamma=0.5,
                              axes=axes[:3]
+                             )
+
+zres_color_limits = [[np.percentile(cz - zf_fit, 1),
+                     np.percentile(cz - zf_fit, 99)]]
+localize.plot_bead_locations(np.max(img, axis=0),
+                             centers,
+                             coords=coords_2d,
+                             title=f"field curvature (after gradient removed)\n"
+                                   f"curvature={fp_curve[2]:.3g} 1/um, "
+                                   f"(cx, cy) = ({fp_curve[0]:.1f} um, {fp_curve[1]:.1f} um)",
+                             color_lists=["hsv"],
+                             weights=cz - zf_fit,
+                             cbar_labels=[r"$c_z$ (um)"],
+                             color_limits=zres_color_limits,
+                             gamma=0.5,
+                             axes=axes[3:6]
                              )
 
 localize.plot_bead_locations(np.max(img, axis=0),
                              centers,
                              coords=coords_2d,
-                             title="field curvature",
+                             title=f"residual shift after removing gradient and curvature",
                              color_lists=["hsv"],
-                             weights=cz - zf_fit,
+                             weights=cz - zf_fit - curvature_model_fn(fp_curve),
                              cbar_labels=[r"$c_z$ (um)"],
                              gamma=0.5,
-                             axes=axes[3:]
+                             axes=axes[6:]
                              )
+
 
 figh_focus.savefig(save_dir / "focus_gradient_and_field_curvature.png")
 
