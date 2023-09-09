@@ -5,7 +5,7 @@ Tools for reconstructing optical diffraction tomography (ODT) data using either 
 """
 import time
 import datetime
-import warnings
+from copy import deepcopy
 from pathlib import Path
 from typing import Union, Optional
 import random
@@ -601,6 +601,7 @@ class tomography:
                         fit_phases: bool = False,
                         correct_amplitudes: bool = True,
                         fit_translations: bool = False,
+                        translation_thresh: float = 1/30,
                         apodization: Optional[np.ndarray] = None,
                         use_gpu: bool = False):
         """
@@ -729,6 +730,7 @@ class tomography:
                                               holograms_abs_ft,
                                               holograms_abs_ft_bg[translation_ref_slice],
                                               self.dxy,
+                                              thresh=translation_thresh,
                                               dtype=float,
                                               new_axis=-1,
                                               chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
@@ -740,6 +742,7 @@ class tomography:
                                                      holograms_abs_ft_bg,
                                                      holograms_abs_ft_bg[translation_ref_slice],
                                                      self.dxy,
+                                                     thresh=translation_thresh,
                                                      dtype=float,
                                                      new_axis=-1,
                                                      chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
@@ -897,7 +900,10 @@ class tomography:
                       use_gpu: bool = False,
                       f_radius_factor: float = 0.15,
                       n_guess: Optional[array] = None,
-                      **kwargs):
+                      cam_roi: Optional[list] = None,
+                      data_roi: Optional[list] = None,
+                      cache_fft_plans: bool = True,
+                      **kwargs) -> (array, tuple, dict):
 
         """
         Reconstruct refractive index using one of a several different models
@@ -916,7 +922,7 @@ class tomography:
         :param **kwargs: passed through to both the constructor and the run() method of the optimizer.
           These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
           Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details
-        :return n, drs_n, xform_recon_pix2coords:
+        :return n, drs_n, xforms:
         """
 
         if use_gpu and _gpu_available:
@@ -1051,36 +1057,38 @@ class tomography:
         if self.verbose:
             tstart_linear_model = time.perf_counter()
 
-
-        if nmax_multiplex == 1:
-            linear_model_invert = fwd_model_linear(mean_beam_frqs_arr[..., 0],
-                                                      mean_beam_frqs_arr[..., 1],
-                                                      mean_beam_frqs_arr[..., 2],
-                                                      self.no,
-                                                      self.na_detection,
-                                                      self.wavelength,
-                                                      (self.ny, self.nx),
-                                                      (self.dxy, self.dxy),
-                                                      n_size,
-                                                      drs_n,
-                                                      mode=guess_mode,
-                                                      interpolate=False,
-                                                      use_gpu=use_gpu)
+        if n_guess is not None:
+            linear_model_invert = None
         else:
-            linear_model_invert = fwd_model_linear(mean_beam_frqs_no_multi[..., 0],
-                                                   mean_beam_frqs_no_multi[..., 1],
-                                                   mean_beam_frqs_no_multi[..., 2],
-                                                   self.no,
-                                                   self.na_detection,
-                                                   self.wavelength,
-                                                   (self.ny, self.nx),
-                                                   (self.dxy, self.dxy),
-                                                   n_size,
-                                                   drs_n,
-                                                   mode=guess_mode,
-                                                   interpolate=False,
-                                                   use_gpu=use_gpu)
-
+            if nmax_multiplex == 1:
+                linear_model_invert = fwd_model_linear(mean_beam_frqs_arr[..., 0],
+                                                       mean_beam_frqs_arr[..., 1],
+                                                       mean_beam_frqs_arr[..., 2],
+                                                       self.no,
+                                                       self.na_detection,
+                                                       self.wavelength,
+                                                       (self.ny, self.nx),
+                                                       (self.dxy, self.dxy),
+                                                       n_size,
+                                                       drs_n,
+                                                       mode=guess_mode,
+                                                       interpolate=False,
+                                                       use_gpu=use_gpu)
+            else:
+                # todo: how to avoid running out of memory
+                linear_model_invert = fwd_model_linear(mean_beam_frqs_no_multi[..., 0],
+                                                       mean_beam_frqs_no_multi[..., 1],
+                                                       mean_beam_frqs_no_multi[..., 2],
+                                                       self.no,
+                                                       self.na_detection,
+                                                       self.wavelength,
+                                                       (self.ny, self.nx),
+                                                       (self.dxy, self.dxy),
+                                                       n_size,
+                                                       drs_n,
+                                                       mode=guess_mode,
+                                                       interpolate=False,
+                                                       use_gpu=use_gpu)
 
 
         if self.verbose:
@@ -1106,22 +1114,10 @@ class tomography:
                   verbose,
                   n_guess=None,
                   block_id=None):
-            # todo: might be cleaner to compute starting points and scattered fields in this function
-            #  disadvantage is harder to access from outside ... although still easy to compute
 
-            # mempool = cp.get_default_memory_pool()
-            # pinned_mempool = cp.get_default_pinned_memory_pool()
-            # # memory_start = mempool.used_bytes()
-            # memory_start = 0
-            # mempool.free_all_blocks()
-            # print(f"used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB, memory pool = {mempool.total_bytes() / 1e9:.3f}GB")
-            # # fourier plan cache
-            # cache = cp.fft.config.get_plan_cache()
-            # cache.show_info()
-
-            if use_gpu:
+            # todo: want to use cache for 2D FFT's for BPM/SSNP but not for 3D models
+            if use_gpu and not cache_fft_plans:
                 # ensure not holding large FFT planes in the cache
-                # todo: caching 2D FFT's not a problem, but caching the 3D FFT can be!
                 cache = cp.fft.config.get_plan_cache()
                 cache.set_size(0)
                 # cache.set_memsize(0)
@@ -1146,47 +1142,48 @@ class tomography:
             else:
                 scatt_fn = get_rytov_phase
 
-            tstart_scatt = time.perf_counter()
-            if nmax_multiplex == 1:
-                efield_scattered_ft = _ft2(scatt_fn(_ift2(efields_ft),
-                                                    _ift2(efields_bg_ft),
-                                                    scattered_field_regularization))
-            else:
-                tstart_demultiplex = time.perf_counter()
+            if n_guess is None or optimizer == "born" or optimizer == "rytov":
+                tstart_scatt = time.perf_counter()
+                if nmax_multiplex == 1:
+                    efield_scattered_ft = _ft2(scatt_fn(_ift2(efields_ft),
+                                                        _ift2(efields_bg_ft),
+                                                        scattered_field_regularization))
+                else:
+                    tstart_demultiplex = time.perf_counter()
 
-                # todo: not this is not implemented for case where multiplexing is different for different images
-                e_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
-                ebg_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
-                for ii in range(nimgs):
-                    for jj in range(nmax_multiplex):
-                        if verbose:
-                            print(f"demultiplexing image {ii + 1:d}/{nimgs:d},"
-                                  f" order {jj + 1:d}/{nmax_multiplex:d} in "
-                                  f"{time.perf_counter() - tstart_demultiplex:.2f}s", end="\r")
+                    # todo: not this is not implemented for case where multiplexing is different for different images
+                    e_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
+                    ebg_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
+                    for ii in range(nimgs):
+                        for jj in range(nmax_multiplex):
+                            if verbose:
+                                print(f"demultiplexing image {ii + 1:d}/{nimgs:d},"
+                                      f" order {jj + 1:d}/{nmax_multiplex:d} in "
+                                      f"{time.perf_counter() - tstart_demultiplex:.2f}s", end="\r")
 
-                        mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
-                                       (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
-                                (f_radius_factor * na_detection / wavelength)
+                            mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
+                                           (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
+                                    (f_radius_factor * na_detection / wavelength)
 
-                        e_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_ft[ii], mask))
-                        ebg_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_bg_ft[ii], mask))
+                            e_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_ft[ii], mask))
+                            ebg_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_bg_ft[ii], mask))
+
+                    if verbose:
+                        print("")
+
+                    efield_scattered_ft = _ft2(scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization))
+
+                    if optimizer == "born":
+                        raise NotImplementedError()
+                    else:
+                        efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
 
                 if verbose:
-                    print("")
-
-                efield_scattered_ft = _ft2(scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization))
-
-                if optimizer == "born":
-                    raise NotImplementedError()
-                else:
-                    efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
-
-            if verbose:
-                print(f"computing scattered field took {time.perf_counter() - tstart_scatt:.2f}s")
+                    print(f"computing scattered field took {time.perf_counter() - tstart_scatt:.2f}s")
 
             # initial guess
             if n_guess is not None:
-                v_fts_start = _ft3(get_v(n_guess, no, wavelength))
+                v_fts_start = _ft3(get_v(xp.asarray(n_guess), no, wavelength))
             else:
                 v_fts_start = inverse_model_linear(efield_scattered_ft,
                                                    linear_model_invert,
@@ -1215,7 +1212,10 @@ class tomography:
 
             else:
                 # delete variables we no longer need
-                del efield_scattered_ft
+                try:
+                    del efield_scattered_ft
+                except:
+                    pass
 
                 # bin if desired
                 n_start = get_n(_ift3(v_fts_start), no, wavelength)
@@ -1263,8 +1263,10 @@ class tomography:
         # #######################
         # get refractive index
         # #######################
+        # todo: replace with a call that lets me extract fields, n_start, and potentially n_fwd also
+        # todo: possibly using self.holograms_ft.to_delayed() and etc.
         n = da.map_blocks(recon,
-                          self.holograms_ft,  # data
+                          self.holograms_ft, # data
                           self.holograms_ft_bg, # background
                           mean_beam_frqs_arr,
                           realspace_mask, # masks
@@ -1293,12 +1295,43 @@ class tomography:
                                              "dz_final": dz_final,
                                              "nbin": nbin,                                             
                                              "use_gpu": use_gpu,
-                                             "n_guess": n_guess
                                              }
                                             )
         self.reconstruction_settings.update(kwargs)
 
-        return n, drs_n, xform_recon_pix2coords
+
+        # ############################
+        # construct affine tranforms between reconstructed data and camera pixels
+        # ############################
+
+        # affine transformation from camera ROI coordinates to pixel indices
+        xform_raw_roi_pix2coords = affine.params2xform([self.dxy, 0, -(n_size[-1] // 2) * self.dxy,
+                                                        self.dxy, 0, -(n_size[-2] // 2) * self.dxy])
+
+        # composing these two transforms gives affine from recon pixel indices to
+        # recon pix inds -> recon coords = ROI coordinates -> ROI pix inds
+        xform_recon2raw_roi = np.linalg.inv(xform_raw_roi_pix2coords).dot(xform_recon_pix2coords)
+
+        # store all transforms
+        xforms = {"xform_recon_pix2coords": xform_recon_pix2coords,
+                  "affine_xform_recon_2_raw_process_roi": xform_recon2raw_roi}
+
+        if data_roi is not None:
+            # transform from reconstruction processing roi to camera roi
+            odt_recon_roi = deepcopy(data_roi)
+            xform_process_roi_to_cam_roi = affine.params2xform([1, 0, odt_recon_roi[2],
+                                                                1, 0, odt_recon_roi[0]])
+            xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
+
+            xforms.update({"affine_xform_recon_2_raw_camera_roi": xform_odt_recon_to_cam_roi,})
+            if cam_roi is not None:
+                # transform from camera roi to uncropped chip
+                xform_cam_roi_to_full = affine.params2xform([1, 0, cam_roi[2],
+                                                             1, 0, cam_roi[0]])
+                xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
+                xforms.update({"affine_xform_recon_2_raw_camera": xform_odt_recon_to_full})
+
+        return n, drs_n, xforms
 
     def plot_translations(self,
                           index: tuple[int],
@@ -2427,6 +2460,29 @@ def fwd_model_linear(beam_fx: array,
 
         # add models to get multiplexed model
         model = sum(models)
+    elif 1 == 2:
+        # todo: want to support looping over frequencies instead of running them in parallel
+        # todo: but may have problems later anyways with holding all the fields I want in memory in that case
+        nfrqs = beam_fx.shape[0]
+        models = []
+        for ii in range(nfrqs):
+            m = fwd_model_linear(beam_fx[ii][None, :],
+                                 beam_fy[ii][None, :],
+                                 beam_fz[ii][None, :],
+                                 no,
+                                 na_det,
+                                 wavelength,
+                                 e_shape,
+                                 drs_e,
+                                 v_shape,
+                                 drs_v,
+                                 mode,
+                                 interpolate,
+                                 use_gpu)
+            models.append(m)
+
+        # here need to correct indices and combine to one matrix
+        raise NotImplementedError()
 
     else:
         if use_gpu and _gpu_available:
@@ -2982,7 +3038,10 @@ def display_tomography_recon(recon_fname: str,
     # load affine xforms
     # Napari is using convention (y, x) whereas I'm using (x, y), so need to swap these dimensions in affine xforms
     swap_xy = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
-    affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
+    try:
+        affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
+    except KeyError:
+        affine_recon2cam_xy = affine.params2xform([1, 0, 0, 1, 0, 0])
     affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
 
     # ######################
@@ -3124,7 +3183,7 @@ def display_tomography_recon(recon_fname: str,
                          affine=affine_recon2cam,
                          contrast_limits=[0, 0.05],
                          colormap=real_cmap,
-                         visible=False)
+                         visible=True)
 
         viewer.add_image(n_real,
                          scale=scale,
@@ -3185,10 +3244,10 @@ def display_tomography_recon(recon_fname: str,
     if show_efields:
         translations = np.array([[0, nx_raw],
                                  [ny, nx_raw],
+                                 [0, nx_raw],
+                                 [ny, nx_raw],
                                  [0, nx_raw + nx],
-                                 [ny, nx_raw + nx],
-                                 [0, nx_raw + 2 * nx],
-                                 [ny, nx_raw + 2 * nx]
+                                 [ny, nx_raw + nx]
                                  ])
 
         ttls = ["|e|",
@@ -3197,21 +3256,6 @@ def display_tomography_recon(recon_fname: str,
                 "angle(e bg)",
                 "|e| - |e bg|",
                 "angle(e) - angle(e bg)"]
-
-        # measured field
-        viewer.add_image(e_abs,
-                         scale=scale,
-                         name=ttls[0],
-                         contrast_limits=[0, 500],
-                         colormap=real_cmap,
-                         translate=translations[0])
-
-        viewer.add_image(e_angle,
-                         scale=scale,
-                         name=ttls[1],
-                         contrast_limits=[-np.pi, np.pi],
-                         colormap=phase_cmap,
-                         translate=translations[1])
 
         # background field
         viewer.add_image(ebg_abs,
@@ -3228,6 +3272,22 @@ def display_tomography_recon(recon_fname: str,
                          colormap=phase_cmap,
                          translate=translations[3])
 
+        # measured field
+        viewer.add_image(e_abs,
+                         scale=scale,
+                         name=ttls[0],
+                         contrast_limits=[0, 500],
+                         colormap=real_cmap,
+                         translate=translations[0])
+
+        viewer.add_image(e_angle,
+                         scale=scale,
+                         name=ttls[1],
+                         contrast_limits=[-np.pi, np.pi],
+                         colormap=phase_cmap,
+                         translate=translations[1])
+
+        # difference
         viewer.add_image(e_ebg_abs_diff,
                          scale=scale,
                          name=ttls[4],
@@ -3268,6 +3328,9 @@ class Optimizer():
     def __init__(self):
         self.n_samples = None
         self.prox_parameters = {}
+
+    def fwd_model(self, x, inds=None):
+        pass
 
     def cost(self, x, inds=None):
         pass
@@ -3323,7 +3386,7 @@ class Optimizer():
 
         return g, gn
 
-    def prox(self, x):
+    def prox(self, x, step=None):
         pass
 
     def guess_step(self, x):
@@ -3586,7 +3649,7 @@ class RIOptimizer(Optimizer):
         :param tau_l1_real:
         :param tau_l1_imag:
         :param use_imaginary_constraint: enforce im(n) > 0
-        :param use_real_constraint:  enforce re(n) > no
+        :param use_real_constraint: enforce re(n) > no
         """
 
         super(RIOptimizer, self).__init__()
@@ -3732,7 +3795,32 @@ class LinearScatt(RIOptimizer):
         else:
             self.model = model
 
+    def fwd_model(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        # todo: not using this in gradient/cost because need to manipulate models there
+
+        if isinstance(self.model, sp_gpu.csr_matrix) and _gpu_available:
+            spnow = sp_gpu
+        else:
+            spnow = sp
+
+        ny, nx = self.e_measured.shape[-2:]
+        models = [self.model[slice(ny*nx*ii, ny*nx*(ii + 1)), :] for ii in inds]
+        nind = len(inds)
+
+        # first division is average
+        # second division converts Fourier space to real-space sum
+        # factor of 0.5 in cost function killed by derivative factor of 2
+        efwd = spnow.vstack(models).dot(x.ravel()).reshape([nind, ny, nx])
+
+        return efwd
+
     def gradient(self, x, inds=None):
+
+        if inds is None:
+            inds = list(range(self.n_samples))
 
         if isinstance(self.model, sp_gpu.csr_matrix) and _gpu_available:
             spnow = sp_gpu
@@ -3742,9 +3830,6 @@ class LinearScatt(RIOptimizer):
             xp = np
 
         ny, nx = self.e_measured.shape[-2:]
-        if inds is None:
-            inds = list(range(self.n_samples))
-
         models = [self.model[slice(ny*nx*ii, ny*nx*(ii + 1)), :] for ii in inds]
         nind = len(inds)
 
@@ -3775,7 +3860,6 @@ class LinearScatt(RIOptimizer):
 
         efwd = model.dot(x.ravel()).reshape([ninds, ny, nx])
 
-        # return (abs(model.dot(x.ravel()) - self.e_measured[inds].ravel()) ** 2).reshape([ninds, ny, nx]).mean(axis=(-1, -2)) / 2 / (nx * ny)
         return 0.5 * (abs(efwd - self.e_measured[inds]) ** 2).mean(axis=(-1, -2)) / (nx * ny)
 
     def guess_step(self, x=None):
@@ -3872,7 +3956,7 @@ class BPM(RIOptimizer):
         nz = self.shape_n[0]
         self.dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * nz])
 
-    def gradient(self, x, inds=None):
+    def fwd_model(self, x, inds=None):
         if inds is None:
             inds = list(range(self.n_samples))
 
@@ -3888,6 +3972,14 @@ class BPM(RIOptimizer):
                                          atf=self.atf,
                                          apodization=self.apodization,
                                          thetas=self.thetas[inds])
+
+        return e_fwd
+
+    def gradient(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        e_fwd = self.fwd_model(x, inds=inds)
 
         # back propagation ... build the gradient from this to save memory
         dtemp = e_fwd[:, -1, :, :] - self.e_measured[inds]
@@ -3933,17 +4025,7 @@ class BPM(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_start = self.get_estart(inds=inds)
-
-        e_fwd = field_prop.propagate_bpm(e_start,
-                                         x,
-                                         self.no,
-                                         self.drs_n,
-                                         self.wavelength,
-                                         self.dz_final,
-                                         atf=self.atf,
-                                         apodization=self.apodization,
-                                         thetas=self.thetas[inds])
+        e_fwd = self.fwd_model(x, inds=inds)
 
         if self.mask is None:
             costs = 0.5 * (abs(e_fwd[:, -1] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
@@ -4015,7 +4097,7 @@ class SSNP(RIOptimizer):
         kz[xp.isnan(kz)] = 0
         self.kz = kz
 
-    def gradient(self, x, inds=None):
+    def fwd_model(self, x, inds=None):
         if inds is None:
             inds = list(range(self.n_samples))
 
@@ -4032,6 +4114,13 @@ class SSNP(RIOptimizer):
                                             self.dz_final,
                                             atf=self.atf,
                                             apodization=self.apodization)
+        return phi_fwd
+
+    def gradient(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        phi_fwd = self.fwd_model(x, inds=inds)
 
         # back propagation
         # this is the backpropagated field, but we will eventually transform it into the gradient
@@ -4073,17 +4162,7 @@ class SSNP(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_start, de_dz_start = self.get_estart(inds=inds)
-
-        e_fwd = field_prop.propagate_ssnp(e_start,
-                                          de_dz_start,
-                                          x,
-                                          self.no,
-                                          self.drs_n,
-                                          self.wavelength,
-                                          self.dz_final,
-                                          atf=self.atf,
-                                          apodization=self.apodization)[..., 0]
+        e_fwd = self.fwd_model(x, inds=inds)
 
         if self.mask is None:
             costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
