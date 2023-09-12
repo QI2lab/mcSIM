@@ -153,7 +153,7 @@ class tomography:
         self.reconstruction_settings = {}
 
     def estimate_hologram_frqs(self,
-                               roi_size_pix: int = 11,
+                               roi_size_pix: int = 5,
                                save_dir: Optional[str] = None,
                                use_fixed_frequencies: bool = False):
         """
@@ -170,7 +170,6 @@ class tomography:
         self.reconstruction_settings.update({"use_fixed_frequencies": use_fixed_frequencies})
 
         saving = save_dir is not None
-
         if saving:
             save_dir = Path(save_dir)
             save_dir.mkdir(exist_ok=True)
@@ -186,6 +185,7 @@ class tomography:
                               roi_size_pix: int,
                               prefix: str = "",
                               figsize: tuple[float] = (20., 10.),
+                              model=fit.gauss2d(),
                               block_id=None):
             """
 
@@ -204,8 +204,6 @@ class tomography:
             fxfx, fyfy = np.meshgrid(fxs, fys)
             dfx = fxs[1] - fxs[0]
             dfy = fys[1] - fys[0]
-            extent_f = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
-                        fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]
 
             nextra_dims = img.ndim - 2
 
@@ -221,7 +219,6 @@ class tomography:
                 block_id = (0, )
 
             n_multiplex_this_pattern = len(fx_guesses)
-            model = fit.gauss2d()
             rois_all = []
             frqs_holo = np.zeros((n_multiplex_this_pattern, 2))
             frqs_guess = np.zeros((n_multiplex_this_pattern, 2))
@@ -241,9 +238,6 @@ class tomography:
                 ft2 = np.abs(rois.cut_roi(roi2, img_ft)[0])
                 fxfx_roi = rois.cut_roi(roi2, fxfx)[0]
                 fyfy_roi = rois.cut_roi(roi2, fyfy)[0]
-
-                extent_f_roi = [fxfx_roi[0, 0] - 0.5 * dfx, fxfx_roi[0, -1] + 0.5 * dfx,
-                                fyfy_roi[-1, 0] + 0.5 * dfy, fyfy_roi[0, 0] - 0.5 * dfy]
 
                 # fit
                 if use_guess_init_params:
@@ -269,7 +263,6 @@ class tomography:
                                    guess_bounds=True)
 
                 rois_all.append(roi2)
-                # frqs_guess[ii] = init_params[1:3]
                 frqs_guess[ii] = np.array([fx_guess, fy_guess])
                 frqs_holo[ii] = rgauss["fit_params"][1:3]
 
@@ -278,9 +271,14 @@ class tomography:
                 figh = plt.figure(figsize=figsize)
 
                 ax = figh.add_subplot(1, 2, 1)
+                extent_f = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
+                            fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]
+
                 ax.set_title("$|I(f)|$")
-                ax.imshow(np.abs(img_ft), extent=extent_f,
-                          norm=PowerNorm(gamma=0.1), cmap="bone")
+                ax.imshow(np.abs(img_ft),
+                          extent=extent_f,
+                          norm=PowerNorm(gamma=0.1),
+                          cmap="bone")
                 ax.plot(frqs_guess[:, 0], frqs_guess[:, 1], 'gx')
                 ax.plot(frqs_holo[:, 0], frqs_holo[:, 1], 'rx')
                 for roi in rois_all:
@@ -293,6 +291,9 @@ class tomography:
                 ax.set_ylabel("$f_y$ (1/$\mu m$)")
 
                 # plot one roi
+                extent_f_roi = [fxfx_roi[0, 0] - 0.5 * dfx, fxfx_roi[0, -1] + 0.5 * dfx,
+                                fyfy_roi[-1, 0] + 0.5 * dfy, fyfy_roi[0, 0] - 0.5 * dfy]
+
                 ax = figh.add_subplot(1, 2, 2)
                 ax.set_title("ROI")
                 ax.imshow(ft2, extent=extent_f_roi,
@@ -302,10 +303,8 @@ class tomography:
                 ax.set_xlabel("$f_x$ (1/$\mu m$)")
                 ax.set_ylabel("$f_y$ (1/$\mu m$)")
 
-                # figh.savefig(Path(save_dir, f"{prefix:s}=pattern_{ii:d}=multiplex_holo_frq_diagnostic.png"))
                 figh.savefig(Path(save_dir, f"{prefix:s}=hologram_frq_diagnostic.png"))
                 plt.close(figh)
-
 
             return np.expand_dims(frqs_holo, axis=tuple(range(nextra_dims)))
 
@@ -368,9 +367,11 @@ class tomography:
 
         if self.verbose:
             with ProgressBar():
-                frqs_hologram, frqs_hologram_bg = dask.compute([delayed_frqs, delayed_frqs_bg])[0]
+                frqs_hologram, frqs_hologram_bg = dask.compute([delayed_frqs,
+                                                                delayed_frqs_bg])[0]
         else:
-            frqs_hologram, frqs_hologram_bg = dask.compute([delayed_frqs, delayed_frqs_bg])[0]
+            frqs_hologram, frqs_hologram_bg = dask.compute([delayed_frqs,
+                                                            delayed_frqs_bg])[0]
 
         if self.use_average_as_background:
             frqs_hologram_bg = frqs_hologram
@@ -413,8 +414,7 @@ class tomography:
             slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
             imgs_frq_cal = np.squeeze(self.imgs_raw_bg[slices])
 
-            imgs_frq_cal_ft = fft.fftshift(fft.fft2(fft.ifftshift(imgs_frq_cal, axes=(-1, -2)), axes=(-1, -2)),
-                                           axes=(-1, -2))
+            imgs_frq_cal_ft = _ft2(imgs_frq_cal)
             imgs_frq_cal_ft_abs_mean = np.mean(np.abs(imgs_frq_cal_ft), axis=0)
 
             results, circ_dbl_fn, figh_ref_frq = fit_ref_frq(imgs_frq_cal_ft_abs_mean,
@@ -630,7 +630,8 @@ class tomography:
             xp = np
 
         if apodization is None:
-            apodization = np.outer(tukey(self.ny, alpha=0.1), tukey(self.nx, alpha=0.1))
+            apodization = np.outer(tukey(self.ny, alpha=0.1),
+                                   tukey(self.nx, alpha=0.1))
 
         # make broadcastable to same size as raw images so can use with dask array
         ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
@@ -892,8 +893,10 @@ class tomography:
                       scattered_field_regularization: float = 50,
                       reconstruction_regularizer: float = 0.1,
                       dxy_sampling_factor: float = 1.,
-                      dz_sampling_factor: float = 1.,
-                      z_fov: float = 20,
+                      # dz_sampling_factor: float = 1.,
+                      # z_fov: float = 20,
+                      dz: float=0.2,
+                      nz: int=11,
                       nbin: int = 1,
                       realspace_mask: Optional[np.ndarray] = None,
                       step: float = 1e-5,
@@ -968,9 +971,12 @@ class tomography:
                                                                     self.wavelength,
                                                                     self.dxy,
                                                                     self.holograms_ft.shape[-2:],
-                                                                    z_fov,
-                                                                    dz_sampling_factor=dz_sampling_factor,
+                                                                    nz * dz,
+                                                                    # dz_sampling_factor=dz_sampling_factor,
                                                                     dxy_sampling_factor=dxy_sampling_factor)
+        # correct size
+        drs_ideal = (dz, drs_ideal[1], drs_ideal[2])
+        size_ideal = (nz, size_ideal[1], size_ideal[2])
 
         # generate ATF ... ultimately want to do this based on pupil function defined in init
         e_size = (self.holograms_ft.shape[-2] // nbin, self.holograms_ft.shape[-1] // nbin)
@@ -1290,8 +1296,8 @@ class tomography:
                                              "scattered_field_regularization": scattered_field_regularization,
                                              "reconstruction_regularizer": reconstruction_regularizer,
                                              "dxy_sampling_factor": dxy_sampling_factor,
-                                             "dz_sampling_factor": dz_sampling_factor,
-                                             "z_fov": z_fov,
+                                             "dz": dz,
+                                             "nz": nz,
                                              "dz_final": dz_final,
                                              "nbin": nbin,                                             
                                              "use_gpu": use_gpu,
@@ -1813,6 +1819,8 @@ def soft_threshold(t: float,
                    x: array) -> array:
     """
     Softmax function, which is the proximal operator for the LASSO (L1 regularization) problem
+
+    x* = argmin{ 0.5 * |x - y|_2^2 + t |x - y|_1}
 
     :param t: softmax parameter
     :param x: array to take softmax of
@@ -2974,7 +2982,7 @@ def display_tomography_recon(recon_fname: str,
                              show_raw: bool = True,
                              show_raw_ft: bool = False,
                              show_efields: bool = False,
-                             compute: bool = False,
+                             compute: bool = True,
                              time_axis: int = 1,
                              time_range: Optional[list[int]] = None,
                              phase_lim: float = np.pi,
@@ -3386,7 +3394,7 @@ class Optimizer():
 
         return g, gn
 
-    def prox(self, x, step=None):
+    def prox(self, x, step):
         pass
 
     def guess_step(self, x):
@@ -3509,7 +3517,7 @@ class Optimizer():
                 # prox operator
                 # ###################################
                 tstart_prox = time.perf_counter()
-                y = self.prox(x)
+                y = self.prox(x, steps[ii])
 
                 timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
 
@@ -3541,7 +3549,7 @@ class Optimizer():
                 liters += 1
                 if ii != 0:
                     steps[ii] = steps[ii - 1]
-                y = self.prox(x - steps[ii] * gx)
+                y = self.prox(x - steps[ii] * gx, steps[ii])
 
                 def lipschitz_condition_violated(y, cx, gx):
                     cy = xp.mean(self.cost(y, inds=inds), axis=0)
@@ -3550,7 +3558,7 @@ class Optimizer():
                 # iterate ... at each point check if we violate Lipschitz continuous gradient condition
                 while lipschitz_condition_violated(y, cx, gx):
                     steps[ii] *= line_search_factor
-                    y = self.prox(x - steps[ii] * gx)
+                    y = self.prox(x - steps[ii] * gx, steps[ii])
                     liters += 1
 
                 # not exclusively prox ... but good enough for now
@@ -3700,7 +3708,7 @@ class RIOptimizer(Optimizer):
                                 "max_imaginary_part": float(max_imaginary_part)
                                 }
 
-    def prox(self, x):
+    def prox(self, x, step):
         if isinstance(x, cp.ndarray) and _gpu_available:
             denoise_tv = denoise_tv_chambolle_gpu
         else:
@@ -3713,14 +3721,14 @@ class RIOptimizer(Optimizer):
         # note cucim TV implementation requires ~10x memory as array does
         if self.prox_parameters["tau_tv_real"] != 0:
             x_real = denoise_tv(x.real,
-                                weight=self.prox_parameters["tau_tv_real"],
+                                weight=self.prox_parameters["tau_tv_real"] * step,
                                 channel_axis=None)
         else:
             x_real = x.real
 
         if self.prox_parameters["tau_tv_imag"] != 0:
             x_imag = denoise_tv(x.imag,
-                                weight=self.prox_parameters["tau_tv_imag"],
+                                weight=self.prox_parameters["tau_tv_imag"] * step,
                                 channel_axis=None)
         else:
             x_imag = x.imag
@@ -3729,10 +3737,10 @@ class RIOptimizer(Optimizer):
         # L1 proximal operators (softmax)
         # ###########################
         if self.prox_parameters["tau_l1_real"] != 0:
-            x_real = soft_threshold(self.prox_parameters["tau_l1_real"], x_real - self.no) + self.no
+            x_real = soft_threshold(self.prox_parameters["tau_l1_real"] * step, x_real - self.no) + self.no
 
         if self.prox_parameters["tau_l1_imag"] != 0:
-            x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"], x_imag)
+            x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"] * step, x_imag)
 
         # ###########################
         # projection constraints
@@ -3873,11 +3881,11 @@ class LinearScatt(RIOptimizer):
         lipschitz_estimate = s ** 2 / (self.n_samples * ny * nx) / (ny * nx)
         return float(1 / lipschitz_estimate)
 
-    def prox(self, x):
+    def prox(self, x, step):
         # convert from V to n
         n = get_n(_ift3(x), self.no, self.wavelength)
         # apply proximal operator on n
-        n_prox = super(LinearScatt, self).prox(n)
+        n_prox = super(LinearScatt, self).prox(n, step)
 
         return _ft3(get_v(n_prox, self.no, self.wavelength))
 
