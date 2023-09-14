@@ -858,7 +858,11 @@ class tomography:
 
         self.holograms_ft = holograms_ft * self.phase_params
 
+        return self.holograms_ft, self.holograms_ft_bg
+
     def reconstruct_n(self,
+                      efields_ft: array,
+                      efields_bg_ft: array,
                       mode: str = "rytov",
                       scattered_field_regularization: float = 50,
                       reconstruction_regularizer: float = 0.1,
@@ -879,6 +883,8 @@ class tomography:
         """
         Reconstruct refractive index using one of a several different models
 
+        :param efields_ft: typically derived from unmix_holograms()
+        :param efields_bg_ft: typically derived from unmix_holograms()
         :param mode: "born", "rytov", "bpm", or "ssnp"
         :param scattered_field_regularization: regularization used in computing scattered field
           or Rytov phase. Regions where background electric field is smaller than this value will be suppressed
@@ -1240,8 +1246,8 @@ class tomography:
         # todo: replace with a call that lets me extract fields, n_start, and potentially n_fwd also
         # todo: possibly using self.holograms_ft.to_delayed() and etc.
         n = da.map_blocks(recon,
-                          self.holograms_ft, # data
-                          self.holograms_ft_bg, # background
+                          efields_ft, # data
+                          efields_bg_ft, # background
                           mean_beam_frqs_arr,
                           realspace_mask, # masks
                           self.dxy,
