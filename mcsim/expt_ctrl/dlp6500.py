@@ -557,7 +557,7 @@ def load_config_file(fname):
     Load DMD firmware data from json configuration file
 
     :param fname:
-    :return pattern_data, channel_map, tstamp:
+    :return pattern_data, channel_map, firmware_patterns, tstamp:
     """
 
     fname = Path(fname)
