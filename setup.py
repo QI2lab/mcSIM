@@ -29,10 +29,7 @@ extras = {'expt_ctrl': ['PyDAQmx'],
                   'cupy-cuda11x',
                   # periodically update version of cucim checkout by hand. The symbol following @ should be
                   # the release tag name
-                  # to install cucim manually
-                  # pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
                   'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim'
-                  # 'cucim @ git+https://github.com/rapidsai/cucim.git@v22.04.00#egg=cucim&subdirectory=python/cucim'
                   ]
 
           }
