@@ -795,11 +795,30 @@ class tomography:
                                               chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
 
             # correct translations
-            fx_bcastable = xp.expand_dims(self.fxs, axis=(-3, -2))
-            fy_bcastable = xp.expand_dims(self.fys, axis=(-3, -1))
+            def translate(e_ft, dxs, dys, fxs, fys):
+                e_ft_out = xp.array(e_ft, copy=True)
 
-            holograms_ft *= da.exp(2 * np.pi * 1j * (fx_bcastable * self.translations[..., 0] +
-                                                     fy_bcastable * self.translations[..., 1]))
+                fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
+                fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
+
+                e_ft_out *= np.exp(2*np.pi * 1j * (fx_bcastable * dxs +
+                                                   fy_bcastable * dys))
+
+                return e_ft_out
+
+            dr_chunks = holograms_ft.chunksize[:-2] + (1, 1)
+            dxs = da.from_array(self.translations[..., 0], chunks=dr_chunks)
+            dys = da.from_array(self.translations[..., 1], chunks=dr_chunks)
+            holograms_ft = da.map_blocks(translate,
+                                         holograms_ft,
+                                         dxs,
+                                         dys,
+                                         self.fxs,
+                                         self.fys,
+                                         dtype=complex,
+                                         meta=xp.array((), dtype=complex))
+            # holograms_ft *= da.exp(2 * np.pi * 1j * (fx_bcastable * self.translations[..., 0] +
+            #                                          fy_bcastable * self.translations[..., 1]))
 
             if self.use_average_as_background:
                 self.translations_bg = self.translations
@@ -814,8 +833,20 @@ class tomography:
                                                      new_axis=-1,
                                                      chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
 
-                holograms_ft_bg *= da.exp(2 * np.pi * 1j * (fx_bcastable * self.translations_bg[..., 0] +
-                                                            fy_bcastable * self.translations_bg[..., 1]))
+                # holograms_ft_bg *= da.exp(2 * np.pi * 1j * (fx_bcastable * self.translations_bg[..., 0] +
+                #                                             fy_bcastable * self.translations_bg[..., 1]))
+
+                dxs_bg = da.from_array(self.translations_bg[..., 0], chunks=dr_chunks)
+                dys_bg = da.from_array(self.translations_bg[..., 1], chunks=dr_chunks)
+
+                holograms_ft_bg = da.map_blocks(translate,
+                                                holograms_ft_bg,
+                                                dxs_bg,
+                                                dys_bg,
+                                                self.fxs,
+                                                self.fys,
+                                                dtype=complex,
+                                                meta=xp.array((), dtype=complex))
 
         # #########################
         # determine phase offsets for background electric field, relative to initial slice
@@ -1273,7 +1304,8 @@ class tomography:
                                              "dz": dz,
                                              "nz": nz,
                                              "dz_final": dz_final,
-                                             "nbin": nbin,                                             
+                                             "nbin": nbin,
+                                             "step": step,
                                              "use_gpu": use_gpu,
                                              }
                                             )
