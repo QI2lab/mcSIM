@@ -3738,6 +3738,11 @@ def get_simulated_sim_imgs(ground_truth: array,
     :param kwargs: keyword arguments which will be passed through to simulated_img()
 
     :return sim_imgs, snrs, patterns, patterns_raw:
+      patterns_raw is generated on a grid which is nbin the size of the raw images. Assume the coordinates are aligned
+      such that binning patterns_raw by a factor of nbin will produce patterns. Note that this grid
+      is slightly different than the Wiener SIM reconstruction grid defined above because the FFT idiom
+      used above implicitely assumes the origin is near the center of the array. This leads to fractional
+      pixel offsets at the edge. See show_sim_napari() for an example of this offset
     """
 
     if isinstance(ground_truth, cp.ndarray) and _cupy_available:
@@ -3821,7 +3826,6 @@ def get_simulated_sim_imgs(ground_truth: array,
             patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))[0]
 
             if not coherent_projection:
-                # patterns_raw[ii, jj] = fit_psf.blur_img_otf(patterns_raw[ii, jj], otf).real
                 patterns_raw[ii, jj] = fit_psf.blur_img_psf(patterns_raw[ii, jj], psf).real
 
             # bin pattern, for reference
