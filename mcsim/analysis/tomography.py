@@ -4170,7 +4170,7 @@ class SSNP(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_fwd = self.fwd_model(x, inds=inds)
+        e_fwd = self.fwd_model(x, inds=inds)[..., 0]
 
         if self.mask is None:
             costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
