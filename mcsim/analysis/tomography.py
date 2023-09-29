@@ -817,8 +817,6 @@ class tomography:
                                          self.fys,
                                          dtype=complex,
                                          meta=xp.array((), dtype=complex))
-            # holograms_ft *= da.exp(2 * np.pi * 1j * (fx_bcastable * self.translations[..., 0] +
-            #                                          fy_bcastable * self.translations[..., 1]))
 
             if self.use_average_as_background:
                 self.translations_bg = self.translations
@@ -832,9 +830,6 @@ class tomography:
                                                      dtype=float,
                                                      new_axis=-1,
                                                      chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
-
-                # holograms_ft_bg *= da.exp(2 * np.pi * 1j * (fx_bcastable * self.translations_bg[..., 0] +
-                #                                             fy_bcastable * self.translations_bg[..., 1]))
 
                 dxs_bg = da.from_array(self.translations_bg[..., 0], chunks=dr_chunks)
                 dys_bg = da.from_array(self.translations_bg[..., 1], chunks=dr_chunks)
@@ -1639,16 +1634,10 @@ class tomography:
         extent_f = [self.fxs[0] - 0.5 * self.dfx, self.fxs[-1] + 0.5 * self.dxy,
                     self.fys[-1] + 0.5 * self.dfy, self.fys[0] - 0.5 * self.dfy]
 
-        def to_numpy(arr):
-            if isinstance(arr, cp.ndarray) and _gpu_available:
-                return arr.get()
-            else:
-                return arr
-
         # ######################
         # plot
         # ######################
-        img_now = to_numpy(self.imgs_raw[index].compute())
+        img_now = _to_cpu(self.imgs_raw[index].compute())
         img_ft = _ft2(img_now)
 
         figh = plt.figure(figsize=figsize, **kwargs)
@@ -1682,7 +1671,7 @@ class tomography:
         # hologram
         # ######################
         try:
-            holo_ft = to_numpy(self.holograms_ft[index].compute())
+            holo_ft = _to_cpu(self.holograms_ft[index].compute())
             holo = _ift2(holo_ft)
 
             ax = figh.add_subplot(grid[0, 1])
@@ -1717,7 +1706,7 @@ class tomography:
             ax = figh.add_subplot(grid[1, 3])
             plt.colorbar(im, cax=ax, location="bottom")
 
-        except AttributeError as e:
+        except TypeError as e:
             print(e)
 
         # ######################
@@ -1726,7 +1715,7 @@ class tomography:
         try:
             index_bg = tuple([v if self.holograms_ft.shape[ii] != 0 else 0 for ii, v in enumerate(index)])
 
-            holo_ft_bg = to_numpy(self.holograms_ft_bg[index_bg].compute())
+            holo_ft_bg = _to_cpu(self.holograms_ft_bg[index_bg].compute())
             holo_bg = _ift2(holo_ft_bg)
 
             ax = figh.add_subplot(grid[2, 1])
@@ -1790,7 +1779,7 @@ class tomography:
             ax = figh.add_subplot(grid[1, 5])
             plt.colorbar(im, cax=ax, location="bottom")
 
-        except AttributeError as e:
+        except Exception as e:
             print(e)
 
         return figh
@@ -4181,7 +4170,7 @@ class SSNP(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_fwd = self.fwd_model(x, inds=inds)
+        e_fwd = self.fwd_model(x, inds=inds)[..., 0]
 
         if self.mask is None:
             costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
