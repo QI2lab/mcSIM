@@ -46,7 +46,10 @@ from matplotlib.colors import PowerNorm, LogNorm
 from matplotlib.patches import Circle, Rectangle
 # code from our projects
 import mcsim.analysis.analysis_tools as tools
-from localize_psf import rois, fit_psf, camera
+from localize_psf import rois
+from localize_psf.fit_psf import circ_aperture_otf, blur_img_psf
+from localize_psf.camera import bin, bin_adjoint, simulated_img
+from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, _to_cpu
 
 # GPU
 _cupy_available = True
@@ -74,6 +77,8 @@ array = Union[np.ndarray, cp.ndarray]
 #         self.phase_offsets = phase_offsets
 #         self.modulation_depths = modulation_depths
 
+# todo: should manage ft plans outside of functions
+# todo: should separate ft tools to separate file ... these duplicate fns in field_prop.py
 def _ft(m: array, axes: tuple=(-1, -2)) -> array:
     """
     2D Fourier transform which can use either CPU or GPU and using specific shifting idiom
@@ -692,7 +697,7 @@ class SimImageSet:
             xp = np
 
         if otf is None:
-            otf = fit_psf.circ_aperture_otf(xp.expand_dims(self.fx, axis=0),
+            otf = circ_aperture_otf(xp.expand_dims(self.fx, axis=0),
                                             xp.expand_dims(self.fy, axis=1),
                                             self.na,
                                             self.wavelength)
@@ -2160,7 +2165,7 @@ class SimImageSet:
             ax.plot(ff.ravel(), self.otf[ii].ravel(), label=f"OTF, angle {ii:d}")
 
         if na is not None and wavelength is not None:
-            otf_ideal = fit_psf.circ_aperture_otf(ff, 0, na, wavelength)
+            otf_ideal = circ_aperture_otf(ff, 0, na, wavelength)
             ax.plot(ff.ravel(), otf_ideal.ravel(), label="OTF ideal")
 
         ax.set_xlim([0, 1.2 * self.fmax])
@@ -3720,6 +3725,9 @@ def get_simulated_sim_imgs(ground_truth: array,
     """
     Get simulated SIM images, including the effects of shot-noise and camera noise.
 
+    The realistic image model relies on the localize_psf.camera function simulated_img(). See this function for
+    details of the camera parameters gain, offset, etc.
+
     :param ground_truth: NumPy or CuPy array of size nz x ny x nx. If
     :param frqs: SIM frequencies, of size nangles x 2. frqs[ii] = [fx, fy]
     :param phases: SIM phases in radians. Of size nangles x nphases. Phases may be different for each angle.
@@ -3810,8 +3818,8 @@ def get_simulated_sim_imgs(ground_truth: array,
 
     # to ensure got coordinates right, can check that the binned coordinates agree with the values obtained
     # from binning the other coordinates
-    assert np.max(np.abs(xb - camera.bin(xx, bin_sizes=(1, nbin, nbin), mode="mean")[0, 0, :])) < 1e-12
-    assert np.max(np.abs(yb - camera.bin(yy, bin_sizes=(1, nbin, nbin), mode="mean")[0, :, 0])) < 1e-12
+    assert np.max(np.abs(xb - bin(xx, bin_sizes=(1, nbin, nbin), mode="mean")[0, 0, :])) < 1e-12
+    assert np.max(np.abs(yb - bin(yy, bin_sizes=(1, nbin, nbin), mode="mean")[0, :, 0])) < 1e-12
 
     # generate images
     frqs = xp.array(frqs)
@@ -3826,27 +3834,27 @@ def get_simulated_sim_imgs(ground_truth: array,
             patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))[0]
 
             if not coherent_projection:
-                patterns_raw[ii, jj] = fit_psf.blur_img_psf(patterns_raw[ii, jj], psf).real
+                patterns_raw[ii, jj] = blur_img_psf(patterns_raw[ii, jj], psf).real
 
             # bin pattern, for reference
-            patterns[ii, jj], _ = camera.simulated_img(patterns_raw[ii, jj],
-                                                       gains=1,
-                                                       offsets=0,
-                                                       readout_noise_sds=0,
-                                                       psf=None,
-                                                       photon_shot_noise=False,
-                                                       bin_size=nbin,
-                                                       image_is_integer=False)
+            patterns[ii, jj], _ = simulated_img(patterns_raw[ii, jj],
+                                                gains=1,
+                                                offsets=0,
+                                                readout_noise_sds=0,
+                                                psf=None,
+                                                photon_shot_noise=False,
+                                                bin_size=nbin,
+                                                image_is_integer=False)
 
             # forward SIM model
             # divide by nbin so e.g. for uniform sample would keep number of photons fixed in pixel of final image
-            sim_imgs[ii, jj], snrs[ii, jj] = camera.simulated_img(ground_truth * patterns_raw[ii, jj] / nbin**2,
-                                                                  gains=gains,
-                                                                  offsets=offsets,
-                                                                  readout_noise_sds=readout_noise_sds,
-                                                                  psf=psf,
-                                                                  bin_size=nbin,
-                                                                  **kwargs)
+            sim_imgs[ii, jj], snrs[ii, jj] = simulated_img(ground_truth * patterns_raw[ii, jj] / nbin**2,
+                                                           gains=gains,
+                                                           offsets=offsets,
+                                                           readout_noise_sds=readout_noise_sds,
+                                                           psf=psf,
+                                                           bin_size=nbin,
+                                                           **kwargs)
             # todo: compute mcnr
             # mcnrs[ii, jj] = 0
 
@@ -3900,3 +3908,99 @@ def get_hexagonal_patterns(dxy, ny, nx, frq_mag, phase1s, phase2s, use_gpu=False
         patterns[ii] = 1 / 9 * xp.abs(e_hex(xp.array(xx), xp.array(yy), 0, phase1s[ii], phase2s[ii]))**2
 
     return patterns
+
+
+class fista_sim(Optimizer):
+    def __init__(self,
+                 psf: array,
+                 patterns: array,
+                 imgs: array,
+                 nbin: int = 1,
+                 tau_tv: float = 0,
+                 tau_l1: float = 0,
+                 enforce_positivity: bool = True):
+
+        super(fista_sim, self).__init__()
+
+        self.prox_parameters = {"tau_tv": float(tau_tv),
+                                "tau_l1": float(tau_l1),
+                                "enforce_positivity": enforce_positivity
+                                }
+
+        self.nbin = nbin
+        self.imgs = imgs
+        self.ny, self.nx = imgs.shape[-2:]
+        self.patterns = patterns
+        self.n_samples = patterns.shape[0]
+        self.psf = psf
+
+        if isinstance(imgs, cp.ndarray) and _cupy_available:
+            xp = cp
+        else:
+            xp = np
+
+        self.psf_reversed = xp.roll(xp.flip(psf, axis=(0, 1)), shift=(1, 1), axis=(0, 1))
+
+    def prox(self, x, step):
+        # ###########################
+        # TV proximal operators
+        # ###########################
+
+        # note cucim TV implementation requires ~10x memory as array does
+        if self.prox_parameters["tau_tv"] != 0:
+            x = tv_prox(x, self.prox_parameters["tau_tv"] * step)
+
+        # ###########################
+        # L1 proximal operators (softmax)
+        # ###########################
+        if self.prox_parameters["tau_l1"] != 0:
+            x = soft_threshold(self.prox_parameters["tau_l1"] * step, x)
+
+        # ###########################
+        # projection constraints
+        # ###########################
+        if self.prox_parameters["enforce_positivity"]:
+            x[x < 0] = 0
+
+        return x
+
+    def fwd_model(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        if isinstance(x, cp.ndarray) and _cupy_available:
+            xp = cp
+        else:
+            xp = np
+
+        blurred = xp.stack([blur_img_psf(x * self.patterns[ii], self.psf).real for ii in inds])
+
+        return bin(blurred, (self.nbin, self.nbin), mode="sum")
+
+    def cost(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        if isinstance(x, cp.ndarray) and _cupy_available:
+            xp = cp
+        else:
+            xp = np
+
+        return 0.5 * xp.mean(xp.abs(self.fwd_model(x, inds=inds) - self.imgs[inds]) ** 2, axis=(1, 2))
+
+    def gradient(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        if isinstance(x, cp.ndarray) and _cupy_available:
+            xp = cp
+        else:
+            xp = np
+
+        img_model = self.fwd_model(x, inds=inds)
+        dc_do = xp.stack([blur_img_psf(bin_adjoint(img_model[ii] - self.imgs[ind], (self.nbin, self.nbin), mode="sum"),
+                                     self.psf_reversed).real
+                        for ii, ind in enumerate(inds)])
+        dc_do *= self.patterns[inds] / (self.ny * self.nx)
+
+        return dc_do
