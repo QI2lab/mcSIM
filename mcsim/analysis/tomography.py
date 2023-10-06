@@ -1337,7 +1337,7 @@ class tomography:
                 xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
                 xforms.update({"affine_xform_recon_2_raw_camera": xform_odt_recon_to_full})
 
-        return n, drs_n, xforms
+        return n, drs_n, xforms, atf
 
     def plot_translations(self,
                           index: tuple[int],
@@ -3109,13 +3109,44 @@ def display_tomography_recon(recon_fname: str,
     e_ebg_phase_diff = pd - 2 * np.pi * (pd > np.pi)
 
     # ######################
-    # broadcasting
+    # simulated forward fields
     # ######################
+    show_efields_fwd = show_efields and hasattr(img_z, "efwd")
 
+    if show_efields_fwd:
+        e_fwd = da.expand_dims(da.from_zarr(img_z.efwd), axis=-3)
+
+        if compute:
+            print("loading fwd electric fields")
+            with ProgressBar():
+                c = dask.compute([e_fwd])
+                e_fwd = c[0]
+
+        e_fwd_abs = da.abs(e_fwd)
+        e_fwd_angle = da.angle(e_fwd)
+
+        efwd_ebg_abs_diff = e_fwd_abs - ebg_abs
+
+        pd = da.mod(da.angle(e_fwd) - da.angle(ebg), 2 * np.pi)
+        efwd_ebg_phase_diff = pd - 2 * np.pi * (pd > np.pi)
+
+    else:
+        e_fwd_abs = np.ones(1)
+        e_fwd_angle = np.ones(1)
+
+    # ######################
+    # broadcasting
     # NOTE: cannot operate on these arrays after broadcasting otherwise memory use will explode
+    # broadcasting does not cause memory size expansion, but in-place operations later will
+    # ######################
     if compute:
-        # broadcasting does not cause memory size expansion
-        n_real, n_imag, imgs, imgs_raw_ft_abs, e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff = \
+        n_real, n_imag,\
+            imgs, imgs_raw_ft_abs,\
+            e_abs, e_angle,\
+            ebg_abs, ebg_angle,\
+            e_ebg_abs_diff, e_ebg_phase_diff,\
+            e_fwd_bas, e_fwd_angle,\
+            efwd_ebg_abs_diff, efwd_ebg_phase_diff= \
             np.broadcast_arrays(n_real,
                                 n_imag,
                                 imgs,
@@ -3125,7 +3156,11 @@ def display_tomography_recon(recon_fname: str,
                                 ebg_abs,
                                 ebg_angle,
                                 e_ebg_abs_diff,
-                                e_ebg_phase_diff)
+                                e_ebg_phase_diff,
+                                e_fwd_abs,
+                                e_fwd_angle,
+                                efwd_ebg_abs_diff,
+                                efwd_ebg_phase_diff)
 
     # ######################
     # create viewer
@@ -3224,67 +3259,93 @@ def display_tomography_recon(recon_fname: str,
     # electric fields
     # ######################
     if show_efields:
+        # field amplitudes
+        viewer.add_image(ebg_abs,
+                         scale=scale,
+                         name="|e bg|",
+                         contrast_limits=[0, 500],
+                         colormap=real_cmap,
+                         translate=[0, nx_raw])
+
+        if show_efields_fwd:
+            viewer.add_image(e_fwd_bas,
+                            scale=scale,
+                            name="|E fwd|",
+                            contrast_limits=[0, 500],
+                            colormap=real_cmap,
+                            translate=[0, nx_raw])
+
+        viewer.add_image(e_abs,
+                         scale=scale,
+                         name="|e|",
+                         contrast_limits=[0, 500],
+                         colormap=real_cmap,
+                         translate=[0, nx_raw])
+
+        # field phases
+        viewer.add_image(ebg_angle,
+                         scale=scale,
+                         name="angle(e bg)",
+                         contrast_limits=[-np.pi, np.pi],
+                         colormap=phase_cmap,
+                         translate=[ny, nx_raw])
+
+        if show_efields_fwd:
+            viewer.add_image(e_fwd_angle,
+                             scale=scale,
+                             name="ange(E fwd)",
+                             contrast_limits=[-np.pi, np.pi],
+                             colormap=phase_cmap,
+                             translate=[ny_raw, nx_raw])
+
+        viewer.add_image(e_angle,
+                         scale=scale,
+                         name="angle(e)",
+                         contrast_limits=[-np.pi, np.pi],
+                         colormap=phase_cmap,
+                         translate=[ny, nx_raw])
+
+        # difference of absolute values
+        if show_efields_fwd:
+            viewer.add_image(efwd_ebg_abs_diff,
+                             scale=scale,
+                             name="|e fwd| - |e bg|",
+                             contrast_limits=[-500, 500],
+                             colormap=phase_cmap,
+                             translate=[0, nx_raw + nx])
+
+        viewer.add_image(e_ebg_abs_diff,
+                         scale=scale,
+                         name="|e| - |e bg|",
+                         contrast_limits=[-500, 500],
+                         colormap=phase_cmap,
+                         translate=[0, nx_raw + nx])
+
+        # difference of phases
+        if show_efields_fwd:
+            viewer.add_image(efwd_ebg_phase_diff,
+                             scale=scale,
+                             name="angle(e fwd) - angle(e bg)",
+                             contrast_limits=[-phase_lim, phase_lim],
+                             colormap=phase_cmap,
+                             translate=[ny, nx_raw + nx]
+                             )
+
+        viewer.add_image(e_ebg_phase_diff,
+                         scale=scale,
+                         name="angle(e) - angle(e bg)",
+                         contrast_limits=[-phase_lim, phase_lim],
+                         colormap=phase_cmap,
+                         translate=[ny, nx_raw + nx]
+                         )
+
+        # label
         translations = np.array([[0, nx_raw],
-                                 [ny, nx_raw],
-                                 [0, nx_raw],
                                  [ny, nx_raw],
                                  [0, nx_raw + nx],
                                  [ny, nx_raw + nx]
                                  ])
-
-        ttls = ["|e|",
-                "angle(e)",
-                "|e bg|",
-                "angle(e bg)",
-                "|e| - |e bg|",
-                "angle(e) - angle(e bg)"]
-
-        # background field
-        viewer.add_image(ebg_abs,
-                         scale=scale,
-                         name=ttls[2],
-                         contrast_limits=[0, 500],
-                         colormap=real_cmap,
-                         translate=translations[2])
-
-        viewer.add_image(ebg_angle,
-                         scale=scale,
-                         name=ttls[3],
-                         contrast_limits=[-np.pi, np.pi],
-                         colormap=phase_cmap,
-                         translate=translations[3])
-
-        # measured field
-        viewer.add_image(e_abs,
-                         scale=scale,
-                         name=ttls[0],
-                         contrast_limits=[0, 500],
-                         colormap=real_cmap,
-                         translate=translations[0])
-
-        viewer.add_image(e_angle,
-                         scale=scale,
-                         name=ttls[1],
-                         contrast_limits=[-np.pi, np.pi],
-                         colormap=phase_cmap,
-                         translate=translations[1])
-
-        # difference
-        viewer.add_image(e_ebg_abs_diff,
-                         scale=scale,
-                         name=ttls[4],
-                         contrast_limits=[-500, 500],
-                         colormap=phase_cmap,
-                         translate=translations[4])
-
-        # phase difference between measured and bg
-        viewer.add_image(e_ebg_phase_diff,
-                         scale=scale,
-                         name=ttls[5],
-                         contrast_limits=[-phase_lim, phase_lim],
-                         colormap=phase_cmap,
-                         translate=translations[5]
-                         )
+        ttls = ["|E|", "ang(E)", "|E| - |Ebg|", "angle(e) - angle(e bg)"]
 
         viewer.add_points(translations + np.array([ny / 10, nx / 2]),
                           features={"names": ttls},
@@ -3292,6 +3353,7 @@ def display_tomography_recon(recon_fname: str,
                                 "size": 30,
                                 "color": "red"},
                           )
+
 
     viewer.dims.axis_labels = n_axis_names[:n_extra_dims + 1] + ["pattern", "z", "y", "x"]
 
