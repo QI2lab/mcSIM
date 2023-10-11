@@ -1,5 +1,9 @@
 """
 Numerical beam propagation through homogeneous and inhomogeneous media
+
+Here we assume complex electric fields are phasors coming from the convention exp(ikr - iwt)
+see e.g. get_angular_spectrum_kernel()
+This is natural when working with discrete Fourier transforms
 """
 
 from typing import Union, Optional
@@ -410,7 +414,7 @@ def backpropagate_bpm(efield_end: array,
     apodization = xp.asarray(apodization)
 
     if thetas is None:
-        thetas = xp.zeros(efield_start.shape[:-2] + (1, 1))
+        thetas = xp.zeros(efield_end.shape[:-2] + (1, 1))
     thetas = xp.asarray(thetas)
 
     if thetas.ndim == 1:
@@ -465,13 +469,13 @@ def propagate_ssnp(efield_start: array,
     atf = xp.expand_dims(xp.asarray(xp.atleast_2d(atf)), axis=(-1, -2))
     apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(apodization)), axis=(-1, -2))
 
-    ko = 2*np.pi / wavelength
+    ko = 2 * np.pi / wavelength
     dz, dy, dx = drs
     nz, ny, nx = n.shape
 
     # construct field propagators
     p = propagation_kernel(dz, wavelength, no, n.shape[1:], drs[1:], use_gpu=use_gpu)
-    p_img = propagation_kernel(dz_final, wavelength, no, n.shape[1:], drs[1:], use_gpu)
+    p_img = propagation_kernel(dz_final, wavelength, no, n.shape[1:], drs[1:], use_gpu=use_gpu)
 
     # add extra dimension at the end for broadcasting during matmult
     out_shape = efield_start.shape[:-2] + (nz + 2, ny, nx, 2, 1)
@@ -492,7 +496,7 @@ def propagate_ssnp(efield_start: array,
     # propagate to imaging plane and aply coherent transfer function
     fb_proj = forward_backward_proj(wavelength, no, n.shape[1:], drs[1:], use_gpu=use_gpu)[..., slice(0, 1), :]
 
-    # note that the last element of phi is fundamentally different than the other sbecause fb_proj changes the basis
+    # the last element of phi is fundamentally different than the others because fb_proj changes the basis
     # so this is (phi_f, phi_b) wherease the others are (phi, dphi / dz)
     phi[..., -1, :, :, 0, :] = _ift2(xp.matmul(fb_proj, atf * xp.matmul(p_img, _ft2(phi[..., -2, :, :, :, :], axes=yx_axes))), axes=yx_axes)[..., 0, :]
 
