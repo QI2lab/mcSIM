@@ -2207,7 +2207,8 @@ class SimImageSet:
                   save_patterns: bool = False,
                   save_raw_data: bool = False,
                   save_processed_data: bool = False,
-                  attributes: Optional[dict] = None):
+                  attributes: Optional[dict] = None,
+                  arrays: Optional[dict] = None):
         """
         Save SIM results and metadata to file
 
@@ -2255,6 +2256,38 @@ class SimImageSet:
         metadata.update(attributes)
 
         # ###############################n
+        # select attributes to save
+        # ###############################n
+        attrs = ["sim_sr", "widefield", "widefield_deconvolution", "mcnr", "sim_os"]
+
+        if save_raw_data:
+            attrs += ["imgs_raw"]
+
+        if save_processed_data:
+            attrs += ["imgs"]
+
+        if save_patterns:
+            real_phases = self.phases - np.expand_dims(self.phase_corrections, axis=1)
+            # on same grid
+            _, _, estimated_patterns, estimated_patterns_2x = \
+                get_simulated_sim_imgs(np.ones([self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
+                                       frqs=self.frqs,
+                                       phases=real_phases,
+                                       mod_depths=self.mod_depths,
+                                       gains=1,
+                                       offsets=0,
+                                       readout_noise_sds=0,
+                                       pix_size=self.dx / self.upsample_fact,
+                                       nbin=self.upsample_fact
+                                       )
+            self.patterns = da.from_array(estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx]))
+            self.patterns_2x = da.from_array(estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx]))
+
+            attrs += ["patterns", "patterns_2x"]
+
+        attrs = [a for a in attrs if getattr(self, a) is not None]
+
+        # ###############################n
         # reconstruction parameters
         # ###############################
         metadata["frqs"] = self.frqs.tolist()
@@ -2282,6 +2315,15 @@ class SimImageSet:
             for k, v in metadata.items():
                 img_z.attrs[k] = v
 
+            # save additional arrays
+            if arrays is not None:
+                for k, v in arrays.items():
+                    if k in attrs:
+                        raise ValueError(f"extra array attribute {k:s} had same name as SIM attribute")
+
+                    img_z.array(k, v, compressor=None, dtype=v.dtype)
+
+            # save reconstruction later
             def save_delayed(attr):
                 d = getattr(self, attr).to_zarr(fname, component=attr, compute=False)
                 return d
@@ -2303,6 +2345,9 @@ class SimImageSet:
                 return d
 
         elif format == "tiff":
+            if arrays is not None:
+                raise NotImplementedError()
+
             # save metadata to json file
             fname = save_dir / f"{save_prefix:s}sim_reconstruction{save_suffix:s}.json"
             with open(fname, "w") as f:
@@ -2335,36 +2380,6 @@ class SimImageSet:
                 return dask.delayed(_save)()
         else:
             raise ValueError(f"format was {format:s}, but the allowed values are {['tiff', 'zarr', 'hd5f']}")
-
-        # select attributes
-        attrs = ["sim_sr", "widefield", "widefield_deconvolution", "mcnr", "sim_os"]
-
-        if save_raw_data:
-            attrs += ["imgs_raw"]
-
-        if save_processed_data:
-            attrs += ["imgs"]
-
-        if save_patterns:
-            real_phases = self.phases - np.expand_dims(self.phase_corrections, axis=1)
-            # on same grid
-            _, _, estimated_patterns, estimated_patterns_2x = \
-                get_simulated_sim_imgs(np.ones([self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
-                                       frqs=self.frqs,
-                                       phases=real_phases,
-                                       mod_depths=self.mod_depths,
-                                       gains=1,
-                                       offsets=0,
-                                       readout_noise_sds=0,
-                                       pix_size=self.dx / self.upsample_fact,
-                                       nbin=self.upsample_fact
-                                       )
-            self.patterns = da.from_array(estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx]))
-            self.patterns_2x = da.from_array(estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx]))
-
-            attrs += ["patterns", "patterns_2x"]
-
-        attrs = [a for a in attrs if getattr(self, a) is not None]
 
         # ###############################
         # save results
@@ -3945,7 +3960,6 @@ class fista_sim(Optimizer):
         # ###########################
         # TV proximal operators
         # ###########################
-
         # note cucim TV implementation requires ~10x memory as array does
         if self.prox_parameters["tau_tv"] != 0:
             x = tv_prox(x, self.prox_parameters["tau_tv"] * step)
