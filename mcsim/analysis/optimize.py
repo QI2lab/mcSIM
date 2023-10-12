@@ -276,7 +276,7 @@ class Optimizer():
 
                 if compute_all_costs:
                     c_all = self.cost(x)
-                    costs[ii, inds] = _to_cpu(c_all)
+                    costs[ii] = _to_cpu(c_all)
                     cx = xp.mean(c_all[inds], axis=0)
                 else:
                     c_now = self.cost(x, inds=inds)
@@ -315,6 +315,12 @@ class Optimizer():
                 timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
 
             line_search_iters[ii] = liters
+
+            # ###################################
+            # compute difference
+            # ###################################
+
+
 
             # ###################################
             # update step
