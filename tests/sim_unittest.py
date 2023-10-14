@@ -6,6 +6,7 @@ import numpy as np
 from scipy import fft
 import mcsim.analysis.sim_reconstruction as sim
 import mcsim.analysis.analysis_tools as tools
+from localize_psf.camera import bin
 
 
 class TestSIM(unittest.TestCase):
@@ -141,16 +142,25 @@ class TestSIM(unittest.TestCase):
 
             freq = np.array([1 / 25.6346, 1 / 25.77772])
             phi = 0.23626
-            gt, _, _, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)),
-                                                     frqs=freq,
-                                                     phases=phi,
-                                                     mod_depths=[1.],
-                                                     gains=1,
-                                                     offsets=0,
-                                                     readout_noise_sds=0,
-                                                     pix_size=dxy,
-                                                     photon_shot_noise=False,
-                                                     nbin=nbin)
+            pattern = sim.get_sinusoidal_patterns(dxy * nbin,
+                                                  (nx // nbin, nx // nbin),
+                                                  freq,
+                                                  [phi],
+                                                  n_oversampled=nbin
+                                                  )
+            gt = bin(pattern, (nbin, nbin))
+
+            # gt, _, _, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)),
+            #                                          frqs=freq,
+            #                                          phases=phi,
+            #                                          mod_depths=[1.],
+            #                                          gains=1,
+            #                                          offsets=0,
+            #                                          readout_noise_sds=0,
+            #                                          pix_size=dxy,
+            #                                          photon_shot_noise=False,
+            #                                          nbin=nbin)
+
             gt = gt[0, 0, 0]
             gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(gt)))
 

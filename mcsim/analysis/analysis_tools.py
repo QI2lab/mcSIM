@@ -322,7 +322,7 @@ def translate_im(img: array,
 
     :param img: NumPy or CuPy array, size ny x nx. If CuPy array will run on GPU
     :param xshift: in same units as drs
-    :param yshift
+    :param yshift:
     :param drs: (dy, dx) pixel size of image along y- and x-directions
     :return img_shifted:
     """
@@ -439,7 +439,7 @@ def translate_ft(img_ft: array,
                          xp.fft.ifft2(xp.fft.ifftshift(img_ft, axes=(-1, -2)),
                                       axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
 
-        if use_gpu:
-            cache.clear()
+        # if use_gpu:
+        #     cache.clear()
 
         return img_ft_shifted

@@ -46,10 +46,10 @@ from matplotlib.colors import PowerNorm, LogNorm
 from matplotlib.patches import Circle, Rectangle
 # code from our projects
 import mcsim.analysis.analysis_tools as tools
-from localize_psf import rois
-from localize_psf.fit_psf import circ_aperture_otf, blur_img_psf
-from localize_psf.camera import bin, bin_adjoint, simulated_img
 from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, _to_cpu
+from localize_psf.rois import get_centered_rois, cut_roi
+from localize_psf.fit_psf import circ_aperture_otf, blur_img_psf, oversample_voxel
+from localize_psf.camera import bin, bin_adjoint, simulated_img
 
 # GPU
 _cupy_available = True
@@ -1130,6 +1130,36 @@ class SimImageSet:
                                    f" {self.mod_depths[ii]:.3f} < {self._recon_settings['minimum_mod_depth']:.3f}")
                     self.mod_depths[ii] = self._recon_settings["minimum_mod_depth"]
 
+        # #############################################
+        # estimate patterns
+        # #############################################
+        frqs_1d = np.kron(self.frqs, np.ones((self.nphases, 1)))
+        phases_1d = (self.phases - np.expand_dims(self.phase_corrections, axis=1)).reshape(self.nangles * self.nphases)
+        mods_1d = np.kron(self.mod_depths, np.ones(self.nphases))
+        amps_1d = self.amps.reshape(self.nphases * self.nangles)
+
+        p2x_delayed = dask.delayed(get_sinusoidal_patterns)(self.dx,
+                                                   (self.ny, self.nx),
+                                                   frqs_1d,
+                                                   phases_1d,
+                                                   mods_1d,
+                                                   amps_1d,
+                                                   n_oversampled=self.upsample_fact)
+
+        self.patterns_2x = da.from_delayed(p2x_delayed, shape=(self.nangles * self.nphases,
+                                                               self.ny * self.upsample_fact,
+                                                               self.nx * self.upsample_fact),
+                                           dtype=float)
+        self.patterns = da.map_blocks(bin,
+                                      self.patterns_2x,
+                                      (self.upsample_fact, self.upsample_fact),
+                                      mode="sum",
+                                      dtype=float,
+                                      chunks=(self.nangles * self.nphases, self.ny, self.nx))
+
+        # #############################################
+        # print info
+        # #############################################
         self.print_log(f"parameter estimation took {time.perf_counter() - tstart_param_est:.2f}s")
 
     def reconstruct(self,
@@ -2267,22 +2297,6 @@ class SimImageSet:
             attrs += ["imgs"]
 
         if save_patterns:
-            real_phases = self.phases - np.expand_dims(self.phase_corrections, axis=1)
-            # on same grid
-            _, _, estimated_patterns, estimated_patterns_2x = \
-                get_simulated_sim_imgs(np.ones([self.upsample_fact * self.ny, self.upsample_fact * self.nx]),
-                                       frqs=self.frqs,
-                                       phases=real_phases,
-                                       mod_depths=self.mod_depths,
-                                       gains=1,
-                                       offsets=0,
-                                       readout_noise_sds=0,
-                                       pix_size=self.dx / self.upsample_fact,
-                                       nbin=self.upsample_fact
-                                       )
-            self.patterns = da.from_array(estimated_patterns[:, :, 0].reshape([self.nangles * self.nphases, self.ny, self.nx]))
-            self.patterns_2x = da.from_array(estimated_patterns_2x[:, :, 0].reshape([self.nangles * self.nphases, self.upsample_fact * self.ny, self.upsample_fact * self.nx]))
-
             attrs += ["patterns", "patterns_2x"]
 
         attrs = [a for a in attrs if getattr(self, a) is not None]
@@ -2453,6 +2467,14 @@ def show_sim_napari(fname_zarr: str,
         shape = imgz.imgs.shape[:-4] + (9,) + imgz.imgs.shape[-2:]
 
         viewer.add_image(np.reshape(imgz.imgs, shape),
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="processed images")
+
+    if hasattr(imgz, "imgs_raw"):
+        shape = imgz.imgs_raw.shape[:-4] + (9,) + imgz.imgs_raw.shape[-2:]
+
+        viewer.add_image(np.reshape(imgz.imgs_raw, shape),
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="raw images")
@@ -2822,16 +2844,16 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # #######################################
     roi_cx = np.argmin(np.abs(fx_sim - fxs))
     roi_cy = np.argmin(np.abs(fy_sim - fys))
-    roi = rois.get_centered_rois([roi_cy, roi_cx],
-                                roi_size,
-                                min_vals=[0, 0],
-                                max_vals=cc.shape)[0]
+    roi = get_centered_rois([roi_cy, roi_cx],
+                            roi_size,
+                            min_vals=[0, 0],
+                            max_vals=cc.shape)[0]
 
     extent_roi = get_extent(fys[roi[0]:roi[1]], fxs[roi[2]:roi[3]])
 
     ax = figh.add_subplot(gspec[0, 0])
     ax.set_title("cross correlation, ROI")
-    im1 = ax.imshow(rois.cut_roi(roi, cc)[0],
+    im1 = ax.imshow(cut_roi(roi, cc)[0],
                     interpolation=None,
                     norm=PowerNorm(gamma=gamma),
                     extent=extent_roi,
@@ -2893,11 +2915,11 @@ def plot_correlation_fit(img1_ft: np.ndarray,
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
-    roi_center = rois.get_centered_rois([cy_c, cx_c], [roi[1] - roi[0], roi[3] - roi[2]], [0, 0], img1_ft.shape)[0]
+    roi_center = get_centered_rois([cy_c, cx_c], [roi[1] - roi[0], roi[3] - roi[2]], [0, 0], img1_ft.shape)[0]
     extent_roic = get_extent(fys[roi_center[0]:roi_center[1]],
                              fxs[roi_center[2]:roi_center[3]])
 
-    im3 = ax3.imshow(rois.cut_roi(roi_center, np.abs(img1_ft)**2)[0],
+    im3 = ax3.imshow(cut_roi(roi_center, np.abs(img1_ft)**2)[0],
                      interpolation=None,
                      norm=PowerNorm(gamma=gamma),
                      extent=extent_roic,
@@ -2920,7 +2942,7 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     ax4.set_title(title)
     ax4.set_xlabel('$f_x (1/\mu m)$')
 
-    im4 = ax4.imshow(rois.cut_roi(roi, np.abs(img2_ft)**2)[0],
+    im4 = ax4.imshow(cut_roi(roi, np.abs(img2_ft)**2)[0],
                      interpolation=None,
                      norm=PowerNorm(gamma=gamma),
                      extent=extent_roi,
@@ -3725,14 +3747,10 @@ def conj_transpose_fft(img_ft: array,
 
 # create test data/SIM forward model
 def get_simulated_sim_imgs(ground_truth: array,
-                           frqs: np.ndarray,
-                           phases: np.ndarray,
-                           mod_depths: list[float],
+                           patterns: array,
                            gains: Union[float, array],
                            offsets: Union[float, array],
                            readout_noise_sds: Union[float, array],
-                           pix_size: float,
-                           amps: Optional[np.ndarray] = None,
                            coherent_projection: bool = True,
                            psf: Optional[np.ndarray] = None,
                            nbin: int = 1,
@@ -3744,23 +3762,17 @@ def get_simulated_sim_imgs(ground_truth: array,
     details of the camera parameters gain, offset, etc.
 
     :param ground_truth: NumPy or CuPy array of size nz x ny x nx. If
-    :param frqs: SIM frequencies, of size nangles x 2. frqs[ii] = [fx, fy]
-    :param phases: SIM phases in radians. Of size nangles x nphases. Phases may be different for each angle.
-    :param mod_depths: SIM pattern modulation depths. Size nangles. If pass matrices, then mod depths can vary
-       spatially. Assume pattern modulation is the same for all phases of a given angle. Maybe pass list of numpy arrays
+    :param patterns:
     :param gains: gain of each pixel (or single value for all pixels)
     :param offsets: offset of each pixel (or single value for all pixels)
     :param readout_noise_sds: noise standard deviation for each pixel (or single value for all pixels)
-    :param pix_size: pixel size of the input image (i.e. before binning). The pixel size of the output image
-       will be (pix_size * nbin)
-    :param amps: Amplitudes of the final image after binning.
     :param coherent_projection:
     :param psf: the point-spread function. Must have same dimensions as ground_truth, but may be different size
        proper frequency points can be obtained using fft.fftshift(fft.fftfreq(nx, dx)) and etc.
     :param nbin:
     :param kwargs: keyword arguments which will be passed through to simulated_img()
 
-    :return sim_imgs, snrs, patterns, patterns_raw:
+    :return sim_imgs, snrs:
       patterns_raw is generated on a grid which is nbin the size of the raw images. Assume the coordinates are aligned
       such that binning patterns_raw by a factor of nbin will produce patterns. Note that this grid
       is slightly different than the Wiener SIM reconstruction grid defined above because the FFT idiom
@@ -3773,6 +3785,8 @@ def get_simulated_sim_imgs(ground_truth: array,
     else:
         xp = np
 
+    npatterns = len(patterns)
+
     ground_truth = xp.asarray(ground_truth)
     gains = xp.asarray(gains)
     offsets = xp.asarray(offsets)
@@ -3783,31 +3797,6 @@ def get_simulated_sim_imgs(ground_truth: array,
         ground_truth = xp.expand_dims(ground_truth, axis=0)
     nz, ny, nx = ground_truth.shape
 
-    # check phases
-    if isinstance(phases, (float, int)):
-        phases = np.atleast_2d(np.array(phases))
-
-    # check mod depths
-    if isinstance(mod_depths, (float, int)):
-        mod_depths = np.atleast_1d(np.array(mod_depths))
-
-    # check frequencies
-    frqs = np.atleast_2d(frqs)
-
-    nangles = len(frqs)
-    nphases = len(phases)
-
-    if psf is None and not coherent_projection:
-        raise ValueError("If coherent_projection is false, OTF must be provided")
-
-    if len(mod_depths) != nangles:
-        raise ValueError("mod_depths must have length nangles")
-
-    if amps is None:
-        amps = xp.ones((nangles, nphases))
-    else:
-        amps = xp.array(amps)
-
     # get binned sizes
     nxb = nx / nbin
     nyb = ny / nbin
@@ -3816,82 +3805,104 @@ def get_simulated_sim_imgs(ground_truth: array,
     nxb = int(nxb)
     nyb = int(nyb)
 
-    # get binned coordinates
-    xb = (xp.arange(nxb) - (nxb // 2)) * (pix_size * nbin)
-    yb = (xp.arange(nyb) - (nyb // 2)) * (pix_size * nbin)
-
-    # get unbinned coordinates
-    # these are not the "natural" coordinates of the unbinned pixel grid
-    # define them in terms of offsets from binned grid
-    subpix_offsets = xp.arange(-(nbin - 1) / 2, (nbin - 1) / 2 + 1) * pix_size
-
-    x = (xp.expand_dims(xb, axis=1) + xp.expand_dims(subpix_offsets, axis=0)).ravel()
-    y = (xp.expand_dims(yb, axis=1) + xp.expand_dims(subpix_offsets, axis=0)).ravel()
-    z = (xp.arange(nz) - (nz // 2))  # do not need dz, so don't have pixel size for it
-
-    _, yy, xx = xp.meshgrid(z, y, x, indexing="ij")
-
-    # to ensure got coordinates right, can check that the binned coordinates agree with the values obtained
-    # from binning the other coordinates
-    assert np.max(np.abs(xb - bin(xx, bin_sizes=(1, nbin, nbin), mode="mean")[0, 0, :])) < 1e-12
-    assert np.max(np.abs(yb - bin(yy, bin_sizes=(1, nbin, nbin), mode="mean")[0, :, 0])) < 1e-12
-
-    # generate images
-    frqs = xp.array(frqs)
-
-    sim_imgs = xp.zeros((nangles, nphases, nz, nyb, nxb), dtype=int)
-    patterns_raw = xp.zeros((nangles, nphases, 1, ny, nx), dtype=float)
-    patterns = xp.zeros((nangles, nphases, 1, nyb, nxb), dtype=float)
+    sim_imgs = xp.zeros((npatterns, nz, nyb, nxb), dtype=int)
     snrs = xp.zeros(sim_imgs.shape)
-    # mcnrs = xp.zeros(sim_imgs.shape)
-    for ii in range(nangles):
-        for jj in range(nphases):
-            patterns_raw[ii, jj] = amps[ii, jj] * 0.5 * (1 + mod_depths[ii] * xp.cos(2 * np.pi * (frqs[ii][0] * xx + frqs[ii][1] * yy) + phases[ii, jj]))[0]
-
+    for ii in range(npatterns):
             if not coherent_projection:
-                patterns_raw[ii, jj] = blur_img_psf(patterns_raw[ii, jj], psf).real
-
-            # bin pattern, for reference
-            patterns[ii, jj], _ = simulated_img(patterns_raw[ii, jj],
-                                                gains=1,
-                                                offsets=0,
-                                                readout_noise_sds=0,
-                                                psf=None,
-                                                photon_shot_noise=False,
-                                                bin_size=nbin,
-                                                image_is_integer=False)
+                patterns[ii] = blur_img_psf(patterns[ii], psf).real
 
             # forward SIM model
+            # apply each pattern to every z-plane
             # divide by nbin so e.g. for uniform sample would keep number of photons fixed in pixel of final image
-            sim_imgs[ii, jj], snrs[ii, jj] = simulated_img(ground_truth * patterns_raw[ii, jj] / nbin**2,
-                                                           gains=gains,
-                                                           offsets=offsets,
-                                                           readout_noise_sds=readout_noise_sds,
-                                                           psf=psf,
-                                                           bin_size=nbin,
-                                                           **kwargs)
-            # todo: compute mcnr
-            # mcnrs[ii, jj] = 0
+            sim_imgs[ii], snrs[ii] = simulated_img(ground_truth * patterns[ii] / nbin**2,
+                                                   gains=gains,
+                                                   offsets=offsets,
+                                                   readout_noise_sds=readout_noise_sds,
+                                                   psf=psf,
+                                                   bin_size=nbin,
+                                                   **kwargs)
 
-    return sim_imgs, snrs, patterns, patterns_raw
+    return sim_imgs, snrs
 
 
-def get_hexagonal_patterns(dxy, ny, nx, frq_mag, phase1s, phase2s, use_gpu=False):
+def get_sinusoidal_patterns(dxy: float,
+                            size: tuple[int],
+                            frqs: array,
+                            phases: array,
+                            mod_depths: Union[array, float],
+                            amps: Optional[Union[array, float]] = None,
+                            n_oversampled: int = 1,
+                            use_gpu: bool = False
+                            ) -> array:
     """
-    Generate hexagonal SIM patterns
+    Generate sinusoidal SIM pattern on supersampled grid. This produces patterns suitable for use with
+    get_simulated_sim_imgs()
+    The supersampled grid is aligned with the final grid such that binning the supersampled grid
+    by n_oversampled will match the final grid. Note that there is a sub-pixel shift between this coordinate
+    system and the one used during Wiener SIM reconstruction
 
-    :param dxy:
-    :param ny:
-    :param nx:
+    :param dxy: pixel size
+    :param size: (ny, nx)
+    :param frqs: npatterns x 2
+    :param phases: npatterns
+    :param mod_depths: npatterns
+    :param amps: npatterns
+    :param n_oversampled: factor to oversample the grid.
+    :param use_gpu:
+    :return patterns:
+    """
+
+    if use_gpu and _cupy_available:
+        xp = cp
+    else:
+        xp = np
+
+    ny, nx = size
+
+    # get binned coordinates
+    xb = (xp.arange(nx) - (nx // 2)) * dxy
+    yb = (xp.arange(ny) - (ny // 2)) * dxy
+    xxb, yyb = np.meshgrid(xb, yb)
+
+    # get expanded coordinates
+    yy, xx = oversample_voxel((yyb, xxb),
+                              (dxy, dxy),
+                              sf=n_oversampled,
+                              expand_along_extra_dim=False)
+
+    # SIM patterns
+    patterns = amps[:, None, None] * 0.5 * (1 + mod_depths[:, None, None] * xp.cos(2 * np.pi * (frqs[:, 0][:, None, None] * xx +
+                                                                                                frqs[:, 1][:, None, None] * yy) +
+                                                                                   phases[:, None, None]))
+
+    return patterns
+
+def get_hexagonal_patterns(dxy: float,
+                           size: tuple[int],
+                           frq_mag: float,
+                           phase1s,
+                           phase2s,
+                           n_oversampled: int = 1,
+                           use_gpu: bool = False) -> array:
+    """
+    Generate hexagonal SIM pattern on supersampled grid. This produces patterns suitable for use with
+    get_simulated_sim_imgs()
+    The supersampled grid is aligned with the final grid such that binning the supersampled grid
+    by n_oversampled will match the final grid. Note that there is a sub-pixel shift between this coordinate
+    system and the one used during Wiener SIM reconstruction
+
+    :param dxy: pixel size
+    :param size: (ny, nx)
     :param frq_mag:
     :param phase1s:
     :param phase2s:
+    :param n_oversampled:
     :param use_gpu:
     :return:
     """
 
     if len(phase1s) != len(phase2s):
-        raise ValueError()
+        raise ValueError("Phases 1 and phases 2 should have equal lengths")
 
     if use_gpu and _cupy_available:
         xp = cp
@@ -3899,9 +3910,20 @@ def get_hexagonal_patterns(dxy, ny, nx, frq_mag, phase1s, phase2s, use_gpu=False
         xp = np
 
     npatterns = len(phase1s)
-    x = xp.arange(nx) * dxy
-    y = xp.arange(ny) * dxy
-    xx, yy = xp.meshgrid(x, y)
+    ny, nx = size
+
+    # get binned coordinates
+    xb = (xp.arange(nx) - (nx // 2)) * dxy
+    yb = (xp.arange(ny) - (ny // 2)) * dxy
+    xxb, yyb = np.meshgrid(xb, yb)
+
+    # get expanded coordinates
+    yy, xx = oversample_voxel((yyb, xxb),
+                              (dxy, dxy),
+                              sf=n_oversampled,
+                              expand_along_extra_dim=False)
+    xx = xp.asarray(xx)
+    yy = xp.asarray(yy)
 
     phi_a = 0
     phi_b = 2 * np.pi / 3
@@ -3920,7 +3942,7 @@ def get_hexagonal_patterns(dxy, ny, nx, frq_mag, phase1s, phase2s, use_gpu=False
 
     patterns = xp.zeros((npatterns, ny, nx))
     for ii in range(npatterns):
-        patterns[ii] = 1 / 9 * xp.abs(e_hex(xp.array(xx), xp.array(yy), 0, phase1s[ii], phase2s[ii]))**2
+        patterns[ii] = 1 / 9 * xp.abs(e_hex(xx, yy, 0, phase1s[ii], phase2s[ii]))**2
 
     return patterns
 
@@ -3933,7 +3955,8 @@ class fista_sim(Optimizer):
                  nbin: int = 1,
                  tau_tv: float = 0,
                  tau_l1: float = 0,
-                 enforce_positivity: bool = True):
+                 enforce_positivity: bool = True,
+                 apodization: Optional[array] = None):
 
         super(fista_sim, self).__init__()
 
@@ -3955,6 +3978,7 @@ class fista_sim(Optimizer):
             xp = np
 
         self.psf_reversed = xp.roll(xp.flip(psf, axis=(0, 1)), shift=(1, 1), axis=(0, 1))
+        self.apodization = apodization
 
     def prox(self, x, step):
         # ###########################
@@ -3987,7 +4011,7 @@ class fista_sim(Optimizer):
         else:
             xp = np
 
-        blurred = xp.stack([blur_img_psf(x * self.patterns[ii], self.psf).real for ii in inds])
+        blurred = xp.stack([blur_img_psf(x * self.patterns[ii], self.psf, apodization=self.apodization).real for ii in inds])
 
         return bin(blurred, (self.nbin, self.nbin), mode="sum")
 
@@ -4013,7 +4037,7 @@ class fista_sim(Optimizer):
 
         img_model = self.fwd_model(x, inds=inds)
         dc_do = xp.stack([blur_img_psf(bin_adjoint(img_model[ii] - self.imgs[ind], (self.nbin, self.nbin), mode="sum"),
-                                     self.psf_reversed).real
+                                     self.psf_reversed, self.apodization).real
                         for ii, ind in enumerate(inds)])
         dc_do *= self.patterns[inds] / (self.ny * self.nx)
 
