@@ -5,6 +5,7 @@ Tools for reconstructing optical diffraction tomography (ODT) data using either 
 """
 import time
 import datetime
+import warnings
 from copy import deepcopy
 from pathlib import Path
 from typing import Union, Optional
@@ -361,7 +362,9 @@ class tomography:
             if img_ft.ndim != 2:
                 raise ValueError()
 
-            figh = plt.figure(figsize=figsize)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                figh = plt.figure(figsize=figsize)
 
             ax = figh.add_subplot(1, 2, 1)
             extent_f = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
