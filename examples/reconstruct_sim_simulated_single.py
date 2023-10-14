@@ -166,8 +166,7 @@ imgset.plot_figs(save_dir,
                  imgs_dpi=300)
 
 # display results in napari
-sim.show_sim_napari(save_dir / "sim_results.zarr",
-                    )
+# sim.show_sim_napari(save_dir / "sim_results.zarr")
 
 print(f"reconstructing images, plotting diagnostics, and saving results took "
       f"{time.perf_counter() - tstart:.2f}s")
