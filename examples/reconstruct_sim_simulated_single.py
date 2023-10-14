@@ -99,25 +99,32 @@ psf /= np.sum(psf)
 # ############################################
 frqs_gt = np.array([[1, 0],
                     [np.cos(60 * np.pi/180), np.sin(60 * np.pi/180)],
-                    [np.cos(120 * np.pi/180), np.sin(120 * np.pi/180)]]) * 0.8 * fmax
+                    [np.cos(120 * np.pi/180), np.sin(120 * np.pi/180)],
+                    ]) * 0.8 * fmax
 
 phases_gt = np.stack([np.array([0, 2*np.pi/3, 4*np.pi/3])] * 3, axis=0)
 mod_depths_gt = np.ones((3))
 amps_gt = np.ones((3, 3))
 
-imgs, snrs, patterns, _ = sim.get_simulated_sim_imgs(gt,
-                                                     frqs_gt,
-                                                     phases_gt,
-                                                     mod_depths=mod_depths_gt,
-                                                     gains=2,
-                                                     offsets=100,
-                                                     readout_noise_sds=5,
-                                                     pix_size=dxy_gt,
-                                                     amps=amps_gt,
-                                                     psf=psf,
-                                                     nbin=nbin)
-imgs = imgs[:, :, 0]
-patterns = patterns[:, :, 0]
+patterns = sim.get_sinusoidal_patterns(dxy,
+                                       (nxy_gt // nbin, nxy_gt // nbin),
+                                       np.kron(frqs_gt, np.ones((3, 1))), # reshaped into 9 x 2
+                                       phases_gt.reshape(9),
+                                       np.kron(mod_depths_gt, np.ones(3)),
+                                       amps_gt.reshape(9),
+                                       n_oversampled=nbin
+                                       )
+
+imgs, snrs = sim.get_simulated_sim_imgs(gt,
+                                        patterns,
+                                        gains=2,
+                                        offsets=100,
+                                        readout_noise_sds=5,
+                                        psf=psf,
+                                        nbin=nbin)
+
+# reshape from 9 x nxy x nxy to 3 x 3 x nxy x nxy
+imgs = imgs.reshape((3, 3, nxy_gt // nbin, nxy_gt // nbin))
 
 # ############################################
 # SIM reconstruction
@@ -150,10 +157,17 @@ imgset.reconstruct(compute_widefield=True,
 
 # save reconstruction results
 imgset.save_imgs(save_dir,
-                 format="hdf5")
+                 format="zarr",
+                 save_patterns=True,
+                 save_raw_data=True)
 # plot results
 imgset.plot_figs(save_dir,
                  figsize=(20, 10),
                  imgs_dpi=300)
 
-print(f"reconstructing images, plotting diagnostics, and saving results took {time.perf_counter() - tstart:.2f}s")
+# display results in napari
+sim.show_sim_napari(save_dir / "sim_results.zarr",
+                    )
+
+print(f"reconstructing images, plotting diagnostics, and saving results took "
+      f"{time.perf_counter() - tstart:.2f}s")
