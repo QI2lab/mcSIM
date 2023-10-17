@@ -158,9 +158,11 @@ for kk in range(ncolors):
     # save reconstruction results
     # ###########################################
     imgset.save_imgs(save_dir,
-                     format="tiff",  #format="zarr",
+                     format="tiff",
+                     # format="zarr",
                      save_raw_data=False,
-                     save_patterns=False)
+                     save_patterns=False,
+                     )
 
     # ###########################################
     # save diagnostic plots

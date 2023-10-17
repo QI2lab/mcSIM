@@ -17,144 +17,6 @@ except ImportError:
 array = Union[np.ndarray, cp.ndarray]
 
 
-def azimuthal_avg(img: np.ndarray,
-                  dist_grid: np.ndarray,
-                  bin_edges: np.ndarray,
-                  weights: Optional[np.ndarray] = None) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
-    """
-    Take azimuthal average of img. All points which have a dist_grid value lying
-    between successive bin_edges will be averaged. Points are considered to lie within a bin
-    if their value is strictly smaller than the upper edge, and greater than or equal to the lower edge.
-
-    :param img: 2D image
-    :param dist_grid:
-    :param bin_edges:
-    :param weights:
-    :return az_avg:
-    :return: (sdm, dist_mean, dist_sd, npts_bin, masks)
-    """
-
-    # there are many possible approaches for doing azimuthal averaging.
-    # Naive way: for each mask az_avg = np.mean(img[mask])
-    # also can do using scipy.ndimage.mean(img, labels=masks, index=np.arange(0, n_bins)
-    # scipy approach is slightly slower than np.bincount.
-    # Naive approach ~ factor of 2 slower.
-
-    if weights is None:
-        weights = np.ones(img.shape)
-
-    n_bins = len(bin_edges) - 1
-    # build masks. initialize with integer value that does not conflict with any of our bins
-    masks = np.ones((img.shape[0], img.shape[1]), dtype=int) * n_bins
-    for ii in range(n_bins):
-        # create mask
-        bmin = bin_edges[ii]
-        bmax = bin_edges[ii + 1]
-        mask = np.logical_and(dist_grid < bmax, dist_grid >= bmin)
-        masks[mask] = ii
-
-    # get indices to use during averaging. Exclude any nans in img, and exclude points outside of any bin
-    to_use_inds = np.logical_and(np.logical_not(np.isnan(img)), masks < n_bins)
-    npts_bin = np.bincount(masks[to_use_inds])
-
-    # failing to correct for case where some points are not contained in any bins. These had the same bin index as
-    # the first bin, which caused problems!
-    # nan_inds = np.isnan(img)
-    # npts_bin = np.bincount(masks.ravel(), np.logical_not(nan_inds).ravel())
-    # set any points with nans to zero, and these will be ignored by averaging due to above correction of npts_bin
-    # img[nan_inds] = 0
-    # dist_grid[nan_inds] = 0
-    # az_avg = np.bincount(masks.ravel(), img.ravel())[0:-1] / npts_bin
-    # sd = np.sqrt(np.bincount(masks.ravel(), img.ravel() ** 2) / npts_bin - az_avg ** 2) * np.sqrt(npts_bin / (npts_bin - 1))
-    # dist_mean = np.bincount(masks.ravel(), dist_grid.ravel()) / npts_bin
-    # dist_sd = np.sqrt(np.bincount(masks.ravel(), dist_grid.ravel() ** 2) / npts_bin - dist_mean ** 2) * np.sqrt(npts_bin / (npts_bin - 1))
-
-    # do azimuthal averaging
-    az_avg = np.bincount(masks[to_use_inds], img[to_use_inds].real) / npts_bin + \
-             1j * np.bincount(masks[to_use_inds], img[to_use_inds].imag) / npts_bin
-    # correct variance for unbiased estimator. (of course still biased for sd)
-    # todo: correct to handle complex numbers appropriately
-    sd = np.sqrt(np.bincount(masks[to_use_inds], np.abs(img[to_use_inds]) ** 2) / npts_bin - np.abs(az_avg) ** 2) * np.sqrt(npts_bin / (npts_bin - 1))
-    dist_mean = np.bincount(masks[to_use_inds], dist_grid[to_use_inds]) / npts_bin
-    dist_sd = np.sqrt(np.bincount(masks[to_use_inds], dist_grid[to_use_inds] ** 2) / npts_bin - dist_mean ** 2) * np.sqrt(npts_bin / (npts_bin - 1))
-
-    # pad to match expected size given number of bin edges provided
-    n_occupied_bins = npts_bin.size
-    extra_zeros = np.zeros(n_bins - n_occupied_bins)
-    if n_occupied_bins < n_bins:
-        npts_bin = np.concatenate((npts_bin, extra_zeros), axis=0)
-        az_avg = np.concatenate((az_avg, extra_zeros * np.nan), axis=0)
-        sd = np.concatenate((sd, extra_zeros * np.nan), axis=0)
-        dist_mean = np.concatenate((dist_mean, extra_zeros * np.nan), axis=0)
-        dist_sd = np.concatenate((dist_sd, extra_zeros * np.nan), axis=0)
-
-    # alternate approach with scipy.ndimage functions. 10-20% slower in my tests
-    # az_avg = ndimage.mean(img, labels=masks,  index=np.arange(0, n_bins))
-    # sd = ndimage.standard_deviation(img, labels=masks, index=np.arange(0, n_bins))
-    # dist_mean = ndimage.mean(dist_grid, labels=masks, index=np.arange(0, n_bins))
-    # dist_sd = ndimage.standard_deviation(dist_grid, labels=masks, index=np.arange(0, n_bins))
-    # npts_bin = ndimage.sum(np.ones(img.shape), labels=masks, index=np.arange(0, n_bins))
-
-    sdm = sd / np.sqrt(npts_bin)
-
-    return az_avg, sdm, dist_mean, dist_sd, npts_bin, masks
-
-
-def elliptical_grid(params: np.ndarray,
-                    xx: np.ndarray,
-                    yy: np.ndarray,
-                    units: str = 'mean') -> np.ndarray:
-    """
-    Get elliptical `distance' grid for use with azimuthal averaging. These `distances' will be the same for points lying
-    on ellipses with the parameters specified by params.
-
-    Ellipse equation is (x - cx) ^ 2 / A ^ 2 + (y - cy) ^ 2 / B ^ 2 = 1
-    Define d_A  = sqrt((x - cx) ^ 2 + (y - cy) ^ 2 * (A / B) ^ 2)...which is the
-    Define d_B  = sqrt((x - cx) ^ 2 * (B / A) ^ 2 + (y - cy) ^ 2) = (B / A) * d_A
-    Define d_AB = sqrt((x - cx) ^ 2 * (B / A) + (y - cy) ^ 2 * (A / B)) = sqrt(B / A) * d_A
-    for a given ellipse, d_A is the distance along the A axis, d_B along the B
-    axis, and d_AB along 45 deg axis.i.e.d_A(x, y) gives the length of the A
-    axis of an ellipse with the given axes A and B that contains (x, y).
-
-    :param params: [cx, cy, aspect_ratio, theta]. aspect_ratio = wy/wx. theta is the rotation angle of the x-axis of the
-      ellipse measured CCW from the x-axis of the coordinate system
-    :param xx: x-coordinates to compute grid on
-    :param yy: y-coordinates to compute grid on
-    :param units: 'mean', 'major', or 'minor'
-    :return: distance grid
-    """
-
-    cx = params[0]
-    cy = params[1]
-    aspect_ratio = params[2]
-    theta = params[3]
-
-    distance_grid = np.sqrt(
-        ((xx - cx) * np.cos(theta) - (yy - cy) * np.sin(theta))**2 +
-        ((yy - cy) * np.cos(theta) + (xx - cx) * np.sin(theta))**2 * aspect_ratio**2)
-
-    if aspect_ratio < 1:
-        if units == 'minor':
-            pass  # if aspect ratio < 1 we are already in 'minor' units.
-        elif units == 'major':
-            distance_grid = distance_grid / aspect_ratio
-        elif units == 'mean':
-            distance_grid = distance_grid / np.sqrt(aspect_ratio)
-        else:
-            raise ValueError(f"'units' must be 'minor', 'major', or 'mean', but was '{units:s}'")
-    else:
-        if units == 'minor':
-            distance_grid = distance_grid / aspect_ratio
-        elif units == 'major':
-            pass  # if aspect ratio > 1 we are already in 'major' units
-        elif units == 'mean':
-            distance_grid = distance_grid / np.sqrt(aspect_ratio)
-        else:
-            raise ValueError(f"'units' must be 'minor', 'major', or 'mean', but was '{units:s}'")
-
-    return distance_grid
-
-
 # geometry tools
 def get_peak_value(img: array,
                    x: array,
@@ -363,16 +225,8 @@ def translate_ft(img_ft: array,
     :return: shifted images, same size as img_ft
     """
 
-    use_gpu = isinstance(img_ft, cp.ndarray) and _cupy_available
-
-    if use_gpu:
+    if isinstance(img_ft, cp.ndarray) and _cupy_available:
         xp = cp
-        # todo: probably better to set this outside of this function ... let user decide!
-        # todo: better to access like this?
-        cache = cp.fft.config.get_plan_cache()
-        cache.set_size(0)
-        cache.set_memsize(0)
-        # cp.fft._cache.PlanCache(memsize=0)  # avoid issues like https://github.com/cupy/cupy/issues/6355
     else:
         xp = np
 
@@ -396,7 +250,6 @@ def translate_ft(img_ft: array,
         shapes_broadcastable = False
 
     # otherwise make shapes broadcastable if possible
-    # todo: think I can get rid of this logic and simply expand fx, fy over [-2, -1] axes
     if not shapes_broadcastable:
         ndim_extra_frq = fx.ndim
         if fx.shape != img_ft.shape[-2 - ndim_extra_frq:-2]:
@@ -438,8 +291,5 @@ def translate_ft(img_ft: array,
                          xp.fft.fft2(xp.asarray(exp_factor) *
                          xp.fft.ifft2(xp.fft.ifftshift(img_ft, axes=(-1, -2)),
                                       axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
-
-        # if use_gpu:
-        #     cache.clear()
 
         return img_ft_shifted
