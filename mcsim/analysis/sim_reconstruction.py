@@ -47,6 +47,7 @@ from matplotlib.patches import Circle, Rectangle
 # code from our projects
 import mcsim.analysis.analysis_tools as tools
 from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, _to_cpu
+from mcsim.analysis.fft import ft2, ift2
 from localize_psf.rois import get_centered_rois, cut_roi
 from localize_psf.fit_psf import circ_aperture_otf, blur_img_psf, oversample_voxel
 from localize_psf.camera import bin, bin_adjoint, simulated_img
@@ -64,57 +65,8 @@ except ImportError:
 array = Union[np.ndarray, cp.ndarray]
 
 
-# class SimParameters:
-#     def __init__(self,
-#                  frequencies=None,
-#                  phases=None,
-#                  phase_offsets=None,
-#                  modulation_depths=None,
-#                  ):
-#
-#         self.frequencies = frequencies
-#         self.phases = phases
-#         self.phase_offsets = phase_offsets
-#         self.modulation_depths = modulation_depths
 
-# todo: should manage ft plans outside of functions
-# todo: should separate ft tools to separate file ... these duplicate fns in field_prop.py
-def _ft(m: array, axes: tuple = (-1, -2)) -> array:
-    """
-    2D Fourier transform which can use either CPU or GPU and using specific shifting idiom
-
-    :param m: array to be Fourier transformed
-    :return mft: Fourier transform of m
-    """
-
-    if isinstance(m, cp.ndarray) and _cupy_available:
-        xp = cp
-        cache = cp.fft.config.get_plan_cache()
-        cache.set_memsize(0)
-        # cp.fft._cache.PlanCache(memsize=0)  # avoid issues like https://github.com/cupy/cupy/issues/6355
-    else:
-        xp = np
-
-    result = xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=axes), axes=axes), axes=axes)
-
-    return result
-
-
-def _ift(m: array, axes: tuple = (-1, -2)) -> array:
-
-    if isinstance(m, cp.ndarray) and _cupy_available:
-        xp = cp
-        cache = cp.fft.config.get_plan_cache()
-        cache.set_memsize(0)
-        # cp.fft._cache.PlanCache(memsize=0)  # avoid issues like https://github.com/cupy/cupy/issues/6355
-    else:
-        xp = np
-
-    result = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=axes), axes=axes), axes=axes)
-
-    return result
-
-
+# todo: move to mcsim.analysis.fft
 def _irft(m: array, axes: tuple = (-1, -2)) -> array:
     """
     2D inverse real Fourier transform which can use either CPU or GPU
@@ -126,13 +78,8 @@ def _irft(m: array, axes: tuple = (-1, -2)) -> array:
     # so think I should avoid calls to self
     if isinstance(m, cp.ndarray) and _cupy_available:
         xp = cp
-        cache = cp.fft.config.get_plan_cache()
-        cache.set_memsize(0)
-        # cp.fft._cache.PlanCache(memsize=0)  # avoid issues like https://github.com/cupy/cupy/issues/6355
     else:
         xp = np
-
-    # result = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2)).real
 
     # irfft2 ~2X faster than ifft2
     # # Have to keep full -2 axis because need two full quadrants for complete fft info
@@ -595,7 +542,7 @@ class SimImageSet:
                                xp.asarray(tukey(self.nx, alpha=0.1)))
 
         # todo: want to do a real ft instead
-        self.imgs_ft = da.map_blocks(_ft,
+        self.imgs_ft = da.map_blocks(ft2,
                                      self.imgs * apodization,
                                      dtype=complex,
                                      meta=xp.array(())
@@ -1776,7 +1723,7 @@ class SimImageSet:
         # widefield
         if self.widefield is not None:
             widefield = self.widefield[wf_slice_list].squeeze()
-            widefield_ft = _ft(widefield)
+            widefield_ft = ft2(widefield)
 
             # real space
             ax = figh.add_subplot(grid[0, 0])
@@ -1805,7 +1752,7 @@ class SimImageSet:
         # deconvolved
         if self.widefield_deconvolution is not None:
             widefield_deconvolution = self.widefield_deconvolution[wf_slice_list].squeeze()
-            widefield_deconvolution_ft = _ft(widefield_deconvolution)
+            widefield_deconvolution_ft = ft2(widefield_deconvolution)
 
             ax = figh.add_subplot(grid[0, 2])
 
@@ -1834,7 +1781,7 @@ class SimImageSet:
         # SIM
         if self.sim_sr is not None:
             sim_sr = self.sim_sr[slices].squeeze()
-            sim_sr_ft = _ft(sim_sr)
+            sim_sr_ft = ft2(sim_sr)
 
             # real-space
             ax = figh.add_subplot(grid[0, 1])
@@ -2592,8 +2539,8 @@ def correct_modulation_for_bead_size(bead_radii: float,
 
 
 # estimate frequency of modulation patterns
-def fit_modulation_frq(ft1: np.ndarray,
-                       ft2: np.ndarray,
+def fit_modulation_frq(mft1: np.ndarray,
+                       mft2: np.ndarray,
                        dxy: float,
                        mask: Optional[np.ndarray] = None,
                        frq_guess: Optional[tuple[float]] = None,
@@ -2614,8 +2561,8 @@ def fit_modulation_frq(ft1: np.ndarray,
     Note that there is ambiguity in the definition of this frequency, as -f will also be a peak. If frq_guess is
     provided, the peak closest to the guess will be returned.
 
-    :param ft1: 2D Fourier space image
-    :param ft2: 2D Fourier space image to be cross correlated with ft1
+    :param mft1: 2D Fourier space image
+    :param mft2: 2D Fourier space image to be cross correlated with ft1
     :param dxy: pixel size. Units of dxy and max_frq_shift must be consistent
     :param mask: boolean array same size as ft1 and ft2. Only consider frequency points where mask is True
     :param frq_guess: frequency guess [fx, fy]. If frequency guess is None, an initial guess will be chosen by
@@ -2631,22 +2578,22 @@ def fit_modulation_frq(ft1: np.ndarray,
 
     """
 
-    if ft1.shape != ft2.shape:
+    if mft1.shape != mft2.shape:
         raise ValueError("must have ft1.shape = ft2.shape")
 
     # must be on CPU for this function to work
-    ft1 = _to_cpu(ft1)
-    ft2 = _to_cpu(ft2)
+    mft1 = _to_cpu(mft1)
+    mft2 = _to_cpu(mft2)
     if otf is not None:
         otf = _to_cpu(otf)
 
     # mask
     if mask is None:
-        mask = np.ones(ft1.shape, dtype=bool)
+        mask = np.ones(mft1.shape, dtype=bool)
     else:
         mask = np.array(mask, copy=True)
 
-    if mask.shape != ft1.shape:
+    if mask.shape != mft1.shape:
         raise ValueError("mask must have same shape as ft1")
 
     # otf
@@ -2655,8 +2602,8 @@ def fit_modulation_frq(ft1: np.ndarray,
         wiener_param = 0.
 
     # get frequency data
-    fxs = fft.fftshift(fft.fftfreq(ft1.shape[1], dxy))
-    fys = fft.fftshift(fft.fftfreq(ft1.shape[0], dxy))
+    fxs = fft.fftshift(fft.fftfreq(mft1.shape[1], dxy))
+    fys = fft.fftshift(fft.fftfreq(mft1.shape[0], dxy))
     fxfx, fyfy = np.meshgrid(fxs, fys)
 
     # ############################
@@ -2669,8 +2616,8 @@ def fit_modulation_frq(ft1: np.ndarray,
         # WARNING: correlate2d uses a different convention for the frequencies of the output, which will not agree with the fft convention
         # cc(k) = \sum_f ft2^*(f) x ft1(f + k)
 
-        cc = np.abs(correlate(ft2 * otf_factor,
-                              ft1 * otf_factor,
+        cc = np.abs(correlate(mft2 * otf_factor,
+                              mft1 * otf_factor,
                               mode='same'))
 
         otf_cc = np.abs(correlate(otf_factor,
@@ -2694,20 +2641,20 @@ def fit_modulation_frq(ft1: np.ndarray,
     # define cross-correlation and minimization objective function
     # ############################
     # real-space coordinates
-    ny, nx = ft1.shape
+    ny, nx = mft1.shape
     x = fft.ifftshift(dxy * (np.arange(nx) - (nx // 2)))
     y = fft.ifftshift(dxy * (np.arange(ny) - (ny // 2)))
     xx, yy = np.meshgrid(x, y)
 
-    img2 = _ift(ft2)
+    img2 = ift2(mft2)
 
     # compute ft2(f + fo)
     def fft_shifted(f): return fft.fftshift(fft.fft2(np.exp(-1j*2*np.pi * (f[0] * xx + f[1] * yy)) * fft.ifftshift(img2 * otf_factor)))
 
     # cross correlation
     # todo: conjugating ft2 instead of ft1, as in typical definition of cross correlation. Doesn't matter bc taking norm
-    def cc_fn(f): return np.sum(ft1 * otf_factor * fft_shifted(f).conj())
-    fft_norm = np.sum(np.abs(ft1 * otf_factor) * np.abs(ft2 * otf_factor))**2
+    def cc_fn(f): return np.sum(mft1 * otf_factor * fft_shifted(f).conj())
+    fft_norm = np.sum(np.abs(mft1 * otf_factor) * np.abs(mft2 * otf_factor))**2
     def min_fn(f): return -np.abs(cc_fn(f))**2 / fft_norm
 
     # ############################

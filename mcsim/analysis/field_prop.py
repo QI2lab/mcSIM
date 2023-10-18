@@ -8,6 +8,7 @@ This is natural when working with discrete Fourier transforms
 
 from typing import Union, Optional
 import numpy as np
+from mcsim.analysis.fft import ft2, ift2, ft2_adj, ift2_adj
 
 _gpu_available = True
 try:
@@ -17,45 +18,6 @@ except ImportError:
     _gpu_available = False
 
 array = Union[np.ndarray, cp.ndarray]
-
-
-# Fourier transform recipes
-def _ft2(m, axes=(-1, -2)):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
-    return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=axes), axes=axes), axes=axes)
-
-
-def _ift2(m, axes=(-1, -2)):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
-    return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=axes), axes=axes), axes=axes)
-
-
-# adjoint operations are FT or IFT with exponential conjugated, so would be swapping FT and IFT except for normalization
-# changing normalization to "forward" instead of the default "backwards" is all else we need
-def _ft2_adj(m, axes=(-1, -2)):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
-    return xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(m, axes=axes), norm="forward", axes=axes), axes=axes)
-
-
-def _ift2_adj(m, axes=(-1, -2)):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
-    return xp.fft.fftshift(xp.fft.fft2(xp.fft.ifftshift(m, axes=axes), norm="forward", axes=axes), axes=axes)
 
 
 def get_fzs(fx: array,
@@ -278,7 +240,7 @@ def propagate_homogeneous(efield_start: array,
     nz = len(zs)
     ny, nx = efield_start.shape[-2:]
 
-    efield_start_ft = _ft2(efield_start)
+    efield_start_ft = ft2(efield_start)
 
     new_size = efield_start.shape[:-2] + (nz, ny, nx)
     efield_ft_prop = xp.zeros(new_size, dtype=complex)
@@ -288,7 +250,7 @@ def propagate_homogeneous(efield_start: array,
         # propagate field with kernel
         efield_ft_prop[..., ii, :, :] = efield_start_ft * kernel
 
-    efield_prop = _ift2(efield_ft_prop)
+    efield_prop = ift2(efield_ft_prop)
 
     return efield_prop
 
@@ -360,11 +322,11 @@ def propagate_bpm(efield_start: array,
     efield = xp.zeros(out_shape, dtype=complex)
     efield[..., 0, :, :] = efield_start
     for ii in range(nz):
-        efield[..., ii + 1, :, :] = _ift2(_ft2(efield[..., ii, :, :]) * prop_kernel * apodization) * xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas))
+        efield[..., ii + 1, :, :] = ift2(ft2(efield[..., ii, :, :]) * prop_kernel * apodization) * xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas))
 
     # propagate to imaging plane
     kernel_img = xp.asarray(get_angular_spectrum_kernel(dz_final, wavelength, no, n.shape[1:], drs[1:], use_gpu))
-    efield[..., -1, :, :] = _ift2(_ft2(efield[..., -2, :, :]) * kernel_img * atf)
+    efield[..., -1, :, :] = ift2(ft2(efield[..., -2, :, :]) * kernel_img * atf)
 
     return efield
 
@@ -434,10 +396,10 @@ def backpropagate_bpm(efield_end: array,
 
     # propagate from imaging plane back to last plane
     kernel_img = xp.asarray(get_angular_spectrum_kernel(dz_final, wavelength, no, n.shape[1:], drs[1:], use_gpu))
-    efield[..., -2, :, :] = _ft2_adj(_ift2_adj(efield[..., -1, :, :]) * kernel_img.conj() * xp.conj(atf))
+    efield[..., -2, :, :] = ft2_adj(ift2_adj(efield[..., -1, :, :]) * kernel_img.conj() * xp.conj(atf))
 
     for ii in range(nz - 1, -1, -1):
-        efield[..., ii, :, :] = _ft2_adj(_ift2_adj(efield[..., ii + 1, :, :] * xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas)).conj()) * prop_kernel.conj() * xp.conj(apodization))
+        efield[..., ii, :, :] = ft2_adj(ift2_adj(efield[..., ii + 1, :, :] * xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas)).conj()) * prop_kernel.conj() * xp.conj(apodization))
 
     return efield
 
@@ -491,14 +453,14 @@ def propagate_ssnp(efield_start: array,
         q[..., 0, 1] = 0
         q[..., 1, 0] = ko**2 * (no**2 - n[ii]**2) * dz
 
-        phi[..., ii + 1, :, :, :, :] = _ift2(xp.matmul(p, (_ft2(xp.matmul(q, phi[..., ii, :, :, :, :]), axes=yx_axes)) * apodization), axes=yx_axes)
+        phi[..., ii + 1, :, :, :, :] = ift2(xp.matmul(p, (ft2(xp.matmul(q, phi[..., ii, :, :, :, :]), axes=yx_axes)) * apodization), axes=yx_axes)
 
     # propagate to imaging plane and aply coherent transfer function
     fb_proj = forward_backward_proj(wavelength, no, n.shape[1:], drs[1:], use_gpu=use_gpu)[..., slice(0, 1), :]
 
     # the last element of phi is fundamentally different than the others because fb_proj changes the basis
     # so this is (phi_f, phi_b) wherease the others are (phi, dphi / dz)
-    phi[..., -1, :, :, 0, :] = _ift2(xp.matmul(fb_proj, atf * xp.matmul(p_img, _ft2(phi[..., -2, :, :, :, :], axes=yx_axes))), axes=yx_axes)[..., 0, :]
+    phi[..., -1, :, :, 0, :] = ift2(xp.matmul(fb_proj, atf * xp.matmul(p_img, ft2(phi[..., -2, :, :, :, :], axes=yx_axes))), axes=yx_axes)[..., 0, :]
 
     # strip off extra dim
     return phi[..., 0]
@@ -564,17 +526,17 @@ def backpropagate_ssnp(efield_end: array,
     fb_proj_adj = forward_backward_proj(wavelength, no, n.shape[1:], drs[1:], use_gpu=use_gpu).conj()[..., slice(0, 1), :].swapaxes(-1, -2)
 
     # adjoint of imaging/final prop operation
-    fadj = _ft2_adj(xp.matmul(p_img_adj, xp.conj(atf) * xp.matmul(fb_proj_adj, _ift2_adj(phi[..., -1, :, :, slice(0, 1), :], axes=yx_axes))), axes=yx_axes)
+    fadj = ft2_adj(xp.matmul(p_img_adj, xp.conj(atf) * xp.matmul(fb_proj_adj, ift2_adj(phi[..., -1, :, :, slice(0, 1), :], axes=yx_axes))), axes=yx_axes)
 
     # last propagation also
-    phi[..., -2, :, :, :, :] = _ft2_adj(xp.matmul(p_adj, _ift2_adj(fadj, axes=yx_axes)), axes=yx_axes)
+    phi[..., -2, :, :, :, :] = ft2_adj(xp.matmul(p_adj, ift2_adj(fadj, axes=yx_axes)), axes=yx_axes)
     # loop backwards through z-stack
     for ii in range(nz - 1, -1, -1):
         q_adj = xp.ones((n.shape[1:]) + (2, 2), dtype=complex)
         q_adj[..., 0, 1] = ko**2 * (no**2 - n[ii]**2).conj() * dz
         q_adj[..., 1, 0] = 0
 
-        phi[..., ii, :, :, :, :] = _ft2_adj(xp.matmul(p_adj, _ift2_adj(xp.matmul(q_adj, phi[..., ii + 1, :, :, :, :]), axes=yx_axes)), axes=yx_axes)
+        phi[..., ii, :, :, :, :] = ft2_adj(xp.matmul(p_adj, ift2_adj(xp.matmul(q_adj, phi[..., ii + 1, :, :, :, :]), axes=yx_axes)), axes=yx_axes)
 
     # strip off extra dim
     return phi[..., 0]

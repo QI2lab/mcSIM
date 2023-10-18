@@ -30,14 +30,15 @@ import zarr
 from localize_psf import fit, rois, camera, affine
 from mcsim.analysis.analysis_tools import translate_ft
 from mcsim.analysis import field_prop
-from mcsim.analysis.field_prop import _ft2, _ift2
 from mcsim.analysis.phase_unwrap import phase_unwrap as weighted_phase_unwrap
 from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, _to_cpu
+from mcsim.analysis.fft import ft3, ift3, ft2, ift2
 
 _gpu_available = True
 try:
     import cupy as cp
     import cupyx.scipy.sparse as sp_gpu
+    import cupyx.scipy.fft as fft_gpu
     # from cucim.skimage.restoration import unwrap_phase as unwrap_phase_gpu # this not implemented ...
 except ImportError:
     cp = np
@@ -52,7 +53,6 @@ except ImportError:
 
 array = Union[np.ndarray, cp.ndarray]
 csr_matrix = Union[sp.csr_matrix, sp_gpu.csr_matrix]
-coo_matrix = Union[sp.coo_matrix, sp_gpu.coo_matrix]
 
 
 class tomography:
@@ -214,7 +214,7 @@ class tomography:
         # cut rois
         def cut_rois(img: array,
                      block_id=None):
-            img_ft = _ft2(img * apodization)
+            img_ft = ft2(img * apodization)
 
             npatt, ny, nx = img_ft.shape[-3:]
             nroi = rois_all.shape[1]
@@ -358,7 +358,7 @@ class tomography:
                  figsize=(20, 10),
                  block_id=None):
 
-            img_ft = _ft2(img).squeeze()
+            img_ft = ft2(img).squeeze()
             if img_ft.ndim != 2:
                 raise ValueError()
 
@@ -478,7 +478,7 @@ class tomography:
             slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
             imgs_frq_cal = np.squeeze(self.imgs_raw_bg[slices])
 
-            imgs_frq_cal_ft = _ft2(imgs_frq_cal)
+            imgs_frq_cal_ft = ft2(imgs_frq_cal)
             imgs_frq_cal_ft_abs_mean = np.mean(np.abs(imgs_frq_cal_ft), axis=0)
 
             results, circ_dbl_fn, figh_ref_frq = fit_ref_frq(imgs_frq_cal_ft_abs_mean,
@@ -1144,7 +1144,7 @@ class tomography:
                 if rmask is not None:
                     rmask = xp.asarray(rmask)
 
-            # todo: get initial fields
+            # todo: export initial fields if desired
             if optimizer == "born":
                 scatt_fn = get_scattered_field
             else:
@@ -1153,9 +1153,9 @@ class tomography:
             if n_guess is None or optimizer == "born" or optimizer == "rytov":
                 tstart_scatt = time.perf_counter()
                 if nmax_multiplex == 1:
-                    efield_scattered_ft = _ft2(scatt_fn(_ift2(efields_ft),
-                                                        _ift2(efields_bg_ft),
-                                                        scattered_field_regularization))
+                    efield_scattered_ft = ft2(scatt_fn(ift2(efields_ft),
+                                                       ift2(efields_bg_ft),
+                                                       scattered_field_regularization))
                 else:
                     tstart_demultiplex = time.perf_counter()
 
@@ -1173,13 +1173,13 @@ class tomography:
                                            (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
                                     (f_radius_factor * na_detection / wavelength)
 
-                            e_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_ft[ii], mask))
-                            ebg_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_bg_ft[ii], mask))
+                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask))
+                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask))
 
                     if verbose:
                         print("")
 
-                    efield_scattered_ft = _ft2(scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization))
+                    efield_scattered_ft = ft2(scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization))
 
                     if optimizer == "born":
                         raise NotImplementedError()
@@ -1191,7 +1191,7 @@ class tomography:
 
             # initial guess
             if n_guess is not None:
-                v_fts_start = _ft3(get_v(xp.asarray(n_guess), no, wavelength))
+                v_fts_start = ft3(get_v(xp.asarray(n_guess), no, wavelength))
             else:
                 v_fts_start = inverse_model_linear(efield_scattered_ft,
                                                    linear_model_invert,
@@ -1216,7 +1216,7 @@ class tomography:
                                   **kwargs
                                   )
 
-                n = get_n(_ift3(results["x"]), no, wavelength).reshape((1,) * nextra_dims + v_fts_start.shape[-3:])
+                n = get_n(ift3(results["x"]), no, wavelength).reshape((1,) * nextra_dims + v_fts_start.shape[-3:])
 
             else:
                 # delete variables we no longer need
@@ -1225,14 +1225,19 @@ class tomography:
                 except:
                     pass
 
-                # bin if desired
-                n_start = get_n(_ift3(v_fts_start), no, wavelength)
+                # bin if desired, but avoid storing large FFT plan in the cache
+                if use_gpu:
+                    plan = fft_gpu.get_fft_plan(v_fts_start)
+                else:
+                    plan = None
+
+                n_start = get_n(ift3(v_fts_start, plan=plan), no, wavelength)
                 del v_fts_start
 
-                efields = camera.bin(_ift2(efields_ft), [nbin, nbin], mode="mean")
+                efields = camera.bin(ift2(efields_ft), [nbin, nbin], mode="mean")
                 del efields_ft
 
-                efields_bg = camera.bin(_ift2(efields_bg_ft), [nbin, nbin], mode="mean")
+                efields_bg = camera.bin(ift2(efields_bg_ft), [nbin, nbin], mode="mean")
                 del efields_bg_ft
 
                 if beam_frqs.shape[0] == 1:
@@ -1640,7 +1645,7 @@ class tomography:
         # plot
         # ######################
         img_now = _to_cpu(self.imgs_raw[index].compute())
-        img_ft = _ft2(img_now)
+        img_ft = ft2(img_now)
 
         figh = plt.figure(figsize=figsize, **kwargs)
         figh.suptitle(f"{index}, {self.axes_names}")
@@ -1674,7 +1679,7 @@ class tomography:
         # ######################
         try:
             holo_ft = _to_cpu(self.holograms_ft[index].compute())
-            holo = _ift2(holo_ft)
+            holo = ift2(holo_ft)
 
             ax = figh.add_subplot(grid[0, 1])
             ax.set_title("$E(f)$")
@@ -1718,7 +1723,7 @@ class tomography:
             index_bg = tuple([v if self.holograms_ft.shape[ii] != 0 else 0 for ii, v in enumerate(index)])
 
             holo_ft_bg = _to_cpu(self.holograms_ft_bg[index_bg].compute())
-            holo_bg = _ift2(holo_ft_bg)
+            holo_bg = ift2(holo_ft_bg)
 
             ax = figh.add_subplot(grid[2, 1])
             ax.set_title("$E_{bg}(f)$")
@@ -1788,25 +1793,7 @@ class tomography:
 
 
 # FFT idioms
-def _ft_abs(m): return _ft2(abs(_ift2(m)))
-
-
-def _ft3(m):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
-    return xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(m, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
-
-
-def _ift3(m):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
-    return xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(m, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
+def _ft_abs(m): return ft2(abs(ift2(m)))
 
 
 def cut_mask(img: array,
@@ -2275,7 +2262,7 @@ def unmix_hologram(img: array,
     apodization = xp.asarray(apodization)
 
     # FT of image
-    img_ft = _ft2(img * apodization)
+    img_ft = ft2(img * apodization)
 
     # get frequency data
     ny, nx = img_ft.shape[-2:]
@@ -3064,7 +3051,7 @@ def display_tomography_recon(recon_fname: str,
     slices_raw = slices + (slice(None), slice(None), slice(None))
     if show_raw:
         imgs = da.expand_dims(da.from_zarr(raw_data[raw_data_component])[slices_raw], axis=-3)
-        imgs_raw_ft = da.map_blocks(_ft2, imgs, dtype=complex)
+        imgs_raw_ft = da.map_blocks(ft2, imgs, dtype=complex)
 
         if compute:
             print("loading raw images")
@@ -3084,11 +3071,11 @@ def display_tomography_recon(recon_fname: str,
     if show_efields:
         # measured field
         e_load_ft = da.expand_dims(da.from_zarr(img_z.efields_ft), axis=-3)
-        e = da.map_blocks(_ift2, e_load_ft, dtype=complex)
+        e = da.map_blocks(ift2, e_load_ft, dtype=complex)
 
         # background field
         ebg_load_ft = da.expand_dims(da.from_zarr(img_z.efield_bg_ft), axis=-3)
-        ebg = da.map_blocks(_ift2, ebg_load_ft, dtype=complex)
+        ebg = da.map_blocks(ift2, ebg_load_ft, dtype=complex)
 
         # compute electric field power
         efield_power = da.mean(da.abs(e), axis=(-1, -2), keepdims=True)
@@ -3631,11 +3618,11 @@ class LinearScatt(RIOptimizer):
 
     def prox(self, x, step):
         # convert from V to n
-        n = get_n(_ift3(x), self.no, self.wavelength)
+        n = get_n(ift3(x), self.no, self.wavelength)
         # apply proximal operator on n
         n_prox = super(LinearScatt, self).prox(n, step)
 
-        return _ft3(get_v(n_prox, self.no, self.wavelength))
+        return ft3(get_v(n_prox, self.no, self.wavelength))
 
     def run(self, x_start, **kwargs):
         return super(LinearScatt, self).run(x_start, **kwargs)
@@ -3938,6 +3925,6 @@ class SSNP(RIOptimizer):
                                                    self.drs_n[1:],
                                                    self.wavelength)[..., 0, :, :]
         # assume initial field is foward propagating only
-        de_dz_start = _ift2(1j * self.kz * _ft2(e_start))
+        de_dz_start = ift2(1j * self.kz * ft2(e_start))
 
         return e_start, de_dz_start
