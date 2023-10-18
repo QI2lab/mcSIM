@@ -1233,6 +1233,7 @@ class tomography:
 
                 n_start = get_n(ift3(v_fts_start, plan=plan), no, wavelength)
                 del v_fts_start
+                del plan
 
                 efields = camera.bin(ift2(efields_ft), [nbin, nbin], mode="mean")
                 del efields_ft
