@@ -11,7 +11,7 @@ from skimage.restoration import denoise_tv_chambolle
 _gpu_available = True
 try:
     import cupy as cp
-except:
+except ImportError:
     cp = np
     _gpu_available = False
 
@@ -19,10 +19,11 @@ except:
 _gpu_tv_available = True
 try:
     from cucim.skimage.restoration import denoise_tv_chambolle as denoise_tv_chambolle_gpu
-except:
+except ImportError:
     denoise_tv_chambolle_gpu = None
 
 array = Union[np.ndarray, cp.ndarray]
+
 
 def _to_cpu(m):
     """
@@ -162,6 +163,7 @@ class Optimizer():
             line_search_factor: float = 0.5,
             stop_on_nan: bool = True,
             xtol: float = 1e-8,
+            print_newline: bool = False,
             **kwargs) -> dict:
 
         """
@@ -176,8 +178,10 @@ class Optimizer():
         :param nmax_stochastic_descent: maximum size of random subset
         :param verbose: print iteration info
         :param compute_cost: optionally compute and store the cost. This can make optimization slower
+        :param compute_all_costs:
         :param line_search: use line search to shrink step-size as necessary
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
+        :param stop_on_nan:
         :param xtol: TODO: stop when change in x is small
         :return results: dictionary containing results
         """
@@ -185,6 +189,7 @@ class Optimizer():
         use_gpu = isinstance(x_start, cp.ndarray) and _gpu_available
         if use_gpu:
             xp = cp
+            mempool = cp.get_default_memory_pool()
         else:
             xp = np
 
@@ -228,10 +233,11 @@ class Optimizer():
                 # use all angles
                 inds = list(range(self.n_samples))
 
-            # if any nans, break
-            if xp.any(xp.isnan(x)):
-                results["stop_condition"] = "stopped on NaN"
-                break
+            if stop_on_nan:
+                # if any nans, break
+                if xp.any(xp.isnan(x)):
+                    results["stop_condition"] = "stopped on NaN"
+                    break
 
             # ###################################
             # proximal gradient descent
@@ -319,8 +325,7 @@ class Optimizer():
             # ###################################
             # compute difference
             # ###################################
-
-
+            # diff = xp.sum(y - y_last)
 
             # ###################################
             # update step
@@ -342,17 +347,24 @@ class Optimizer():
 
             # print information
             if verbose:
-                print(
-                    f"iteration {ii + 1:d}/{max_iterations:d},"
-                    f" cost={np.nanmean(costs[ii]):.3g},"
-                    f" step={steps[ii]:.3g},"
-                    f" line search iters={line_search_iters[ii]:d},"
-                    f" grad={timing['grad'][ii]:.3f}s,"
-                    f" prox={timing['prox'][ii]:.3f}s,"                                        
-                    f" cost={timing['cost'][ii]:.3f}s,"
-                    f" iter={timing['iteration'][ii]:.3f}s,"
-                    f" total={time.perf_counter() - tstart:.3f}s",
-                    end="\r")
+                status = f"iteration {ii + 1:d}/{max_iterations:d}," \
+                         f" cost={np.nanmean(costs[ii]):.3g}," \
+                         f" step={steps[ii]:.3g}," \
+                         f" line search iters={line_search_iters[ii]:d}," \
+                         f" grad={timing['grad'][ii]:.3f}s," \
+                         f" prox={timing['prox'][ii]:.3f}s," \
+                         f" cost={timing['cost'][ii]:.3f}s," \
+                         f" iter={timing['iteration'][ii]:.3f}s," \
+                         f" total={time.perf_counter() - tstart:.3f}s"
+                if use_gpu:
+                    status += f", GPU={mempool.used_bytes()/1e9:.3}GB"
+
+                if print_newline:
+                    end = "\n"
+                else:
+                    end = "\r"
+
+                print(status, end=end)
 
         # compute final cost
         if compute_cost:
