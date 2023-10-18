@@ -133,7 +133,9 @@ tstart = time.perf_counter()
 
 save_dir = root_dir / f"{tstamp:s}_sim_reconstruction_simulated"
 
-imgset = sim.SimImageSet.initialize({"pixel_size": dxy, "na": na, "wavelength": wavelength},
+imgset = sim.SimImageSet.initialize({"pixel_size": dxy,
+                                     "na": na,
+                                     "wavelength": wavelength},
                                     imgs,
                                     otf=None,
                                     wiener_parameter=0.3,
@@ -156,17 +158,17 @@ imgset.reconstruct(compute_widefield=True,
                    compute_mcnr=True)
 
 # save reconstruction results
-imgset.save_imgs(save_dir,
-                 format="zarr",
-                 save_patterns=True,
-                 save_raw_data=True)
+fname_out = imgset.save_imgs(save_dir,
+                             format="zarr",
+                             save_patterns=True,
+                             save_raw_data=True)
 # plot results
 imgset.plot_figs(save_dir,
                  figsize=(20, 10),
                  imgs_dpi=300)
 
-# display results in napari
-# sim.show_sim_napari(save_dir / "sim_results.zarr")
-
 print(f"reconstructing images, plotting diagnostics, and saving results took "
       f"{time.perf_counter() - tstart:.2f}s")
+
+# display results in napari
+sim.show_sim_napari(fname_out)
