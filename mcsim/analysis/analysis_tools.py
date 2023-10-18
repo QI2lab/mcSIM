@@ -36,7 +36,7 @@ def get_peak_value(img: array,
     :return: estimated value of the peak
     """
 
-    if isinstance(img, cp.ndarray):
+    if isinstance(img, cp.ndarray) and _cupy_available:
         xp = cp
     else:
         xp = np
@@ -86,7 +86,7 @@ def pixel_overlap(centers1: array,
     :return: overlap area of pixels
     """
 
-    if isinstance(centers1, cp.ndarray):
+    if isinstance(centers1, cp.ndarray) and _cupy_available:
         xp = cp
     else:
         xp = np
@@ -138,7 +138,7 @@ def translate_pix(img: array,
     :return img_shifted, pix_shifts:
     """
 
-    if isinstance(img, cp.ndarray):
+    if isinstance(img, cp.ndarray) and _cupy_available:
         xp = cp
     else:
         xp = np
