@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
 MIT License
 
@@ -39,7 +36,6 @@ Should maybe use a scipy conjugate descent.
 """
 
 import numpy as np
-from scipy.fft import dctn, idctn
 import scipy.fft as fft_cpu
 
 _gpu_available = True
@@ -49,6 +45,7 @@ try:
 except ImportError:
     _gpu_available = False
     fft_gpu = fft_cpu
+
 
 def phase_unwrap_ref(psi, weight, kmax=100):
 
@@ -70,8 +67,8 @@ def phase_unwrap_ref(psi, weight, kmax=100):
     
     # See 3. Implementation issues: eq. 34 from Ghiglia et al.
     # Improves number of needed iterations. Different from matlab implementation
-    WWx = xp.minimum(WW[:,:-1], WW[:,1:])
-    WWy = xp.minimum(WW[:-1,:], WW[1:,:])
+    WWx = xp.minimum(WW[:, :-1], WW[:, 1:])
+    WWy = xp.minimum(WW[:-1, :], WW[1:, :])
     WWdx = WWx * dx
     WWdy = WWy * dy
 
@@ -113,6 +110,7 @@ def phase_unwrap_ref(psi, weight, kmax=100):
 
     return phi
 
+
 def solvePoisson(rho):
     """Solve the poisson equation "P phi = rho" using DCT
     """
@@ -125,13 +123,14 @@ def solvePoisson(rho):
 
     dctRho = fft.dctn(rho)
     N, M = rho.shape
-    I, J = xp.ogrid[0:N,0:M]
+    I, J = xp.ogrid[0:N, 0:M]
     with np.errstate(divide='ignore'):
         dctPhi = dctRho / 2 / (xp.cos(np.pi*I/M) + xp.cos(np.pi*J/N) - 2)
-    dctPhi[0, 0] = 0 # handling the inf/nan value
+    dctPhi[0, 0] = 0  # handling the inf/nan value
     # now invert to get the result
     phi = fft.idctn(dctPhi)
     return phi
+
 
 def solvePoisson_precomped(rho, scale):
     """Solve the poisson equation "P phi = rho" using DCT
@@ -150,6 +149,7 @@ def solvePoisson_precomped(rho, scale):
     phi = fft.idctn(dctPhi, overwrite_x=True)
     return phi
 
+
 def precomp_Poissonscaling(rho):
     if isinstance(rho, cp.ndarray):
         xp = cp
@@ -157,7 +157,7 @@ def precomp_Poissonscaling(rho):
         xp = np
 
     N, M = rho.shape
-    I, J = xp.ogrid[0:N,0:M]
+    I, J = xp.ogrid[0:N, 0:M]
     scale = 2 * (xp.cos(np.pi*I/M) + xp.cos(np.pi*J/N) - 2)
     # Handle the inf/nan value without a divide by zero warning:
     # By Ghiglia et al.:
@@ -165,6 +165,7 @@ def precomp_Poissonscaling(rho):
     #  the bias unchanged"
     scale[0, 0] = 1. 
     return scale
+
 
 def applyQ(p, WWx, WWy):
     """Apply the weighted transformation (A^T)(W^T)(W)(A) to 2D matrix p"""
@@ -200,6 +201,7 @@ def _wrapToPi(x):
     r = xp.mod(x+np.pi, 2*np.pi) - np.pi
     return r
 
+
 def phase_unwrap(psi, weight=None, kmax=100):
     """
     Unwrap the phase of an image psi given weights weight
@@ -225,7 +227,7 @@ def phase_unwrap(psi, weight=None, kmax=100):
     
     # multiply the vector b by weight square (W^T * W)
     if weight is None:
-        # Unweighed case. will terminate in 1 round
+        # Unweighted case. will terminate in 1 round
         WW = xp.ones_like(psi)
     else:
         weight = xp.asarray(weight)
@@ -233,8 +235,8 @@ def phase_unwrap(psi, weight=None, kmax=100):
     
     # See 3. Implementation issues: eq. 34 from Ghiglia et al.
     # Improves number of needed iterations. Different from matlab implementation
-    WWx = xp.minimum(WW[:,:-1], WW[:,1:])
-    WWy = xp.minimum(WW[:-1,:], WW[1:,:])
+    WWx = xp.minimum(WW[:, :-1], WW[:, 1:])
+    WWy = xp.minimum(WW[:-1, :], WW[1:, :])
     WWdx = WWx * dx
     WWdy = WWy * dy
 

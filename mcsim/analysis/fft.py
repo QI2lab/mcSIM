@@ -26,6 +26,16 @@ array = Union[np.ndarray, cp.ndarray]
 # 2D Fourier transform recipes
 # ######################
 def ft2(m: array, axes: tuple[int] = (-1, -2), plan=None) -> array:
+    """
+    2D FFT idiom assuming the center of our coordinate system is near the center of our array. Specifically,
+    the spatial coordinates are range(n) - (n // 2) along a dimension of size n
+
+    :param m: array to perform Fourier transform on
+    :param axes: axes to perform Fourier transform on
+    :param plan: CuPy FFT plan. This has no effect if running on the CPU. If a plan is passed through, then
+      no plan will be cached
+    :return:
+    """
     if isinstance(m, cp.ndarray) and _gpu_available:
         return fft_gpu.fftshift(fft_gpu.fft2(fft_gpu.ifftshift(m, axes=axes), axes=axes, plan=plan), axes=axes)
     else:
@@ -39,9 +49,20 @@ def ift2(m: array, axes: tuple[int] = (-1, -2), plan=None) -> array:
         return fft_cpu.fftshift(fft_cpu.ifft2(fft_cpu.ifftshift(m, axes=axes), axes=axes), axes=axes)
 
 
-# adjoint operations are FT or IFT with exponential conjugated, so would be swapping FT and IFT except for normalization
-# changing normalization to "forward" instead of the default "backwards" is all else we need
 def ft2_adj(m: array, axes: tuple[int] = (-1, -2), plan=None) -> array:
+    """
+    Adjoint to 2D Fourier transform. This operation is the adjoint in the sense that for any two
+    images w and v the following inner products are equal:
+    <w, ft(v)> = <ft_adj(w), v>
+
+    adjoint operations are FT or IFT with exponential conjugated, so would be swapping FT and IFT except for normalization
+    changing normalization to "forward" instead of the default "backwards" is all else we need
+
+    :param m:
+    :param axes:
+    :param plan:
+    :return:
+    """
     if isinstance(m, cp.ndarray) and _gpu_available:
         return fft_gpu.fftshift(fft_gpu.ifft2(fft_gpu.ifftshift(m, axes=axes), norm="forward", axes=axes, plan=plan), axes=axes)
     else:
