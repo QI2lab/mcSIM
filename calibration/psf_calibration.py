@@ -194,11 +194,11 @@ figh_focus.savefig(save_dir / "focus_gradient_and_field_curvature.png")
 # average PSF
 # ###############################
 psf_roi_size = (11, 21, 21)
-psf, psf_coords, otf, otf_coords = fit_psf.average_exp_psfs(img,
-                                                            coords_3d,
-                                                            centers,
-                                                            psf_roi_size,
-                                                            backgrounds=backgrounds)
+psf = fit_psf.average_exp_psfs(img,
+                               coords_3d,
+                               centers,
+                               psf_roi_size,
+                               backgrounds=backgrounds)
 
 tifffile.imwrite(save_dir / "psf.tif",
                  tifffile.transpose_axes(psf.astype(np.float32), "ZYX", asaxes="TZCYXS"),
