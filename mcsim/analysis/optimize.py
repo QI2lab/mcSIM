@@ -2,6 +2,7 @@
 Tools for solving inverse problems using accelerated proximal gradient methods
 """
 
+import warnings
 import numpy as np
 import time
 import random
@@ -25,7 +26,7 @@ except ImportError:
 array = Union[np.ndarray, cp.ndarray]
 
 
-def _to_cpu(m):
+def to_cpu(m):
     """
     Ensure array is CPU/NumPy
     :param m:
@@ -204,7 +205,7 @@ class Optimizer():
                    "niterations": max_iterations,
                    "use_fista": use_fista,
                    "use_gpu": use_gpu,
-                   "x_init": _to_cpu(xp.array(x_start, copy=True)),
+                   "x_init": to_cpu(xp.array(x_start, copy=True)),
                    "prox_parameters": self.prox_parameters,
                    "stop_condition": "ok"
                    }
@@ -252,9 +253,9 @@ class Optimizer():
 
                 if compute_cost:
                     if compute_all_costs:
-                        costs[ii] = _to_cpu(self.cost(x))
+                        costs[ii] = to_cpu(self.cost(x))
                     else:
-                        costs[ii, inds] = _to_cpu(self.cost(x, inds=inds))
+                        costs[ii, inds] = to_cpu(self.cost(x, inds=inds))
 
                 timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
 
@@ -282,11 +283,11 @@ class Optimizer():
 
                 if compute_all_costs:
                     c_all = self.cost(x)
-                    costs[ii] = _to_cpu(c_all)
+                    costs[ii] = to_cpu(c_all)
                     cx = xp.mean(c_all[inds], axis=0)
                 else:
                     c_now = self.cost(x, inds=inds)
-                    costs[ii, inds] = _to_cpu(c_now)
+                    costs[ii, inds] = to_cpu(c_now)
                     cx = xp.mean(c_now, axis=0)
 
                 timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
@@ -347,15 +348,19 @@ class Optimizer():
 
             # print information
             if verbose:
-                status = f"iteration {ii + 1:d}/{max_iterations:d}," \
-                         f" cost={np.nanmean(costs[ii]):.3g}," \
-                         f" step={steps[ii]:.3g}," \
-                         f" line search iters={line_search_iters[ii]:d}," \
-                         f" grad={timing['grad'][ii]:.3f}s," \
-                         f" prox={timing['prox'][ii]:.3f}s," \
-                         f" cost={timing['cost'][ii]:.3f}s," \
-                         f" iter={timing['iteration'][ii]:.3f}s," \
-                         f" total={time.perf_counter() - tstart:.3f}s"
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+
+                    status = f"iteration {ii + 1:d}/{max_iterations:d}," \
+                             f" cost={np.nanmean(costs[ii]):.3g}," \
+                             f" step={steps[ii]:.3g}," \
+                             f" line search iters={line_search_iters[ii]:d}," \
+                             f" grad={timing['grad'][ii]:.3f}s," \
+                             f" prox={timing['prox'][ii]:.3f}s," \
+                             f" cost={timing['cost'][ii]:.3f}s," \
+                             f" iter={timing['iteration'][ii]:.3f}s," \
+                             f" total={time.perf_counter() - tstart:.3f}s"
+
                 if use_gpu:
                     status += f", GPU={mempool.used_bytes()/1e9:.3}GB"
 
@@ -369,9 +374,9 @@ class Optimizer():
         # compute final cost
         if compute_cost:
             if compute_all_costs:
-                costs[ii + 1] = _to_cpu(self.cost(x))
+                costs[ii + 1] = to_cpu(self.cost(x))
             else:
-                costs[ii + 1, inds] = _to_cpu(self.cost(x, inds=inds))
+                costs[ii + 1, inds] = to_cpu(self.cost(x, inds=inds))
 
         # store results
         results.update({"timing": timing,

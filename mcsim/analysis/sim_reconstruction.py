@@ -46,7 +46,7 @@ from matplotlib.colors import PowerNorm, LogNorm
 from matplotlib.patches import Circle, Rectangle
 # code from our projects
 import mcsim.analysis.analysis_tools as tools
-from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, _to_cpu
+from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, to_cpu
 from mcsim.analysis.fft import ft2, ift2
 from localize_psf.rois import get_centered_rois, cut_roi
 from localize_psf.fit_psf import circ_aperture_otf, blur_img_psf, oversample_voxel
@@ -1332,11 +1332,11 @@ class SimImageSet:
 
                 # if cupy array, move off GPU
                 if isinstance(attr, cp.ndarray):
-                    setattr(self, attr_name, _to_cpu(attr))
+                    setattr(self, attr_name, to_cpu(attr))
 
                 # if dask array, move off GPU delayed
                 if isinstance(attr, da.core.Array):
-                    on_cpu = da.map_blocks(_to_cpu, attr, dtype=attr.dtype)
+                    on_cpu = da.map_blocks(to_cpu, attr, dtype=attr.dtype)
                     setattr(self, attr_name, on_cpu)
 
         self.print_log(f"reconstruction took {time.perf_counter() - tstart_recon:.2f}s")
@@ -2370,13 +2370,28 @@ def show_sim_napari(fname_zarr: str,
 
     dxy = imgz.attrs["dx"]
     dxy_sim = dxy / imgz.attrs["upsample_factor"]
+
+    # translate to put FFT zero coordinates at origin
     translate_wf = (-(wf.shape[-2] // 2) * dxy, -(wf.shape[-1] // 2) * dxy)
     translate_sim = (-((2 * wf.shape[-2]) // 2) * dxy_sim, -((2 * wf.shape[-1]) // 2) * dxy_sim)
+    translate_pattern_2x = [a - 0.25 * dxy for a in translate_wf]
 
     if viewer is None:
         viewer = napari.Viewer()
 
-    # translate to put FFT zero coordinates at origin
+    if hasattr(imgz, "patterns"):
+        viewer.add_image(imgz.patterns,
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="patterns")
+
+    if hasattr(imgz, "patterns_2x"):
+        viewer.add_image(imgz.patterns_2x,
+                         scale=(dxy_sim, dxy_sim),
+                         # translate=translate_sim,
+                         translate=translate_pattern_2x,
+                         name="patterns upsampled")
+
     if hasattr(imgz, "sim_os"):
         sim_os = np.expand_dims(imgz.sim_os, axis=-3)
 
@@ -2391,6 +2406,18 @@ def show_sim_napari(fname_zarr: str,
                          translate=translate_sim,
                          name="wf deconvolved",
                          visible=False)
+
+    if hasattr(imgz, "sim_fista_forward_model"):
+        viewer.add_image(imgz.sim_fista_forward_model,
+                         scale=(dxy, dxy),
+                         translate=translate_wf,
+                         name="FISTA forward model")
+
+    if hasattr(imgz, "sim_sr_fista"):
+        viewer.add_image(np.expand_dims(imgz.sim_sr_fista, axis=-3),
+                         scale=(dxy_sim, dxy_sim),
+                         translate=translate_pattern_2x,
+                         name="SIM-SR FISTA")
 
     if hasattr(imgz, "sim_sr"):
         viewer.add_image(np.expand_dims(imgz.sim_sr, axis=-3),
@@ -2419,19 +2446,6 @@ def show_sim_napari(fname_zarr: str,
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="raw images")
-
-    if hasattr(imgz, "patterns"):
-        viewer.add_image(imgz.patterns,
-                         scale=(dxy, dxy),
-                         translate=translate_wf,
-                         name="patterns")
-
-    if hasattr(imgz, "patterns_2x"):
-        viewer.add_image(imgz.patterns_2x,
-                         scale=(dxy_sim, dxy_sim),
-                         # translate=translate_sim,
-                         translate=[a - 0.25 * dxy for a in translate_wf],
-                         name="patterns upsampled")
 
     viewer.show(block=block)
 
@@ -2582,10 +2596,10 @@ def fit_modulation_frq(mft1: np.ndarray,
         raise ValueError("must have ft1.shape = ft2.shape")
 
     # must be on CPU for this function to work
-    mft1 = _to_cpu(mft1)
-    mft2 = _to_cpu(mft2)
+    mft1 = to_cpu(mft1)
+    mft2 = to_cpu(mft2)
     if otf is not None:
-        otf = _to_cpu(otf)
+        otf = to_cpu(otf)
 
     # mask
     if mask is None:

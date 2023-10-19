@@ -9,6 +9,7 @@ import warnings
 from copy import deepcopy
 from pathlib import Path
 from typing import Union, Optional
+from functools import partial
 import numpy as np
 from numpy import fft
 import scipy.sparse as sp
@@ -31,7 +32,7 @@ from localize_psf import fit, rois, camera, affine
 from mcsim.analysis.analysis_tools import translate_ft
 from mcsim.analysis import field_prop
 from mcsim.analysis.phase_unwrap import phase_unwrap as weighted_phase_unwrap
-from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, _to_cpu
+from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, to_cpu
 from mcsim.analysis.fft import ft3, ift3, ft2, ift2
 
 _gpu_available = True
@@ -905,7 +906,7 @@ class tomography:
                       n_guess: Optional[array] = None,
                       cam_roi: Optional[list] = None,
                       data_roi: Optional[list] = None,
-                      cache_fft_plans: bool = True,
+                      use_weighted_phase_unwrap: bool = False,
                       **kwargs) -> (array, tuple, dict):
 
         """
@@ -924,6 +925,10 @@ class tomography:
         :param realspace_mask: indicate which parts of image to exclude/keep
         :param step: ignored if mode is "born" or "rytov"
         :param use_gpu:
+        :param f_radius_factor:
+        :param cam_roi:
+        :param data_roi:
+        :param use_weighted_phase_unwrap:
         :param **kwargs: passed through to both the constructor and the run() method of the optimizer.
           These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
           Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details
@@ -1123,12 +1128,11 @@ class tomography:
                   n_guess=None,
                   block_id=None):
 
-            # todo: want to use cache for 2D FFT's for BPM/SSNP but not for 3D models
-            if use_gpu and not cache_fft_plans:
-                # ensure not holding large FFT planes in the cache
+            if use_gpu:
                 cache = cp.fft.config.get_plan_cache()
-                cache.set_size(0)
-                # cache.set_memsize(0)
+                # if not cache_fft_plans:
+                #     # ensure not holding large FFT planes in the cache
+                #     cache.set_size(0)
 
             nextra_dims = efields_ft.ndim - 3
             dims = tuple(range(nextra_dims))
@@ -1148,7 +1152,7 @@ class tomography:
             if optimizer == "born":
                 scatt_fn = get_scattered_field
             else:
-                scatt_fn = get_rytov_phase
+                scatt_fn = partial(get_rytov_phase, use_weighted_unwrap=use_weighted_phase_unwrap)
 
             if n_guess is None or optimizer == "born" or optimizer == "rytov":
                 tstart_scatt = time.perf_counter()
@@ -1162,6 +1166,11 @@ class tomography:
                     # todo: not this is not implemented for case where multiplexing is different for different images
                     e_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
                     ebg_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
+
+                    plan_scatt = None
+                    if use_gpu:
+                        plan_scatt = fft_gpu.get_fft_plan(e_unmulti[0])
+
                     for ii in range(nimgs):
                         for jj in range(nmax_multiplex):
                             if verbose:
@@ -1173,13 +1182,16 @@ class tomography:
                                            (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
                                     (f_radius_factor * na_detection / wavelength)
 
-                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask))
-                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask))
+                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask), plan=plan_scatt)
+                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask), plan=plan_scatt)
 
                     if verbose:
                         print("")
 
-                    efield_scattered_ft = ft2(scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization))
+                    efield_scattered = scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization)
+                    efield_scattered_ft = ft2(efield_scattered, plan=plan_scatt)
+                    del efield_scattered
+                    del plan_scatt
 
                     if optimizer == "born":
                         raise NotImplementedError()
@@ -1191,13 +1203,24 @@ class tomography:
 
             # initial guess
             if n_guess is not None:
-                v_fts_start = ft3(get_v(xp.asarray(n_guess), no, wavelength))
+                if use_gpu:
+                    plan = fft_gpu.get_fft_plan(xp.asarray(n_guess))
+                else:
+                    plan = None
+
+                v_fts_start = ft3(get_v(xp.asarray(n_guess), no, wavelength), plan=plan)
+                del plan
             else:
                 v_fts_start = inverse_model_linear(efield_scattered_ft,
                                                    linear_model_invert,
                                                    n_size,
                                                    regularization=reconstruction_regularizer,
                                                    no_data_value=0.)
+
+            print(f"starting inference")
+            if use_gpu and verbose:
+                print(f"gpu memory usage = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
+                print(cache)
 
             if optimizer == "born" or optimizer == "rytov":
                 opt = LinearScatt(efield_scattered_ft,
@@ -1272,7 +1295,7 @@ class tomography:
             if verbose:
                 print("")
 
-            return _to_cpu(n)
+            return to_cpu(n)
 
         # #######################
         # get refractive index
@@ -1332,6 +1355,7 @@ class tomography:
                   "affine_xform_recon_2_raw_process_roi": xform_recon2raw_roi}
 
         if data_roi is not None:
+            xforms["processing roi"] = np.asarray(data_roi)
             # transform from reconstruction processing roi to camera roi
             odt_recon_roi = deepcopy(data_roi)
             xform_process_roi_to_cam_roi = affine.params2xform([1, 0, odt_recon_roi[2],
@@ -1340,6 +1364,8 @@ class tomography:
 
             xforms.update({"affine_xform_recon_2_raw_camera_roi": xform_odt_recon_to_cam_roi,})
             if cam_roi is not None:
+                xforms["camera roi"] = np.asarray(cam_roi)
+
                 # transform from camera roi to uncropped chip
                 xform_cam_roi_to_full = affine.params2xform([1, 0, cam_roi[2],
                                                              1, 0, cam_roi[0]])
@@ -1645,7 +1671,7 @@ class tomography:
         # ######################
         # plot
         # ######################
-        img_now = _to_cpu(self.imgs_raw[index].compute())
+        img_now = to_cpu(self.imgs_raw[index].compute())
         img_ft = ft2(img_now)
 
         figh = plt.figure(figsize=figsize, **kwargs)
@@ -1679,7 +1705,7 @@ class tomography:
         # hologram
         # ######################
         try:
-            holo_ft = _to_cpu(self.holograms_ft[index].compute())
+            holo_ft = to_cpu(self.holograms_ft[index].compute())
             holo = ift2(holo_ft)
 
             ax = figh.add_subplot(grid[0, 1])
@@ -1723,7 +1749,7 @@ class tomography:
         try:
             index_bg = tuple([v if self.holograms_ft.shape[ii] != 0 else 0 for ii, v in enumerate(index)])
 
-            holo_ft_bg = _to_cpu(self.holograms_ft_bg[index_bg].compute())
+            holo_ft_bg = to_cpu(self.holograms_ft_bg[index_bg].compute())
             holo_bg = ift2(holo_ft_bg)
 
             ax = figh.add_subplot(grid[2, 1])
@@ -2202,11 +2228,16 @@ def get_rytov_phase(eimgs: array,
         ind = np.unravel_index(ii, nextra_shape)
 
         if use_weighted_unwrap:
-            psi_rytov[ind] += 1j * weighted_phase_unwrap(phase_diff[ind],
-                                                         weight=xp.abs(eimgs_bg[ind]))
+            weights = xp.abs(eimgs_bg[ind])
         else:
-            # no cucim/cupy GPU implementation of unwrapping, so must do it on CPU
-            psi_rytov[ind] += 1j * xp.asarray(unwrap_phase(_to_cpu(phase_diff[ind])))
+            weights = None
+
+        psi_rytov[ind] += 1j * weighted_phase_unwrap(phase_diff[ind],
+                                                     weight=weights)
+        # else:
+        #     # todo: why not use the other implementation without weighting here as well?
+        #     # no cucim/cupy GPU implementation of unwrapping, so must do it on CPU
+        #     psi_rytov[ind] += 1j * xp.asarray(unwrap_phase(to_cpu(phase_diff[ind])))
 
     # regularization
     psi_rytov[abs(eimgs_bg) < regularization] = 0
@@ -3287,7 +3318,7 @@ def display_tomography_recon(recon_fname: str,
                              name="ange(E fwd)",
                              contrast_limits=[-np.pi, np.pi],
                              colormap=phase_cmap,
-                             translate=[ny_raw, nx_raw])
+                             translate=[ny, nx_raw])
 
         viewer.add_image(e_angle,
                          scale=scale,
