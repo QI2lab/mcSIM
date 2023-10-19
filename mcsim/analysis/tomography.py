@@ -5,6 +5,7 @@ Tools for reconstructing optical diffraction tomography (ODT) data using either 
 """
 import time
 import datetime
+import warnings
 from copy import deepcopy
 from pathlib import Path
 from typing import Union, Optional
@@ -29,14 +30,15 @@ import zarr
 from localize_psf import fit, rois, camera, affine
 from mcsim.analysis.analysis_tools import translate_ft
 from mcsim.analysis import field_prop
-from mcsim.analysis.field_prop import _ft2, _ift2
 from mcsim.analysis.phase_unwrap import phase_unwrap as weighted_phase_unwrap
 from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, _to_cpu
+from mcsim.analysis.fft import ft3, ift3, ft2, ift2
 
 _gpu_available = True
 try:
     import cupy as cp
     import cupyx.scipy.sparse as sp_gpu
+    import cupyx.scipy.fft as fft_gpu
     # from cucim.skimage.restoration import unwrap_phase as unwrap_phase_gpu # this not implemented ...
 except ImportError:
     cp = np
@@ -51,7 +53,6 @@ except ImportError:
 
 array = Union[np.ndarray, cp.ndarray]
 csr_matrix = Union[sp.csr_matrix, sp_gpu.csr_matrix]
-coo_matrix = Union[sp.coo_matrix, sp_gpu.coo_matrix]
 
 
 class tomography:
@@ -213,7 +214,7 @@ class tomography:
         # cut rois
         def cut_rois(img: array,
                      block_id=None):
-            img_ft = _ft2(img * apodization)
+            img_ft = ft2(img * apodization)
 
             npatt, ny, nx = img_ft.shape[-3:]
             nroi = rois_all.shape[1]
@@ -357,11 +358,13 @@ class tomography:
                  figsize=(20, 10),
                  block_id=None):
 
-            img_ft = _ft2(img).squeeze()
+            img_ft = ft2(img).squeeze()
             if img_ft.ndim != 2:
                 raise ValueError()
 
-            figh = plt.figure(figsize=figsize)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                figh = plt.figure(figsize=figsize)
 
             ax = figh.add_subplot(1, 2, 1)
             extent_f = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
@@ -475,7 +478,7 @@ class tomography:
             slices = tuple([slice(0, 1)] * self.nextra_dims + [slice(None)] * 3)
             imgs_frq_cal = np.squeeze(self.imgs_raw_bg[slices])
 
-            imgs_frq_cal_ft = _ft2(imgs_frq_cal)
+            imgs_frq_cal_ft = ft2(imgs_frq_cal)
             imgs_frq_cal_ft_abs_mean = np.mean(np.abs(imgs_frq_cal_ft), axis=0)
 
             results, circ_dbl_fn, figh_ref_frq = fit_ref_frq(imgs_frq_cal_ft_abs_mean,
@@ -1141,7 +1144,7 @@ class tomography:
                 if rmask is not None:
                     rmask = xp.asarray(rmask)
 
-            # todo: get initial fields
+            # todo: export initial fields if desired
             if optimizer == "born":
                 scatt_fn = get_scattered_field
             else:
@@ -1150,9 +1153,9 @@ class tomography:
             if n_guess is None or optimizer == "born" or optimizer == "rytov":
                 tstart_scatt = time.perf_counter()
                 if nmax_multiplex == 1:
-                    efield_scattered_ft = _ft2(scatt_fn(_ift2(efields_ft),
-                                                        _ift2(efields_bg_ft),
-                                                        scattered_field_regularization))
+                    efield_scattered_ft = ft2(scatt_fn(ift2(efields_ft),
+                                                       ift2(efields_bg_ft),
+                                                       scattered_field_regularization))
                 else:
                     tstart_demultiplex = time.perf_counter()
 
@@ -1170,13 +1173,13 @@ class tomography:
                                            (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
                                     (f_radius_factor * na_detection / wavelength)
 
-                            e_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_ft[ii], mask))
-                            ebg_unmulti[ii * nmax_multiplex + jj] = _ift2(cut_mask(efields_bg_ft[ii], mask))
+                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask))
+                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask))
 
                     if verbose:
                         print("")
 
-                    efield_scattered_ft = _ft2(scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization))
+                    efield_scattered_ft = ft2(scatt_fn(e_unmulti, ebg_unmulti, scattered_field_regularization))
 
                     if optimizer == "born":
                         raise NotImplementedError()
@@ -1188,7 +1191,7 @@ class tomography:
 
             # initial guess
             if n_guess is not None:
-                v_fts_start = _ft3(get_v(xp.asarray(n_guess), no, wavelength))
+                v_fts_start = ft3(get_v(xp.asarray(n_guess), no, wavelength))
             else:
                 v_fts_start = inverse_model_linear(efield_scattered_ft,
                                                    linear_model_invert,
@@ -1213,7 +1216,7 @@ class tomography:
                                   **kwargs
                                   )
 
-                n = get_n(_ift3(results["x"]), no, wavelength).reshape((1,) * nextra_dims + v_fts_start.shape[-3:])
+                n = get_n(ift3(results["x"]), no, wavelength).reshape((1,) * nextra_dims + v_fts_start.shape[-3:])
 
             else:
                 # delete variables we no longer need
@@ -1222,14 +1225,20 @@ class tomography:
                 except:
                     pass
 
-                # bin if desired
-                n_start = get_n(_ift3(v_fts_start), no, wavelength)
-                del v_fts_start
+                # bin if desired, but avoid storing large FFT plan in the cache
+                if use_gpu:
+                    plan = fft_gpu.get_fft_plan(v_fts_start)
+                else:
+                    plan = None
 
-                efields = camera.bin(_ift2(efields_ft), [nbin, nbin], mode="mean")
+                n_start = get_n(ift3(v_fts_start, plan=plan), no, wavelength)
+                del v_fts_start
+                del plan
+
+                efields = camera.bin(ift2(efields_ft), [nbin, nbin], mode="mean")
                 del efields_ft
 
-                efields_bg = camera.bin(_ift2(efields_bg_ft), [nbin, nbin], mode="mean")
+                efields_bg = camera.bin(ift2(efields_bg_ft), [nbin, nbin], mode="mean")
                 del efields_bg_ft
 
                 if beam_frqs.shape[0] == 1:
@@ -1337,7 +1346,7 @@ class tomography:
                 xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
                 xforms.update({"affine_xform_recon_2_raw_camera": xform_odt_recon_to_full})
 
-        return n, drs_n, xforms
+        return n, drs_n, xforms, atf
 
     def plot_translations(self,
                           index: tuple[int],
@@ -1637,7 +1646,7 @@ class tomography:
         # plot
         # ######################
         img_now = _to_cpu(self.imgs_raw[index].compute())
-        img_ft = _ft2(img_now)
+        img_ft = ft2(img_now)
 
         figh = plt.figure(figsize=figsize, **kwargs)
         figh.suptitle(f"{index}, {self.axes_names}")
@@ -1671,7 +1680,7 @@ class tomography:
         # ######################
         try:
             holo_ft = _to_cpu(self.holograms_ft[index].compute())
-            holo = _ift2(holo_ft)
+            holo = ift2(holo_ft)
 
             ax = figh.add_subplot(grid[0, 1])
             ax.set_title("$E(f)$")
@@ -1715,7 +1724,7 @@ class tomography:
             index_bg = tuple([v if self.holograms_ft.shape[ii] != 0 else 0 for ii, v in enumerate(index)])
 
             holo_ft_bg = _to_cpu(self.holograms_ft_bg[index_bg].compute())
-            holo_bg = _ift2(holo_ft_bg)
+            holo_bg = ift2(holo_ft_bg)
 
             ax = figh.add_subplot(grid[2, 1])
             ax.set_title("$E_{bg}(f)$")
@@ -1785,25 +1794,7 @@ class tomography:
 
 
 # FFT idioms
-def _ft_abs(m): return _ft2(abs(_ift2(m)))
-
-
-def _ft3(m):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
-    return xp.fft.fftshift(xp.fft.fftn(xp.fft.ifftshift(m, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
-
-
-def _ift3(m):
-    if isinstance(m, cp.ndarray) and _gpu_available:
-        xp = cp
-    else:
-        xp = np
-
-    return xp.fft.fftshift(xp.fft.ifftn(xp.fft.ifftshift(m, axes=(-1, -2, -3)), axes=(-1, -2, -3)), axes=(-1, -2, -3))
+def _ft_abs(m): return ft2(abs(ift2(m)))
 
 
 def cut_mask(img: array,
@@ -2272,7 +2263,7 @@ def unmix_hologram(img: array,
     apodization = xp.asarray(apodization)
 
     # FT of image
-    img_ft = _ft2(img * apodization)
+    img_ft = ft2(img * apodization)
 
     # get frequency data
     ny, nx = img_ft.shape[-2:]
@@ -3061,7 +3052,7 @@ def display_tomography_recon(recon_fname: str,
     slices_raw = slices + (slice(None), slice(None), slice(None))
     if show_raw:
         imgs = da.expand_dims(da.from_zarr(raw_data[raw_data_component])[slices_raw], axis=-3)
-        imgs_raw_ft = da.map_blocks(_ft2, imgs, dtype=complex)
+        imgs_raw_ft = da.map_blocks(ft2, imgs, dtype=complex)
 
         if compute:
             print("loading raw images")
@@ -3081,11 +3072,11 @@ def display_tomography_recon(recon_fname: str,
     if show_efields:
         # measured field
         e_load_ft = da.expand_dims(da.from_zarr(img_z.efields_ft), axis=-3)
-        e = da.map_blocks(_ift2, e_load_ft, dtype=complex)
+        e = da.map_blocks(ift2, e_load_ft, dtype=complex)
 
         # background field
         ebg_load_ft = da.expand_dims(da.from_zarr(img_z.efield_bg_ft), axis=-3)
-        ebg = da.map_blocks(_ift2, ebg_load_ft, dtype=complex)
+        ebg = da.map_blocks(ift2, ebg_load_ft, dtype=complex)
 
         # compute electric field power
         efield_power = da.mean(da.abs(e), axis=(-1, -2), keepdims=True)
@@ -3109,13 +3100,44 @@ def display_tomography_recon(recon_fname: str,
     e_ebg_phase_diff = pd - 2 * np.pi * (pd > np.pi)
 
     # ######################
-    # broadcasting
+    # simulated forward fields
     # ######################
+    show_efields_fwd = show_efields and hasattr(img_z, "efwd")
 
+    if show_efields_fwd:
+        e_fwd = da.expand_dims(da.from_zarr(img_z.efwd), axis=-3)
+
+        if compute:
+            print("loading fwd electric fields")
+            with ProgressBar():
+                c = dask.compute([e_fwd])
+                e_fwd = c[0]
+
+        e_fwd_abs = da.abs(e_fwd)
+        e_fwd_angle = da.angle(e_fwd)
+
+        efwd_ebg_abs_diff = e_fwd_abs - ebg_abs
+
+        pd = da.mod(da.angle(e_fwd) - da.angle(ebg), 2 * np.pi)
+        efwd_ebg_phase_diff = pd - 2 * np.pi * (pd > np.pi)
+
+    else:
+        e_fwd_abs = np.ones(1)
+        e_fwd_angle = np.ones(1)
+
+    # ######################
+    # broadcasting
     # NOTE: cannot operate on these arrays after broadcasting otherwise memory use will explode
+    # broadcasting does not cause memory size expansion, but in-place operations later will
+    # ######################
     if compute:
-        # broadcasting does not cause memory size expansion
-        n_real, n_imag, imgs, imgs_raw_ft_abs, e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff = \
+        n_real, n_imag,\
+            imgs, imgs_raw_ft_abs,\
+            e_abs, e_angle,\
+            ebg_abs, ebg_angle,\
+            e_ebg_abs_diff, e_ebg_phase_diff,\
+            e_fwd_bas, e_fwd_angle,\
+            efwd_ebg_abs_diff, efwd_ebg_phase_diff= \
             np.broadcast_arrays(n_real,
                                 n_imag,
                                 imgs,
@@ -3125,7 +3147,11 @@ def display_tomography_recon(recon_fname: str,
                                 ebg_abs,
                                 ebg_angle,
                                 e_ebg_abs_diff,
-                                e_ebg_phase_diff)
+                                e_ebg_phase_diff,
+                                e_fwd_abs,
+                                e_fwd_angle,
+                                efwd_ebg_abs_diff,
+                                efwd_ebg_phase_diff)
 
     # ######################
     # create viewer
@@ -3224,67 +3250,93 @@ def display_tomography_recon(recon_fname: str,
     # electric fields
     # ######################
     if show_efields:
+        # field amplitudes
+        viewer.add_image(ebg_abs,
+                         scale=scale,
+                         name="|e bg|",
+                         contrast_limits=[0, 500],
+                         colormap=real_cmap,
+                         translate=[0, nx_raw])
+
+        if show_efields_fwd:
+            viewer.add_image(e_fwd_bas,
+                            scale=scale,
+                            name="|E fwd|",
+                            contrast_limits=[0, 500],
+                            colormap=real_cmap,
+                            translate=[0, nx_raw])
+
+        viewer.add_image(e_abs,
+                         scale=scale,
+                         name="|e|",
+                         contrast_limits=[0, 500],
+                         colormap=real_cmap,
+                         translate=[0, nx_raw])
+
+        # field phases
+        viewer.add_image(ebg_angle,
+                         scale=scale,
+                         name="angle(e bg)",
+                         contrast_limits=[-np.pi, np.pi],
+                         colormap=phase_cmap,
+                         translate=[ny, nx_raw])
+
+        if show_efields_fwd:
+            viewer.add_image(e_fwd_angle,
+                             scale=scale,
+                             name="ange(E fwd)",
+                             contrast_limits=[-np.pi, np.pi],
+                             colormap=phase_cmap,
+                             translate=[ny_raw, nx_raw])
+
+        viewer.add_image(e_angle,
+                         scale=scale,
+                         name="angle(e)",
+                         contrast_limits=[-np.pi, np.pi],
+                         colormap=phase_cmap,
+                         translate=[ny, nx_raw])
+
+        # difference of absolute values
+        if show_efields_fwd:
+            viewer.add_image(efwd_ebg_abs_diff,
+                             scale=scale,
+                             name="|e fwd| - |e bg|",
+                             contrast_limits=[-500, 500],
+                             colormap=phase_cmap,
+                             translate=[0, nx_raw + nx])
+
+        viewer.add_image(e_ebg_abs_diff,
+                         scale=scale,
+                         name="|e| - |e bg|",
+                         contrast_limits=[-500, 500],
+                         colormap=phase_cmap,
+                         translate=[0, nx_raw + nx])
+
+        # difference of phases
+        if show_efields_fwd:
+            viewer.add_image(efwd_ebg_phase_diff,
+                             scale=scale,
+                             name="angle(e fwd) - angle(e bg)",
+                             contrast_limits=[-phase_lim, phase_lim],
+                             colormap=phase_cmap,
+                             translate=[ny, nx_raw + nx]
+                             )
+
+        viewer.add_image(e_ebg_phase_diff,
+                         scale=scale,
+                         name="angle(e) - angle(e bg)",
+                         contrast_limits=[-phase_lim, phase_lim],
+                         colormap=phase_cmap,
+                         translate=[ny, nx_raw + nx]
+                         )
+
+        # label
         translations = np.array([[0, nx_raw],
-                                 [ny, nx_raw],
-                                 [0, nx_raw],
                                  [ny, nx_raw],
                                  [0, nx_raw + nx],
                                  [ny, nx_raw + nx]
                                  ])
-
-        ttls = ["|e|",
-                "angle(e)",
-                "|e bg|",
-                "angle(e bg)",
-                "|e| - |e bg|",
-                "angle(e) - angle(e bg)"]
-
-        # background field
-        viewer.add_image(ebg_abs,
-                         scale=scale,
-                         name=ttls[2],
-                         contrast_limits=[0, 500],
-                         colormap=real_cmap,
-                         translate=translations[2])
-
-        viewer.add_image(ebg_angle,
-                         scale=scale,
-                         name=ttls[3],
-                         contrast_limits=[-np.pi, np.pi],
-                         colormap=phase_cmap,
-                         translate=translations[3])
-
-        # measured field
-        viewer.add_image(e_abs,
-                         scale=scale,
-                         name=ttls[0],
-                         contrast_limits=[0, 500],
-                         colormap=real_cmap,
-                         translate=translations[0])
-
-        viewer.add_image(e_angle,
-                         scale=scale,
-                         name=ttls[1],
-                         contrast_limits=[-np.pi, np.pi],
-                         colormap=phase_cmap,
-                         translate=translations[1])
-
-        # difference
-        viewer.add_image(e_ebg_abs_diff,
-                         scale=scale,
-                         name=ttls[4],
-                         contrast_limits=[-500, 500],
-                         colormap=phase_cmap,
-                         translate=translations[4])
-
-        # phase difference between measured and bg
-        viewer.add_image(e_ebg_phase_diff,
-                         scale=scale,
-                         name=ttls[5],
-                         contrast_limits=[-phase_lim, phase_lim],
-                         colormap=phase_cmap,
-                         translate=translations[5]
-                         )
+        ttls = ["|E|", "ang(E)", "|E| - |Ebg|", "angle(e) - angle(e bg)"]
 
         viewer.add_points(translations + np.array([ny / 10, nx / 2]),
                           features={"names": ttls},
@@ -3292,6 +3344,7 @@ def display_tomography_recon(recon_fname: str,
                                 "size": 30,
                                 "color": "red"},
                           )
+
 
     viewer.dims.axis_labels = n_axis_names[:n_extra_dims + 1] + ["pattern", "z", "y", "x"]
 
@@ -3566,11 +3619,11 @@ class LinearScatt(RIOptimizer):
 
     def prox(self, x, step):
         # convert from V to n
-        n = get_n(_ift3(x), self.no, self.wavelength)
+        n = get_n(ift3(x), self.no, self.wavelength)
         # apply proximal operator on n
         n_prox = super(LinearScatt, self).prox(n, step)
 
-        return _ft3(get_v(n_prox, self.no, self.wavelength))
+        return ft3(get_v(n_prox, self.no, self.wavelength))
 
     def run(self, x_start, **kwargs):
         return super(LinearScatt, self).run(x_start, **kwargs)
@@ -3873,6 +3926,6 @@ class SSNP(RIOptimizer):
                                                    self.drs_n[1:],
                                                    self.wavelength)[..., 0, :, :]
         # assume initial field is foward propagating only
-        de_dz_start = _ift2(1j * self.kz * _ft2(e_start))
+        de_dz_start = ift2(1j * self.kz * ft2(e_start))
 
         return e_start, de_dz_start
