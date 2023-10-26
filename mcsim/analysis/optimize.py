@@ -156,14 +156,14 @@ class Optimizer():
             max_iterations: int = 100,
             use_fista: bool = True,
             stochastic_descent: bool = True,
-            nmax_stochastic_descent: int = np.inf,
+            nmax_stochastic_descent: int = 1,
             verbose: bool = False,
             compute_cost: bool = False,
             compute_all_costs: bool = False,
             line_search: bool = False,
             line_search_factor: float = 0.5,
             stop_on_nan: bool = True,
-            xtol: float = 1e-8,
+            xtol: float = 0.0,
             print_newline: bool = False,
             **kwargs) -> dict:
 
@@ -183,7 +183,8 @@ class Optimizer():
         :param line_search: use line search to shrink step-size as necessary
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
         :param stop_on_nan:
-        :param xtol: TODO: stop when change in x is small
+        :param xtol: When norm(x[t] - x[t-1]) / norm(x[0]) < xtol, stop iteration
+        :param print_newline:
         :return results: dictionary containing results
         """
 
@@ -205,7 +206,7 @@ class Optimizer():
                    "niterations": max_iterations,
                    "use_fista": use_fista,
                    "use_gpu": use_gpu,
-                   "x_init": to_cpu(xp.array(x_start, copy=True)),
+                   "x_init": np.array(to_cpu(x_start), copy=True),
                    "prox_parameters": self.prox_parameters,
                    "stop_condition": "ok"
                    }
@@ -220,6 +221,7 @@ class Optimizer():
         tstart = time.perf_counter()
         costs = np.zeros((max_iterations + 1, self.n_samples)) * np.nan
         steps = np.ones(max_iterations) * step
+        xdiffs = np.ones(max_iterations) * np.nan
         line_search_iters = np.ones(max_iterations, dtype=int)
         q_last = 1
         x = xp.array(x_start, copy=True)
@@ -278,7 +280,7 @@ class Optimizer():
 
             else:
                 # cost at current point
-                # always grab costs, since computing anyways for line-search
+                # always grab costs, since computing for line-search
                 tstart_err = time.perf_counter()
 
                 if compute_all_costs:
@@ -312,35 +314,40 @@ class Optimizer():
                                             gx.imag * (y - x).imag) + \
                                             0.5 / steps[ii] * xp.linalg.norm(y - x)**2
 
-                # iterate ... at each point check if we violate Lipschitz continuous gradient condition
+                # reduce step until we don't violate Lipschitz continuous gradient condition
                 while lipschitz_condition_violated(y, cx, gx):
                     steps[ii] *= line_search_factor
                     y = self.prox(x - steps[ii] * gx, steps[ii])
                     liters += 1
 
-                # not exclusively prox ... but good enough for now
+                # not exclusively prox
                 timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
 
             line_search_iters[ii] = liters
 
             # ###################################
-            # compute difference
+            # stop conditions
             # ###################################
-            # diff = xp.sum(y - y_last)
+            if ii == 0:
+                ynorm = xp.sqrt(xp.sum(xp.abs(y)**2))
+            else:
+                xdiffs[ii] = to_cpu(xp.sqrt(xp.sum(xp.abs(y - y_last)**2)) / ynorm)
+
+            stop = xdiffs[ii] < xtol or ii == (max_iterations - 1)
 
             # ###################################
             # update step
             # ###################################
             tstart_update = time.perf_counter()
 
-            q_now = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
-            if ii == 0 or ii == (max_iterations - 1) or not use_fista:
+            q = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
+            if ii == 0 or not use_fista or stop:
                 x = y
             else:
-                x = y + (q_last - 1) / q_now * (y - y_last)
+                x = y + (q_last - 1) / q * (y - y_last)
 
             # update for next gradient-descent/FISTA iteration
-            q_last = q_now
+            q_last = q
             y_last = y
 
             timing["update"] = np.concatenate((timing["update"], np.array([time.perf_counter() - tstart_update])))
@@ -353,6 +360,7 @@ class Optimizer():
 
                     status = f"iteration {ii + 1:d}/{max_iterations:d}," \
                              f" cost={np.nanmean(costs[ii]):.3g}," \
+                             f" diff={xdiffs[ii]:.3g}," \
                              f" step={steps[ii]:.3g}," \
                              f" line search iters={line_search_iters[ii]:d}," \
                              f" grad={timing['grad'][ii]:.3f}s," \
@@ -371,6 +379,12 @@ class Optimizer():
 
                 print(status, end=end)
 
+            # ###################################
+            # loop termination
+            # ###################################
+            if stop:
+                break
+
         # compute final cost
         if compute_cost:
             if compute_all_costs:
@@ -382,6 +396,7 @@ class Optimizer():
         results.update({"timing": timing,
                         "costs": costs,
                         "steps": steps,
+                        "xdiffs": xdiffs,
                         "line_search_iterations": line_search_iters,
                         "x": x})
 
