@@ -1,14 +1,14 @@
 import unittest
 import mcsim.analysis.tomography as tm
-from mcsim.analysis.tomography import _ft3
+from mcsim.analysis.fft import ft3
 import numpy as np
 import cupy as cp
+
 
 class TestPatterns(unittest.TestCase):
 
     def setUp(self):
         pass
-
 
     def test_born_grad(self):
         dxy = 0.1
@@ -29,9 +29,9 @@ class TestPatterns(unittest.TestCase):
         # ebg = cp.random.rand(npattern, ny, nx) + 1j * cp.random.rand(npattern, ny, nx)
         n = no + 0.1 * cp.random.rand(nz, ny, nx) + 1j * cp.random.rand(nz, ny, nx) * 1e-3
         v = tm.get_v(n, no, wavelength)
-        vft = _ft3(v)
+        vft = ft3(v)
 
-        theta = 25 * np.pi/ 180 * np.ones(npattern)
+        theta = 25 * np.pi / 180 * np.ones(npattern)
         phis = np.arange(npattern) / npattern * 2*np.pi
         beam_frqs = tm.angles2frqs(no, wavelength, theta, phis)
 
@@ -81,9 +81,9 @@ class TestPatterns(unittest.TestCase):
         # ebg = cp.random.rand(npattern, ny, nx) + 1j * cp.random.rand(npattern, ny, nx)
         n = no + 0.1 * cp.random.rand(nz, ny, nx) + 1j * cp.random.rand(nz, ny, nx) * 1e-3
         v = tm.get_v(n, no, wavelength)
-        vft = _ft3(v)
+        vft = ft3(v)
 
-        theta = 25 * np.pi/ 180 * np.ones(npattern)
+        theta = 25 * np.pi / 180 * np.ones(npattern)
         phis = np.arange(npattern) / npattern * 2*np.pi
         beam_frqs = tm.angles2frqs(no, wavelength, theta, phis)
 
