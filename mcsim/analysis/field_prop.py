@@ -20,6 +20,72 @@ except ImportError:
 array = Union[np.ndarray, cp.ndarray]
 
 
+# spatial frequency helper functions
+def frqs2angles(frqs: array,
+                no: float,
+                wavelength: float) -> (array, array):
+    """
+    Convert from frequency vectors to angle vectors
+
+    :param frqs: N x 3 array with order (fx, fy, fz).
+      Frequency vectors should be normalized such that
+      norm(frqs, axis=1) = no / wavelength
+    :param no: background index of refraction
+    :param wavelength:
+    :return: theta, phi
+    """
+    if isinstance(frqs, cp.ndarray) and _gpu_available:
+        xp = cp
+    else:
+        xp = np
+
+    frqs = xp.atleast_2d(frqs)
+
+    with np.errstate(invalid="ignore"):
+        theta = xp.array(np.arccos(xp.dot(frqs, xp.array([0, 0, 1])) / (no / wavelength)))
+        theta[xp.isnan(theta)] = 0
+        phi = xp.angle(frqs[:, 0] + 1j * frqs[:, 1])
+        phi[xp.isnan(phi)] = 0
+
+        # todo: want to do this?
+        # theta = np.atleast_1d(np.arcsin(wavelength / n * np.linalg.norm(frq_2d, axis=-1)))
+        # ensure disallowed points return nans
+        # disallowed = np.linalg.norm(frq_2d, axis=-1) > n / wavelength
+        # phi[disallowed] = np.nan
+        # theta[disallowed] = np.nan
+
+    return theta, phi
+
+
+def angles2frqs(no: float,
+                wavelength: float,
+                theta: array,
+                phi: array) -> array:
+    """
+    Get frequency vector from angles
+
+    :param no:
+    :param wavelength:
+    :param theta:
+    :param phi:
+    :return:
+    """
+
+    if isinstance(theta, cp.ndarray) and _gpu_available:
+        xp = cp
+    else:
+        xp = np
+
+    phi = xp.asarray(phi)
+
+    fz = no / wavelength * xp.cos(theta)
+    fy = no / wavelength * xp.sin(theta) * xp.sin(phi)
+    fx = no / wavelength * xp.sin(theta) * xp.cos(phi)
+    f = xp.stack((fx, fy, fz), axis=1)
+
+    return f
+
+
 def get_fzs(fx: array,
             fy: array,
             no: float,
@@ -27,17 +93,23 @@ def get_fzs(fx: array,
     """
     Get z-component of frequency given fx, fy
 
-    :param fx: nfrqs
+    :param fx:
     :param fy:
     :param no: index of refraction
     :param wavelength: wavelength
     :return fzs:
     """
 
-    # todo: should support gpu
+    if isinstance(fx, cp.ndarray) and _gpu_available:
+        xp = cp
+    else:
+        xp = np
+    fy = xp.asarray(fy)
 
+    # arg = (k * no) ** 2 - (2 * np.pi * fx) ** 2 - (2 * np.pi * fy) ** 2
+    # allowed = arg >= 0
     with np.errstate(invalid="ignore"):
-        fzs = np.sqrt(no**2 / wavelength ** 2 - fx**2 - fy**2)
+        fzs = xp.sqrt(no**2 / wavelength ** 2 - fx**2 - fy**2)
 
     return fzs
 
@@ -62,7 +134,7 @@ def get_angular_spectrum_kernel(dz: float,
     :return kernel:
     """
 
-    if use_gpu:
+    if _gpu_available and use_gpu:
         xp = cp
     else:
         xp = np
@@ -103,7 +175,7 @@ def propagation_kernel(dz: float,
     :return kernel:
     """
 
-    if use_gpu:
+    if _gpu_available and use_gpu:
         xp = cp
     else:
         xp = np
@@ -145,7 +217,7 @@ def forward_backward_proj(wavelength: float,
     :param use_gpu:
     :return:
     """
-    if use_gpu:
+    if _gpu_available and use_gpu:
         xp = cp
     else:
         xp = np
@@ -173,10 +245,10 @@ def forward_backward_proj(wavelength: float,
 
 
 def field_deriv_proj(wavelength: float,
-                          no: float,
-                          shape: tuple[int],
-                          drs: tuple[float],
-                          use_gpu: bool = False) -> array:
+                     no: float,
+                     shape: tuple[int],
+                     drs: tuple[float],
+                     use_gpu: bool = False) -> array:
     """
     matrix converting from (phi, dphi/dz) -> (phi_f, phi_b) representation
 
@@ -187,7 +259,7 @@ def field_deriv_proj(wavelength: float,
     :param use_gpu:
     :return:
     """
-    if use_gpu:
+    if _gpu_available and use_gpu:
         xp = cp
     else:
         xp = np

@@ -21,53 +21,8 @@ from matplotlib.patches import Circle
 import matplotlib.pyplot as plt
 from mcsim.analysis import dmd_patterns, simulate_dmd, sim_reconstruction
 import mcsim.analysis.analysis_tools as tools
+from mcsim.analysis.field_prop import frqs2angles, get_fzs
 from localize_psf import affine, fit_psf
-
-
-def frq2angles(frq_2d,
-               wavelength,
-               n):
-    """
-    Convert from frequency vectors (in angular spectrum representation) to angles
-
-    :math:`f = n/\\lambda * [\\cos(\\phi) \\sin(\\theta), \\sin(\\phi) \\sin(\\theta), \\cos(\\theta)]`
-
-    :param frq_2d:
-    :param wavelength:
-    :param n:
-    :return: (phi, theta)
-    """
-    frq_2d = np.array(frq_2d, copy=True)
-
-    # phi = np.arctan(wavelength / n * frq_2d[..., 1] / frq_2d[..., 0])
-    # phi[frq_2d[..., 0] == 0] = np.pi/2
-    phi = np.atleast_1d(np.angle(frq_2d[..., 0] + 1j * frq_2d[..., 1]))
-    theta = np.atleast_1d(np.arcsin(wavelength / n * np.linalg.norm(frq_2d, axis=-1)))
-
-    # ensure disallowed points return nans
-    disallowed = np.linalg.norm(frq_2d, axis=-1) > n/wavelength
-    phi[disallowed] = np.nan
-    theta[disallowed] = np.nan
-
-    return phi, theta
-
-
-def angles2frq(theta,
-               phi,
-               wavelength,
-               n):
-    """
-
-    :param theta:
-    :param phi:
-    :param float wavelength:
-    :param float n: index of refraction of medium
-    :return frq:
-    """
-    frq = n/wavelength * np.array([np.cos(phi) * np.sin(theta),
-                                   np.sin(phi) * np.sin(theta),
-                                   np.cos(theta)])
-    return frq
 
 
 def interfere_polarized(theta1: float,
@@ -174,6 +129,7 @@ def get_int_fc_pol(efield_fc: np.ndarray,
     def conv(efield): return scipy.signal.fftconvolve(efield, np.flip(efield, axis=(0, 1)).conj(), mode='same')
 
     # convert frequencies in distance units to polar angles
+    raise NotImplementedError("todo: need to fix call to frq2angles from field_prop")
     phis, thetas = frq2angles(vecs, wavelength, n)
 
     if polarization_angle is None:
