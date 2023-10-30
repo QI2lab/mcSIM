@@ -30,6 +30,7 @@ import zarr
 # custom tools
 from localize_psf import fit, rois, camera, affine
 from mcsim.analysis.analysis_tools import translate_ft
+from mcsim.analysis.field_prop import frqs2angles, get_fzs
 from mcsim.analysis import field_prop
 from mcsim.analysis.phase_unwrap import phase_unwrap as weighted_phase_unwrap
 from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, to_cpu
@@ -164,8 +165,8 @@ class tomography:
         looking at FFT
         :param roi_size_pix: ROI size (in pixels) to use for frequency fitting
         :param save_dir:
-        :param use_gpufit: do fitting on GPU with gpufit. Otherwise use CPU
         :param use_fixed_frequencies: determine single set of frequencies for all data/background images
+        :param fit_on_gpu: do fitting on GPU with gpufit. Otherwise use CPU
         :return:
         """
         self.reconstruction_settings.update({"roi_size_pix": roi_size_pix})
@@ -295,7 +296,6 @@ class tomography:
             cy = fit_params[:, 2].reshape(rois_cut.shape[:-2])
 
             return cx, cy, fit_params, init_params, fit_states
-
 
         if not fit_on_gpu:
             if fit_data_imgs:
@@ -446,7 +446,6 @@ class tomography:
                                                       rois_all=rois_all[ii]))
                 dask.compute(*delayed)
 
-
     def estimate_reference_frq(self,
                                mode: str = "average",
                                frq: Optional[array] = None,
@@ -510,7 +509,7 @@ class tomography:
         """
 
         bxys = [f - np.expand_dims(self.reference_frq, axis=-2) for f in self.hologram_frqs]
-        bzs = [field_prop.get_fzs(bxy[..., 0], bxy[..., 1], self.no, self.wavelength) for bxy in bxys]
+        bzs = [get_fzs(bxy[..., 0], bxy[..., 1], self.no, self.wavelength) for bxy in bxys]
         beam_frqs = [np.stack((bxy[..., 0], bxy[..., 1], bz), axis=-1) for bxy, bz in zip(bxys, bzs)]
 
         return beam_frqs
@@ -527,6 +526,7 @@ class tomography:
 
         :param offsets:
         :param save_dir:
+        :param dmd_size:
         :return:
         """
 
@@ -689,6 +689,8 @@ class tomography:
         :param bg_average_axes: axes to average along when producing background images
         :param fourier_mask: regions where this mask is True will be set to 0 during hologram unmixing
         :param fit_phases: whether to fit phase differences between image and background holograms
+        :param fit_translations:
+        :param translation_thresh:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         :param use_gpu:
         :return:
@@ -918,13 +920,12 @@ class tomography:
         :param n_size: (nz, ny, nx) shape of reconstructred refractive index # todo: make n_shape
         :param mode: "born", "rytov", "bpm", or "ssnp"
         :param scattered_field_regularization: regularization used in computing scattered field
-          or Rytov phase. Regions where background electric field is smaller than this value will be suppressed
-        :param dxy_sampling_factor: ignored unless mode is "born" or "rytov"
-        :param nbin: bin raw images by this factor
+          or Rytov phase. Regions where background electric field is smaller than this value will be suppressed                
         :param realspace_mask: indicate which parts of image to exclude/keep
         :param step: ignored if mode is "born" or "rytov"
         :param use_gpu:
         :param f_radius_factor:
+        :param n_guess:
         :param cam_roi:
         :param data_roi:
         :param use_weighted_phase_unwrap:
@@ -1108,7 +1109,6 @@ class tomography:
                   n_start_out=None,
                   block_id=None):
 
-
             nextra_dims = efields_ft.ndim - 3
             dims = tuple(range(nextra_dims))
             efields_ft = efields_ft.squeeze(axis=dims)
@@ -1195,7 +1195,6 @@ class tomography:
 
                 if verbose:
                     print(f"computing scattered field took {time.perf_counter() - tstart_scatt:.2f}s")
-
 
             # ############
             # optionally write out starting refractive index
@@ -1321,7 +1320,6 @@ class tomography:
                           chunks=(1,) * self.nextra_dims + n_size,
                           dtype=complex,
                           )
-
 
         self.reconstruction_settings.update({"mode": mode,
                                              "scattered_field_regularization": scattered_field_regularization,
@@ -1899,8 +1897,8 @@ def fit_phase_ramp(imgs_ft: array,
     """
     Given a stack of images and reference images, determine the phase ramp parameters relating them
 
-    :param imgs: n0 x n1 x ... x n_{-2} x n_{-1} array
-    :param ref_imgs: reference images. Should be broadcastable to same size as imgs.
+    :param imgs_ft: n0 x n1 x ... x n_{-2} x n_{-1} array
+    :param ref_imgs_ft: reference images. Should be broadcastable to same size as imgs.
     :param dxy:
     :param thresh:
     :return fit_params:
@@ -1950,6 +1948,7 @@ def fit_phase_ramp(imgs_ft: array,
         fit_params[ind] = results["fit_params"]
 
     return fit_params
+
 
 def fit_ref_frq(img_ft: np.ndarray,
                 dxy: float,
@@ -2147,10 +2146,11 @@ def get_rytov_phase(eimgs: array,
 
     We calculate \psi_s(r) = log | U_total(r) / U_o(r)| + 1j * unwrap[angle(U_total) - angle(U_o)]
 
-    :param efields_ft: n0 x n1 ... x nm x ny x nx
-    :param efields_bg_ft: broadcastable to same size as eimgs
-    :param float regularization: regularization value. Any pixels where the background
-    exceeds this value will be set to zero
+    :param eimgs: n0 x n1 ... x nm x ny x nx
+    :param eimgs_bg: broadcastable to same size as eimgs
+    :param regularization: regularization value. Any pixels where the background
+      exceeds this value will be set to zero
+    :param use_weighted_unwrap:
     :return psi_rytov:
     """
 
@@ -2202,8 +2202,8 @@ def get_scattered_field(holograms: array,
     Compute estimate of scattered electric field with regularization. This function only operates on the
     last two dimensions of the array
 
-    :param eimgs_ft: array of size n0 x ... x nm x ny x nx
-    :param eimgs_bg_ft: broadcastable to same size as eimgs_ft
+    :param holograms: array of size n0 x ... x nm x ny x nx
+    :param holograms_bg: broadcastable to same size as eimgs_ft
     :param regularization:
     :return efield_scattered_ft: scattered field of same size as eimgs_ft
     """
@@ -2233,6 +2233,7 @@ def unmix_hologram(img: array,
     :param fx_ref: x-component of hologram reference frequency
     :param fy_ref: y-component of hologram reference frequency
     :param apodization: apodization window applied to real-space image before Fourier transformation
+    :param mask:
     :return efield_ft: hologram electric field
     """
 
@@ -2306,10 +2307,8 @@ def get_reconstruction_nyquist_sampling(no: float,
     :param na_exc: maximum excitation numerical aperture (i.e. corresponding to the steepest input beam and not nec.
     the objective).
     :param wavelength: wavelength
-    :param drs: (dz, dy, dx) voxel size
     :param fov: (nz, ny, nx) field of view voxels
-    :param dz_sampling_factor: z-spacing as a fraction of the nyquist limit
-    :param dxy_sampling_factor: xy-spacing as a fraction of nyquist limit
+    :param sampling_factors: (sz, sy, sx) spacing as a fraction of the nyquist limit
     :return (dz_sp, dxy_sp, dxy_sp), (nz_sp, ny_sp, nx_sp):
     """
     alpha = np.arcsin(na_det / no)
@@ -2474,7 +2473,7 @@ def fwd_model_linear(beam_fx: array,
             detectable = xp.sqrt(fx ** 2 + fy ** 2)[0] <= (na_det / wavelength)
             detectable = xp.tile(detectable, [nimgs, 1, 1])
 
-            fz = xp.tile(field_prop.get_fzs(fx, fy, no, wavelength), [nimgs, 1, 1])
+            fz = xp.tile(get_fzs(fx, fy, no, wavelength), [nimgs, 1, 1])
 
             # construct frequencies where we have data about the 3D scattering potentials
             # frequencies of the sample F = f - no/lambda * beam_vec
@@ -2507,10 +2506,10 @@ def fwd_model_linear(beam_fx: array,
             fx_rytov = Fx + xp.expand_dims(beam_fx, axis=(1, 2))
             fy_rytov = Fy + xp.expand_dims(beam_fy, axis=(1, 2))
 
-            fz = field_prop.get_fzs(fx_rytov,
-                                    fy_rytov,
-                                    no,
-                                    wavelength)
+            fz = get_fzs(fx_rytov,
+                         fy_rytov,
+                         no,
+                         wavelength)
 
             Fz = fz - xp.expand_dims(beam_fz, axis=(1, 2))
 
@@ -2531,7 +2530,6 @@ def fwd_model_linear(beam_fx: array,
             zind, yind, xind = [xp.array(a, copy=True) for a in xp.broadcast_arrays(zind, yind, xind)]
         else:
             raise ValueError(f"'mode' must be 'born' or 'rytov' but was '{mode:s}'")
-
 
         # build forward model as sparse matrix
         # E(k) = model * V(k)
@@ -2645,6 +2643,7 @@ def inverse_model_linear(efield_fts: array,
     singleton dimensions, but must have at least three dimensions.
     i.e. it should have shape 1 x ... x 1 x nimgs x ny x nx
     :param model: forward model matrix. Generated from fwd_model_linear(). Should have interpolate=False
+    :param v_shape:
     :param regularization: regularization factor
     :param no_data_value: value of any points in v_ft where no data is available
     :return v_ft:
@@ -2752,9 +2751,8 @@ def plot_odt_sampling(frqs: np.ndarray,
         # if na_excite is immersion objective and beam undergoes TIR at interface for full NA
         alpha_exc = np.pi/2
 
-    fzs = field_prop.get_fzs(frqs[:, 0], frqs[:, 1], ni, wavelength)
+    fzs = get_fzs(frqs[:, 0], frqs[:, 1], ni, wavelength)
     frqs_3d = np.concatenate((frqs, np.expand_dims(fzs, axis=1)), axis=1)
-
 
     figh = plt.figure(**kwargs)
     figh.suptitle("Frequency support diagnostic")
@@ -2835,7 +2833,6 @@ def plot_odt_sampling(frqs: np.ndarray,
     ax.add_artist(Arc((0, 0), 2 * frq_norm, 2 * frq_norm, angle=-90,
                       theta1=-alpha_exc * 180 / np.pi, theta2=alpha_exc * 180 / np.pi, edgecolor="b"))
 
-
     ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
     ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
     ax.set_xlabel("$f_y$ (1/$\mu m$)")
@@ -2855,7 +2852,6 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     ax.add_artist(Circle((0, 0), na_excite / wavelength, fill=False, color="b"))
     ax.add_artist(Circle((0, 0), (na_excite + na_detect) / wavelength, fill=False, color="r"))
-
 
     # size = 1.5 * (na_excite + na_detect) / wavelength
     # ax.set_ylim([-size, size])
@@ -2881,12 +2877,10 @@ def plot_odt_sampling(frqs: np.ndarray,
     fyfy[ff > fmax] = np.nan
     fzfz = np.sqrt((ni / wavelength)**2 - fxfx**2 - fyfy**2)
 
-
     # kx0, ky0, kz0
     fxyz0 = np.stack((fxfx, fyfy, fzfz), axis=-1)
     for ii in range(len(frqs_3d)):
         ax.plot_surface(fxyz0[..., 0] - frqs_3d[ii, 0], fxyz0[..., 1] - frqs_3d[ii, 1], fxyz0[..., 2] - frqs_3d[ii, 2], alpha=0.3)
-
 
     ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
     ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
@@ -2958,7 +2952,6 @@ def display_tomography_recon(recon_fname: str,
     except KeyError:
         ny_raw = ny
         nx_raw = nx
-
 
     drs_n = img_z.attrs["dr"]
     n_axis_names = img_z.attrs["dimensions"]
@@ -3032,7 +3025,6 @@ def display_tomography_recon(recon_fname: str,
         imgs_raw_ft = np.ones(1)
 
     imgs_raw_ft_abs = da.abs(imgs_raw_ft)
-
 
     # ######################
     # prepare electric fields
@@ -3146,9 +3138,12 @@ def display_tomography_recon(recon_fname: str,
         e_fwd_angle = np.broadcast_to(e_fwd_angle, bcast_shape_e)
         efwd_ebg_abs_diff = np.broadcast_to(efwd_ebg_abs_diff, bcast_shape_e)
         efwd_ebg_phase_diff = np.broadcast_to(efwd_ebg_phase_diff, bcast_shape_e)
-        escatt_real = np.broadcast_to(escatt_real, bcast_shape_e)
-        escatt_imag = np.broadcast_to(escatt_imag, bcast_shape_e)
 
+        # this can be a differetn size due to multiplexing
+        bcast_root_scatt = (1,) * n_extra_dims + (1, nz, 1, 1)
+        bcast_shape_scatt = np.broadcast_shapes(escatt_real.shape, bcast_root_scatt)
+        escatt_real = np.broadcast_to(escatt_real, bcast_shape_scatt)
+        escatt_imag = np.broadcast_to(escatt_imag, bcast_shape_scatt)
 
     # ######################
     # create viewer
@@ -3349,7 +3344,6 @@ def display_tomography_recon(recon_fname: str,
                                 "color": "red"},
                           )
 
-
     viewer.dims.axis_labels = n_axis_names[:n_extra_dims + 1] + ["pattern", "z", "y", "x"]
 
     # set to first position
@@ -3435,7 +3429,6 @@ class RIOptimizer(Optimizer):
                       use_imaginary_constraint,
                       use_real_constraint,
                       max_imaginary_part)
-
 
     def set_prox(self,
                  tau_tv_real: float = 0,
@@ -3730,7 +3723,6 @@ class BPM(RIOptimizer):
         if self.mask is not None:
             dtemp *= self.mask
 
-
         dc_dn = field_prop.backpropagate_bpm(dtemp,
                                              x,
                                              self.no,
@@ -3792,7 +3784,6 @@ class BPM(RIOptimizer):
                                                 self.wavelength)[..., 0, :, :]
 
 
-
 class SSNP(RIOptimizer):
     def __init__(self,
                  e_measured: array,
@@ -3840,7 +3831,7 @@ class SSNP(RIOptimizer):
         else:
             xp = np
 
-        kz = xp.asarray(2 * np.pi * field_prop.get_fzs(fxfx, fyfy, self.no, self.wavelength))
+        kz = xp.asarray(2 * np.pi * get_fzs(fxfx, fyfy, self.no, self.wavelength))
         kz[xp.isnan(kz)] = 0
         self.kz = kz
 
@@ -3912,7 +3903,6 @@ class SSNP(RIOptimizer):
         # dc_dn *= phi_fwd[:, :-2, :, :, 0].conj()
 
         return dc_dn
-
 
     def cost(self, x, inds=None):
         if inds is None:

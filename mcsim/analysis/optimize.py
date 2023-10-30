@@ -372,7 +372,7 @@ class Optimizer():
                 if use_gpu:
                     status += f", GPU={mempool.used_bytes()/1e9:.3}GB"
 
-                if print_newline:
+                if print_newline or stop:
                     end = "\n"
                 else:
                     end = "\r"
