@@ -16,59 +16,13 @@ import scipy.signal
 import scipy.optimize
 from typing import Optional
 import matplotlib
-import matplotlib.colors
-from matplotlib.colors import PowerNorm
-import matplotlib.patches
+from matplotlib.colors import PowerNorm, Normalize
+from matplotlib.patches import Circle
 import matplotlib.pyplot as plt
 from mcsim.analysis import dmd_patterns, simulate_dmd, sim_reconstruction
 import mcsim.analysis.analysis_tools as tools
+from mcsim.analysis.field_prop import frqs2angles, get_fzs
 from localize_psf import affine, fit_psf
-
-
-def frq2angles(frq_2d,
-               wavelength,
-               n):
-    """
-    Convert from frequency vectors (in angular spectrum representation) to angles
-
-    :math:`f = n/\\lambda * [\\cos(\\phi) \\sin(\\theta), \\sin(\\phi) \\sin(\\theta), \\cos(\\theta)]`
-
-    :param frq_2d:
-    :param wavelength:
-    :param n:
-    :return: (phi, theta)
-    """
-    frq_2d = np.array(frq_2d, copy=True)
-
-    # phi = np.arctan(wavelength / n * frq_2d[..., 1] / frq_2d[..., 0])
-    # phi[frq_2d[..., 0] == 0] = np.pi/2
-    phi = np.atleast_1d(np.angle(frq_2d[..., 0] + 1j * frq_2d[..., 1]))
-    theta = np.atleast_1d(np.arcsin(wavelength / n * np.linalg.norm(frq_2d, axis=-1)))
-
-    # ensure disallowed points return nans
-    disallowed = np.linalg.norm(frq_2d, axis=-1) > n/wavelength
-    phi[disallowed] = np.nan
-    theta[disallowed] = np.nan
-
-    return phi, theta
-
-
-def angles2frq(theta,
-               phi,
-               wavelength,
-               n):
-    """
-
-    :param theta:
-    :param phi:
-    :param float wavelength:
-    :param float n: index of refraction of medium
-    :return frq:
-    """
-    frq = n/wavelength * np.array([np.cos(phi) * np.sin(theta),
-                                   np.sin(phi) * np.sin(theta),
-                                   np.cos(theta)])
-    return frq
 
 
 def interfere_polarized(theta1: float,
@@ -175,6 +129,7 @@ def get_int_fc_pol(efield_fc: np.ndarray,
     def conv(efield): return scipy.signal.fftconvolve(efield, np.flip(efield, axis=(0, 1)).conj(), mode='same')
 
     # convert frequencies in distance units to polar angles
+    raise NotImplementedError("todo: need to fix call to frq2angles from field_prop")
     phis, thetas = frq2angles(vecs, wavelength, n)
 
     if polarization_angle is None:
@@ -255,10 +210,8 @@ def get_all_fourier_exp(imgs: np.ndarray,
     window = scipy.signal.windows.hann(nx_roi)[None, :] * scipy.signal.windows.hann(ny_roi)[:, None]
 
     # generate frequency data for image FT's
-    # fxs = tools.get_fft_frqs(nx_roi, pixel_size_um)
     fxs = fft.fftshift(fft.fftfreq(nx_roi, pixel_size_um))
     dfx = fxs[1] - fxs[0]
-    # fys = tools.get_fft_frqs(ny_roi, pixel_size_um)
     fys = fft.fftshift(fft.fftfreq(ny_roi, pixel_size_um))
     dfy = fys[1] - fys[0]
 
@@ -580,10 +533,8 @@ def plot_pattern(img: np.ndarray,
     # pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
 
     # get fourier transform of image
-    # fxs = tools.get_fft_frqs(nx, pixel_size_um)
     fxs = fft.fftshift(fft.fftfreq(nx, pixel_size_um))
     dfx = fxs[1] - fxs[0]
-    # fys = tools.get_fft_frqs(ny, pixel_size_um)
     fys = fft.fftshift(fft.fftfreq(ny, pixel_size_um))
     dfy = fys[1] - fys[0]
 
@@ -630,11 +581,11 @@ def plot_pattern(img: np.ndarray,
     # plt.scatter(frq_vects[nmax, nmax + 2, 0], frq_vects[nmax, nmax + 2, 1], facecolor="none", edgecolor='k')
     # plt.scatter(frq_vects[nmax, nmax - 2, 0], frq_vects[nmax, nmax - 2, 1], facecolor="none", edgecolor='k')
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='--')
+    circ = Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='--')
     ax.add_artist(circ)
 
     if fmax_in is not None:
-        circ2 = matplotlib.patches.Circle((0, 0), radius=(fmax_in/2), color='r', fill=0, ls='--')
+        circ2 = Circle((0, 0), radius=(fmax_in/2), color='r', fill=0, ls='--')
         ax.add_artist(circ2)
 
 
@@ -854,11 +805,11 @@ def plot_otf(frq_vects,
     plt.plot([-fmax_img, fmax_img], [0, 0], 'k')
     plt.scatter(frqs_pos[to_use, 0].ravel(), frqs_pos[to_use, 1].ravel(),
                 c=np.log10(np.abs(otf[to_use]).ravel()),
-                norm=matplotlib.colors.Normalize(vmin=np.log10(clims[0]), vmax=np.log10(clims[1])))
+                norm=Normalize(vmin=np.log10(clims[0]), vmax=np.log10(clims[1])))
     cb = plt.colorbar()
     plt.clim(np.log10(clims))
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='-')
+    circ = Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='-')
     ax.add_artist(circ)
     ax.set_xlim([-fmax_img, fmax_img])
     ax.set_ylim([-0.05 * fmax_img, fmax_img])
@@ -884,11 +835,11 @@ def plot_otf(frq_vects,
     plt.plot([-fmax_img, fmax_img], [0, 0], 'k')
     plt.scatter(frqs_pos[to_use, 0].ravel(), frqs_pos[to_use, 1].ravel(),
                 c=np.angle(otf[to_use]),
-                norm=matplotlib.colors.Normalize(vmin=clims_phase[0], vmax=clims_phase[1]))
+                norm=Normalize(vmin=clims_phase[0], vmax=clims_phase[1]))
     cb = plt.colorbar()
     plt.clim(clims_phase)
 
-    circ = matplotlib.patches.Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='-')
+    circ = Circle((0, 0), radius=fmax_img, color='k', fill=0, ls='-')
     ax.add_artist(circ)
     ax.set_xlim([-fmax_img, fmax_img])
     ax.set_ylim([-0.05 * fmax_img, fmax_img])

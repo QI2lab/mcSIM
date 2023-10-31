@@ -157,10 +157,12 @@ for kk in range(ncolors):
     # ###########################################
     # save reconstruction results
     # ###########################################
-    imgset.save_imgs(save_dir,
-                     format="tiff",  #format="zarr",
-                     save_raw_data=False,
-                     save_patterns=False)
+    fname_out = imgset.save_imgs(save_dir,
+                                # format="tiff",
+                                format="zarr",
+                                save_raw_data=False,
+                                save_patterns=False,
+                                )
 
     # ###########################################
     # save diagnostic plots
@@ -169,3 +171,8 @@ for kk in range(ncolors):
                      diagnostics_only=True,
                      figsize=(20, 10),
                      imgs_dpi=300)
+
+    # ###########################################
+    # show reconstruction in napari
+    # ###########################################
+    # sim.show_sim_napari(fname_out)
