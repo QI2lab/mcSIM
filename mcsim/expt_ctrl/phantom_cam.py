@@ -828,6 +828,7 @@ class phantom_cam(camera):
             # get max number of cines
             self.max_cine_ct = getattr(self._phcon, "PhMaxCineCnt")(self.cam_index)
 
+            self.cine_running = False
 
     def initialize(self, **kwargs):
         self.__init__(initialize=True, **kwargs)
@@ -913,7 +914,7 @@ class phantom_cam(camera):
             result = getattr(self._phcon, "PhRecordCine")(self.cam_index)
         else:
             if cine_no < 0:
-                raise ValueError("cine_no must be > 0")
+                raise ValueError("cine_no must be >= 0")
 
             result = getattr(self._phcon, "PhRecordSpecificCine")(self.cam_index, ct.c_int(cine_no))
 
@@ -1138,9 +1139,12 @@ class phantom_cam(camera):
 
     def isSequenceRunning(self):
         # todo: what best to do here?
+        # return self.cine_running
         return False
 
     def stopSequenceAcquisition(self):
+        self.cine_running = False
+        # todo: shouldn't this be 1 not zero?
         self.record_cine(0)  # stop recording
 
     def startContinuousSequenceAcquisition(self, exposure_ms: float = 0.):
