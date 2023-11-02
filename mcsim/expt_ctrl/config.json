@@ -106,7 +106,7 @@
 		"file_name": "G:\\2022_09_07\\02_fluorescence_affine_ref\\2022_09_08_11;45;05_affine_xform.json",
 		"data_time_stamp": ""
 	},
-	"timestamp": "2023_09_19_11;41;44",
+	"timestamp": "2023_11_01_14;02;13",
 	"sim_odt_program_defaults": {
 		"sx": 801,
 		"cx": 1024,
@@ -119,7 +119,8 @@
 		"sim_warmup_time_ms": 200.0,
 		"odt_warmup_time_ms": 1000.0,
 		"shutter_delay_ms": 50,
-		"sim_readout_time_ms": 10
+		"sim_readout_time_ms": 10,
+		"stage_delay_ms": 50.0
 	},
 	"camera_settings_phantom": {
 		"dxy": 0.1,
