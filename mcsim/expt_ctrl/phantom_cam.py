@@ -781,6 +781,8 @@ class camera:
     def __init__(self):
         pass
 
+class PhantomException(Exception):
+    pass
 
 # ###############################
 # phantom camera
@@ -789,6 +791,8 @@ class phantom_cam(camera):
     _phcon = None
     _phint = None
     _phfile = None
+    width = 1280
+    height = 960
 
     def __init__(self,
                  root_dir=Path(r"C:\Users\q2ilab\Documents\Phantom\PhSDK800\Bin\Win64"),
@@ -799,6 +803,7 @@ class phantom_cam(camera):
         @param initialize:
         """
 
+        super().__init__()
         self.initialized = initialize
         if self.initialize:
             # load dll's we will need
@@ -827,7 +832,7 @@ class phantom_cam(camera):
 
             # get max number of cines
             self.max_cine_ct = getattr(self._phcon, "PhMaxCineCnt")(self.cam_index)
-
+            # todo: implement logic for this
             self.cine_running = False
 
     def initialize(self, **kwargs):
@@ -862,12 +867,12 @@ class phantom_cam(camera):
         state_c = ct.c_int(state)
         result = getattr(self._phcon, "PhSet")(self.cam_index, ct.c_uint(gsQuiet), ct.byref(state_c))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
         
     def set_black_reference(self):
         result = getattr(self._phcon, "PhBlackReferenceCI")(self.cam_index, None)
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
     # deal with cines
     def set_cines(self, ncins):
@@ -891,7 +896,7 @@ class phantom_cam(camera):
         pweights = (ct.c_uint * ncins)(*percents) # percent of memory each cine occupies
         result = getattr(self._phcon, "PhSetPartitions")(self.cam_index, num_parts, ct.byref(pweights))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
     def get_cine_status(self):
         """
@@ -901,7 +906,7 @@ class phantom_cam(camera):
         cine_status = (tagCINESTATUS * self.max_cine_ct)()
         result = getattr(self._phcon, "PhGetCineStatus")(self.cam_index, ct.byref(cine_status))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         return cine_status
 
@@ -919,7 +924,7 @@ class phantom_cam(camera):
             result = getattr(self._phcon, "PhRecordSpecificCine")(self.cam_index, ct.c_int(cine_no))
 
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
     def save_cine(self,
                   cine_no: int,
@@ -927,6 +932,15 @@ class phantom_cam(camera):
                   first_image=None,
                   img_count=None,
                   file_type: str = "cine raw"):
+        """
+
+        :param cine_no:
+        :param fname:
+        :param first_image:
+        :param img_count:
+        :param file_type: "cine raw", "cine", "tif16", "tif12", "tif8", among other options
+        :return:
+        """
 
         file_types = {"tif16": SIFILE_TIF16,
                       "tif12": SIFILE_TIF12,
@@ -950,14 +964,14 @@ class phantom_cam(camera):
         ch = ct.pointer(ct.c_int())
         result = getattr(self._phfile, "PhNewCineFromCamera")(self.cam_index, ct.c_int(cine_no), ct.byref(ch))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # first image
         if first_image is None:
             img_no = ct.c_int()
             result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_FIRSTIMAGENO), ct.byref(img_no))
             if result != 0:
-                raise Exception(self.get_error(result))
+                raise PhantomException(self.get_error(result))
         else:
             img_no = ct.c_int(first_image)
 
@@ -966,7 +980,7 @@ class phantom_cam(camera):
             img_ct = ct.c_uint()
             result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_IMAGECOUNT), ct.byref(img_ct))
             if result != 0:
-                raise Exception(self.get_error(result))
+                raise PhantomException(self.get_error(result))
         else:
             img_ct = ct.c_uint(img_count)
 
@@ -977,7 +991,7 @@ class phantom_cam(camera):
 
         result = getattr(self._phfile, "PhSetCineInfo")(ch, ct.c_uint(GCI_SAVERANGE), ct.byref(imgRng))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # imgRngGet = tagIMRANGE()
         # result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_uint(GCI_SAVERANGE), ct.byref(imgRngGet))
@@ -988,20 +1002,20 @@ class phantom_cam(camera):
         pack_type = ct.c_uint(2)
         result = getattr(self._phfile, "PhSetCineInfo")(ch, ct.c_uint(GCI_SAVEPACKED), ct.byref(pack_type))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # set save file type
         # file_type = ct.c_int(SIFILE_TIF12)
         file_type_int = ct.c_int(file_types[file_type])
         result = getattr(self._phfile, "PhSetCineInfo")(ch, ct.c_uint(GCI_SAVEFILETYPE), ct.byref(file_type_int))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # set save fname
         fname_c = ct.create_string_buffer(bytes(str(fname), "ascii"))
         result = getattr(self._phfile, "PhSetCineInfo")(ch, ct.c_uint(GCI_SAVEFILENAME), ct.byref(fname_c))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # fname_cget = ct.create_string_buffer(256)
         # result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_uint(GCI_SAVEFILENAME), ct.byref(fname_cget))
@@ -1010,7 +1024,7 @@ class phantom_cam(camera):
         # save
         result = getattr(self._phfile, "PhWriteCineFile")(ch, None)
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
     def destroy_cine(self, cine_num):
         """
@@ -1020,11 +1034,11 @@ class phantom_cam(camera):
         ch = ct.pointer(ct.c_int())
         result = getattr(self._phfile, "PhNewCineFromCamera")(self.cam_index, cine_num, ct.byref(ch))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         results = getattr(self._phfile, "PhDestroyCine")(ch)
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
     def getImage(self):
         """
@@ -1035,12 +1049,12 @@ class phantom_cam(camera):
         ch = ct.pointer(ct.c_int())
         result = getattr(self._phfile, "PhGetCineLive")(self.cam_index, ct.byref(ch))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         buffer_size = ct.c_int()
         result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_MAXIMGSIZE), ct.byref(buffer_size))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         pixel = ct.create_string_buffer(buffer_size.value)
         img_header = tagIH()
@@ -1048,7 +1062,7 @@ class phantom_cam(camera):
         result = getattr(self._phfile, "PhGetCineImage")(ch, None, ct.byref(pixel), buffer_size,
                                                       ct.byref(img_header))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # seems this always returns an RGB image. We will only grab the first image
         # nimgs = len(pixel) // (2 * ny * nx)
@@ -1074,7 +1088,7 @@ class phantom_cam(camera):
         ch = ct.pointer(ct.c_int())
         result = getattr(self._phfile, "PhNewCineFromCamera")(self.cam_index, cine_num, ct.byref(ch))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # if handle not yet initialized...
         if result != 0:
@@ -1084,30 +1098,30 @@ class phantom_cam(camera):
         buffer_size = ct.c_int()
         result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_MAXIMGSIZE), ct.byref(buffer_size))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # first image
         # img_no = ct.c_int()
         # result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_FIRSTIMAGENO), ct.byref(img_no))
         # if result != 0:
-        #     raise Exception(self.get_error(result))
+        #     raise PhantomException(self.get_error(result))
 
         # image count
         img_ct = ct.c_uint()
         result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_IMAGECOUNT), ct.byref(img_ct))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         # image sizes
         width = ct.c_int()
         result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_IMWIDTH), ct.byref(width))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         height = ct.c_int()
         result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_IMHEIGHT), ct.byref(height))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
         nimgs = img_end - img_start
         ny = height.value
         nx = width.value
@@ -1158,12 +1172,12 @@ class phantom_cam(camera):
         ch = ct.pointer(ct.c_int())
         result = getattr(self._phfile, "PhGetCineLive")(self.cam_index, ct.byref(ch))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         width = ct.c_int()
         result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_IMWIDTH), ct.byref(width))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         return width.value
 
@@ -1171,12 +1185,12 @@ class phantom_cam(camera):
         ch = ct.pointer(ct.c_int())
         result = getattr(self._phfile, "PhGetCineLive")(self.cam_index, ct.byref(ch))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         height = ct.c_int()
         result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_IMHEIGHT), ct.byref(height))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         return height.value
 
@@ -1188,12 +1202,12 @@ class phantom_cam(camera):
         ch = ct.pointer(ct.c_int())
         result = getattr(self._phfile, "PhGetCineLive")(self.cam_index, ct.byref(ch))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         exposure = ct.c_uint()
         result = getattr(self._phfile, "PhGetCineInfo")(ch, ct.c_int(GCI_EXPOSURE), ct.byref(exposure))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
 
         return (exposure.value / 1e3)
 
@@ -1227,21 +1241,18 @@ class phantom_cam(camera):
 
         result = getattr(self._phcon, "PhSetCineParams")(self.cam_index, cn, ct.byref(params))
         if result != 0:
-            raise Exception(self.get_error(result))
+            raise PhantomException(self.get_error(result))
         # params are input and will also contain actual output values
 
         return params
 
     def getROI(self):
-        # raise NotImplementedError()
         # todo: generalize
         nx = self.getImageWidth()
         ny = self.getImageHeight()
 
-        nx_start = (1280 - nx) // 2
-        # nx_end = 1280 - (1280 - nx_cam2) // 2
-        ny_start = (960 - ny) // 2
-        # ny_end = 960 - (960 - ny_cam2) // 2
+        nx_start = (self.width - nx) // 2
+        ny_start = (self.height - ny) // 2
 
         return [nx_start, ny_start, nx, ny]
 
@@ -1269,6 +1280,9 @@ def imread_cine(fname: str,
     Read images saved in a grayscale Cine file using 12L packing
 
     :param fname: File path
+    :param start_index:
+    :param end_index:
+    :param read_setup_info:
     :return imgs, metadata: dask array of images
     """
 
@@ -1693,18 +1707,3 @@ def unpack12(data: np.ndarray) -> np.ndarray:
     img = np.stack((first_int, second_int), axis=1).ravel()
 
     return img
-
-
-if __name__ == "__main__":
-    import matplotlib
-    matplotlib.use("TkAgg")
-    import matplotlib.pyplot as plt
-    import time
-
-    c = phantom_cam()
-
-
-    # result = getattr(c._phcon, "PhRecordCine")(c.cam_index)
-    # print(c.get_error(result))
-    # c.trigger()
-    # time.sleep(3000)
