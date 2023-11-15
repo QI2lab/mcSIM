@@ -2890,12 +2890,14 @@ def display_tomography_recon(recon_fname: str,
                              raw_data_fname: Optional[str] = None,
                              raw_data_component: str = "cam2/odt",
                              show_raw: bool = True,
-                             show_raw_ft: bool = False,
                              show_efields: bool = False,
                              compute: bool = True,
                              time_axis: int = 1,
                              time_range: Optional[list[int]] = None,
                              phase_lim: float = np.pi,
+                             n_lim: tuple[float] = (0., 0.05),
+                             e_lim: tuple[float] = (0., 500.),
+                             escatt_lim: tuple[float] = (-5., 5.),
                              block_while_display: bool = True,
                              real_cmap="bone",
                              phase_cmap="RdBu"):
@@ -2906,7 +2908,6 @@ def display_tomography_recon(recon_fname: str,
     :param raw_data_fname: raw data stored in zar file
     :param raw_data_component:
     :param show_raw:
-    :param show_raw_ft:
     :param show_efields:
     :param compute:
     :param time_axis:
@@ -2959,6 +2960,7 @@ def display_tomography_recon(recon_fname: str,
     except KeyError:
         affine_recon2cam_xy = affine.params2xform([1, 0, 0, 1, 0, 0])
     affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
+    affine_cam2recon = np.linalg.inv(affine_recon2cam)
 
     # ######################
     # prepare n
@@ -3006,18 +3008,14 @@ def display_tomography_recon(recon_fname: str,
     slices_raw = slices + (slice(None), slice(None), slice(None))
     if show_raw:
         imgs = da.expand_dims(da.from_zarr(raw_data[raw_data_component])[slices_raw], axis=-3)
-        imgs_raw_ft = da.map_blocks(ft2, imgs, dtype=complex)
 
         if compute:
             print("loading raw images")
             with ProgressBar():
-                c = dask.compute([imgs, imgs_raw_ft])
-                imgs, imgs_raw_ft = c[0]
+                imgs = imgs.compute()
     else:
         imgs = np.ones(1)
         imgs_raw_ft = np.ones(1)
-
-    imgs_raw_ft_abs = da.abs(imgs_raw_ft)
 
     # ######################
     # prepare electric fields
@@ -3117,7 +3115,6 @@ def display_tomography_recon(recon_fname: str,
         # broadcast raw images
         bcast_shape_raw = np.broadcast_shapes(imgs.shape, bcast_shape)
         imgs = np.broadcast_to(imgs, bcast_shape_raw)
-        imgs_raw_ft_abs = np.broadcast_to(imgs_raw_ft_abs, bcast_shape_raw)
 
         # broadcast electric fields
         bcast_shape_e = np.broadcast_shapes(e_abs.shape, bcast_shape)
@@ -3153,15 +3150,22 @@ def display_tomography_recon(recon_fname: str,
                          scale=scale,
                          name="raw images",
                          colormap=real_cmap,
+                         affine=affine_cam2recon,
                          contrast_limits=[0, 4096])
 
-        if show_raw_ft:
-            viewer.add_image(imgs_raw_ft_abs,
-                             scale=scale,
-                             name="raw images ft",
-                             gamma=0.2,
-                             colormap=real_cmap,
-                             translate=(ny_raw, 0))
+        # processed ROI
+        proc_roi_rect = np.array([[[0 - 1, 0 - 1],
+                                   [0 - 1, nx],
+                                   [ny, nx],
+                                   [ny, 0 - 1]
+                                   ]])
+
+        viewer.add_shapes(proc_roi_rect,
+                          shape_type="polygon",
+                          name="processing ROI",
+                          edge_width=1,
+                          edge_color=[1, 0, 0, 1],
+                          face_color=[0, 0, 0, 0])
 
     # ######################
     # reconstructed index of refraction
@@ -3172,50 +3176,28 @@ def display_tomography_recon(recon_fname: str,
         viewer.add_image(n_start_imag,
                          scale=scale,
                          name=f"n start.imaginary",
-                         affine=affine_recon2cam,
-                         contrast_limits=[0, 0.05],
+                         contrast_limits=n_lim,
                          colormap=real_cmap,
-                         visible=True)
+                         visible=False)
 
         viewer.add_image(n_start_real,
                          scale=scale,
                          name=f"n start - no",
-                         affine=affine_recon2cam,
                          colormap=real_cmap,
-                         contrast_limits=[0, 0.05])
+                         contrast_limits=n_lim)
 
         viewer.add_image(n_imag,
                          scale=scale,
                          name=f"n.imaginary",
-                         affine=affine_recon2cam,
-                         contrast_limits=[0, 0.05],
+                         contrast_limits=n_lim,
                          colormap=real_cmap,
-                         visible=True)
+                         visible=False)
 
         viewer.add_image(n_real,
                          scale=scale,
                          name=f"n-no",
-                         affine=affine_recon2cam,
                          colormap=real_cmap,
-                         contrast_limits=[0, 0.05])
-
-    # ######################
-    # show ROI in image
-    # ######################
-    if show_raw:
-        # draw so that points inside rectangle are in the ROI. Points under rectangle are not
-        proc_roi_rect = np.array([[[proc_roi[0] - 1, proc_roi[2] - 1],
-                                   [proc_roi[0] - 1, proc_roi[3]],
-                                   [proc_roi[1], proc_roi[3]],
-                                   [proc_roi[1], proc_roi[2] - 1]
-                                   ]])
-
-        viewer.add_shapes(proc_roi_rect,
-                          shape_type="polygon",
-                          name="processing ROI",
-                          edge_width=1,
-                          edge_color=[1, 0, 0, 1],
-                          face_color=[0, 0, 0, 0])
+                         contrast_limits=n_lim)
 
     # ######################
     # electric fields
@@ -3227,22 +3209,22 @@ def display_tomography_recon(recon_fname: str,
                          name="|e bg|",
                          contrast_limits=[0, 500],
                          colormap=real_cmap,
-                         translate=[0, nx_raw])
+                         translate=[0, nx])
 
         if show_efields_fwd:
             viewer.add_image(e_fwd_bas,
                             scale=scale,
                             name="|E fwd|",
-                            contrast_limits=[0, 500],
+                            contrast_limits=e_lim,
                             colormap=real_cmap,
-                            translate=[0, nx_raw])
+                            translate=[0, nx])
 
         viewer.add_image(e_abs,
                          scale=scale,
                          name="|e|",
-                         contrast_limits=[0, 500],
+                         contrast_limits=e_lim,
                          colormap=real_cmap,
-                         translate=[0, nx_raw])
+                         translate=[0, nx])
 
         # field phases
         viewer.add_image(ebg_angle,
@@ -3250,7 +3232,7 @@ def display_tomography_recon(recon_fname: str,
                          name="angle(e bg)",
                          contrast_limits=[-np.pi, np.pi],
                          colormap=phase_cmap,
-                         translate=[ny, nx_raw])
+                         translate=[ny, nx])
 
         if show_efields_fwd:
             viewer.add_image(e_fwd_angle,
@@ -3258,30 +3240,30 @@ def display_tomography_recon(recon_fname: str,
                              name="ange(E fwd)",
                              contrast_limits=[-np.pi, np.pi],
                              colormap=phase_cmap,
-                             translate=[ny, nx_raw])
+                             translate=[ny, nx])
 
         viewer.add_image(e_angle,
                          scale=scale,
                          name="angle(e)",
                          contrast_limits=[-np.pi, np.pi],
                          colormap=phase_cmap,
-                         translate=[ny, nx_raw])
+                         translate=[ny, nx])
 
         # difference of absolute values
         if show_efields_fwd:
             viewer.add_image(efwd_ebg_abs_diff,
                              scale=scale,
                              name="|e fwd| - |e bg|",
-                             contrast_limits=[-500, 500],
+                             contrast_limits=[-e_lim[1], e_lim[1]],
                              colormap=phase_cmap,
-                             translate=[0, nx_raw + nx])
+                             translate=[0, 2*nx])
 
         viewer.add_image(e_ebg_abs_diff,
                          scale=scale,
                          name="|e| - |e bg|",
-                         contrast_limits=[-500, 500],
+                         contrast_limits=[-e_lim[1], e_lim[1]],
                          colormap=phase_cmap,
-                         translate=[0, nx_raw + nx])
+                         translate=[0, 2*nx])
 
         # difference of phases
         if show_efields_fwd:
@@ -3290,7 +3272,7 @@ def display_tomography_recon(recon_fname: str,
                              name="angle(e fwd) - angle(e bg)",
                              contrast_limits=[-phase_lim, phase_lim],
                              colormap=phase_cmap,
-                             translate=[ny, nx_raw + nx]
+                             translate=[ny, 2*nx]
                              )
 
         viewer.add_image(e_ebg_phase_diff,
@@ -3298,13 +3280,13 @@ def display_tomography_recon(recon_fname: str,
                          name="angle(e) - angle(e bg)",
                          contrast_limits=[-phase_lim, phase_lim],
                          colormap=phase_cmap,
-                         translate=[ny, nx_raw + nx]
+                         translate=[ny, 2*nx]
                          )
 
         viewer.add_image(escatt_real,
                          scale=scale,
                          name="Re(e scatt)",
-                         contrast_limits=[-10, 10],
+                         contrast_limits=escatt_lim,
                          colormap=phase_cmap,
                          translate=[ny, 0]
                          )
@@ -3312,16 +3294,16 @@ def display_tomography_recon(recon_fname: str,
         viewer.add_image(escatt_imag,
                          scale=scale,
                          name="Im(e scatt)",
-                         contrast_limits=[-10, 10],
+                         contrast_limits=escatt_lim,
                          colormap=phase_cmap,
                          translate=[ny, 0]
                          )
 
         # label
-        translations = np.array([[0, nx_raw],
-                                 [ny, nx_raw],
-                                 [0, nx_raw + nx],
-                                 [ny, nx_raw + nx],
+        translations = np.array([[0, nx],
+                                 [ny, nx],
+                                 [0, 2*nx],
+                                 [ny, 2*nx],
                                  [ny, 0]
                                  ])
         ttls = ["|E|",
