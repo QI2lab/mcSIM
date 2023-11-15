@@ -3207,7 +3207,7 @@ def display_tomography_recon(recon_fname: str,
         viewer.add_image(ebg_abs,
                          scale=scale,
                          name="|e bg|",
-                         contrast_limits=[0, 500],
+                         contrast_limits=e_lim,
                          colormap=real_cmap,
                          translate=[0, nx])
 
