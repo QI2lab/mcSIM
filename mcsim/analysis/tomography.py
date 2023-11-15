@@ -901,7 +901,6 @@ class tomography:
                       realspace_mask: Optional[np.ndarray] = None,
                       step: float = 1e-5,
                       use_gpu: bool = False,
-                      f_radius_factor: float = 0.15,
                       n_guess: Optional[array] = None,
                       cam_roi: Optional[list] = None,
                       data_roi: Optional[list] = None,
@@ -924,7 +923,6 @@ class tomography:
         :param realspace_mask: indicate which parts of image to exclude/keep
         :param step: ignored if mode is "born" or "rytov"
         :param use_gpu:
-        :param f_radius_factor:
         :param n_guess:
         :param cam_roi:
         :param data_roi:
@@ -1150,10 +1148,13 @@ class tomography:
 
                     for ii in range(nimgs):
                         for jj in range(nmax_multiplex):
-                            mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
-                                           (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
-                                    (f_radius_factor * na_detection / wavelength)
+                            dists = np.linalg.norm(mean_beam_frqs_arr[:, ii, :2] -
+                                                   mean_beam_frqs_arr[jj, ii, :2], axis=1)
+                            min_dist = 0.5 * np.min(dists[dists > 0.])
+                            # min_dist = f_radius_factor * na_detection / wavelength
 
+                            mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
+                                           (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > min_dist
                             e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask))
                             ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask))
 
