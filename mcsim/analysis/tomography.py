@@ -1145,15 +1145,8 @@ class tomography:
                                                 scattered_field_regularization)
                     efield_scattered_ft = ft2(efield_scattered)
                 else:
-                    tstart_demultiplex = time.perf_counter()
-
                     e_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
                     ebg_unmulti = xp.zeros_like(e_unmulti)
-
-                    # todo: think this plan is ok to cache
-                    plan_scatt = None
-                    if use_gpu:
-                        plan_scatt = fft_gpu.get_fft_plan(e_unmulti[0])
 
                     for ii in range(nimgs):
                         for jj in range(nmax_multiplex):
@@ -1161,23 +1154,23 @@ class tomography:
                                            (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
                                     (f_radius_factor * na_detection / wavelength)
 
-                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask), plan=plan_scatt)
-                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask), plan=plan_scatt)
+                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask))
+                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask))
 
                     # compute scattered field
                     efield_scattered = scatt_fn(e_unmulti,
                                                 ebg_unmulti,
                                                 scattered_field_regularization)
-                    efield_scattered_ft = ft2(efield_scattered, plan=plan_scatt)
-                    del plan_scatt
+                    efield_scattered_ft = ft2(efield_scattered)
                     del e_unmulti
                     del ebg_unmulti
 
                     # set regions we don't want to use to nans
-                    if optimizer == "born":
-                        raise NotImplementedError("demultiplexing not implemented for mode 'born'")
-                    else:
-                        efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
+                    # todo: testing ... I don't really think this is needed?
+                    # if optimizer == "born":
+                    #     raise NotImplementedError("demultiplexing not implemented for mode 'born'")
+                    # else:
+                    #     efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
 
                 # optionally export scattered field
                 try:
