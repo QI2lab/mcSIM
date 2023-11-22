@@ -3623,6 +3623,7 @@ class BPM(RIOptimizer):
                  atf: Optional[array] = None,
                  apodization: Optional[array] = None,
                  mask: Optional[array] = None,
+                 loss_mode: str = "efield",
                  **kwargs
                  ):
         """
@@ -3660,6 +3661,8 @@ class BPM(RIOptimizer):
                                   mask=mask,
                                   **kwargs)
 
+        self.loss_mode = loss_mode
+
         # include cosine oblique factor
         if self.beam_frqs is not None:
             self.thetas, _ = frqs2angles(self.beam_frqs, self.no, self.wavelength)
@@ -3695,7 +3698,18 @@ class BPM(RIOptimizer):
         e_fwd = self.fwd_model(x, inds=inds)
 
         # back propagation ... build the gradient from this to save memory
-        dtemp = e_fwd[:, -1, :, :] - self.e_measured[inds]
+        if self.loss_mode == "efield":
+            dtemp = e_fwd[:, -1, :, :] - self.e_measured[inds]
+        elif self.loss_mode == "intensity_sqr":
+            dtemp = (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) * e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])
+        elif self.loss_mode == "mix":
+            dtemp = 0.01 * (e_fwd[:, -1, :, :] - self.e_measured[inds]) + \
+                    0.99 * (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) * e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])
+        elif self.loss_mode == "intensity":
+            dtemp = (abs(e_fwd[:, -1, :, :])**2 - abs(self.e_measured[inds])**2) * 2*e_fwd[:, -1, :, :]
+        else:
+            raise ValueError()
+
         if self.mask is not None:
             dtemp *= self.mask
 
@@ -3742,10 +3756,30 @@ class BPM(RIOptimizer):
 
         e_fwd = self.fwd_model(x, inds=inds)
 
-        if self.mask is None:
-            costs = 0.5 * (abs(e_fwd[:, -1] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+        if self.loss_mode == "efield":
+            if self.mask is None:
+                costs = 0.5 * (abs(e_fwd[:, -1] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+            else:
+                costs = 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
+        elif self.loss_mode == "mix":
+            if self.mask is None:
+                costs = 0.01 * 0.5 * (abs(e_fwd[:, -1] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2)) + \
+                        0.99 * 0.5 * (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).mean(axis=(-1, -2))
+            else:
+                costs = 0.01 * 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1) + \
+                        0.99 * 0.5 * (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).mean(axis=-1)
+        elif self.loss_mode == "intensity_sqr":
+            if self.mask is None:
+                costs = 0.5 * (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).mean(axis=(-1, -2))
+            else:
+                costs = 0.5 * (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).mean(axis=-1)
+        elif self.loss_mode == "intensity":
+            if self.mask is None:
+                costs = 0.5 * (abs(abs(e_fwd[:, -1])**2 - abs(self.e_measured[inds])**2) ** 2).mean(axis=(-1, -2))
+            else:
+                costs = 0.5 * (abs(abs(e_fwd[:, -1, self.mask])**2 - abs(self.e_measured[inds][:, self.mask])**2) ** 2).mean(axis=-1)
         else:
-            costs = 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
+            raise ValueError()
 
         return costs
 
