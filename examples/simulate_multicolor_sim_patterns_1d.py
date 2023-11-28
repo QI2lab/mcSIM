@@ -67,7 +67,7 @@ for ii in range(len(wlens)):
         tp_out, tm_out = sdmd.angle2pm(tx_out, ty_out)
         uvec_out_pm = np.array(sdmd.xyz2mpz(*uvec_out))
 
-        print("output angle, determined from %0.0fnm, order %d" % (wlens[ii] * 1e9, diff_orders[ii]))
+        print(f"output angle, determined from {wlens[ii] * 1e9:.0f}nm, order {diff_orders[ii]:d}")
         print("output angle (tx, ty) = (%0.2f, %0.2f)deg" % (tx_out * 180/np.pi, ty_out * 180/np.pi))
         print("output angle (tm, tp) = (%0.2f, %0.2f)deg" % (tm_out * 180/np.pi, tp_out))
         print("(bx, by, bz) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_out.squeeze()))
@@ -122,18 +122,15 @@ for ii in range(len(wlens)):
 # plot results of 1D simulations
 # ##################################
 figh = plt.figure(figsize=(16, 8))
-str = r"Diffraction orders and blaze envelopes for beams diffracted along the $\hat{e}_- = \frac{x - y}{\sqrt{2}}$ direction" + \
-      "\noutput direction, " + r"($\theta_-$, $\theta_+$)" + " = (%0.2f, %0.2f) deg; " + \
-      r"($\theta_x$, $\theta_y$)" + " = (%0.2f, %0.2f) deg;" + \
-      " $(b_x, b_y, b_z)$ = (%0.4f, %0.4f, %0.4f)"
-figh.suptitle(str %
-             (tm_out * 180/np.pi,
-              tp_out * 180/np.pi,
-              tx_out * 180/np.pi,
-              ty_out * 180/np.pi,
-              uvec_out[0],
-              uvec_out[1],
-              uvec_out[2]))
+str = (r"Diffraction orders and blaze envelopes for beams diffracted along the "
+       r"$\hat{e}_- = \frac{x - y}{\sqrt{2}}$ direction" + "\n"
+       "output direction, " + r"($\theta_-$, $\theta_+$)"
+       f" = ({tm_out * 180/np.pi:.2f}, {tp_out * 180/np.pi:.2f}) deg; "
+       r"($\theta_x$, $\theta_y$)"
+       f" = ({tx_out * 180/np.pi:.2f}, {ty_out * 180/np.pi:.2f}) deg;"
+       f" $(b_x, b_y, b_z)$ = ({uvec_out[0]:.4f}, {uvec_out[1]:.4f}, {uvec_out[2]:.4f})")
+
+figh.suptitle(str)
 ax = figh.add_subplot(1, 1, 1)
 
 leg = []
@@ -153,14 +150,11 @@ for ii in range(len(wlens)):
     imax = np.argmax(int_check)
     int = int / int[imax] * sinc[imax]
 
-    label = ("%.0fnm, $(n_x, n_y)$ = (%d, %d); " + r"$\theta_-$" + " = %0.2fdeg" + "\na=(%0.3f, %0.3f, %0.3f)") % \
-            (wlens[ii]*1e9,
-             diff_orders[ii],
-             -diff_orders[ii],
-             tins_exact[ii] * 180/np.pi,
-             uvecs_in_exact[ii][0],
-             uvecs_in_exact[ii][1],
-             uvecs_in_exact[ii][2])
+    label = (f"{wlens[ii]*1e9:.0f}nm, "
+             f"$(n_x, n_y)$ = ({diff_orders[ii]:d}, {-diff_orders[ii]:d}); "
+             r"$\theta_-$"
+             f" = {tins_exact[ii] * 180/np.pi:.2f}deg\n"
+             f"a=({uvecs_in_exact[ii][0]:.3f}, {uvecs_in_exact[ii][1]:.3f}, {uvecs_in_exact[ii][1]:.3f})")
 
     h, = ax.plot(tout * 180/np.pi, int, color=display_colors[ii], label=label)
     hs.append(h)

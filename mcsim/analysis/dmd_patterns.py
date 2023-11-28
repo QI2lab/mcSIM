@@ -1040,9 +1040,9 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
 
             if include_blaze_correction:
                 # wavelength * frq = theta in Fraunhofer approximation
-                uvec_in = simulate_dmd.xy2uvector(tin_x, tin_y, "in")
+                uvec_in = simulate_dmd.xy2uvector(tin_x, tin_y, True)
                 uvec_out = simulate_dmd.xy2uvector(tout_x + wavelength * vecs[ii, jj][0] / dx,
-                                                   tout_y + wavelength * vecs[ii, jj][1] / dy, "out")
+                                                   tout_y + wavelength * vecs[ii, jj][1] / dy, False)
                 # amb = uvec_in - uvec_out
                 bma = uvec_out - uvec_in
                 blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, bma)
@@ -1163,9 +1163,9 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
 
             if include_blaze_correction:
                 # wavelength * frq = theta in Fraunhofer approximation
-                uvec_in = simulate_dmd.xy2uvector(tin_x, tin_y, "in")
+                uvec_in = simulate_dmd.xy2uvector(tin_x, tin_y, True)
                 uvec_out = simulate_dmd.xy2uvector(tout_x + wavelength * vecs[ii, jj][0] / dx,
-                                                   tout_y + wavelength * vecs[ii, jj][1] / dy, "out")
+                                                   tout_y + wavelength * vecs[ii, jj][1] / dy, False)
                 # amb = uvec_in - uvec_out
                 bma = uvec_out - uvec_in
                 blaze_envelope[ii, jj] = simulate_dmd.blaze_envelope(wavelength, gamma, wx, wy, bma)
