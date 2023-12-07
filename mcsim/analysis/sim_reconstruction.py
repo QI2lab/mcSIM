@@ -2350,7 +2350,9 @@ class SimImageSet:
 
 def show_sim_napari(fname_zarr: str,
                     block: bool = True,
-                    viewer = None):
+                    load: bool = True,
+                    viewer = None,
+                    clims=(0, 5000)):
     """
     Plot all images obtained from SIM reconstruction with correct scale/offset
 
@@ -2380,13 +2382,23 @@ def show_sim_napari(fname_zarr: str,
         viewer = napari.Viewer()
 
     if hasattr(imgz, "patterns"):
-        viewer.add_image(imgz.patterns,
+        if load:
+            p = np.array(imgz.patterns)
+        else:
+            p = imgz.patterns
+
+        viewer.add_image(p,
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="patterns")
 
     if hasattr(imgz, "patterns_2x"):
-        viewer.add_image(imgz.patterns_2x,
+        if load:
+            p2 = np.array(imgz.patterns_2x)
+        else:
+            p2 = imgz.patterns_2x
+
+        viewer.add_image(p2,
                          scale=(dxy_sim, dxy_sim),
                          # translate=translate_sim,
                          translate=translate_pattern_2x,
@@ -2401,48 +2413,59 @@ def show_sim_napari(fname_zarr: str,
                          name="SIM-OS")
 
     if hasattr(imgz, "deconvolved"):
-        viewer.add_image(np.expand_dims(imgz.deconvolved, axis=-3),
+        decon = np.expand_dims(imgz.deconvolved, axis=-3)
+        viewer.add_image(decon,
                          scale=(dxy_sim, dxy_sim),
                          translate=translate_sim,
                          name="wf deconvolved",
                          visible=False)
 
     if hasattr(imgz, "sim_fista_forward_model"):
-        viewer.add_image(imgz.sim_fista_forward_model,
+        if load:
+            fwd = np.array(imgz.sim_fista_forward_model)
+        else:
+            imgz.sim_fista_forward_model
+
+        viewer.add_image(fwd,
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="FISTA forward model")
 
     if hasattr(imgz, "sim_sr_fista"):
-        viewer.add_image(np.expand_dims(imgz.sim_sr_fista, axis=-3),
+        sim_sr_fista = np.expand_dims(imgz.sim_sr_fista, axis=-3)
+        viewer.add_image(sim_sr_fista,
                          scale=(dxy_sim, dxy_sim),
                          translate=translate_pattern_2x,
                          name="SIM-SR FISTA")
 
     if hasattr(imgz, "sim_sr"):
-        viewer.add_image(np.expand_dims(imgz.sim_sr, axis=-3),
+        sim_sr = np.expand_dims(imgz.sim_sr, axis=-3)
+        viewer.add_image(sim_sr,
                          scale=(dxy_sim, dxy_sim),
                          translate=translate_sim,
                          name="SIM-SR",
-                         contrast_limits=[0, 5000])
+                         contrast_limits=clims)
 
-    viewer.add_image(np.expand_dims(wf, axis=-3),
+    wf = np.expand_dims(wf, axis=-3)
+    viewer.add_image(wf,
                      scale=(dxy, dxy),
                      translate=translate_wf,
                      name="widefield")
 
     if hasattr(imgz, "imgs"):
         shape = imgz.imgs.shape[:-4] + (9,) + imgz.imgs.shape[-2:]
+        imgs = np.reshape(np.array(imgz.imgs), shape)
 
-        viewer.add_image(np.reshape(imgz.imgs, shape),
+        viewer.add_image(imgs,
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="processed images")
 
     if hasattr(imgz, "imgs_raw"):
         shape = imgz.imgs_raw.shape[:-4] + (9,) + imgz.imgs_raw.shape[-2:]
+        imgs_raw = np.reshape(np.array(imgz.imgs_raw), shape)
 
-        viewer.add_image(np.reshape(imgz.imgs_raw, shape),
+        viewer.add_image(imgs_raw,
                          scale=(dxy, dxy),
                          translate=translate_wf,
                          name="raw images")
@@ -3800,6 +3823,11 @@ def get_sinusoidal_patterns(dxy: float,
     else:
         xp = np
 
+    if amps is None:
+        amps = xp.array([1])
+
+    frqs = xp.atleast_2d(frqs)
+
     ny, nx = size
 
     # get binned coordinates
@@ -3823,8 +3851,8 @@ def get_sinusoidal_patterns(dxy: float,
 def get_hexagonal_patterns(dxy: float,
                            size: tuple[int],
                            frq_mag: float,
-                           phase1s,
-                           phase2s,
+                           phase1s: array,
+                           phase2s: array,
                            n_oversampled: int = 1,
                            use_gpu: bool = False) -> array:
     """
@@ -3841,7 +3869,7 @@ def get_hexagonal_patterns(dxy: float,
     :param phase2s:
     :param n_oversampled:
     :param use_gpu:
-    :return:
+    :return patterns:
     """
 
     if len(phase1s) != len(phase2s):
