@@ -573,7 +573,7 @@ def sinc_fn(x: array) -> array:
 
     x = xp.atleast_1d(x)
 
-    with np.errstate(divide='ignore'):
+    with np.errstate(divide='ignore', invalid='ignore'):
         y = xp.asarray(xp.sin(x) / x)
     y[x == 0] = 1
 
@@ -1475,103 +1475,87 @@ def solve_combined_condition(d: float,
                              wavelength: float,
                              order: Sequence[int]) -> (Callable, Callable):
     """
-    Return functions for the simultaneous blaze/diffraction condition solution as a function of ax or ay
-
+    Solve the combined diffraction/blaze condition. Since in general the system of equation is overdetermined,
+    return the vectors which solve the diffraction condition and minimize the blaze condition cost, defined by
+    C(a, b) = (b1-a1)^2 + (b2-a2)^2
+    Since this optimization problem is underdetermined, as it only depends on b-a, return callables which solve it
+    for specific values of ax or ay
 
     :param float d: DMD mirror pitch
     :param float gamma: DMD mirror angle along the x-y direction in radians
     :param rot_axis:
     :param float wavelength: wavelength in same units as DMD mirror pitch
     :param int order: (nx, ny) = (order, -order)
-    :return uvec_fn_ax:
-    :return uvec_fn_ay:
+    :return ab_from_ax: function which returns the full vectors a(ax), b(ax). If ax is a vector of length N,
+      then this will return two vectors of size 2 x N x 3, since there are two solutions for eaach ax
+    :return ab_from_ay: function which return the full vectors a(ay), b(ay)
     """
 
     nx, ny = order
     rot_mat = get_rot_mat(rot_axis, gamma)
 
     # differences between vectors b and a
-    bma_x = nx * wavelength / d
-    bma_y = ny * wavelength / d
+    # this condition derived from Lagrange multiplier method
     bma_z = -wavelength / d * (nx * (rot_mat[2, 0] * rot_mat[0, 0] + rot_mat[2, 1] * rot_mat[0, 1]) +
                                ny * (rot_mat[2, 0] * rot_mat[1, 0] + rot_mat[2, 1] * rot_mat[1, 1])) / \
             (rot_mat[2, 0]**2 + rot_mat[2, 1]**2)
 
-    bma_norm = np.sqrt(bma_x**2 + bma_y**2 + bma_z**2)
+    bma_norm = np.sqrt((nx * wavelength / d)**2 + (ny * wavelength / d)**2 + bma_z**2)
     b_dot_a = 0.5 * (2 - bma_norm**2)
 
-    # choose value for ax, then use ax*bx + ay*by - sqrt(1 - ax^2 - ay^2) * sqrt(1 - bx^2 - by^2) = K
+    # choose value for ax, then use ax*bx + ay*by - sqrt(1 - ax^2 - ay^2) * sqrt(1 - bx^2 - by^2) = b_dot_a
     # together with diffraction condition to obtain quadratic equation for ay
-    def uvec_fn_ax(ax, positive=True):
+    def ab_fn(ax, nx, ny):
+        # ax and bx
         ax = np.atleast_1d(ax)
-        bx = ax + bma_x
+        bx = ax + (nx * wavelength / d)
 
         # solve quadratic equation to get ay
-        a = 2 * (ax*bx - b_dot_a) + (1 - bx**2) + (1 - ax**2)
-        b = 2 * ny * wavelength / d * ((ax*bx - b_dot_a) + (1 - ax**2))
-        c = (ax*bx - b_dot_a)**2 - (1 - bx**2) * (1 - ax**2) + (1 - ax**2) * (ny * wavelength / d)**2
+        A = 2 * (ax * bx - b_dot_a) + (1 - bx ** 2) + (1 - ax ** 2)
+        B = 2 * ny * wavelength / d * ((ax * bx - b_dot_a) + (1 - ax ** 2))
+        C = (ax * bx - b_dot_a) ** 2 - (1 - bx ** 2) * (1 - ax ** 2) + (1 - ax ** 2) * (ny * wavelength / d) ** 2
 
         with np.errstate(invalid="ignore"):
-            if positive:
-                ay = (-b + np.sqrt(b**2 - 4 * a * c)) / (2 * a)
-            else:
-                ay = (-b - np.sqrt(b**2 - 4 * a * c)) / (2 * a)
-        by = ay + bma_y
+            # loss of significance
+            ay_pos = (-B + np.sqrt(B ** 2 - 4 * A * C)) / (2 * A)
+            ay_neg = (-B - np.sqrt(B ** 2 - 4 * A * C)) / (2 * A)
+        ay = np.stack((ay_pos, ay_neg), axis=0)
+        by = ay + (ny * wavelength / d)
 
         # solve az, bz from unit vector equation
-        az = -np.sqrt(1 - ax**2 - ay**2)
-        bz = np.sqrt(1 - bx**2 - by**2)
+        with np.errstate(invalid="ignore"):
+            az = -np.sqrt(1 - ax ** 2 - ay ** 2)
+            bz = np.sqrt(1 - bx ** 2 - by ** 2)
 
-        a = np.stack((ax, ay, az), axis=1)
-        b = np.stack((bx, by, bz), axis=1)
+        # rangle
+        a = np.stack(np.broadcast_arrays(ax, ay, az), axis=-1)
+        b = np.stack(np.broadcast_arrays(bx, by, bz), axis=-1)
 
-        disallowed = np.logical_or(np.any(np.isnan(a), axis=1), np.any(np.isnan(b), axis=1))
+        # since we derived our quadratic equation by squaring the equation of interest,
+        # must check which solutions solve initial eqn
+        soln_bad = np.abs(bx * ax + by * ay + bz * az - b_dot_a) > 1e-8
+
+        disallowed = np.logical_or(np.any(np.isnan(a + b), axis=-1), soln_bad)
         a[disallowed] = np.nan
         b[disallowed] = np.nan
 
-        # get blaze angle deviation
-        with np.errstate(invalid="ignore"):
-            b_blazed = solve_blaze_output(a, gamma, rot_axis)
-            blaze_angle_deviation = np.arccos(np.sum(b * b_blazed, axis=1))
+        return a, b
 
-        return a, b, blaze_angle_deviation
+    def ab_from_ax(ax): return ab_fn(ax, nx, ny)
+    # define function for ay from symmetry
+    def ab_from_ay(ay):
+        a_rev, b_rev = ab_fn(ay, ny, nx)
+        a = np.array(a_rev, copy=True)
+        a[..., 0] = a_rev[..., 1]
+        a[..., 1] = a_rev[..., 0]
 
-    # if prefer ay instead ...
-    def uvec_fn_ay(ay, positive=True):
-        ay = np.atleast_1d(ay)
-        by = ay + bma_y
+        b = np.array(b_rev, copy=True)
+        b[..., 0] = b_rev[..., 1]
+        b[..., 1] = b_rev[..., 0]
 
-        # solve quadratic equation to get ay
-        a = 2 * (ay * by - b_dot_a) + (1 - by ** 2) + (1 - ay ** 2)
-        b = 2 * nx * wavelength / d * ((ay * by - b_dot_a) + (1 - ay ** 2))
-        c = (ay * by - b_dot_a) ** 2 - (1 - by ** 2) * (1 - ay ** 2) + (1 - ay ** 2) * (nx * wavelength / d) ** 2
+        return a, b
 
-        with np.errstate(invalid="ignore"):
-            if positive:
-                ax = (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
-            else:
-                ax = (-b - np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
-        bx = ax + bma_x
-
-        # solve az, bz from unit vector equation
-        az = -np.sqrt(1 - ax ** 2 - ay ** 2)
-        bz = np.sqrt(1 - bx ** 2 - by ** 2)
-
-        a = np.stack((ax, ay, az), axis=1)
-        b = np.stack((bx, by, bz), axis=1)
-
-        disallowed = np.logical_or(np.any(np.isnan(a), axis=1), np.any(np.isnan(b), axis=1))
-        a[disallowed] = np.nan
-        b[disallowed] = np.nan
-
-        # get blaze angle deviation
-        with np.errstate(invalid="ignore"):
-            b_blazed = solve_blaze_output(a, gamma, rot_axis)
-            blaze_angle_deviation = np.arccos(np.sum(b * b_blazed, axis=1))
-
-        return a, b, blaze_angle_deviation
-
-    return uvec_fn_ax, uvec_fn_ay
+    return ab_from_ax, ab_from_ay
 
 
 def solve_blazed_pattern_frequency(dx: float,

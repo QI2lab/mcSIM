@@ -47,15 +47,15 @@ for jj in range(nc):
             if n < nmin or n > nmax:
                 continue
 
-            uvec_fn_ax, uvec_fn_ay = sdmd.solve_combined_condition(d, gamma, rot_axis, wavelength, (n, -n))
+            # solve combined blaze/diffraction conditions
+            ab_from_ax_fn, ab_from_ay_fn = sdmd.solve_combined_condition(d, gamma, rot_axis, wavelength, (n, -n))
+            a_from_ax, b_from_ax = ab_from_ax_fn(a_pts)
+            a_from_ay, b_from_ay = ab_from_ay_fn(a_pts)
 
-            at1, bt1, _ = uvec_fn_ax(a_pts, positive=True)
-            at2, bt2, _ = uvec_fn_ax(a_pts, positive=False)
-            at3, bt3, _ = uvec_fn_ay(a_pts, positive=True)
-            at4, bt4, _ = uvec_fn_ay(a_pts, positive=False)
+            # combine solutions
+            a_temps = np.concatenate((a_from_ax[0], a_from_ax[1], a_from_ay[0], a_from_ay[1]), axis=0)
+            b_temps = np.concatenate((b_from_ax[0], b_from_ax[1], b_from_ay[0], b_from_ay[1]), axis=0)
 
-            a_temps = np.concatenate((at1, at2, at3, at4), axis=0)
-            b_temps = np.concatenate((bt1, bt2, bt3, bt4), axis=0)
 
             not_nan = np.logical_not(np.any(np.isnan(a_temps), axis=1))
             ax_mid = np.mean(a_temps[not_nan, 0])
@@ -79,16 +79,21 @@ ph_on = []
 ph_off = []
 ax.plot(np.linspace(-1, 1, 300), -np.linspace(-1, 1, 300), 'k')
 for jj in range(nc):
-    ph = ax.plot(bxyzs[:, jj, :, 0].transpose(), bxyzs[:, jj, :, 1].transpose(), color=colors[jj])
+    ph = ax.plot(bxyzs[:, jj, :, 0].transpose(),
+                 bxyzs[:, jj, :, 1].transpose(),
+                 color=colors[jj])
     ph_on.append(ph[0])
 
     # use symmetry
-    ph2 = ax.plot(axyzs[:, jj, :, 0].transpose(), axyzs[:, jj, :, 1].transpose(), '--', color=colors[jj])
+    ph2 = ax.plot(axyzs[:, jj, :, 0].transpose(),
+                  axyzs[:, jj, :, 1].transpose(),
+                  '--',
+                  color=colors[jj])
     ph_off.append(ph2[0])
 ax.plot(0, 0, 'kx')
 
-strs_on = ["%dnm on, n=%d to %d" % (w*1e3, nlims[ii, 0], nlims[ii, 1]) for ii, w in enumerate(wavelengths)]
-strs_off = ["%dnm off" % (w*1e3) for w in wavelengths]
+strs_on = [f"{w*1e3:.0f}nm on, n={nlims[ii, 0]:d} to {nlims[ii, 1]:d}" for ii, w in enumerate(wavelengths)]
+strs_off = [f"{w*1e3:.0f}nm off" for w in wavelengths]
 ax.legend(ph_on + ph_off, strs_on + strs_off)
 ax.set_xlabel("output unit-vector component $b_x$")
 ax.set_ylabel("output unit-vector component $b_y$")
