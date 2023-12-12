@@ -173,13 +173,13 @@ def simulate_dmd(pattern: array,
  
     :param pattern: an NxM array. Dimensions of the DMD are determined from this. As usual, the upper left
      hand corner if this array represents the smallest x- and y- values
-    :param float wavelength: choose any units as long as consistent with dx, dy, wx, and wy.
-    :param float gamma_on: DMD mirror angle in radians
-    :param float gamma_off:
-    :param float dx: spacing between DMD pixels in the x-direction. Same units as wavelength.
-    :param float dy: spacing between DMD pixels in the y-direction. Same units as wavelength.
-    :param float wx: width of mirrors in the x-direction. Must be <= dx.
-    :param float wy: width of mirrors in the y-direction. Must be <= dy.
+    :param wavelength: choose any units as long as consistent with dx, dy, wx, and wy.
+    :param gamma_on: DMD mirror angle in radians
+    :param gamma_off:
+    :param dx: spacing between DMD pixels in the x-direction. Same units as wavelength.
+    :param dy: spacing between DMD pixels in the y-direction. Same units as wavelength.
+    :param wx: width of mirrors in the x-direction. Must be <= dx.
+    :param wy: width of mirrors in the y-direction. Must be <= dy.
     :param uvec_in: (ax, ay, az) direction of plane wave input to DMD
     :param uvecs_out: N x 3 array. Output unit vectors where diffraction should be computed.
     :param zshifts: if DMD is assumed to be non-flat, give height profile here. Array of the same size as pattern
@@ -543,7 +543,6 @@ def get_diffracted_power(pattern: array,
     orders_x = ns[allowed_any, 0]
     orders_y = ns[allowed_any, 1]
 
-    # todo: replace with dask
     with ProgressBar():
         r = [dask.delayed(calc_power_order)((orders_x[ii], orders_y[ii])) for ii in range(len(orders_x))]
         results = dask.compute(*r)
@@ -593,7 +592,7 @@ def get_rot_mat(rot_axis: Sequence[float],
     since vectors are acted on by the inverse matrix, they rotated in a right-handed sense about the given axis.
 
     :param rot_axis: unit vector specifying axis to rotate about, [nx, ny, nz]
-    :param float gamma: rotation angle in radians to transform point. A positive angle corresponds right-handed rotation
+    :param gamma: rotation angle in radians to transform point. A positive angle corresponds right-handed rotation
     about the given axis
     :return mat: 3x3 rotation matrix
     """
@@ -1075,10 +1074,10 @@ def blaze_envelope(wavelength: float,
     The overall electric field is given by
     E(b-a) = (diffraction from mirror pattern) x envelope(b-a)
 
-    :param float wavelength: wavelength of light. Units are arbitrary, but must be the same for wavelength, wx, and wy
-    :param float gamma: mirror swivel angle, in radians
-    :param float wx: mirror width in x-direction. Same units as wavelength.
-    :param float wy: mirror width in y-direction. Same units as wavelength.
+    :param wavelength: wavelength of light. Units are arbitrary, but must be the same for wavelength, wx, and wy
+    :param gamma: mirror swivel angle, in radians
+    :param wx: mirror width in x-direction. Same units as wavelength.
+    :param wy: mirror width in y-direction. Same units as wavelength.
     :param b_minus_a: array of size no x ... x nk x 3 difference between output (b) and input (a) unit vectors.
     :param rot_axis: unit vector about which the mirror swivels. Typically (1, 1, 0) / np.sqrt(2)
     :return envelope: same length as b_minus_a
@@ -1100,7 +1099,7 @@ def blaze_condition_fn(gamma: float,
     These are related to the overall electric field by
     E(b-a) = (diffraction from mirror pattern) x w**2 * sinc(0.5 * k * w * A_+) * sinc(0.5 * k * w * A_-)
 
-    :param float gamma: angle micro-mirror normal makes with device normal
+    :param gamma: angle micro-mirror normal makes with device normal
     :param b_minus_a: outgoing unit vector - incoming unit vector. array of shape n0 x n1 x ... x 3
     :param rot_axis: unit vector about which the mirror swivels. Typically use (1, 1, 0) / np.sqrt(2)
     :return val: A_+ or A_-, depending on the mode
@@ -1364,10 +1363,10 @@ def solve_1color_1d(wavelength: float,
 
     This function is a wrapper for solve_combined_condition() simplified for the 1D geometry.
 
-    :param float wavelength: wavelength of light
-    :param float d: mirror pitch (in same units as wavelength)
-    :param float gamma: angle mirror normal makes with DMD body normal
-    :param int order: diffraction order index. Full order index is (nx, ny) = (order, -order)
+    :param wavelength: wavelength of light
+    :param d: mirror pitch (in same units as wavelength)
+    :param gamma: angle mirror normal makes with DMD body normal
+    :param order: diffraction order index. Full order index is (nx, ny) = (order, -order)
 
     :return uvecs_in: list of input angle solutions as unit vectors
     :return uvecs_out: list of output angle solutions as unit vectors
@@ -1481,11 +1480,11 @@ def solve_combined_condition(d: float,
     Since this optimization problem is underdetermined, as it only depends on b-a, return callables which solve it
     for specific values of ax or ay
 
-    :param float d: DMD mirror pitch
-    :param float gamma: DMD mirror angle along the x-y direction in radians
+    :param d: DMD mirror pitch
+    :param gamma: DMD mirror angle along the x-y direction in radians
     :param rot_axis:
-    :param float wavelength: wavelength in same units as DMD mirror pitch
-    :param int order: (nx, ny) = (order, -order)
+    :param wavelength: wavelength in same units as DMD mirror pitch
+    :param order: (nx, ny) = (order, -order)
     :return ab_from_ax: function which returns the full vectors a(ax), b(ax). If ax is a vector of length N,
       then this will return two vectors of size 2 x N x 3, since there are two solutions for eaach ax
     :return ab_from_ay: function which return the full vectors a(ay), b(ay)
@@ -1573,9 +1572,9 @@ def solve_blazed_pattern_frequency(dx: float,
     the input direction a and output direction b(0) for the main grid diffraction order)
 
     :param rot_axis:
-    :param float dx:
-    :param float dy:
-    :param float gamma:
+    :param dx:
+    :param dy:
+    :param gamma:
     :param rot_axis:
     :param wavelength:
     :param bf: unit vector pointing along direction
@@ -1606,10 +1605,10 @@ def solve_diffraction_output_frq(frq: array,
 
     :param frq:
     :param uvec_out:
-    :param float dx:
-    :param float dy:
-    :param float wavelength:
-    :param (int, int) order: (nx, ny)
+    :param dx:
+    :param dy:
+    :param wavelength:
+    :param order: (nx, ny)
     :return b_out, uvec_in:
     """
 
@@ -2359,13 +2358,13 @@ def simulate_2d_angles(wavelengths: Sequence[float],
     In practice, want to use different input angles, but keep output angle fixed.
     Want to sample output angles...
 
-    :param list[float] wavelengths: list of wavelength, in um
-    :param float gamma: micromirror angle in "on" position, in radians
-    :param float dx: x-mirror pitch, in microns
-    :param float dy: y-mirror pitch, in microns
+    :param wavelengths: list of wavelength, in um
+    :param gamma: micromirror angle in "on" position, in radians
+    :param dx: x-mirror pitch, in microns
+    :param dy: y-mirror pitch, in microns
     :param tx_ins: NumPy array of input angles. Output results will simulate all combinations of x- and y- input angles
     :param ty_ins: NumPy array of output angles.
-    :param int ndiff_orders:
+    :param ndiff_orders:
     :return data: dictionary object containing simulation results
     """
 
@@ -2375,7 +2374,8 @@ def simulate_2d_angles(wavelengths: Sequence[float],
     n_wavelens = len(wavelengths)
 
     # diffraction orders to compute
-    nxs, nys = np.meshgrid(range(-ndiff_orders, ndiff_orders + 1), range(-ndiff_orders, ndiff_orders + 1))
+    nxs, nys = np.meshgrid(range(-ndiff_orders, ndiff_orders + 1),
+                           range(-ndiff_orders, ndiff_orders + 1))
 
     # input angles
     txtx_in, tyty_in = np.meshgrid(tx_ins, ty_ins)
