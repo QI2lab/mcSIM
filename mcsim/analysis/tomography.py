@@ -1269,10 +1269,7 @@ class tomography:
                 if optimizer == "born" or optimizer == "rytov":
                     e_fwd_out[block_ind] = to_cpu(ift2(model.fwd_model(ft3(get_v(n, no, wavelength)))))
                 else:
-                    if optimizer == BPM:
-                        slices = (slice(0, 1), slice(-1, None), slice(None), slice(None))  # [0, -1, :, :]
-                    else:
-                        slices = (slice(0, 1), slice(-1, None), slice(None), slice(None), slice(0, 1))  # [0, -1, :, :, 0]
+                    slices = (slice(0, 1), slice(-1, None), slice(None), slice(None))  # [0, -1, :, :]
 
                     tstart_efwd = time.perf_counter()
                     for ii in range(nimgs):
@@ -3355,6 +3352,7 @@ class RIOptimizer(Optimizer):
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
                  max_imaginary_part: float = np.inf,
+                 efield_cost_factor: float = 1.,
                  **kwargs
                  ):
         """
@@ -3392,6 +3390,10 @@ class RIOptimizer(Optimizer):
         self.dz_final = dz_final
         self.atf = atf
         self.apodization = apodization
+
+        self.efield_cost_factor = float(efield_cost_factor)
+        if self.efield_cost_factor > 1 or self.efield_cost_factor < 0:
+            raise ValueError(f"efield_cost_factor must be between 0 and 1, but was {self.efield_cost_factor}")
 
         if mask is not None:
             if mask.dtype.kind != "b":
@@ -3468,6 +3470,30 @@ class RIOptimizer(Optimizer):
         return x_real + 1j * x_imag
 
 
+    def cost(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        # todo: how to unify these?
+        e_fwd = self.fwd_model(x, inds=inds)
+
+        costs = 0
+        if self.efield_cost_factor > 0:
+            if self.mask is None:
+                costs += self.efield_cost_factor * 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+            else:
+                costs += self.efield_cost_factor * 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
+
+        if (1 - self.efield_cost_factor) > 0:
+            if self.mask is None:
+                costs += (1 - self.efield_cost_factor) * 0.5 * (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).mean(axis=(-1, -2))
+            else:
+                costs += (1 - self.efield_cost_factor) * 0.5 * (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).mean(axis=-1)
+
+        return costs
+
+
+
 class LinearScatt(RIOptimizer):
     def __init__(self,
                  eft: array,
@@ -3508,6 +3534,10 @@ class LinearScatt(RIOptimizer):
                                           None,
                                           None,
                                           **kwargs)
+
+        if self.efield_cost_factor != 1:
+            raise NotImplementedError(f"Linear scattering models only support self.efield_cost_factor=1, "
+                                      f"but values was {self.efield_cost_factor:.3f}")
 
         if isinstance(self.e_measured, cp.ndarray) and _gpu_available:
             self.model = sp_gpu.csr_matrix(model)
@@ -3605,6 +3635,7 @@ class LinearScatt(RIOptimizer):
         return super(LinearScatt, self).run(x_start, **kwargs)
 
 
+
 class BPM(RIOptimizer):
     """
     Beam propagation method (BPM)
@@ -3623,7 +3654,6 @@ class BPM(RIOptimizer):
                  atf: Optional[array] = None,
                  apodization: Optional[array] = None,
                  mask: Optional[array] = None,
-                 loss_mode: str = "efield",
                  **kwargs
                  ):
         """
@@ -3661,8 +3691,6 @@ class BPM(RIOptimizer):
                                   mask=mask,
                                   **kwargs)
 
-        self.loss_mode = loss_mode
-
         # include cosine oblique factor
         if self.beam_frqs is not None:
             self.thetas, _ = frqs2angles(self.beam_frqs, self.no, self.wavelength)
@@ -3698,17 +3726,12 @@ class BPM(RIOptimizer):
         e_fwd = self.fwd_model(x, inds=inds)
 
         # back propagation ... build the gradient from this to save memory
-        if self.loss_mode == "efield":
-            dtemp = e_fwd[:, -1, :, :] - self.e_measured[inds]
-        elif self.loss_mode == "intensity_sqr":
-            dtemp = (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) * e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])
-        elif self.loss_mode == "mix":
-            dtemp = 0.01 * (e_fwd[:, -1, :, :] - self.e_measured[inds]) + \
-                    0.99 * (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) * e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])
-        elif self.loss_mode == "intensity":
-            dtemp = (abs(e_fwd[:, -1, :, :])**2 - abs(self.e_measured[inds])**2) * 2*e_fwd[:, -1, :, :]
-        else:
-            raise ValueError()
+        dtemp = 0
+        if self.efield_cost_factor > 0:
+            dtemp += self.efield_cost_factor * (e_fwd[:, -1, :, :] - self.e_measured[inds])
+
+        if (1 - self.efield_cost_factor) > 0:
+            dtemp += (1 - self.efield_cost_factor) * (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) * e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])
 
         if self.mask is not None:
             dtemp *= self.mask
@@ -3749,39 +3772,6 @@ class BPM(RIOptimizer):
         dc_dn *= e_fwd[:, 1:-1, :, :]
 
         return dc_dn
-
-    def cost(self, x, inds=None):
-        if inds is None:
-            inds = list(range(self.n_samples))
-
-        e_fwd = self.fwd_model(x, inds=inds)
-
-        if self.loss_mode == "efield":
-            if self.mask is None:
-                costs = 0.5 * (abs(e_fwd[:, -1] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
-            else:
-                costs = 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
-        elif self.loss_mode == "mix":
-            if self.mask is None:
-                costs = 0.01 * 0.5 * (abs(e_fwd[:, -1] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2)) + \
-                        0.99 * 0.5 * (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).mean(axis=(-1, -2))
-            else:
-                costs = 0.01 * 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1) + \
-                        0.99 * 0.5 * (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).mean(axis=-1)
-        elif self.loss_mode == "intensity_sqr":
-            if self.mask is None:
-                costs = 0.5 * (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).mean(axis=(-1, -2))
-            else:
-                costs = 0.5 * (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).mean(axis=-1)
-        elif self.loss_mode == "intensity":
-            if self.mask is None:
-                costs = 0.5 * (abs(abs(e_fwd[:, -1])**2 - abs(self.e_measured[inds])**2) ** 2).mean(axis=(-1, -2))
-            else:
-                costs = 0.5 * (abs(abs(e_fwd[:, -1, self.mask])**2 - abs(self.e_measured[inds][:, self.mask])**2) ** 2).mean(axis=-1)
-        else:
-            raise ValueError()
-
-        return costs
 
     def get_estart(self, inds=None):
         if inds is None:
@@ -3845,11 +3835,20 @@ class SSNP(RIOptimizer):
         kz[xp.isnan(kz)] = 0
         self.kz = kz
 
-    def fwd_model(self, x, inds=None):
+
+    def phi_fwd(self, x, inds=None):
+        """
+        Return the forward model field and the forward model derivative. Since we do not measure the derivative,
+        we do not consider it part of our forward models
+
+        :param x:
+        :param inds:
+        :return:
+        """
         if inds is None:
             inds = list(range(self.n_samples))
 
-        # initial field
+            # initial field
         e_start, de_dz_start = self.get_estart(inds=inds)
 
         # forward propagation
@@ -3864,6 +3863,11 @@ class SSNP(RIOptimizer):
                                             apodization=self.apodization)
         return phi_fwd
 
+
+    def fwd_model(self, x, inds=None):
+        return self.phi_fwd(x, inds=inds)[..., 0]
+
+
     def gradient(self, x, inds=None):
         if isinstance(x, cp.ndarray) and _gpu_available:
             xp = cp
@@ -3873,12 +3877,19 @@ class SSNP(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        phi_fwd = self.fwd_model(x, inds=inds)
+        phi_fwd = self.phi_fwd(x, inds=inds)
 
         # back propagation
         # this is the backpropagated field, but we will eventually transform it into the gradient
         # do things this way to reduce memory overhead
-        dtemp = phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds]
+
+        # back propagation ... build the gradient from this to save memory
+        dtemp = 0
+        if self.efield_cost_factor > 0:
+            dtemp += self.efield_cost_factor * (phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds])
+
+        if (1 - self.efield_cost_factor) > 0:
+            dtemp += (1 - self.efield_cost_factor) * (abs(phi_fwd[:, -1, :, :, 0]) - abs(self.e_measured[inds])) * phi_fwd[:, -1, :, :, 0] / abs(phi_fwd[:, -1, :, :, 0])
 
         if self.mask is not None:
             dtemp *= self.mask
@@ -3910,22 +3921,8 @@ class SSNP(RIOptimizer):
         # conjugate in place to avoid using extra memory
         xp.conjugate(phi_fwd, out=phi_fwd)
         dc_dn *= phi_fwd[:, :-2, :, :, 0]
-        # dc_dn *= phi_fwd[:, :-2, :, :, 0].conj()
 
         return dc_dn
-
-    def cost(self, x, inds=None):
-        if inds is None:
-            inds = list(range(self.n_samples))
-
-        e_fwd = self.fwd_model(x, inds=inds)[..., 0]
-
-        if self.mask is None:
-            costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
-        else:
-            costs = 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
-
-        return costs
 
     def get_estart(self, inds=None):
         if inds is None:

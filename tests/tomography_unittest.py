@@ -1,5 +1,6 @@
 import unittest
 import mcsim.analysis.tomography as tm
+from mcsim.analysis.field_prop import angles2frqs
 from mcsim.analysis.fft import ft3
 import numpy as np
 import cupy as cp
@@ -33,7 +34,7 @@ class TestPatterns(unittest.TestCase):
 
         theta = 25 * np.pi / 180 * np.ones(npattern)
         phis = np.arange(npattern) / npattern * 2*np.pi
-        beam_frqs = tm.angles2frqs(no, wavelength, theta, phis)
+        beam_frqs = angles2frqs(no, wavelength, theta, phis)
 
         model = tm.fwd_model_linear(beam_frqs[..., 0],
                                     beam_frqs[..., 1],
@@ -85,7 +86,7 @@ class TestPatterns(unittest.TestCase):
 
         theta = 25 * np.pi / 180 * np.ones(npattern)
         phis = np.arange(npattern) / npattern * 2*np.pi
-        beam_frqs = tm.angles2frqs(no, wavelength, theta, phis)
+        beam_frqs = angles2frqs(no, wavelength, theta, phis)
 
         model = tm.fwd_model_linear(beam_frqs[..., 0],
                                     beam_frqs[..., 1],
@@ -148,7 +149,8 @@ class TestPatterns(unittest.TestCase):
                      (nz, ny, nx),
                      dz_final=dz_final,
                      atf=atf,
-                     mask=mask)
+                     mask=mask,
+                     efield_cost_factor=0.5)
 
         jind = np.ravel_multi_index((nz//2, ny//2, nx//2), n.shape)
         g, gn = opt.test_gradient(n, jind, inds=[0, 1])
@@ -189,7 +191,8 @@ class TestPatterns(unittest.TestCase):
                       (nz, ny, nx),
                       dz_final=dz_final,
                       atf=atf,
-                      mask=mask)
+                      mask=mask,
+                      efield_cost_factor=0.5)
 
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), n.shape)
         g, gn = opt.test_gradient(n, jind, inds=[0, 1])
