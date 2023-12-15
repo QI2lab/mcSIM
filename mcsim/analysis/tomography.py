@@ -2718,7 +2718,7 @@ def inverse_model_linear(efield_fts: array,
 def plot_odt_sampling(frqs: np.ndarray,
                       na_detect: float,
                       na_excite: float,
-                      ni: float,
+                      no: float,
                       wavelength: float,
                       **kwargs) -> matplotlib.figure.Figure:
     """
@@ -2727,22 +2727,21 @@ def plot_odt_sampling(frqs: np.ndarray,
     :param frqs: nfrqs x 2 array of [[fx0, fy0], [fx1, fy1], ...]
     :param na_detect: detection NA
     :param na_excite: excitation NA
-    :param ni: index of refraction of medium that samle is immersed in. This may differ from the immersion medium
-    of the objectives
+    :param ni: index of refraction of medium that sample is immersed in.
     :param wavelength:
     :param kwargs: passed through to figure
     :return figh:
     """
-    frq_norm = ni / wavelength
-    alpha_det = np.arcsin(na_detect / ni)
+    frq_norm = no / wavelength
+    alpha_det = np.arcsin(na_detect / no)
 
-    if na_excite / ni < 1:
-        alpha_exc = np.arcsin(na_excite / ni)
+    if na_excite / no < 1:
+        alpha_exc = np.arcsin(na_excite / no)
     else:
         # if na_excite is immersion objective and beam undergoes TIR at interface for full NA
         alpha_exc = np.pi/2
 
-    fzs = get_fzs(frqs[:, 0], frqs[:, 1], ni, wavelength)
+    fzs = get_fzs(frqs[:, 0], frqs[:, 1], no, wavelength)
     frqs_3d = np.concatenate((frqs, np.expand_dims(fzs, axis=1)), axis=1)
 
     figh = plt.figure(**kwargs)
@@ -2770,7 +2769,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     # draw arcs for the extremal angles
     fx_edge = na_excite / wavelength
-    fz_edge = np.sqrt((ni / wavelength)**2 - fx_edge**2)
+    fz_edge = np.sqrt((no / wavelength)**2 - fx_edge**2)
 
     ax.plot(-fx_edge, -fz_edge, 'r.')
     ax.plot(fx_edge, -fz_edge, 'r.')
@@ -2810,7 +2809,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     # draw arcs for the extremal angles
     fy_edge = na_excite / wavelength
-    fz_edge = np.sqrt((ni / wavelength)**2 - fy_edge**2)
+    fz_edge = np.sqrt((no / wavelength)**2 - fy_edge**2)
 
     ax.plot(-fy_edge, -fz_edge, 'r.')
     ax.plot(fy_edge, -fz_edge, 'r.')
@@ -2866,7 +2865,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     fxfx[ff > fmax] = np.nan
     fyfy[ff > fmax] = np.nan
-    fzfz = np.sqrt((ni / wavelength)**2 - fxfx**2 - fyfy**2)
+    fzfz = np.sqrt((no / wavelength)**2 - fxfx**2 - fyfy**2)
 
     # kx0, ky0, kz0
     fxyz0 = np.stack((fxfx, fyfy, fzfz), axis=-1)
@@ -2898,7 +2897,8 @@ def display_tomography_recon(recon_fname: str,
                              escatt_lim: tuple[float] = (-5., 5.),
                              block_while_display: bool = True,
                              real_cmap="bone",
-                             phase_cmap="RdBu"):
+                             phase_cmap="RdBu",
+                             scale_z: bool = True):
     """
     Display reconstruction results and (optionally) raw data in Napari
 
@@ -2917,8 +2917,6 @@ def display_tomography_recon(recon_fname: str,
     :return: viewer
     """
 
-    # todo: accept slice argument?
-
     import napari
 
     if raw_data_fname is not None:
@@ -2932,27 +2930,29 @@ def display_tomography_recon(recon_fname: str,
         show_efields = False
 
     # raw data sizes
-    dxy_cam = img_z.attrs["camera_path_attributes"]["dx_um"]
+    # dxy_cam = img_z.attrs["camera_path_attributes"]["dx_um"]
     proc_roi = img_z.attrs["processing roi"]
     ny = proc_roi[1] - proc_roi[0]
     nx = proc_roi[3] - proc_roi[2]
 
-    try:
-        cam_roi = img_z.attrs["camera_path_attributes"]["camera_roi"]
-        ny_raw = cam_roi[1] - cam_roi[0]
-        nx_raw = cam_roi[3] - cam_roi[2]
-    except KeyError:
-        ny_raw = ny
-        nx_raw = nx
+    # try:
+    #     cam_roi = img_z.attrs["camera_path_attributes"]["camera_roi"]
+    #     ny_raw = cam_roi[1] - cam_roi[0]
+    #     nx_raw = cam_roi[3] - cam_roi[2]
+    # except KeyError:
+    #     ny_raw = ny
+    #     nx_raw = nx
 
     drs_n = img_z.attrs["dr"]
     n_axis_names = img_z.attrs["dimensions"]
-    wavelength = img_z.attrs["wavelength"]
+    # wavelength = img_z.attrs["wavelength"]
     no = img_z.attrs["no"]
 
     # load affine xforms
     # Napari is using convention (y, x) whereas I'm using (x, y), so need to swap these dimensions in affine xforms
-    swap_xy = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+    swap_xy = np.array([[0, 1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
     try:
         affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
     except KeyError:
@@ -3075,7 +3075,6 @@ def display_tomography_recon(recon_fname: str,
         if compute:
             print("loading fwd electric fields")
             with ProgressBar():
-                # c = dask.compute([e_fwd])
                 e_fwd = e_fwd.compute()
 
         e_fwd_abs = da.abs(e_fwd)
@@ -3100,7 +3099,12 @@ def display_tomography_recon(recon_fname: str,
     if compute:
         n_extra_dims = n_real.ndim - 4
         nz = n_real.shape[-3]
-        npatt = e_abs.shape[-4]
+
+        if show_efields:
+            npatt = e_abs.shape[-4]
+        else:
+            npatt = 1
+
         bcast_shape = (1,) * n_extra_dims + (npatt, nz) + (1, 1)
 
         # broadcast refractive index arrays
@@ -3138,7 +3142,10 @@ def display_tomography_recon(recon_fname: str,
     # ######################
     viewer = napari.Viewer(title=str(recon_fname))
 
-    scale = (drs_n[0] / drs_n[1], 1, 1)
+    if scale_z:
+        scale = (drs_n[0] / drs_n[1], 1, 1)
+    else:
+        scale = (1, 1, 1)
 
     # ######################
     # raw data
