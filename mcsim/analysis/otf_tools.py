@@ -9,19 +9,19 @@ Actually, we need to the fourier transform of the intensity for our DMD pattern 
 of the imaging system on the coherent light.
 """
 
+from typing import Optional
 import time
 import numpy as np
 from scipy import fft
-import scipy.signal
-import scipy.optimize
-from typing import Optional
+from scipy.signal import fftconvolve
+from scipy.signal.windows import hann
+from scipy.optimize import minimize
 import matplotlib
 from matplotlib.colors import PowerNorm, Normalize
 from matplotlib.patches import Circle
 import matplotlib.pyplot as plt
 from mcsim.analysis import dmd_patterns, simulate_dmd, sim_reconstruction
 import mcsim.analysis.analysis_tools as tools
-from mcsim.analysis.field_prop import frqs2angles, get_fzs
 from localize_psf import affine, fit_psf
 
 
@@ -99,7 +99,7 @@ def get_int_fc(efield_fc: np.ndarray) -> np.ndarray:
     if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
         raise ValueError("not implemented for even sized arrays")
 
-    intensity_fc = scipy.signal.fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
+    intensity_fc = fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
 
     return intensity_fc
 
@@ -126,7 +126,7 @@ def get_int_fc_pol(efield_fc: np.ndarray,
         raise ValueError("not implemented for even sized arrays")
 
     # define convolution
-    def conv(efield): return scipy.signal.fftconvolve(efield, np.flip(efield, axis=(0, 1)).conj(), mode='same')
+    def conv(efield): return fftconvolve(efield, np.flip(efield, axis=(0, 1)).conj(), mode='same')
 
     # convert frequencies in distance units to polar angles
     raise NotImplementedError("todo: need to fix call to frq2angles from field_prop")
@@ -195,19 +195,19 @@ def get_all_fourier_exp(imgs: np.ndarray,
     :return: (intensity, frq_vects_expt)
     """
     if to_use is None:
-        to_use = np.ones(frq_vects_theory[:, :, :, 0].shape, dtype=np.int)
+        to_use = np.ones(frq_vects_theory[:, :, :, 0].shape, dtype=int)
 
     nimgs = frq_vects_theory.shape[0]
     n1_vecs = frq_vects_theory.shape[1]
     n2_vecs = frq_vects_theory.shape[2]
 
-    intensity = np.zeros(frq_vects_theory.shape[:-1], dtype=np.complex) * np.nan
+    intensity = np.zeros(frq_vects_theory.shape[:-1], dtype=complex) * np.nan
     intensity_unc = np.zeros(intensity.shape) * np.nan
 
     # apodization, 2D window from broadcasting
     nx_roi = roi[3] - roi[2]
     ny_roi = roi[1] - roi[0]
-    window = scipy.signal.windows.hann(nx_roi)[None, :] * scipy.signal.windows.hann(ny_roi)[:, None]
+    window = hann(nx_roi)[None, :] * hann(ny_roi)[:, None]
 
     # generate frequency data for image FT's
     fxs = fft.fftshift(fft.fftfreq(nx_roi, pixel_size_um))
@@ -271,21 +271,28 @@ def get_all_fourier_exp(imgs: np.ndarray,
                 else:
                     # fit real fourier component in image space
                     # only need wavelength and na to get fmax
-                    frq_vects_expt[ii, aa, bb], mask, _ = sim_reconstruction.fit_modulation_frq(img_ft, img_ft,
-                                                                                                pixel_size_um, fmax_img,
-                                                                                                frq_guess=
-                                                                                                frq_vects_theory[
-                                                                                                    ii, aa, bb],
+                    frq_vects_expt[ii, aa, bb], mask, _ = sim_reconstruction.fit_modulation_frq(img_ft,
+                                                                                                img_ft,
+                                                                                                pixel_size_um,
+                                                                                                fmax_img,
+                                                                                                frq_guess=frq_vects_theory[ii, aa, bb],
                                                                                                 max_frq_shift=max_frq_shift)
 
-                    sim_reconstruction.plot_correlation_fit(img_ft, img_ft, frq_vects_expt[ii, aa, bb],
-                                                            pixel_size_um, fmax_img,
-                                                            frqs_guess=frq_vects_theory[ii, aa, bb], roi_size=3)
+                    sim_reconstruction.plot_correlation_fit(img_ft,
+                                                            img_ft,
+                                                            frq_vects_expt[ii, aa, bb],
+                                                            pixel_size_um,
+                                                            fmax_img,
+                                                            frqs_guess=frq_vects_theory[ii, aa, bb],
+                                                            roi_size=3)
 
                 try:
                     # get peak value and phase
-                    intensity[ii, aa, bb] = tools.get_peak_value(img_ft, fxs, fys, frq_vects_expt[ii, aa, bb],
-                                                                         peak_pixel_size=peak_pix)
+                    intensity[ii, aa, bb] = tools.get_peak_value(img_ft,
+                                                                 fxs,
+                                                                 fys,
+                                                                 frq_vects_expt[ii, aa, bb],
+                                                                 peak_pixel_size=peak_pix)
 
                     intensity_unc[ii, aa, bb] = np.sqrt(noise_power) * peak_pix ** 2
 
@@ -324,15 +331,14 @@ def get_all_fourier_thry(vas,
     npatterns = len(vas)
 
     norders = 2 * nmax + 1
-    efield_theory = np.zeros((npatterns, norders, norders), dtype=np.complex) * np.nan
+    efield_theory = np.zeros((npatterns, norders, norders), dtype=complex) * np.nan
     frq_vects_dmd = np.zeros((npatterns, norders, norders, 2))
 
     tstart = time.process_time()
     for ii in range(npatterns):
         tnow = time.process_time()
         print("%d/%d, elapsed time = %0.2fs" % (ii + 1, npatterns, tnow - tstart))
-        # sys.stdout.write("\033[F")
-        # sys.stdout.flush()
+
         va = vas[ii]
         vb = vbs[ii]
 
@@ -404,10 +410,17 @@ def get_intensity_fourier_thry(efields,
             tx_out = dmd_params["theta_outs"][0] + dmd_params["wavelength"] * fx / dmd_params["dx"]
             ty_out = dmd_params["theta_outs"][1] + dmd_params["wavelength"] * fy / dmd_params["dy"]
 
-            uvec_in = simulate_dmd.xy2uvector(dmd_params["theta_ins"][0], dmd_params["theta_ins"][1], True)
-            uvec_out = simulate_dmd.xy2uvector(tx_out, ty_out, False)
-            envelope = simulate_dmd.blaze_envelope(dmd_params["wavelength"], dmd_params["gamma"], dmd_params["wx"],
-                                               dmd_params["wy"], uvec_in - uvec_out)
+            uvec_in = simulate_dmd.xy2uvector(dmd_params["theta_ins"][0],
+                                              dmd_params["theta_ins"][1],
+                                              True)
+            uvec_out = simulate_dmd.xy2uvector(tx_out,
+                                               ty_out,
+                                               False)
+            envelope = simulate_dmd.blaze_envelope(dmd_params["wavelength"],
+                                                   dmd_params["gamma"],
+                                                   dmd_params["wx"],
+                                                   dmd_params["wy"],
+                                                   uvec_in - uvec_out)
             return envelope * (np.sqrt(fx ** 2 + fy ** 2) <= fmax_efield_ex)
     else:
         def pupil_fn(fx, fy):
@@ -418,18 +431,26 @@ def get_intensity_fourier_thry(efields,
 
     # compute frequency vectors in camera space (1/pixels)
     frq_vects_cam = np.zeros(frq_vects_dmd.shape)
-    frq_vects_cam[..., 0], frq_vects_cam[..., 1], _ = affine.xform_sinusoid_params_roi(
-        frq_vects_dmd[..., 0], frq_vects_dmd[..., 1], 0, dmd_shape, roi, affine_xform,
-        input_origin="fft", output_origin="fft")
+    frq_vects_cam[..., 0], frq_vects_cam[..., 1], _ = affine.xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
+                                                                                       frq_vects_dmd[..., 1],
+                                                                                       0,
+                                                                                       dmd_shape,
+                                                                                       roi,
+                                                                                       affine_xform,
+                                                                                       input_origin="fft",
+                                                                                       output_origin="fft")
 
     # correct frequency vectors in camera space to be in real units (1/um)
     frq_vects_um = frq_vects_cam / pixel_size_um
 
     # calculate intensities for each image
-    intensity_theory = np.zeros(efields.shape, dtype=np.complex) * np.nan
+    intensity_theory = np.zeros(efields.shape, dtype=complex) * np.nan
     for ii in range(frq_vects_cam.shape[0]):
         if use_polarization_correction:
-            intensity_theory[ii] = get_int_fc_pol(efields[ii] * pupil[ii], frq_vects_um[ii], wavelength_ex, index_of_refraction)
+            intensity_theory[ii] = get_int_fc_pol(efields[ii] * pupil[ii],
+                                                  frq_vects_um[ii],
+                                                  wavelength_ex,
+                                                  index_of_refraction)
         else:
             intensity_theory[ii] = get_int_fc(efields[ii] * pupil[ii])
 
@@ -437,12 +458,18 @@ def get_intensity_fourier_thry(efields,
     intensity_theory = intensity_theory / np.max(np.abs(intensity_theory), axis=(1, 2))[:, None, None]
 
     # compute phase in new coordinates
-    _, _, intensity_phases = affine.xform_sinusoid_params_roi(frq_vects_dmd[..., 0], frq_vects_dmd[..., 1],
-                                                                      np.angle(intensity_theory),
-                                                                      dmd_shape, roi, affine_xform, input_origin="fft", output_origin="fft")
+    _, _, intensity_phases = affine.xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
+                                                              frq_vects_dmd[..., 1],
+                                                              np.angle(intensity_theory),
+                                                              dmd_shape,
+                                                              roi,
+                                                              affine_xform,
+                                                              input_origin="fft",
+                                                              output_origin="fft")
     intensity_theory_xformed = np.abs(intensity_theory) * np.exp(1j * intensity_phases)
 
     return intensity_theory, intensity_theory_xformed, frq_vects_cam, frq_vects_um
+
 
 def fit_phase_diff(phase_th,
                    phase_expt,
@@ -463,12 +490,15 @@ def fit_phase_diff(phase_th,
 
     def phase_xform_fn(phi, fx, fy, p): return np.mod(phi + 2 * np.pi * fx * p[0] + 2 * np.pi * fy * p[1], 2 * np.pi)
 
-    def min_fn(p): return np.nansum(np.abs(phase_diff_fn(phase_xform_fn(phase_th, frqs[:, 0], frqs[:, 1], p), phase_expt)))
+    def min_fn(p): return np.nansum(np.abs(phase_diff_fn(phase_xform_fn(phase_th, frqs[:, 0], frqs[:, 1], p),
+                                                         phase_expt)))
 
-    results = scipy.optimize.minimize(min_fn, [0, 0])
+    results = minimize(min_fn, [0, 0])
 
     figh = plt.figure()
-    plt.plot(np.linalg.norm(frqs, axis=-1), phase_xform_fn(phase_th, frqs[:, 0], frqs[:, 1], results["x"]), '.')
+    plt.plot(np.linalg.norm(frqs, axis=-1),
+             phase_xform_fn(phase_th, frqs[:, 0], frqs[:, 1], results["x"]),
+             '.')
     plt.plot(np.linalg.norm(frqs, axis=-1), np.mod(phase_th, 2*np.pi), '.')
     plt.plot(np.linalg.norm(frqs, axis=-1), np.mod(phase_expt, 2*np.pi), 'x')
     plt.legend(["th fit", "th", "expt"])
@@ -513,7 +543,7 @@ def plot_pattern(img: np.ndarray,
     """
 
     if to_use is None:
-        to_use = np.ones(peak_int_exp.shape, dtype=np.bool)
+        to_use = np.ones(peak_int_exp.shape, dtype=bool)
 
     fmags = np.linalg.norm(frq_vects, axis=-1)
     n1max = int(np.round(0.5 * (fmags.shape[0] - 1)))
@@ -540,8 +570,7 @@ def plot_pattern(img: np.ndarray,
 
     extent = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx, fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]
 
-
-    window = scipy.signal.windows.hann(nx)[None, :] * scipy.signal.windows.hann(ny)[:, None]
+    window = hann(nx)[None, :] * hann(ny)[:, None]
     img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_roi * window)))
 
     # plot results
@@ -588,7 +617,6 @@ def plot_pattern(img: np.ndarray,
         circ2 = Circle((0, 0), radius=(fmax_in/2), color='r', fill=0, ls='--')
         ax.add_artist(circ2)
 
-
     plt.xlim([-fmax_img, fmax_img])
     plt.ylim([fmax_img, -fmax_img])
 
@@ -616,13 +644,11 @@ def plot_pattern(img: np.ndarray,
         phs.append(ph)
         legend_entries.append("experiment")
 
-
     ax.set_ylim([1e-4, 1.2])
     ax.set_xlim([-0.1 * fmax_img, 1.1 * fmax_img])
     ax.set_yscale('log')
 
     plt.legend(phs, legend_entries)
-
 
     # plot phase
     ax = plt.subplot(grid[1, 2:4])
@@ -667,6 +693,7 @@ def plot_pattern(img: np.ndarray,
 
     return figh
 
+
 def plot_otf(frq_vects,
              fmax_img: float,
              otf,
@@ -690,11 +717,10 @@ def plot_otf(frq_vects,
         otf_unc = np.zeros(otf.shape)
 
     if to_use is None:
-        to_use = np.ones(otf.shape, dtype=np.int)
+        to_use = np.ones(otf.shape, dtype=int)
 
     nmax1 = int(np.round(0.5 * (otf.shape[1] - 1)))
     nmax2 = int(np.round(0.5 * (otf.shape[2] - 1)))
-
 
     fmag = np.linalg.norm(frq_vects, axis=-1)
 
@@ -703,7 +729,6 @@ def plot_otf(frq_vects,
     na = 1
     wavelength = 2 * na / fmax_img
     otf_ideal = fit_psf.circ_aperture_otf(fmag_interp, 0, na, wavelength)
-
 
     figh = plt.figure(figsize=figsize)
     grid = plt.GridSpec(2, 6)
@@ -724,15 +749,17 @@ def plot_otf(frq_vects,
     # plot main series peaks
     for jj in range(1, 6):
         ph = plt.errorbar(fmag[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]],
-                     np.abs(otf[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]]),
-                     yerr=otf_unc[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]],
-                     color=colors[jj - 1], fmt=".")
+                          np.abs(otf[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]]),
+                          yerr=otf_unc[:, nmax1, nmax2 + jj][to_use[:, nmax1, nmax2 + jj]],
+                          color=colors[jj - 1],
+                          fmt=".")
         phs.append(ph)
 
         plt.errorbar(fmag[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]],
                      np.abs(otf[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]]),
                      yerr=otf_unc[:, nmax1, nmax2 - jj][to_use[:, nmax1, nmax2 - jj]],
-                     color=colors[jj - 1], fmt=".")
+                     color=colors[jj - 1],
+                     fmt=".")
 
     plt.legend(phs, labels)
 
