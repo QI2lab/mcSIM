@@ -1108,7 +1108,7 @@ class SimImageSet:
                     compute_deconvolved: bool = False,
                     compute_mcnr: bool = False,
                     compute_sr: bool = True,
-                    frq_search_bounds: tuple[float] = (0, np.inf)):
+                    frq_search_bounds: tuple[float] = (0., 1.)):
         """
         SIM reconstruction
 
@@ -1118,6 +1118,8 @@ class SimImageSet:
         :param compute_deconvolved:
         :param compute_mcnr:
         :param compute_sr:
+        :param frq_search_bounds: (fmin_search, fmax_search) as fractions of fmax. Note that the upperbound
+          must be increased above 1 for TIRF-SIM data.
         :return:
         """
 

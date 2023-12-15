@@ -56,7 +56,8 @@ imgset.reconstruct(slices=(slice(0, 1),), # determine SIM parameters from first 
                    compute_os=False,
                    compute_deconvolved=False,
                    compute_mcnr=True,
-                   frq_search_bounds=(0, 0.95))
+                   # frq_search_bounds=(0, 0.95)
+                   )
 
 # ###########################################
 # print parameters
