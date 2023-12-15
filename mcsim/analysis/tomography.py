@@ -3336,6 +3336,63 @@ def display_tomography_recon(recon_fname: str,
 
     return viewer
 
+def get_2d_projections(n: np.ndarray,
+                       z_to_xy_ratio: float = 1,
+                       use_slice: bool = False,
+                       n_pix_sep: int = 5
+                       ):
+    """
+    Generate an image showing 3 orthogonal projections from a 3D array.
+
+    :param n: 3D array
+    :param z_to_xy_ratio: pixel size ratio dz/dxy
+    :param use_slice: use the central slice. If False, max project
+    :param n_pix_sep: number of blank pixels between projections
+    :return img: 2D image showing projections
+    """
+
+    nz, ny, nx = n.shape
+
+    if use_slice:
+        iz = nz // 2
+        iy = ny // 2
+        ix = nx // 2
+        n_xy = n[iz]
+        n_yz_before_xform = n[:, :, ix].transpose()
+        n_xz_before_xform = n[:, iy, :]
+    else:
+        # max projection
+        n_xy = np.max(n, axis=0)
+        n_yz_before_xform = np.max(n, axis=2).transpose()
+        n_xz_before_xform = np.max(n, axis=1)
+
+    ny_img = ny + n_pix_sep + int(np.ceil(nz * z_to_xy_ratio))
+    nx_img = nx + n_pix_sep + int(np.ceil(nz * z_to_xy_ratio))
+
+    img = np.zeros((ny_img, nx_img))
+
+    # xy slice
+    img[:ny, :nx] = n_xy
+
+    xx, yy = np.meshgrid(range(nx_img), range(ny_img))
+
+    # yz slice
+    xform_yz = affine.params2xform([z_to_xy_ratio, 0, nx + n_pix_sep, 1, 0, 0])
+    n_yz = affine.xform_mat(n_yz_before_xform,
+                            xform_yz,
+                            (xx[:ny, nx + n_pix_sep:], yy[:ny, nx + n_pix_sep:]))
+    img[:ny, nx + n_pix_sep:] = n_yz
+
+    xform_xz = affine.params2xform([1, 0, 0, z_to_xy_ratio, 0, ny + n_pix_sep])
+    n_xz = affine.xform_mat(n_xz_before_xform,
+                            xform_xz,
+                            (xx[ny + n_pix_sep:, :nx],
+                             yy[ny + n_pix_sep:, :nx]))
+    img[ny + n_pix_sep:, :nx] = n_xz
+
+    img[np.isnan(img)] = 0
+
+    return img
 
 class RIOptimizer(Optimizer):
 
