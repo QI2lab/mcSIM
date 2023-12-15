@@ -1107,7 +1107,8 @@ class SimImageSet:
                     compute_os: bool = False,
                     compute_deconvolved: bool = False,
                     compute_mcnr: bool = False,
-                    compute_sr: bool = True):
+                    compute_sr: bool = True,
+                    frq_search_bounds: tuple[float] = (0, np.inf)):
         """
         SIM reconstruction
 
@@ -1128,7 +1129,12 @@ class SimImageSet:
         # #############################################
         # parameter estimation
         # #############################################
-        self.estimate_parameters(slices=slices)
+        frq_search_bounds = np.array(frq_search_bounds)
+        frq_search_bounds[0] *= self.fmax
+        frq_search_bounds[1] *= self.fmax
+
+        self.estimate_parameters(slices=slices,
+                                 frq_search_bounds=frq_search_bounds)
 
         # if self.use_gpu:
         #     mempool = cp.get_default_memory_pool()
@@ -2668,7 +2674,10 @@ def fit_modulation_frq(mft1: np.ndarray,
             mask[np.sqrt(fxfx ** 2 + fyfy ** 2) > fbounds[1]] = False
 
         # get initial frq_guess by looking at cc at discrete frequency set and finding max
-        subscript = np.unravel_index(np.argmax(cc / otf_cc * mask), cc.shape)
+        with np.errstate(divide="ignore"):
+            to_max = cc / otf_cc
+        to_max[np.logical_not(mask)] = 0.
+        subscript = np.unravel_index(np.argmax(to_max), cc.shape)
 
         init_params = np.array([fxfx[subscript], fyfy[subscript]])
     else:
