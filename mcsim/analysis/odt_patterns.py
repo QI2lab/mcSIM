@@ -257,7 +257,8 @@ def get_odt_patterns(center_set: list[np.ndarray],
                      fc: np.ndarray,
                      phase: float = 0.,
                      drs: Optional[list[np.ndarray]] = None,
-                     use_off_mirrors: bool = True) -> (np.ndarray, list[dict]):
+                     use_off_mirrors: bool = True,
+                     use_thick_lines: bool = False) -> (np.ndarray, list[dict]):
     """
     Generate pattern arrays
 
@@ -273,6 +274,7 @@ def get_odt_patterns(center_set: list[np.ndarray],
     :param phase:
     :param drs: distances (dx, dy) in um
     :param use_off_mirrors:
+    :param use_thick_lines:
     :return odt_patterns, odt_pattern_data:
     """
 
@@ -289,7 +291,11 @@ def get_odt_patterns(center_set: list[np.ndarray],
     xx, yy = np.meshgrid(range(nx), range(ny))
 
     npatterns = len(center_set)
-    odt_patterns = np.ones((npatterns, ny, nx), dtype=bool)
+    if use_off_mirrors:
+        odt_patterns = np.ones((npatterns, ny, nx), dtype=bool)
+    else:
+        odt_patterns = np.zeros((npatterns, ny, nx), dtype=bool)
+
     odt_pattern_data = []
     for ii, centers_now in enumerate(center_set):
 
@@ -313,7 +319,8 @@ def get_odt_patterns(center_set: list[np.ndarray],
             pnow[pnow <= 0] = 0
             pnow[pnow > 0] = 1
 
-            if use_off_mirrors:
+            # todo: may need to correct logic for on states
+            if not use_thick_lines:
                 pnow = 1 - pnow
 
             odt_patterns[ii, to_use] = pnow
