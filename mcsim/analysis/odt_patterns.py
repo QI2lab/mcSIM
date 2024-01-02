@@ -257,10 +257,9 @@ def get_odt_patterns(center_set: list[np.ndarray],
                      fc: np.ndarray,
                      phase: float = 0.,
                      drs: Optional[list[np.ndarray]] = None,
-                     use_off_mirrors: bool = True,
-                     use_thick_lines: bool = False) -> (np.ndarray, list[dict]):
+                     use_off_mirrors: bool = True) -> (np.ndarray, list[dict]):
     """
-    Generate pattern arrays
+    Generate DMD patterns from a list of center positions
 
     :param center_set:
     :param dmd_size: (ny, nx)
@@ -272,9 +271,9 @@ def get_odt_patterns(center_set: list[np.ndarray],
     :param dm: DMD mirror size in um
     :param fc: in 1/mirrors
     :param phase:
-    :param drs: distances (dx, dy) in um
+    :param drs: distances (dx, dy) in um for the final beam to be displaced from the center of the field-of-view
+      This should be a list of arrays of the same size as center_set.
     :param use_off_mirrors:
-    :param use_thick_lines:
     :return odt_patterns, odt_pattern_data:
     """
 
@@ -286,8 +285,6 @@ def get_odt_patterns(center_set: list[np.ndarray],
         drs = [np.zeros((center_set[ii].shape)) for ii in range(len(center_set))]
 
     ny, nx = dmd_size
-
-    cref = np.array([nx // 2, ny // 2])
     xx, yy = np.meshgrid(range(nx), range(ny))
 
     npatterns = len(center_set)
@@ -297,6 +294,7 @@ def get_odt_patterns(center_set: list[np.ndarray],
         odt_patterns = np.zeros((npatterns, ny, nx), dtype=bool)
 
     odt_pattern_data = []
+    # loop over patterns
     for ii, centers_now in enumerate(center_set):
 
         drs_now = drs[ii]
@@ -309,9 +307,10 @@ def get_odt_patterns(center_set: list[np.ndarray],
         # frq_mirrors = frq * dm  = h_bfp * mag / (f * wavelength) * dm
         frqs_mirrors = drs_now * mag_dmd2bfp / (fl_detection * wavelength) * dm + fc
 
+        # loop over centers and create spots
         for kk in range(len(centers_now)):
-            to_use = np.sqrt((xx - cref[0] - centers_now[kk, 0] * pupil_rad_mirrors) ** 2 +
-                             (yy - cref[1] - centers_now[kk, 1] * pupil_rad_mirrors) ** 2) <= rad
+            to_use = np.sqrt((xx - (nx // 2) - centers_now[kk, 0] * pupil_rad_mirrors) ** 2 +
+                             (yy - (ny // 2) - centers_now[kk, 1] * pupil_rad_mirrors) ** 2) <= rad
 
             pnow = np.round(
                 np.cos(2 * np.pi * (xx[to_use] * frqs_mirrors[kk, 0] +
@@ -319,8 +318,7 @@ def get_odt_patterns(center_set: list[np.ndarray],
             pnow[pnow <= 0] = 0
             pnow[pnow > 0] = 1
 
-            # todo: may need to correct logic for on states
-            if not use_thick_lines:
+            if use_off_mirrors:
                 pnow = 1 - pnow
 
             odt_patterns[ii, to_use] = pnow
@@ -328,6 +326,7 @@ def get_odt_patterns(center_set: list[np.ndarray],
         pupil_fracs = np.linalg.norm(centers_now, axis=1) / pupil_rad_mirrors
         pupil_angles = np.arctan2(centers_now[:, 1], centers_now[:, 0])
 
+        # record pattern metadata
         odt_pattern_data.append({"type": "odt",
                                  "drs": drs_now.tolist(),
                                  "nposition_multiplex": nr,
