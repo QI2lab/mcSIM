@@ -3340,7 +3340,7 @@ def get_2d_projections(n: np.ndarray,
                        z_to_xy_ratio: float = 1,
                        use_slice: bool = False,
                        n_pix_sep: int = 5
-                       ):
+                       ) -> np.ndarray:
     """
     Generate an image showing 3 orthogonal projections from a 3D array.
 
@@ -3393,6 +3393,45 @@ def get_2d_projections(n: np.ndarray,
     img[np.isnan(img)] = 0
 
     return img
+
+def get_color_projection(n: np.ndarray,
+                         contrast_limits=(0, 1),
+                         mask: Optional[np.ndarray] = None,
+                         cmap="turbo") -> (np.ndarray, np.ndarray):
+    """
+    Given a 3D refractive index distribution, take the max-z projection and color code the results
+    by height. For each xy position, only consider the voxel along z with the maximum value.
+    Display this in the final array in a color based on the height where that voxel was.
+
+    :param n: refractive index array of size n0 x ... x nm x nz x ny x nx
+    :param contrast_limits: (nmin, nmax)
+    :param mask: only consider points where mask value is True
+    :param cmap: matplotlib colormap
+    :return: n_proj, colors
+    """
+
+    if mask is None:
+        maxz_args = np.argmax(n, axis=-3)
+    else:
+        maxz_args = np.argmax(n * mask, axis=-3)
+
+    nz, _, _ = n.shape[-3:]
+    shape = list(n.shape + (3,))
+    shape[-4] = 1
+
+    colors = plt.get_cmap(cmap)(np.linspace(0, 1, nz))
+
+    n_proj = np.zeros(shape, dtype=float)
+    for ii in range(nz):
+        to_use = maxz_args == ii
+
+        intensity = (n[..., ii, :, :][to_use] - contrast_limits[0]) / ((contrast_limits[1] - contrast_limits[0]))
+        intensity[intensity < 0] = 0
+        intensity[intensity > 1] = 1
+
+        n_proj[np.expand_dims(to_use, axis=-3), :] = np.expand_dims(intensity, axis=-1) * colors[ii, :3][None, :]
+
+    return n_proj, colors
 
 class RIOptimizer(Optimizer):
 
