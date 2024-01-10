@@ -3397,7 +3397,9 @@ def get_2d_projections(n: np.ndarray,
 def get_color_projection(n: np.ndarray,
                          contrast_limits=(0, 1),
                          mask: Optional[np.ndarray] = None,
-                         cmap="turbo") -> (np.ndarray, np.ndarray):
+                         cmap="turbo",
+                         max_z: bool = False,
+                         background_color: np.ndarray = np.array([0., 0., 0.])) -> (np.ndarray, np.ndarray):
     """
     Given a 3D refractive index distribution, take the max-z projection and color code the results
     by height. For each xy position, only consider the voxel along z with the maximum value.
@@ -3409,6 +3411,8 @@ def get_color_projection(n: np.ndarray,
     :param cmap: matplotlib colormap
     :return: n_proj, colors
     """
+
+    background_color = np.asarray(background_color)
 
     if mask is None:
         maxz_args = np.argmax(n, axis=-3)
@@ -3423,13 +3427,20 @@ def get_color_projection(n: np.ndarray,
 
     n_proj = np.zeros(shape, dtype=float)
     for ii in range(nz):
-        to_use = maxz_args == ii
+        if max_z:
+            to_use = maxz_args == ii
+        else:
+            to_use = np.ones(n[..., ii, :, :].shape, dtype=bool)
 
         intensity = (n[..., ii, :, :][to_use] - contrast_limits[0]) / ((contrast_limits[1] - contrast_limits[0]))
         intensity[intensity < 0] = 0
         intensity[intensity > 1] = 1
 
-        n_proj[np.expand_dims(to_use, axis=-3), :] = np.expand_dims(intensity, axis=-1) * colors[ii, :3][None, :]
+        n_proj[np.expand_dims(to_use, axis=-3), :] += np.expand_dims(intensity, axis=-1) * colors[ii, :3][None, :]
+
+    # different background color
+    is_bg = np.sum(n_proj, axis=-1) == 0
+    n_proj[is_bg, :] = background_color
 
     return n_proj, colors
 
