@@ -7,7 +7,7 @@ and the frequency coordinates are found from
 fftshift(fftfreq(n, dr))
 """
 
-from typing import Union
+from typing import Union, Sequence
 import numpy as np
 import numpy.fft as fft_cpu
 
@@ -21,6 +21,7 @@ except ImportError:
     _gpu_available = False
 
 array = Union[np.ndarray, cp.ndarray]
+
 
 # ######################
 # 2D Fourier transform recipes
@@ -69,8 +70,8 @@ def ft2_adj(m: array, axes: tuple[int] = (-1, -2), plan=None, no_cache: bool = F
     images w and v the following inner products are equal:
     <w, ft(v)> = <ft_adj(w), v>
 
-    adjoint operations are FT or IFT with exponential conjugated, so would be swapping FT and IFT except for normalization
-    changing normalization to "forward" instead of the default "backwards" is all else we need
+    adjoint operations are FT or IFT with exponential conjugated, so would be swapping FT and IFT except for
+    normalization changing normalization to "forward" instead of the default "backwards" is all else we need
 
     :param m:
     :param axes:
@@ -102,6 +103,32 @@ def ift2_adj(m: array, axes: tuple[int] = (-1, -2), plan=None, no_cache: bool = 
         return fft_gpu.fftshift(fft_gpu.fft2(fft_gpu.ifftshift(m, axes=axes), norm="forward", axes=axes, plan=plan), axes=axes)
     else:
         return fft_cpu.fftshift(fft_cpu.fft2(fft_cpu.ifftshift(m, axes=axes), norm="forward", axes=axes), axes=axes)
+
+
+def irft2(m: array, axes: tuple = (-1, -2)) -> array:
+    """
+    2D inverse real Fourier transform which can use either CPU or GPU
+
+    :param m:
+    :param axes:
+    :return ft:
+    """
+    # note: at first had self.use_gpu here, but then next map_blocks fn took ~1 minute to run!
+    # so think I should avoid calls to self
+    # todo: should adhere more closely to ft2
+    if isinstance(m, cp.ndarray) and _gpu_available:
+        xp = cp
+    else:
+        xp = np
+
+    # irfft2 ~2X faster than ifft2
+    # # Have to keep full -2 axis because need two full quadrants for complete fft info
+    one_sided = xp.fft.ifftshift(m, axes=axes)[..., :m.shape[-1] // 2 + 1]
+
+    # note: for irfft2 must match shape and axes, so order important
+    result = xp.fft.fftshift(xp.fft.irfft2(one_sided, s=m.shape[-2:], axes=(-2, -1)), axes=(-1, -2))
+
+    return result
 
 
 # ######################
@@ -145,3 +172,38 @@ def ift3(m: array, axes: tuple[int] = (-1, -2, -3), plan=None, no_cache: bool = 
         return fft_gpu.fftshift(fft_gpu.ifftn(fft_gpu.ifftshift(m, axes=axes), axes=axes, plan=plan), axes=axes)
     else:
         return fft_cpu.fftshift(fft_cpu.ifftn(fft_cpu.ifftshift(m, axes=axes), axes=axes), axes=axes)
+
+
+# ######################
+# ND Fourier transform recipes
+# ######################
+def conj_transpose_fft(img_ft: array,
+                       axes: Sequence[int] = (-1, -2)) -> array:
+    """
+    Given img_ft(f), return a new array
+    img_new_ft(f) := conj(img_ft(-f))
+
+    :param img_ft:
+    :param axes: axes on which to perform the transformation
+    """
+
+    if isinstance(img_ft, cp.ndarray) and _gpu_available:
+        xp = cp
+    else:
+        xp = np
+
+    # convert axes to positive number
+    axes = np.mod(np.array(axes), img_ft.ndim)
+
+    # flip and conjugate
+    img_ft_ct = xp.flip(xp.conj(img_ft), axis=tuple(axes))
+
+    # for odd FFT size, can simply flip the array to take f -> -f
+    # for even FFT size, have on more negative frequency than positive frequency component.
+    # by flipping array, have put the negative frequency components on the wrong side of the array
+    # (i.e. where the positive frequency components are)
+    # so must roll array to put them back on the right side
+    to_roll = [a for a in axes if np.mod(img_ft.shape[a], 2) == 0]
+    img_ft_ct = xp.roll(img_ft_ct, shift=[1] * len(to_roll), axis=tuple(to_roll))
+
+    return img_ft_ct
