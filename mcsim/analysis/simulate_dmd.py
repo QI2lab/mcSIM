@@ -649,6 +649,13 @@ def get_rot_mat_angle_axis(rot_mat: np.ndarray) -> (np.ndarray, float):
     # transformed rotation matrix
     r_bc = np.linalg.inv(mat_basis_change).dot(rot_mat.dot(mat_basis_change))
     angle = np.arcsin(r_bc[1, 0]).real
+    
+    # the pairs (e3, angle) and (-e3, -angle) represent the same matrix
+    # choose the pair so that the largest component of e3 is positive
+    ind_max = np.argmax(np.abs(e3))
+    if e3[ind_max] < 0:
+        e3 = -e3
+        angle = -angle
 
     return e3, angle
 
