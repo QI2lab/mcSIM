@@ -89,6 +89,7 @@ array = Union[np.ndarray, cp.ndarray]
 _dlp_1stgen_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0.)
 
 
+# todo: migrate functions to this class
 class DMD:
     def __init__(self,
                  dx: float,
@@ -98,7 +99,9 @@ class DMD:
                  gamma_on: float,
                  gamma_off: float,
                  rot_axis_on: Sequence[float] = _dlp_1stgen_axis,
-                 rot_axis_off: Sequence[float] = _dlp_1stgen_axis):
+                 rot_axis_off: Sequence[float] = _dlp_1stgen_axis,
+                 nx: Optional[int] = None,
+                 ny: Optional[int] = None):
         """
 
         :param dx: spacing between DMD pixels in the x-direction. Same units as wavelength.
@@ -120,8 +123,9 @@ class DMD:
         self.dy = float(dy)
         self.wx = float(wx)
         self.wy = float(wy)
-        self.rot_axis_on = rot_axis_on
-        self.rot_axis_off = rot_axis_off
+        self.rot_axis_on = np.asarray(rot_axis_on)
+        self.rot_axis_off = np.asarray(rot_axis_off)
+        self.size = (ny, nx)
 
     def simulate_pattern(self,
                          wavelength: float,
@@ -133,6 +137,7 @@ class DMD:
                          efield_profile: Optional[array] = None):
         """
 
+        :param wavelength:
         :param pattern:
         :param uvec_in: (ax, ay, az) direction of plane wave input to DMD
         :param uvecs_out: N x 3 array. Output unit vectors where diffraction should be computed.
@@ -143,6 +148,66 @@ class DMD:
         :return:
         """
         pass
+
+class DLP7000(DMD):
+    def __init__(self):
+        super(DLP7000, self).__init__(13.68,
+                                      13.68,
+                                      13.68,
+                                      13.68,
+                                      12 * np.pi / 180,
+                                      -12 * np.pi / 180,
+                                      rot_axis_on=_dlp_1stgen_axis,
+                                      rot_axis_off=_dlp_1stgen_axis,
+                                      nx=1024,
+                                      ny=768)
+
+class DLP6500(DMD):
+    def __init__(self):
+        super(DLP6500, self).__init__(7.56,
+                                      7.56,
+                                      7.56,
+                                      7.56,
+                                      12 * np.pi/180,
+                                      -12 * np.pi/180,
+                                      rot_axis_on=_dlp_1stgen_axis,
+                                      rot_axis_off=_dlp_1stgen_axis,
+                                      nx=1920,
+                                      ny=1080)
+
+class DLP5500(DMD):
+    def __init__(self):
+        super(DLP5500, self).__init__(10.8,
+                                      10.8,
+                                      10.8,
+                                      10.8,
+                                      12 * np.pi / 180,
+                                      -12 * np.pi / 180,
+                                      rot_axis_on=_dlp_1stgen_axis,
+                                      rot_axis_off=_dlp_1stgen_axis,
+                                      nx=1024,
+                                      ny=768)
+class DLP4710(DMD):
+    def __init__(self):
+        r1 = get_rot_mat(np.array([1 / np.sqrt(2), -1 / np.sqrt(2), 0]), 12 * np.pi / 180)
+        r2 = get_rot_mat(np.array([1 / np.sqrt(2), 1 / np.sqrt(2), 0]), 12 * np.pi / 180)
+
+        # convert on rotation matrix to equivalent rotation about single axis
+        r_on = r2.transpose().dot(r1)
+        rot_axis_on, gamma_on = get_rot_mat_angle_axis(r_on)
+        r_off = r2.dot(r1)
+        rot_axis_off, gamma_off = get_rot_mat_angle_axis(r_off)
+
+        super(DLP4710, self).__init__(5.4,
+                                      5.4,
+                                      5.4,
+                                      5.4,
+                                      gamma_on,
+                                      gamma_off,
+                                      rot_axis_on=rot_axis_on,
+                                      rot_axis_off=rot_axis_off,
+                                      nx=1920,
+                                      ny=1080)
 
 
 def simulate_dmd(pattern: array,
@@ -835,7 +900,7 @@ def pm2uvector(tm: array,
 
     :param tm:
     :param tp:
-    :param mode:
+    :param incoming:
     :return:
     """
     tx, ty = angle2xy(tp, tm)
@@ -944,7 +1009,7 @@ def get_fourier_plane_basis(optical_axis_uvec: Sequence[float]):
     along the y-axis if optical_axis_uvec = (0, 0, 1).
 
     :param optical_axis_uvec: unit vector defining the optical axis
-    :return xb, yb:
+    :return xb, yb: (xb, yb, optical_axis_uvec) form a right-handed coordinate system
     """
     xb = np.array([optical_axis_uvec[2], 0, -optical_axis_uvec[0]]) / np.sqrt(optical_axis_uvec[0] ** 2 + optical_axis_uvec[2] ** 2)
     yb = np.cross(optical_axis_uvec, xb)
@@ -1471,7 +1536,6 @@ def solve_2color_on_off(d: float,
                                      -gamma_on),
                           axis=-1)
 
-
     return b_vecs, a_vecs_on, a_vecs_off
 
 
@@ -1634,6 +1698,7 @@ def solve_diffraction_output_frq(frq: array,
 # ###########################################
 # 1D simulation in x-y plane and multiple wavelengths
 # ###########################################
+# todo: combine simulate_1d and simulate_2d
 def simulate_1d(pattern: array,
                 wavelengths: list,
                 gamma_on: float,
@@ -1668,16 +1733,15 @@ def simulate_1d(pattern: array,
     :return data: dictionary storing simulation results
     """
 
-    if isinstance(tm_ins, (float, int)):
-        tm_ins = np.array([tm_ins])
+    tm_ins = np.atleast_1d(tm_ins)
     ninputs = len(tm_ins)
 
     if tm_out_offsets is None:
         tm_out_offsets = np.linspace(-45, 45, 2400) * np.pi / 180
+    tm_out_offsets = np.atleast_1d(tm_out_offsets)
     noutputs = len(tm_out_offsets)
 
-    if isinstance(wavelengths, float):
-        wavelengths = [wavelengths]
+    wavelengths = np.atleast_1d(wavelengths)
     n_wavelens = len(wavelengths)
 
     # input angles
@@ -1961,7 +2025,9 @@ def simulate_2d(pattern: array,
     :param pattern: binary pattern of arbitrary size
     :param wavelengths: list of wavelengths to compute
     :param gamma_on: mirror angle in ON position, relative to the DMD normal
+    :param rot_axis_on:
     :param gamma_off:
+    :param rot_axis_off:
     :param dx: spacing between DMD pixels in the x-direction. Same units as wavelength.
     :param dy: spacing between DMD pixels in the y-direction. Same units as wavelength.
     :param wx: width of mirrors in the x-direction. Must be < dx.
@@ -1971,23 +2037,17 @@ def simulate_2d(pattern: array,
     :param tout_offsets: offsets from the blaze condition to solve problem
     :param ndiff_orders:
     :return data: dictionary storing simulation results
-    :param rot_axis_on:
-    :param rot_axis_off:
     """
 
     if tout_offsets is None:
         tout_offsets = np.linspace(-25, 25, 50) * np.pi / 180
     txtx_out_offsets, tyty_out_offsets = np.meshgrid(tout_offsets, tout_offsets)
 
-    if isinstance(wavelengths, float):
-        wavelengths = [wavelengths]
-
-    if isinstance(tx_in, (float, int)):
-        tx_in = np.array([tx_in])
-    if isinstance(ty_in, (float, int)):
-        ty_in = np.array([ty_in])
-
+    wavelengths = np.atleast_1d(wavelengths)
     n_wavelens = len(wavelengths)
+
+    tx_in = np.atleast_1d(tx_in)
+    ty_in = np.atleast_1d(ty_in)
 
     # input directions
     txtx_in, tyty_in = np.meshgrid(tx_in, ty_in)
@@ -2216,9 +2276,15 @@ def plot_2d_sim(data: dict,
                           radius=1, color='g', fill=0, ls='-'))
 
             # diffraction peaks
-            ax.scatter(diff_tx_out * 180 / np.pi, diff_ty_out * 180 / np.pi, edgecolor='y', facecolor='none')
+            ax.scatter(diff_tx_out * 180 / np.pi,
+                       diff_ty_out * 180 / np.pi,
+                       edgecolor='y',
+                       facecolor='none')
             # diffraction zeroth order
-            ax.scatter(diff_tx_out[iz] * 180 / np.pi, diff_ty_out[iz] * 180 / np.pi, edgecolor='m', facecolor='none')
+            ax.scatter(diff_tx_out[iz] * 180 / np.pi,
+                       diff_ty_out[iz] * 180 / np.pi,
+                       edgecolor='m',
+                       facecolor='none')
 
             ax.set_xlim(xlim)
             ax.set_ylim(ylim)
@@ -2403,7 +2469,9 @@ def simulate_2d_angles(wavelengths: Sequence[float],
         # loop over wavelengths
         for jj in range(n_wavelens):
             # solve diffraction orders
-            uvec_out_diff[jj][ind] = solve_diffraction_output(uvec_in, dx, dy,
+            uvec_out_diff[jj][ind] = solve_diffraction_output(uvec_in,
+                                                              dx,
+                                                              dy,
                                                               wavelengths[jj],
                                                               nxs,
                                                               nys)
