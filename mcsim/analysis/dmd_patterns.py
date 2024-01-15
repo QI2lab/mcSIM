@@ -8,21 +8,27 @@ dimension.
 """
 from typing import Union, Optional, Sequence
 import time
+import datetime
 import json
 from pathlib import Path
+import matplotlib.figure
 import numpy as np
 from PIL import Image
 from scipy import fft
 from scipy.signal import fftconvolve
 from scipy.signal.windows import hann
 import tifffile
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
 #
 import mcsim.analysis.analysis_tools as tools
+from mcsim.analysis.fft import conj_transpose_fft
 from mcsim.analysis import simulate_dmd
 from localize_psf import affine
+
+array = Union[np.ndarray, np.ndarray]
 
 
 def get_sim_pattern(dmd_size: Sequence[int],
@@ -285,7 +291,7 @@ def get_unit_cell(vec_a: np.ndarray,
                   vec_b: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray):
     """
     Generate a mask which represents one unit cell of a pattern for given vectors.
-    This mask is a square array with NaNs at positions outside of the unit cell, and
+    This mask is a square array with NaNs at positions outside the unit cell, and
     zeros at points in the cell.
 
     The unit cell is the area enclosed by [0, vec_a, vec_b, vec_a + vec_b]. For pixels, we say that
@@ -297,16 +303,17 @@ def get_unit_cell(vec_a: np.ndarray,
     :param vec_a: [dxa, dya]
     :param vec_b: [dxb, dyb]
 
-    :return cell:
-    :return x:
-    :return y:
+    :return cell: values are 0 for valid points and NaN for invalid points
+    :return x: x-coordinates
+    :return y: y-coordinates
     """
 
     # test that vec_a and vec_b components are integers
     for vecs in [vec_a, vec_b]:
-        for v in vec_a:
+        for v in vecs:
             if not float(v).is_integer():
-                raise ValueError("At least one component of vec_a or vec_b cannot be interpreted as an integer")
+                raise ValueError(f"At least one component of lattice vector={vecs} cannot "
+                                 f"be interpreted as an integer")
 
     # copy vector data, so don't affect inputs
     vec_a = np.array(vec_a, copy=True, dtype=int)
@@ -431,7 +438,7 @@ def reduce2cell(point: np.ndarray,
     for vec in [va, vb]:
         for v in vec:
             if not float(v).is_integer():
-                raise ValueError("at least one component of va or vb could nto be interpreted as an integer.")
+                raise ValueError("at least one component of va or vb could not be interpreted as an integer.")
 
     point = np.array(point, copy=True)
     va = np.array(va, copy=True, dtype=int)
@@ -487,13 +494,13 @@ def reduce2cell(point: np.ndarray,
     return point_red, na_out, nb_out
 
 
-def convert_cell(cell1,
-                 x1,
-                 y1,
-                 va1,
-                 vb1,
-                 va2,
-                 vb2):
+def convert_cell(cell1: np.ndarray,
+                 x1: np.ndarray,
+                 y1: np.ndarray,
+                 va1: np.ndarray,
+                 vb1: np.ndarray,
+                 va2: np.ndarray,
+                 vb2: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray):
     """
     Given a unit cell described by vectors va1 and vb2, convert to equivalent description
     in terms of va2, vb2
@@ -526,11 +533,11 @@ def convert_cell(cell1,
     return cell2, x2, y2
 
 
-def get_minimal_cell(cell,
-                     x,
-                     y,
-                     va,
-                     vb):
+def get_minimal_cell(cell: np.ndarray,
+                     x: np.ndarray,
+                     y: np.ndarray,
+                     va: np.ndarray,
+                     vb: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
     Convert to cell using smallest lattice vectors
     :param cell:
@@ -550,7 +557,7 @@ def show_cell(v1: np.ndarray,
               cell: np.ndarray,
               x: np.ndarray,
               y: np.ndarray,
-              **kwargs):
+              **kwargs) -> matplotlib.figure.Figure:
     """
     Plot unit cell and periodicity vectors
 
@@ -566,10 +573,10 @@ def show_cell(v1: np.ndarray,
     v1 = np.array(v1, copy=True).ravel()
     v2 = np.array(v2, copy=True).ravel()
 
-    if not v1.dtype.kind in np.typecodes["AllInteger"] or \
-       not v2.dtype.kind in np.typecodes["AllInteger"]:
+    if v1.dtype.kind not in np.typecodes["AllInteger"] or \
+       v2.dtype.kind not in np.typecodes["AllInteger"]:
         raise ValueError(f"v1 and v2 had data types '{v1.dtype}' and '{v2.dtype}', "
-                         f"but both be type 'int'")
+                         f"but both must be type 'int'")
 
     # plot
     fig = plt.figure(**kwargs)
@@ -578,11 +585,24 @@ def show_cell(v1: np.ndarray,
                  f" $v_1$ = ({v1[0]:d}, {v1[1]:d}),"
                  f" $v_2$ = ({v2[0]:d}, {v2[1]:d})")
 
-    ax.imshow(np.abs(cell), origin='lower', extent=[x[0] - 0.5, x[-1] + 0.5, y[0] - 0.5, y[-1] + 0.5])
-    ax.plot([0, v1[0]], [0, v1[1]], 'r', label="$v_1$")
-    ax.plot([0, v2[0]], [0, v2[1]], 'g', label="$v_2$")
-    ax.plot([v2[0], v2[0] + v1[0]], [v2[1], v2[1] + v1[1]], 'r')
-    ax.plot([v1[0], v2[0] + v1[0]], [v1[1], v2[1] + v1[1]], 'g')
+    ax.imshow(np.abs(cell),
+              origin='lower',
+              extent=[x[0] - 0.5, x[-1] + 0.5,
+                      y[0] - 0.5, y[-1] + 0.5])
+    ax.plot([0, v1[0]],
+            [0, v1[1]],
+            'r',
+            label="$v_1$")
+    ax.plot([0, v2[0]],
+            [0, v2[1]],
+            'g',
+            label="$v_2$")
+    ax.plot([v2[0], v2[0] + v1[0]],
+            [v2[1], v2[1] + v1[1]],
+            'r')
+    ax.plot([v1[0], v2[0] + v1[0]],
+            [v1[1], v2[1] + v1[1]],
+            'g')
     ax.legend()
     ax.set_xlabel("x")
     ax.set_ylabel("y")
@@ -592,15 +612,17 @@ def show_cell(v1: np.ndarray,
 
 # determine parameters of SIM patterns
 def get_reciprocal_vects(vec_a: np.ndarray,
-                         vec_b: np.ndarray,
-                         mode: str = 'frequency') -> (np.ndarray, np.ndarray):
+                         vec_b: np.ndarray) -> (np.ndarray, np.ndarray):
     """
     Compute the reciprocal vectors for (real-space) lattice vectors vec_a and vec_b.
     exp[ i 2*pi*ai * bj] = 1
 
     If we call the lattice vectors a_i and the
-    reciprocal vectors b_j, then these should be defined such that dot(a_i, b_j) = delta_{ij} if the b_j are frequency
-    like, or dot(a_i, b_j) = 2*pi * delta_{ij} if the b_j are angular-frequency like.
+    reciprocal vectors b_j, then these should be defined such that dot(a_i, b_j) = delta_{ij}.
+
+    This means the b_j are frequency like (i.e. equivalent of Hz). Note that they are instead sometimes defined
+     dot(a_i, b_j) = 2*pi * delta_{ij},
+    which would make them angular-frequency like (i.e. in radians).
 
     Cast this as matrix problem
     [[Ax, Ay]   *  [[R1_x, R2_x]   =  [[1, 0]
@@ -608,9 +630,8 @@ def get_reciprocal_vects(vec_a: np.ndarray,
 
     :param vec_a:
     :param vec_b:
-    :param mode: 'frequency' or 'angular-frequency'
-    :return reciprocal_vect1:
-    :return reciprocal_vect2:
+    :return reciprocal_vect1: frequency-like
+    :return reciprocal_vect2: frequency-like
     """
     vec_a_temp = np.array(vec_a, copy=True)
     vec_a_temp = vec_a_temp.reshape([vec_a_temp.size, 1])
@@ -631,14 +652,6 @@ def get_reciprocal_vects(vec_a: np.ndarray,
     except np.linalg.LinAlgError:
         raise ValueError("vec_a_temp and vec_b_temp are linearly dependent, "
                          "so their reciprocal vectors could not be computed.")
-
-    if mode == 'angular-frequency':
-        reciprocal_vect1 = reciprocal_vect1 * (2 * np.pi)
-        reciprocal_vect2 = reciprocal_vect2 * (2 * np.pi)
-    elif mode == 'frequency':
-        pass
-    else:
-        raise ValueError("'mode' should be 'frequency' or 'angular-frequency', but was '%s'" % mode)
 
     return reciprocal_vect1, reciprocal_vect2
 
@@ -825,7 +838,7 @@ def get_pattern_fourier_component(unit_cell,
     :return frq_vector: recp_vec_a * n + recp_vec_b * m
     """
 
-    recp_vect_a, recp_vect_b = get_reciprocal_vects(vec_a, vec_b, mode='frequency')
+    recp_vect_a, recp_vect_b = get_reciprocal_vects(vec_a, vec_b)
     frq_vector = na * recp_vect_a + nb * recp_vect_b
 
     # fourier component is integral over unit cell
@@ -844,8 +857,6 @@ def get_pattern_fourier_component(unit_cell,
 
         # now correct for
         nx, ny = dmd_size
-        # x_pattern = tools.get_fft_pos(nx)
-        # y_pattern = tools.get_fft_pos(ny)
         x_pattern = np.arange(nx) - (nx // 2)
         y_pattern = np.arange(ny) - (ny // 2)
         # center coordinate in the edge coordinate system
@@ -1175,8 +1186,11 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
                 affine.xform_sinusoid_params(vecs[ii, jj, 0], vecs[ii, jj, 1], 0, affine_xform)
 
             try:
-                efield_fc_xformed[ii, jj] = tools.get_peak_value(pattern_xformed_ft, fxs, fys,
-                                                                 vecs_xformed[ii, jj], peak_pixel_size=2)
+                efield_fc_xformed[ii, jj] = tools.get_peak_value(pattern_xformed_ft,
+                                                                 fxs,
+                                                                 fys,
+                                                                 vecs_xformed[ii, jj],
+                                                                 peak_pixel_size=2)
             except:  # todo: what exception is this supposed to catch?
                 efield_fc_xformed[ii, jj] = 0
 
@@ -1205,8 +1219,8 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
     # intensity fourier components from autocorrelation
     # intensity_fc_xformed = scipy.signal.fftconvolve(efield_fc_xformed, efield_fc_xformed, mode='same')
     intensity_fc_xformed = fftconvolve(efield_fc_xformed,
-                                                    np.flip(efield_fc_xformed, axis=(0, 1)).conj(),
-                                                    mode='same')
+                                       np.flip(efield_fc_xformed, axis=(0, 1)).conj(),
+                                       mode='same')
     intensity_fc_xformed = intensity_fc_xformed * (frqs <= 1)
     intensity_fc_xformed = intensity_fc_xformed * (frqs <= 2*fmax)
 
@@ -1223,8 +1237,8 @@ def show_fourier_components(vec_a: np.ndarray,
                             vecs: np.ndarray,
                             plot_lims: Sequence[float] = (1e-4, 1),
                             gamma: float = 0.1,
-                            figsize: Sequence[float] = (20, 10),
-                            **kwargs):
+                            figsize: Sequence[float] = (20., 10.),
+                            **kwargs) -> matplotlib.figure.Figure:
     """
     Display strength of fourier components for a given pattern. Display function for data generated with
     `get_bandlimited_fourier_components()`. See that function for more information about parameters
@@ -2231,7 +2245,7 @@ def vects2pattern_data(dmd_size: Sequence[int],
                        wavelength: Optional[float] = None,
                        invert: bool = False,
                        pitch: float = 7560,
-                       generate_patterns: bool = True):
+                       generate_patterns: bool = True) -> (np.ndarray, dict):
     """
     Generate pattern and useful data (angles, phases, frequencies, reciprocal vectors, ...) from the lattice
     vectors for a given pattern set.
@@ -2291,7 +2305,21 @@ def vects2pattern_data(dmd_size: Sequence[int],
     if invert:
         patterns = 1 - patterns
 
-    return patterns, vec_as, vec_bs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle
+    data = {'vec_as': vec_as,
+            'vec_bs': vec_bs,
+            'frqs': frqs,
+            'angles': angles,
+            'periods': periods,
+            'phases': phases,
+            'nx': int(dmd_size[0]),
+            'ny': int(dmd_size[1]),
+            'recp_vects_a': recp_vects_a,
+            'recp_vects_b': recp_vects_b,
+            'min_leakage_angle': float(min_leakage_angle),
+            'dmd_pitch': float(pitch),
+            'wavelength': float(wavelength)}
+
+    return patterns, data
 
 
 def plot_sim_pattern_sets(patterns: np.ndarray,
@@ -2316,9 +2344,14 @@ def plot_sim_pattern_sets(patterns: np.ndarray,
 
     nangles, nphases, ny, nx = patterns.shape
 
-    _, vas, vbs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle = \
-        vects2pattern_data([nx, ny], vas, vbs, nphases=nphases, wavelength=wavelength,
-                           generate_patterns=False, pitch=pitch)
+    _, data = vects2pattern_data([nx, ny],
+                                 vas,
+                                 vbs,
+                                 nphases=nphases,
+                                 wavelength=wavelength,
+                                 generate_patterns=False,
+                                 pitch=pitch)
+    min_leakage_angle = data["min_leakage_angle"]
 
     # display summary of patterns
     figh = plt.figure(figsize=figsize, **kwargs)
@@ -2391,7 +2424,7 @@ def export_pattern_set(dmd_size: Sequence[int],
                        pitch: float = 7560.,
                        wavelength: float = 1.,
                        save_dir: str = 'sim_patterns',
-                       plot_results: bool = False):
+                       plot_results: bool = False) -> (np.ndarray, dict, matplotlib.figure.Figure):
     """
     Export a single set of SIM patterns, i.e. single wavelength, single period
 
@@ -2408,28 +2441,25 @@ def export_pattern_set(dmd_size: Sequence[int],
     """
     save_dir = Path(save_dir)
     save_dir.mkdir(exist_ok=True)
+    tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 
-    patterns, vec_as, vec_bs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle = \
-        vects2pattern_data(dmd_size, vec_as, vec_bs, nphases=nphases, wavelength=None, invert=invert, pitch=pitch)
-
+    patterns, data = vects2pattern_data(dmd_size,
+                                        vec_as,
+                                        vec_bs,
+                                        nphases=nphases,
+                                        wavelength=None,
+                                        invert=invert,
+                                        pitch=pitch)
+    periods = data["periods"]
+    data["tstamp"] = tstamp
     nangles, _, ny, nx = patterns.shape
 
-    # save data
-    data = {'vec_as': vec_as.tolist(),
-            'vec_bs': vec_bs.tolist(),
-            'frqs': frqs.tolist(),
-            'angles': angles.tolist(),
-            'periods': periods.tolist(),
-            'phases': phases.tolist(),
-            'nx': int(dmd_size[0]),
-            'ny': int(dmd_size[1]),
-            'recp_vects_a': recp_vects_a.tolist(),
-            'recp_vects_b': recp_vects_b.tolist(),
-            'min_leakage_angle': float(min_leakage_angle),
-            'dmd_pitch': float(pitch),
-            'wavelength': float(wavelength)}
+    for k, v in data.items():
+        if isinstance(v, np.ndarray):
+            data[k] = v.tolist()
 
-    fpath = save_dir / f"sim_patterns_period={np.mean(periods):.2f}_nangles={nangles:d}.json"
+    fpath = save_dir / (f"sim_patterns_period={np.mean(periods):.2f}_"
+                        f"nangles={nangles:d}.json")
     with open(fpath, 'w') as f:
         json.dump(data, f, indent="\t")
 
@@ -2817,7 +2847,8 @@ def export_otf_test_set(dmd_size: Sequence[int],
     pattern_off = np.zeros((ny, nx), dtype=np.uint8)
 
     # convert arrays to lists to make json compatible
-    data = {'vec_as': vec_as.tolist(),
+    data = {'tstamp': datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S'),
+            'vec_as': vec_as.tolist(),
             'vec_bs': vec_bs.tolist(),
             'angles': real_angles.tolist(),
             'periods': real_periods.tolist(),
@@ -2856,7 +2887,7 @@ def export_otf_test_set(dmd_size: Sequence[int],
 
         # save patterns as tif
         patterns_reshaped = np.reshape(patterns,
-                             [patterns.shape[0] * patterns.shape[1], patterns.shape[2], patterns.shape[3]])
+                              [patterns.shape[0] * patterns.shape[1], patterns.shape[2], patterns.shape[3]])
         patterns_reshaped = np.concatenate((patterns_reshaped,
                                             np.expand_dims(pattern_on, axis=0),
                                             np.expand_dims(pattern_off, axis=0)),
