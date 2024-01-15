@@ -733,18 +733,27 @@ def get_sim_phase(vec_a: np.ndarray,
     """
 
     cell, xs, ys = get_sim_unit_cell(vec_a, vec_b, nphases)
-    fourier_component, _ = get_pattern_fourier_component(cell, xs, ys, vec_a, vec_b, 0, 1,
-                                                         nphases, phase_index, origin, pattern_size)
+    fourier_component, _ = get_pattern_fourier_component(cell,
+                                                         xs,
+                                                         ys,
+                                                         vec_a,
+                                                         vec_b,
+                                                         0,
+                                                         1,
+                                                         nphases,
+                                                         phase_index,
+                                                         origin,
+                                                         pattern_size)
 
     phase = np.angle(fourier_component)
 
     return np.mod(phase, 2*np.pi)
 
 
-def get_lattice_dft_frqs(vec_a: np.ndarray,
-                         vec_b: np.ndarray):
+def ldftfreq(vec_a: np.ndarray,
+             vec_b: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
-    Get the minimal number of Fourier frequencies which determine a periodic pattern.
+    Get the Fourier frequencies for the lattice fourier transform (LDFT). Analog of fftfreq()
 
     Since the pattern is periodic and binary, it can be described by a generalization of the DFT. Here the indices of
     of the pattern are given by the pixel locations in the unit cell. The frequencies are also defined on a unit cell,
@@ -758,52 +767,86 @@ def get_lattice_dft_frqs(vec_a: np.ndarray,
 
     :param vec_a:
     :param vec_b:
-    :return bcell, f1, f2, fvecs: bcell is a boolean array indicating which points are in the frequency unit cell.
-      f1 and f2 are integers which define the frequencies, f = f1 * b1 + f2 * b2. fvecs are the frequencies for each
-      points in bcell
+    :return fvecs: fvecs are the frequencies. Return NaNs for values outside the unit cell
+    :return f1: f1 and f2 are integers which define the frequencies as multiplies of the reciprocal
+      lattice vectors b1 and b2. fvecs = f1 * b1 + f2 * b2.
+    :return f2:
     """
     b1, b2 = get_reciprocal_vects(vec_a, vec_b)
-    det = int(np.linalg.det(np.stack((vec_a, vec_b), axis=1)))
+    det = int(np.round(np.linalg.det(np.stack((vec_a, vec_b), axis=1))))
 
-    bcell, f1, f2 = get_unit_cell(b1.ravel() * det, b2.ravel() * det)
-    bcell[bcell == 0] = 1
-    bcell[np.isnan(bcell)] = 0
-    bcell = bcell.astype(bool)
+    b1_int_approx = b1.ravel() * det
+    b2_int_approx = b2.ravel() * det
+    b1_int = np.round(b1_int_approx).astype(int)
+    b2_int = np.round(b2_int_approx).astype(int)
 
+    if (np.linalg.norm(b1_int - b1_int_approx) > 1e-10 or
+        np.linalg.norm(b2_int - b2_int_approx) > 1e-10):
+       raise ValueError(f"Reciprocal lattice vector b1={b1_int_approx} or b2={b2_int_approx} was "
+                        f"not close enough to an integer")
+
+
+    # todo: to match DFT, want this to produce one more negative frequency than positive frequency
+    # todo: don't think this works that way at the moment?
+    bcell, f1, f2 = get_unit_cell(b1_int, b2_int)
+    # bcell[bcell == 0] = 1
+    # bcell[np.isnan(bcell)] = 0
+    # bcell = bcell.astype(bool)
+
+    # todo: should I return NaN's for frequency outside of bcell?
     fvecs = np.expand_dims(f1, axis=(0, 2)) * np.expand_dims(b1.ravel(), axis=(0, 1)) + \
             np.expand_dims(f2, axis=(1, 2)) * np.expand_dims(b2.ravel(), axis=(0, 1))
+    fvecs[np.isnan(bcell), :] = np.nan
 
-    return bcell, f1, f2, fvecs
+    return fvecs, f1, f2
 
 
-def get_lattice_dft(unit_cell,
-                    x,
-                    y,
-                    vec_a,
-                    vec_b):
+def ldft2(unit_cell: np.ndarray,
+          x: np.ndarray,
+          y: np.ndarray,
+          vec_a: np.ndarray,
+          vec_b: np.ndarray) -> np.ndarray:
     """
-    Compute the lattice DFT of a given pattern defined on a unit cell
+    Compute the 2D lattice DFT of a given pattern (defined on a unit cell)
+    The unit cell and coordinates can be obtained from get_sim_unit_cell()
+    Alternatively, the skeleton of the unit cell can be obtained from get_unit_cell() and then the
+    values on the unit cell may be chosen by the user.
+
+    Use ldftfreq() to get the corresponding frequencies.
+
     :param unit_cell:
     :param x: coordinates of the unit cell
     :param y:
     :param vec_a: lattice vectors
     :param vec_b:
-    :return ldft, f1, f2, fvecs:
+    :return ldft: points which are not in the frequency unit cell are returned as NaNs
     """
-    bcell, f1, f2, fvecs = get_lattice_dft_frqs(vec_a, vec_b)
 
-    bcell = bcell.astype(float)
-    bcell[bcell == 0] = np.nan
+    # todo: what exactly is the relationship between this and get_pattern_fourier_component()?
+    # todo: presumably this computes all Fourier components rather than just one
+
+    # todo: what is relationship between this and get_efield_fourier_components()?
+    # todo: should combine these two functions ...
+
+    fvecs, f1, f2 = ldftfreq(vec_a, vec_b)
+    # bcell = bcell.astype(float)
+    # bcell[bcell == 0] = np.nan
 
     xx, yy = np.meshgrid(x, y)
-    ldft = np.zeros(bcell.shape, dtype=complex) * np.nan
-    for ii in range(ldft.shape[0]):
-        for jj in range(ldft.shape[1]):
-            if np.isnan(bcell[ii, jj]):
-                continue
-            ldft[ii, jj] = np.nansum(unit_cell * np.exp(-1j*2*np.pi * (fvecs[ii, jj, 0] * xx + fvecs[ii, jj, 1] * yy)))
+    # ldft = np.zeros(bcell.shape, dtype=complex) * np.nan
+    # for ii in range(ldft.shape[0]):
+    #     for jj in range(ldft.shape[1]):
+    #         if np.isnan(bcell[ii, jj]):
+    #             continue
+    #         ldft[ii, jj] = np.nansum(unit_cell * np.exp(-1j*2*np.pi * (fvecs[ii, jj, 0] * xx +
+    #                                                                    fvecs[ii, jj, 1] * yy)))
 
-    return ldft, f1, f2, fvecs
+    ldft = np.nansum(unit_cell * np.exp(-1j*2*np.pi * (fvecs[..., 0][..., None, None] * xx +
+                                                       fvecs[..., 1][..., None, None] * yy)),
+                     axis=(-1, -2))
+    ldft[np.isnan(fvecs[..., 0])] = np.nan + 1j * np.nan
+
+    return ldft
 
 
 def get_pattern_fourier_component(unit_cell,
