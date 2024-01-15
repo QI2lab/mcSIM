@@ -204,6 +204,8 @@ def conj_transpose_fft(img_ft: array,
     # (i.e. where the positive frequency components are)
     # so must roll array to put them back on the right side
     to_roll = [a for a in axes if np.mod(img_ft.shape[a], 2) == 0]
-    img_ft_ct = xp.roll(img_ft_ct, shift=[1] * len(to_roll), axis=tuple(to_roll))
+    img_ft_ct = xp.roll(img_ft_ct,
+                        shift=[1] * len(to_roll),
+                        axis=tuple(to_roll))
 
     return img_ft_ct

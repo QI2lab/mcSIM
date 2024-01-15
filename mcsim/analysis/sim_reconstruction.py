@@ -2357,12 +2357,12 @@ def show_sim_napari(fname_zarr: str,
     """
     Plot all images obtained from SIM reconstruction with correct scale/offset
 
-    :param fname_zarr:
-    :param block:
-    :param load:
+    :param fname_zarr: file path for data saved in zarr format
+    :param block: block program while displaying
+    :param load: load data (vs lazy load)
     :param viewer: if viewer is supplied, plot results on this viewer
-    :param clims:
-    :param use_um:
+    :param clims: display limits for SR-SIM data
+    :param use_um: display using real units (vs pixels)
     :return viewer:
     """
 
