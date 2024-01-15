@@ -964,14 +964,11 @@ def get_int_fc(efield_fc: np.ndarray) -> np.ndarray:
 
     :return intensity_fc: intensity Fourier components at the same frequencies, f = ii * v1 + jj * v2
     """
-    ny, nx = efield_fc.shape
-    if np.mod(ny, 2) == 0 or np.mod(nx, 2) == 0:
-        # TODO: the flip operation only works for taking f-> -f only works assuming
-        #  that array size is odd, with f=0 at the center
-        raise ValueError("not implemented for even sized arrays")
 
     # I(f) = autocorrelation[E(f)] = convolution[E(f), E^*(-f)]
-    intensity_fc = fftconvolve(efield_fc, np.flip(efield_fc, axis=(0, 1)).conj(), mode='same')
+    intensity_fc = fftconvolve(efield_fc,
+                               conj_transpose_fft(efield_fc, axes=(0, 1)),
+                               mode='same')
 
     return intensity_fc
 
