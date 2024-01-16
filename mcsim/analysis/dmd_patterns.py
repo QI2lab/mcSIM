@@ -7,6 +7,7 @@ will display the matrix with i_y = 1 on top, so the pattern we really want is th
 dimension.
 """
 from typing import Union, Optional, Sequence
+import warnings
 import time
 import datetime
 import json
@@ -24,7 +25,7 @@ from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
 #
 import mcsim.analysis.analysis_tools as tools
-from mcsim.analysis.fft import conj_transpose_fft
+from mcsim.analysis.fft import conj_transpose_fft, ft2
 from mcsim.analysis import simulate_dmd
 from localize_psf import affine
 
@@ -48,8 +49,11 @@ def get_sim_pattern(dmd_size: Sequence[int],
       a single unit cell of the pattern
     """
 
+    vec_a = np.asarray(vec_a)
+    vec_b = np.asarray(vec_b)
+
     # ensure both vec_b components are divisible by nphases
-    if not (vec_b[0] / nphases).is_integer() or not (vec_b[1] / nphases).is_integer():
+    if not _verify_int(vec_b / nphases):
         raise ValueError("At least one component of vec_b was not divisible by nphases")
 
     cell, x, y = get_sim_unit_cell(vec_a, vec_b, nphases)
@@ -256,8 +260,11 @@ def get_sim_unit_cell(vec_a: np.ndarray,
     :return y_cell: y-coordinates of cell pixels
     """
 
+    vec_a = np.asarray(vec_a)
+    vec_b = np.asarray(vec_b)
+
     # ensure both vec_b components are divisible by nphases
-    if not float(vec_b[0] / nphases).is_integer() or not float(vec_b[1] / nphases).is_integer():
+    if not _verify_int(vec_b / nphases):
         raise ValueError("At least one component of vec_b was not divisible by nphases")
 
     # get full unit cell
@@ -309,11 +316,9 @@ def get_unit_cell(vec_a: np.ndarray,
     """
 
     # test that vec_a and vec_b components are integers
-    for vecs in [vec_a, vec_b]:
-        for v in vecs:
-            if not float(v).is_integer():
-                raise ValueError(f"At least one component of lattice vector={vecs} cannot "
-                                 f"be interpreted as an integer")
+    if not _verify_int(vec_a) or not _verify_int(vec_b):
+        raise ValueError(f"At least one component of lattice vectors={vec_a}, {vec_b} cannot "
+                         f"be interpreted as an integer")
 
     # copy vector data, so don't affect inputs
     vec_a = np.array(vec_a, copy=True, dtype=int)
@@ -435,10 +440,9 @@ def reduce2cell(point: np.ndarray,
     :param vb:
     :return point_red, na_out, nb_out:
     """
-    for vec in [va, vb]:
-        for v in vec:
-            if not float(v).is_integer():
-                raise ValueError("at least one component of va or vb could not be interpreted as an integer.")
+    if not _verify_int(va) or not _verify_int(vb):
+        raise ValueError(f"At least one component of lattice vectors={va}, {vb} cannot "
+                         f"be interpreted as an integer")
 
     point = np.array(point, copy=True)
     va = np.array(va, copy=True, dtype=int)
@@ -457,40 +461,6 @@ def reduce2cell(point: np.ndarray,
 
     assert test_in_cell(point_red, va, vb)
 
-    # # this point may not be in cell, but only need to go one away to find it
-    # _, na, nb = get_closest_lattice_vec(point, va, vb)
-    #
-    # # todo: found [-1, 0, 1] not enough to ensure point is there
-    # # e.g. vec_a = (-15, 15), vec_b = (-27, -30), point = (2, -12) requires going 2 away
-    # # is this a rare case where there is a "tie" between "closest" vectors,
-    # # or are there more pathological cases?
-    # # e.g. vec_a = (-15, 15), vec_b = (-27, -30), point = (2, -11) requires going 3 away
-    #
-    # found_point = False
-    # nmax = 1
-    # while not found_point:
-    #     # each time expand range, don't want to redo any points we already checked
-    #     n1s, m1s = np.meshgrid([-nmax, nmax], range(-nmax, nmax+1))
-    #     n2s, m2s = np.meshgrid(range(-(nmax - 1), nmax), [-nmax, nmax])
-    #     ns = np.concatenate((n1s.ravel(), n2s.ravel()), axis=0)
-    #     ms = np.concatenate((m1s.ravel(), m2s.ravel()), axis=0)
-    #
-    #     for n,m in zip(ns, ms):
-    #         point_red = point - (na + n) * va - (nb + m) * vb
-    #         #print("%d, %d, (%d, %d)" % (na+n, nb+m, point_red[0], point_red[1]))
-    #
-    #         if test_in_cell(point_red, va, vb):
-    #             found_point = True
-    #             na_out = na + n
-    #             nb_out = nb + m
-    #             break
-    #
-    #     nmax += 1
-    #
-    # if not found_point:
-    #     raise Exception("did not find point (%d,%d) in unit cell of va=(%d,%d), vb=(%d,%d)" %
-    #                     (point[0], point[1], va[0], va[1], vb[0], vb[1]))
-
     return point_red, na_out, nb_out
 
 
@@ -504,6 +474,7 @@ def convert_cell(cell1: np.ndarray,
     """
     Given a unit cell described by vectors va1 and vb2, convert to equivalent description
     in terms of va2, vb2
+
     :param cell1:
     :param x1:
     :param y1:
@@ -514,13 +485,17 @@ def convert_cell(cell1: np.ndarray,
 
     :return cell2, x2, y2:
     """
+
+    va1 = np.asarray(va1)
+    vb1 = np.asarray(vb1)
+    va2 = np.asarray(va2)
+    vb2 = np.asarray(vb2)
+
     # todo: add check that va1/vb1 and va2/vb2 describe same lattice
     for vec in [va1, vb1, va2, vb2]:
-        for v in vec:
-            if not float(v).is_integer():
-                raise ValueError("At least one component of va1, vb1, va2, or vb2 "
-                                 "could not be interpreted as an integer")
-
+        if not _verify_int(vec):
+            raise ValueError(f"At least one component of lattice {vec} cannot "
+                             f"be interpreted as an integer")
     cell2, x2, y2 = get_unit_cell(va2, vb2)
     y1min = y1.min()
     x1min = x1.min()
@@ -561,48 +536,44 @@ def show_cell(v1: np.ndarray,
     """
     Plot unit cell and periodicity vectors
 
-    :param v1:
-    :param v2:
-    :param cell:
-    :param x:
-    :param y:
+    :param v1: first lattice vector
+    :param v2: second lattice vector
+    :param cell: array representing values of pattern in unit cell
+    :param x: x-coordinates of cell
+    :param y: y-coordinates of cell
 
     :return figh: handle to resulting figure
     """
 
-    v1 = np.array(v1, copy=True).ravel()
-    v2 = np.array(v2, copy=True).ravel()
-
-    if v1.dtype.kind not in np.typecodes["AllInteger"] or \
-       v2.dtype.kind not in np.typecodes["AllInteger"]:
-        raise ValueError(f"v1 and v2 had data types '{v1.dtype}' and '{v2.dtype}', "
-                         f"but both must be type 'int'")
-
-    # plot
     fig = plt.figure(**kwargs)
     ax = fig.add_subplot(1, 1, 1)
-    ax.set_title(f"Unit cell,"
-                 f" $v_1$ = ({v1[0]:d}, {v1[1]:d}),"
-                 f" $v_2$ = ({v2[0]:d}, {v2[1]:d})")
+    ax.set_title("Unit cell")
 
+    # plot cell
     ax.imshow(np.abs(cell),
               origin='lower',
               extent=[x[0] - 0.5, x[-1] + 0.5,
                       y[0] - 0.5, y[-1] + 0.5])
-    ax.plot([0, v1[0]],
-            [0, v1[1]],
-            'r',
-            label="$v_1$")
-    ax.plot([0, v2[0]],
-            [0, v2[1]],
-            'g',
-            label="$v_2$")
-    ax.plot([v2[0], v2[0] + v1[0]],
-            [v2[1], v2[1] + v1[1]],
-            'r')
-    ax.plot([v1[0], v2[0] + v1[0]],
-            [v1[1], v2[1] + v1[1]],
-            'g')
+
+    # plot lattice vectors
+    if v1 is not None and v2 is not None:
+        v1 = np.asarray(v1).ravel()
+        v2 = np.asarray(v2).ravel()
+
+        ax.plot([0, v1[0]],
+                [0, v1[1]],
+                'r',
+                label=f"$v_1$=({v1[0]:d}, {v1[1]:d})")
+        ax.plot([0, v2[0]],
+                [0, v2[1]],
+                'g',
+                label=f"$v_2$=({v2[0]:d}, {v2[1]:d})")
+        ax.plot([v2[0], v2[0] + v1[0]],
+                [v2[1], v2[1] + v1[1]],
+                'r')
+        ax.plot([v1[0], v2[0] + v1[0]],
+                [v1[1], v2[1] + v1[1]],
+                'g')
     ax.legend()
     ax.set_xlabel("x")
     ax.set_ylabel("y")
@@ -630,30 +601,29 @@ def get_reciprocal_vects(vec_a: np.ndarray,
 
     :param vec_a:
     :param vec_b:
-    :return reciprocal_vect1: frequency-like
-    :return reciprocal_vect2: frequency-like
+    :return rv1, rv2: frequency-like reciprocal lattice vectors
     """
-    vec_a_temp = np.array(vec_a, copy=True)
-    vec_a_temp = vec_a_temp.reshape([vec_a_temp.size, 1])
+    vec_a = np.asarray(vec_a)
+    vec_b = np.asarray(vec_b)
 
-    vec_b_temp = np.array(vec_b, copy=True)
-    vec_b_temp = vec_b_temp.reshape([vec_b_temp.size, 1])
+    # check this directly, as sometimes due to numerical precision np.linalg.inv() will not throw error
+    err_msg = "vec_a and vec_b are linearly dependent, so their reciprocal vectors could not be computed."
+    if np.cross(vec_a, vec_b) == 0:
+        raise ValueError(err_msg)
 
-    # best to check this directly, as sometimes due to numerical issues np.linalg.inv() will not throw error
-    if np.cross(vec_a_temp[:, 0], vec_b_temp[:, 0]) == 0:
-        raise ValueError("vec_a_temp and vec_b_temp are linearly dependent, "
-                         "so their reciprocal vectors could not be computed.")
-
-    a_mat = np.concatenate([vec_a_temp.transpose(), vec_b_temp.transpose()], 0)
+    a_mat = np.stack((vec_a, vec_b), axis=0)
     try:
         inv_a = np.linalg.inv(a_mat)
-        reciprocal_vect1 = inv_a[:, 0][:, None]
-        reciprocal_vect2 = inv_a[:, 1][:, None]
     except np.linalg.LinAlgError:
-        raise ValueError("vec_a_temp and vec_b_temp are linearly dependent, "
-                         "so their reciprocal vectors could not be computed.")
+        raise ValueError(err_msg)
 
-    return reciprocal_vect1, reciprocal_vect2
+    rv1 = inv_a[:, 0][:, None]
+    rv2 = inv_a[:, 1][:, None]
+    # todo: return 1D vectors instead of 2D vectors
+    # rv1 = inv_a[:, 0]
+    # rv2 = inv_a[:, 1]
+
+    return rv1, rv2
 
 
 def get_sim_angle(vec_a: np.ndarray,
@@ -715,7 +685,7 @@ def get_sim_phase(vec_a: np.ndarray,
                   nphases: int,
                   phase_index: int,
                   pattern_size: Sequence[int],
-                  origin: str = 'fft'):
+                  use_fft_origin: bool = True):
     """
     Get phase of dominant frequency component in the SIM pattern.
 
@@ -726,8 +696,8 @@ def get_sim_phase(vec_a: np.ndarray,
     :param nphases: number of equal phase shifts for SIM pattern
     :param phase_index: 0, ..., nphases-1
     :param pattern_size: [nx, ny]
-    :param origin: origin to use for computing the phase. If 'fft', will assume the coordinates are the same
-      as used in an FFT (i.e. before performing an ifftshift, with the 0 near the center). If 'corner', will
+    :param use_fft_origin: origin to use for computing the phase. If True, will assume the coordinates are the same
+      as used in an FFT (i.e. before performing an ifftshift, with the 0 near the center). If False, will
       suppose the origin is at pattern[0, 0].
     :return phase: phase of the SIM pattern at the dominant frequency component (which is recp_vec_b)
     """
@@ -742,8 +712,8 @@ def get_sim_phase(vec_a: np.ndarray,
                                                          1,
                                                          nphases,
                                                          phase_index,
-                                                         origin,
-                                                         pattern_size)
+                                                         use_fft_origin=use_fft_origin,
+                                                         dmd_size=pattern_size)
 
     phase = np.angle(fourier_component)
 
@@ -765,35 +735,25 @@ def ldftfreq(vec_a: np.ndarray,
     Instead of (nx, ny), one can also work with coefficients d1, d2 for the vectors a1 and a2.
     i.e. (nx, ny) = d1(nx, ny) * a1 + d2(nx, ny) * a2
 
-    :param vec_a:
-    :param vec_b:
+    :param vec_a: first lattice vector
+    :param vec_b: second lattice vector
     :return fvecs: fvecs are the frequencies. Return NaNs for values outside the unit cell
     :return f1: f1 and f2 are integers which define the frequencies as multiplies of the reciprocal
       lattice vectors b1 and b2. fvecs = f1 * b1 + f2 * b2.
     :return f2:
     """
     b1, b2 = get_reciprocal_vects(vec_a, vec_b)
-    det = int(np.round(np.linalg.det(np.stack((vec_a, vec_b), axis=1))))
+    det = _convert_int(np.linalg.det(np.stack((vec_a, vec_b), axis=1)))
 
     b1_int_approx = b1.ravel() * det
     b2_int_approx = b2.ravel() * det
-    b1_int = np.round(b1_int_approx).astype(int)
-    b2_int = np.round(b2_int_approx).astype(int)
-
-    if (np.linalg.norm(b1_int - b1_int_approx) > 1e-10 or
-        np.linalg.norm(b2_int - b2_int_approx) > 1e-10):
-       raise ValueError(f"Reciprocal lattice vector b1={b1_int_approx} or b2={b2_int_approx} was "
-                        f"not close enough to an integer")
-
+    b1_int = _convert_int(b1_int_approx)
+    b2_int = _convert_int(b2_int_approx)
 
     # todo: to match DFT, want this to produce one more negative frequency than positive frequency
     # todo: don't think this works that way at the moment?
     bcell, f1, f2 = get_unit_cell(b1_int, b2_int)
-    # bcell[bcell == 0] = 1
-    # bcell[np.isnan(bcell)] = 0
-    # bcell = bcell.astype(bool)
 
-    # todo: should I return NaN's for frequency outside of bcell?
     fvecs = np.expand_dims(f1, axis=(0, 2)) * np.expand_dims(b1.ravel(), axis=(0, 1)) + \
             np.expand_dims(f2, axis=(1, 2)) * np.expand_dims(b2.ravel(), axis=(0, 1))
     fvecs[np.isnan(bcell), :] = np.nan
@@ -829,8 +789,6 @@ def ldft2(unit_cell: np.ndarray,
     # todo: should combine these two functions ...
 
     fvecs, f1, f2 = ldftfreq(vec_a, vec_b)
-    # bcell = bcell.astype(float)
-    # bcell[bcell == 0] = np.nan
 
     xx, yy = np.meshgrid(x, y)
     # ldft = np.zeros(bcell.shape, dtype=complex) * np.nan
@@ -849,17 +807,17 @@ def ldft2(unit_cell: np.ndarray,
     return ldft
 
 
-def get_pattern_fourier_component(unit_cell,
-                                  x,
-                                  y,
-                                  vec_a,
-                                  vec_b,
+def get_pattern_fourier_component(unit_cell: np.ndarray,
+                                  x: np.ndarray,
+                                  y: np.ndarray,
+                                  vec_a: np.ndarray,
+                                  vec_b: np.ndarray,
                                   na: int,
                                   nb: int,
                                   nphases: int = 3,
                                   phase_index: int = 0,
-                                  origin: str = 'fft',
-                                  dmd_size: Optional[Sequence[int]] = None):
+                                  use_fft_origin: bool = True,
+                                  dmd_size: Optional[Sequence[int]] = None) -> (np.ndarray, np.ndarray):
     """
     Get fourier component at f = n * recp_vec_a + m * recp_vec_b.
 
@@ -874,12 +832,16 @@ def get_pattern_fourier_component(unit_cell,
     :param nb: integer multiples of recp_vec_b
     :param nphases: only relevant for calculating phase
     :param phase_index: only relevant for calculating phase
-    :param origin: "corner" or "fft". Specifies where the origin of the
+    :param use_fft_origin: Specifies where the origin of the array is, which affects the phase.
+      if not using the fft_origin, using the corner
     :param dmd_size: [nx, ny], only required if origin is "fft"
 
     :return fcomponent: fourier component of pattern at frq_vector
     :return frq_vector: recp_vec_a * n + recp_vec_b * m
     """
+
+    # todo: change this to accept frequency instead of index? Then can use this as helper function for ldft2()
+    # todo: accept any pattern, not just SIM pattern
 
     recp_vect_a, recp_vect_b = get_reciprocal_vects(vec_a, vec_b)
     frq_vector = na * recp_vect_a + nb * recp_vect_b
@@ -889,14 +851,13 @@ def get_pattern_fourier_component(unit_cell,
     fcomponent = np.nansum(unit_cell * np.exp(-1j*2*np.pi * (frq_vector[0] * xxs + frq_vector[1] * yys)))
 
     # correct phase for start coord
+    # todo: explain this
     start_coord = np.array(vec_b) / nphases * phase_index
     phase = np.angle(fcomponent) - 2 * np.pi * start_coord.dot(frq_vector)
 
-    if origin == 'corner':
-        pass
-    elif origin == 'fft':
+    if use_fft_origin:
         if dmd_size is None:
-            raise TypeError("dmd_size was None, but must be specified when origin is 'fft'")
+            raise ValueError("dmd_size was None, but must be specified when use_fft_origin is True")
 
         # now correct for
         nx, ny = dmd_size
@@ -906,9 +867,6 @@ def get_pattern_fourier_component(unit_cell,
         center_coord = np.array([-x_pattern[0], -y_pattern[0]])
 
         phase = phase + 2 * np.pi * center_coord.dot(frq_vector)
-
-    else:
-        raise ValueError(f"origin must be 'corner' or 'fft', but was '{origin:s}'")
 
     fcomponent = np.abs(fcomponent) * np.exp(1j * phase)
 
@@ -924,7 +882,7 @@ def get_efield_fourier_components(unit_cell: np.ndarray,
                                   phase_index: int,
                                   dmd_size: Sequence[int],
                                   nmax: int = 20,
-                                  origin: str = "fft",
+                                  use_fft_origin: bool = True,
                                   otf: Optional[np.ndarray] = None):
     """
     Generate many Fourier components of pattern
@@ -938,7 +896,7 @@ def get_efield_fourier_components(unit_cell: np.ndarray,
     :param phase_index:
     :param dmd_size:
     :param nmax:
-    :param origin:
+    :param use_fft_origin:
     :param otf: optical transfer function to apply
 
     :return efield: evaluated at the frequencyes vecs = ns * recp_va + ms * recp_vb
@@ -980,7 +938,7 @@ def get_efield_fourier_components(unit_cell: np.ndarray,
                                                                      ms[jj],
                                                                      nphases,
                                                                      phase_index,
-                                                                     origin=origin,
+                                                                     use_fft_origin=use_fft_origin,
                                                                      dmd_size=dmd_size)
                 vecs[ii, jj] = v[:, 0]
 
@@ -1027,7 +985,7 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
                                      phase_index: int,
                                      dmd_size: Sequence[int],
                                      nmax: int = 20,
-                                     origin: str = "fft",
+                                     use_fft_origin: bool = True,
                                      include_blaze_correction: bool = True,
                                      dmd_params: Optional[dict] = None) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
@@ -1055,7 +1013,7 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
     :param phase_index:
     :param dmd_size: [nx, ny]
     :param nmax:
-    :param origin: origin used to compute pattern phases "fft" or ""
+    :param use_fft_origin: origin used to compute pattern phases "fft" or ""
     :param include_blaze_correction: if True, include blaze corrections
     :param dmd_params: dictionary {'wavelength', 'dx', 'dy', 'wx', 'wy', 'theta_ins': [tx_in, ty_in],
      'theta_outs': [tx_out, ty_out]}
@@ -1065,6 +1023,8 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
     :return ms: vec = ns * recp_vec_a + ms * recp_vec_b
     :return vecs: ns * recp_vec_a + ms * recp_vec_b
     """
+
+    warnings.warn("get_intensity_fourier_components() is deprecated")
 
     if dmd_params is None and include_blaze_correction is True:
         raise ValueError("dmd_params must be supplied as include_blaze_correction is True")
@@ -1105,7 +1065,7 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
                                                                  ms[jj],
                                                                  nphases,
                                                                  phase_index,
-                                                                 origin=origin,
+                                                                 use_fft_origin=use_fft_origin,
                                                                  dmd_size=dmd_size)
             vecs[ii, jj] = v[:, 0]
 
@@ -1196,15 +1156,15 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
 
     # todo: generate roi directly instead of cropping
-    # img_coords = np.meshgrid(range(cam_size[1]), range(cam_size[0]))
     xform_roi = affine.xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
     nx_roi = roi[3] - roi[2]
     ny_roi = roi[1] - roi[0]
     img_coords_roi = np.meshgrid(range(nx_roi), range(ny_roi))
-    pattern_xformed = affine.xform_mat(pattern, xform_roi, img_coords_roi, mode="interp")
-    # pattern_xformed = affine.affine_xform_mat(pattern, affine_xform, img_coords, mode="interp")
-    # pattern_xformed = pattern_xformed[roi[0]:roi[1], roi[2]:roi[3]]
-    pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
+    pattern_xformed = affine.xform_mat(pattern,
+                                       xform_roi,
+                                       img_coords_roi,
+                                       mode="interp")
+    pattern_xformed_ft = ft2(pattern_xformed)
 
     fxs = fft.fftshift(fft.fftfreq(pattern_xformed.shape[1], 1))
     fys = fft.fftshift(fft.fftfreq(pattern_xformed.shape[0], 1))
@@ -1223,7 +1183,9 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
         for jj in range(len(ms)):
             vecs[ii, jj] = ns[ii] * recp_va[:, 0] + ms[jj] * recp_vb[:, 0]
             vecs_xformed[ii, jj, 0], vecs_xformed[ii, jj, 1], _ = \
-                affine.xform_sinusoid_params(vecs[ii, jj, 0], vecs[ii, jj, 1], 0, affine_xform)
+                affine.xform_sinusoid_params(vecs[ii, jj, 0],
+                                             vecs[ii, jj, 1],
+                                             0, affine_xform)
 
             try:
                 efield_fc_xformed[ii, jj] = tools.get_peak_value(pattern_xformed_ft,
@@ -1257,9 +1219,8 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
     efield_fc_xformed = efield_fc_xformed * (frqs <= fmax)
 
     # intensity fourier components from autocorrelation
-    # intensity_fc_xformed = scipy.signal.fftconvolve(efield_fc_xformed, efield_fc_xformed, mode='same')
     intensity_fc_xformed = fftconvolve(efield_fc_xformed,
-                                       np.flip(efield_fc_xformed, axis=(0, 1)).conj(),
+                                       conj_transpose_fft(efield_fc_xformed, axes=(0, 1)),
                                        mode='same')
     intensity_fc_xformed = intensity_fc_xformed * (frqs <= 1)
     intensity_fc_xformed = intensity_fc_xformed * (frqs <= 2*fmax)
@@ -1416,8 +1377,8 @@ def show_fourier_components(vec_a: np.ndarray,
 
     # only plot one of +/- f, and only plot if above certain threshold
     vec_mag = np.linalg.norm(vecs, axis=-1)
-    nmax1 = int(np.round(0.5 * (int_fc.shape[0] - 1)))
-    nmax2 = int(np.round(0.5 * (int_fc.shape[1] - 1)))
+    nmax1 = _convert_int(0.5 * (int_fc.shape[0] - 1))
+    nmax2 = _convert_int(0.5 * (int_fc.shape[1] - 1))
     to_use = np.ones(int_fc.shape, dtype=int)
     xx, yy = np.meshgrid(range(-nmax2, nmax2 + 1), range(-nmax1, nmax1 + 1))
     to_use[xx > yy] = 0
@@ -1506,7 +1467,11 @@ def reduce_basis(va: np.ndarray,
     if swapped == 1:
         va, vb = vb, va
 
-    return va, vb
+    # ensure integers
+    va_int = _convert_int(va)
+    vb_int = _convert_int(vb)
+
+    return va_int, vb_int
 
 
 def reduce_recp_basis(va: np.ndarray,
@@ -1572,8 +1537,8 @@ def get_closest_lattice_vec(point: np.ndarray,
     var_ints = np.array([np.vdot(var, ra), np.vdot(var, rb)])
     vbr_ints = np.array([np.vdot(vbr, ra), np.vdot(vbr, rb)])
 
-    na_min = int(np.round(nar_min * var_ints[0] + nbr_min * vbr_ints[0]))
-    nb_min = int(np.round(nar_min * var_ints[1] + nbr_min * vbr_ints[1]))
+    na_min = _convert_int(nar_min * var_ints[0] + nbr_min * vbr_ints[0])
+    nb_min = _convert_int(nar_min * var_ints[1] + nbr_min * vbr_ints[1])
 
     return vec, na_min, nb_min
 
@@ -2295,10 +2260,10 @@ def vects2pattern_data(dmd_size: Sequence[int],
     :param np.array vec_bs:
     :param nphases:
     :param wavelength: wavelength in nm
-    :param invert: whether or not pattern is "inverted", i.e. if the roll of "OFF" and "ON" should be flipped
+    :param invert: whether pattern is "inverted", i.e. if the roll of "OFF" and "ON" should be flipped
     :param pitch: DMD micromirror pitch
     :param generate_patterns:
-    :return patterns, vec_as, vec_bs, angles, frqs, periods, phases, recp_vects_a, recp_vects_b, min_leakage_angle:
+    :return patterns, data:
     """
 
     vec_as = np.array(vec_as, copy=True)
@@ -2322,25 +2287,37 @@ def vects2pattern_data(dmd_size: Sequence[int],
     recp_vects_b = np.zeros((nangles, 2))
 
     # loop over wavelengths
-    min_leakage_angle, _, _ = find_nearest_leakage_peaks(vec_as, vec_bs, nphases,
+    min_leakage_angle, _, _ = find_nearest_leakage_peaks(vec_as,
+                                                         vec_bs,
+                                                         nphases,
                                                          minimum_relative_peak_size=1e-3,
-                                                         wavelength=wavelength, pitch=pitch)
+                                                         wavelength=wavelength,
+                                                         pitch=pitch)
 
     # loop over angles and find closest available patterns
     for ii in range(nangles):
         ra, rb = get_reciprocal_vects(vec_as[ii], vec_bs[ii])
-        recp_vects_a[ii] = ra[:, 0]
-        recp_vects_b[ii] = rb[:, 0]
+        recp_vects_a[ii] = ra.ravel()
+        recp_vects_b[ii] = rb.ravel()
 
         periods[ii] = get_sim_period(vec_as[ii], vec_bs[ii])
         angles[ii] = get_sim_angle(vec_as[ii], vec_bs[ii])
         frqs[ii] = get_sim_frqs(vec_as[ii], vec_bs[ii])
 
         for jj in range(nphases):
-            phases[ii, jj] = get_sim_phase(vec_as[ii], vec_bs[ii], nphases, jj, dmd_size)
+            phases[ii, jj] = get_sim_phase(vec_as[ii],
+                                           vec_bs[ii],
+                                           nphases,
+                                           jj,
+                                           pattern_size=dmd_size,
+                                           use_fft_origin=True)
 
             if generate_patterns:
-                patterns[ii, jj], c = get_sim_pattern([nx, ny], vec_as[ii], vec_bs[ii], nphases, jj)
+                patterns[ii, jj], c = get_sim_pattern([nx, ny],
+                                                      vec_as[ii],
+                                                      vec_bs[ii],
+                                                      nphases,
+                                                      jj)
 
     if invert:
         patterns = 1 - patterns
@@ -2391,6 +2368,10 @@ def plot_sim_pattern_sets(patterns: np.ndarray,
                                  wavelength=wavelength,
                                  generate_patterns=False,
                                  pitch=pitch)
+    periods = data["periods"]
+    phases = data["phases"]
+    angles = data["angles"]
+    frqs = data["frqs"]
     min_leakage_angle = data["min_leakage_angle"]
 
     # display summary of patterns
@@ -2439,8 +2420,11 @@ def plot_sim_pattern_sets(patterns: np.ndarray,
         # 2D window from broadcasting
         apodization = np.expand_dims(hann(nx), axis=0) * np.expand_dims(hann(ny), axis=1)
 
-        ft = fft.fftshift(fft.fft2(fft.ifftshift(patterns[ii, 0] * apodization)))
-        ax.imshow(np.abs(ft) / np.abs(ft).max(), norm=PowerNorm(gamma=0.1), extent=extent, cmap="bone")
+        ft = ft2(patterns[ii, 0] * apodization)
+        ax.imshow(np.abs(ft) / np.abs(ft).max(),
+                  norm=PowerNorm(gamma=0.1),
+                  extent=extent,
+                  cmap="bone")
 
         # dominant frequencies of underlying patterns
         for rr in range(nangles):
@@ -2448,8 +2432,16 @@ def plot_sim_pattern_sets(patterns: np.ndarray,
                 color = 'r'
             else:
                 color = 'm'
-            ax.add_artist(Circle((frqs[rr, 0], frqs[rr, 1]), radius=5 * df_min, color=color, fill=0, ls='-'))
-            ax.add_artist(Circle((-frqs[rr, 0], -frqs[rr, 1]), radius=5 * df_min, color=color, fill=0, ls='-'))
+            ax.add_artist(Circle((frqs[rr, 0], frqs[rr, 1]),
+                                 radius=5 * df_min,
+                                 color=color,
+                                 fill=0,
+                                 ls='-'))
+            ax.add_artist(Circle((-frqs[rr, 0], -frqs[rr, 1]),
+                                 radius=5 * df_min,
+                                 color=color,
+                                 fill=0,
+                                 ls='-'))
 
         ax.set_ylabel('ft')
 
@@ -2872,7 +2864,7 @@ def export_otf_test_set(dmd_size: Sequence[int],
                                                 nphases,
                                                 phase_index,
                                                 dmd_size,
-                                                origin='fft')
+                                                use_fft_origin=True)
 
             if verbose:
                 tnow = time.perf_counter()
@@ -2936,3 +2928,29 @@ def export_otf_test_set(dmd_size: Sequence[int],
                          patterns_reshaped)
 
     return patterns, data
+
+
+def _verify_int(m: Union[array, float]) -> bool:
+    """
+
+    :param m:
+    :return:
+    """
+    m = np.asarray(m)
+    mint = np.round(m).astype(int)
+
+    # if v1.dtype.kind not in np.typecodes["AllInteger"] or \
+    #    v2.dtype.kind not in np.typecodes["AllInteger"]:
+    #     raise ValueError(f"v1 and v2 had data types '{v1.dtype}' and '{v2.dtype}', "
+    #                      f"but both must be type 'int'")
+
+    return np.all(np.abs(m - mint) < 1e-10)
+
+
+def _convert_int(m: array):
+    if not _verify_int(m):
+        raise ValueError("array could not be converted to integers")
+
+    mint = np.round(np.asarray(m)).astype(int)
+
+    return mint
