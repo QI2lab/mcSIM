@@ -12,31 +12,26 @@ theta_in~43deg and output angle theta_out~19deg.
 
 For a complete description of the geometry and coordinate systems, see the docstring for simulate_dmd.py
 """
+import matplotlib
+matplotlib.use("TkAgg")
 import numpy as np
 import matplotlib.pyplot as plt
 import mcsim.analysis.simulate_dmd as sdmd
 
-# define DMD pitch, mirror size, mirror angles, etc.
-dx = 7.56e-6 # DMD pitch in meters
-dy = dx
-coverage_f = 0.92 # pixel size, inferred from coverage fraction
-wx = np.sqrt(coverage_f) * dx
-wy = wx
-# on and off angle of mirrors from the normal plane of the DMD body
-gamma_on = 12 * np.pi/180
-gamma_off = -12 * np.pi/180
-rot_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0)
+# load DMD model, or define your own
+dmd = sdmd.DLP6500() # NOTE: DMD object stores spatial information in um
+
 # output angles offset around the main output direction
 tout_offsets = np.linspace(-10, 10, 4800) * np.pi / 180
 
 # set up different wavelengths
-wlens = [0.465e-6, 0.635e-6, 0.532e-6, 0.785e-6]
-diff_orders = [4, 3, -4, -3] # todo: find closest orders instead of presetting
+wlens = [0.465, 0.635, 0.532, 0.785]  # must be in um to match default DMD models
+diff_orders = [4, 3, -4, -3]  # todo: find closest orders instead of presetting
 inverted = [False, False, True, True]
 display_colors = ['b', 'r', 'g', 'k']
 
 # set up pattern information
-base_period = 5 # period of pattern at the first wavelength listed above
+base_period = 5  # period of pattern at the first wavelength listed above
 periods = np.zeros(len(wlens))
 # create small pattern (i.e. not using full DMD size) to broaden diffraction peaks and speed up calculation
 n_pattern = 50
@@ -48,13 +43,16 @@ tins_exact = np.zeros(len(wlens))
 simulation_data = []
 for ii in range(len(wlens)):
     if inverted[ii]:
-        gon, goff = gamma_off, gamma_on
+        gamma_use = dmd.gamma_off
     else:
-        gon, goff = gamma_on, gamma_off
+        gamma_use = dmd.gamma_on
 
     # for the first/main wavelength, ensure we satisfy the blaze and diffraction conditions
     if ii == 0:
-        uvecs_in, uvecs_out = sdmd.solve_1color_1d(wlens[ii], dx, gon, diff_orders[ii])
+        uvecs_in, uvecs_out = sdmd.solve_1color_1d(wlens[ii],
+                                                   dmd.dx,
+                                                   gamma_use,
+                                                   diff_orders[ii])
         uvecs_in_exact[ii] = uvecs_in[1]
         uvec_out = uvecs_out[1]
 
@@ -67,13 +65,13 @@ for ii in range(len(wlens)):
         tp_out, tm_out = sdmd.angle2pm(tx_out, ty_out)
         uvec_out_pm = np.array(sdmd.xyz2mpz(*uvec_out))
 
-        print(f"output angle, determined from {wlens[ii] * 1e9:.0f}nm, order {diff_orders[ii]:d}")
+        print(f"output angle, determined from {wlens[ii] * 1e3:.0f}nm, order {diff_orders[ii]:d}")
         print("output angle (tx, ty) = (%0.2f, %0.2f)deg" % (tx_out * 180/np.pi, ty_out * 180/np.pi))
         print("output angle (tm, tp) = (%0.2f, %0.2f)deg" % (tm_out * 180/np.pi, tp_out))
         print("(bx, by, bz) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_out.squeeze()))
         print("(bm, bp, bz) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_out_pm))
 
-        print("input data for %.0fnm, order %d:" % (wlens[ii] * 1e9, diff_orders[ii]))
+        print("input data for %.0fnm, order %d:" % (wlens[ii] * 1e3, diff_orders[ii]))
         print("input angle (tx, ty) = (%0.2f, %0.2f)deg" % (tx_in * 180/np.pi, ty_in * 180/np.pi))
         print("input angle (tm, tp) = (%0.2f, %0.2f)deg" % (tins_exact[ii] * 180/np.pi, 0))
         print("(ax, ay, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvecs_in_exact[ii].squeeze()))
@@ -82,16 +80,17 @@ for ii in range(len(wlens)):
     # for other wavelength, make sure the output direction is the same
     else:
         uvecs_in_exact[ii] = sdmd.solve_diffraction_input(uvec_out,
-                                                          dx,
-                                                          dy,
+                                                          dmd.dx,
+                                                          dmd.dy,
                                                           wlens[ii],
-                                                          (diff_orders[ii], -diff_orders[ii]))
+                                                          diff_orders[ii],
+                                                          -diff_orders[ii])
         tx_in, ty_in = sdmd.uvector2txty(*uvecs_in_exact[ii])
         tp_in, tm_in = sdmd.angle2pm(tx_in, ty_in)
         tins_exact[ii] = tm_in
         uvec_in_pm = np.array(sdmd.xyz2mpz(*uvecs_in_exact[ii]))
 
-        print("input data for %.0fnm, order %d:" % (wlens[ii] * 1e9, diff_orders[ii]))
+        print("input data for %.0fnm, order %d:" % (wlens[ii] * 1e3, diff_orders[ii]))
         print("input angle (tx, ty) = (%0.2f, %0.2f)deg" % (tx_in * 180 / np.pi, ty_in * 180 / np.pi))
         print("input angle (tm, tp) = (%0.2f, %0.2f)deg" % (tins_exact[ii] * 180 / np.pi, 0))
         print("(ax, ay, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvecs_in_exact[ii].squeeze()))
@@ -105,17 +104,11 @@ for ii in range(len(wlens)):
 
     # do 1D DMD simulations
     data_temp = sdmd.simulate_1d(pattern,
-                                 [wlens[ii]],
-                                 gon,
-                                 rot_axis,
-                                 goff,
-                                 rot_axis,
-                                 dx,
-                                 dy,
-                                 wx,
-                                 wy,
+                                 wlens[ii],
+                                 dmd,
                                  tins_exact[ii],
-                                 tm_out_offsets=tout_offsets)
+                                 tm_out_offsets=tout_offsets,
+                                 inverted=inverted[ii])
     simulation_data.append(data_temp)
 
 # ##################################
@@ -133,37 +126,54 @@ str = (r"Diffraction orders and blaze envelopes for beams diffracted along the "
 figh.suptitle(str)
 ax = figh.add_subplot(1, 1, 1)
 
-leg = []
-hs = []
 for ii in range(len(wlens)):
     data = simulation_data[ii]
 
+    # load data
     _, tout = sdmd.uvector2tmtp(*data["uvecs_out"][0].transpose())
     sinc = np.abs(data['sinc_efield_on'][0] / data['wx'] / data['wy']) ** 2
     sinc_off = np.abs(data['sinc_efield_off'][0] / data['wx'] / data['wy']) ** 2
     int = np.abs(data['efields'][0]) ** 2
 
-    peak_angle = tm_out + wlens[0] / (dx * base_period)
+    # normalize diffraction patterns
+    if inverted[ii]:
+        sinc_ref = sinc_off
+    else:
+        sinc_ref = sinc
+
+    peak_angle = tm_out + wlens[0] / (dmd.dx * base_period)
     ind = np.argmin(np.abs(peak_angle - tout))
     int_check = np.array(int, copy=True)
     int_check[np.arange(int.size) < (ind - 10)] = 0
     imax = np.argmax(int_check)
-    int = int / int[imax] * sinc[imax]
+    int = int / int[imax] * sinc_ref[imax]
 
-    label = (f"{wlens[ii]*1e9:.0f}nm, "
+    # plot
+    label = (f"{wlens[ii]*1e3:.0f}nm, "
              f"$(n_x, n_y)$ = ({diff_orders[ii]:d}, {-diff_orders[ii]:d}); "
              r"$\theta_-$"
              f" = {tins_exact[ii] * 180/np.pi:.2f}deg\n"
-             f"a=({uvecs_in_exact[ii][0]:.3f}, {uvecs_in_exact[ii][1]:.3f}, {uvecs_in_exact[ii][1]:.3f})")
+             f"a=({uvecs_in_exact[ii][0]:.3f}, "
+             f"{uvecs_in_exact[ii][1]:.3f}, "
+             f"{uvecs_in_exact[ii][2]:.3f})")
 
-    h, = ax.plot(tout * 180/np.pi, int, color=display_colors[ii], label=label)
-    hs.append(h)
-    h, = ax.plot(tout * 180/np.pi, sinc, color=display_colors[ii])
-    hs.append(h)
-    ax.plot(tout * 180 / np.pi, sinc_off, '--', color=display_colors[ii])
+    ax.plot(tout * 180/np.pi,
+            int,
+            color=display_colors[ii],
+            label=label)
+
+    ax.plot(tout * 180/np.pi,
+            sinc,
+            color=display_colors[ii])
+
+    ax.plot(tout * 180 / np.pi,
+            sinc_off,
+            '--',
+            color=display_colors[ii])
     ax.set_ylim([-0.05, 1.1])
 
-ax.set_xlim([tm_out * 180/np.pi - 10, tm_out * 180/np.pi + 10])
+ax.set_xlim([tm_out * 180/np.pi - 10,
+             tm_out * 180/np.pi + 10])
 ax.legend()
 ax.set_xlabel(r"$\theta_-$ (degrees)")
 ax.set_ylabel("intensity (arb)")
