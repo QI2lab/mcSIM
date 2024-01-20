@@ -14,8 +14,6 @@ which cannot be used with e.g. python and the ctypes library as a dll could be.
 This DMD control code was originally based on refactoring https://github.com/mazurenko/Lightcrafter6500DMDControl.
 The combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycrafter6500.
 """
-
-import pywinusb.hid as pyhid
 import sys
 import time
 import struct
@@ -29,7 +27,10 @@ import zarr
 import warnings
 from pathlib import Path
 import numcodecs
-
+try:
+    import pywinusb.hid as pyhid
+except ImportError:
+    warnings.warn("pywinusb could not be imported")
 
 ##############################################
 # compress DMD pattern data
