@@ -2935,14 +2935,6 @@ def display_tomography_recon(recon_fname: str,
     ny = proc_roi[1] - proc_roi[0]
     nx = proc_roi[3] - proc_roi[2]
 
-    # try:
-    #     cam_roi = img_z.attrs["camera_path_attributes"]["camera_roi"]
-    #     ny_raw = cam_roi[1] - cam_roi[0]
-    #     nx_raw = cam_roi[3] - cam_roi[2]
-    # except KeyError:
-    #     ny_raw = ny
-    #     nx_raw = nx
-
     drs_n = img_z.attrs["dr"]
     n_axis_names = img_z.attrs["dimensions"]
     # wavelength = img_z.attrs["wavelength"]
@@ -2990,6 +2982,8 @@ def display_tomography_recon(recon_fname: str,
             if compute:
                 with ProgressBar():
                     n_start = n_start.compute()
+        else:
+            n_start = no * np.ones(1)
 
     else:
         n = no * np.ones(1)
