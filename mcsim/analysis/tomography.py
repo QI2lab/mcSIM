@@ -3801,7 +3801,7 @@ class BPM(RIOptimizer):
 
         # include cosine oblique factor
         if self.beam_frqs is not None:
-            self.thetas, _ = frqs2angles(self.beam_frqs, self.no, self.wavelength)
+            self.thetas, _ = frqs2angles(self.beam_frqs, self.no / self.wavelength)
         else:
             self.thetas = np.zeros((self.n_samples,))
 

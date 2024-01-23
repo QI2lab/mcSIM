@@ -1,6 +1,6 @@
 import unittest
 import mcsim.analysis.tomography as tm
-from mcsim.analysis.field_prop import angles2frqs
+from mcsim.analysis.field_prop import angles2frqs, propagate_homogeneous
 from mcsim.analysis.fft import ft3
 import numpy as np
 import cupy as cp
@@ -10,6 +10,36 @@ class TestPatterns(unittest.TestCase):
 
     def setUp(self):
         pass
+
+    def test_prop_adjoint(self):
+        dxy = 0.1
+        z = 5
+        nxy = 100
+        no = 1.333
+        wlen = 0.532
+
+        v = np.random.rand(nxy, nxy) + 1j * np.random.rand(nxy, nxy)
+        w = np.random.rand(nxy, nxy) + 1j * np.random.rand(nxy, nxy)
+
+        op_v = propagate_homogeneous(v,
+                                   z,
+                                   no,
+                                   (dxy, dxy),
+                                   wlen)
+        opadj_w = propagate_homogeneous(w,
+                                        z,
+                                        no,
+                                        (dxy, dxy),
+                                        wlen,
+                                        adjoint_operator=True)
+
+        w_dot_op_v = np.sum(np.conj(w) * op_v)
+        opadj_w_dot_v = np.sum(np.conj(opadj_w) * v)
+
+        np.testing.assert_allclose(w_dot_op_v,
+                                   opadj_w_dot_v,
+                                   atol=1e-10)
+
 
     def test_born_grad(self):
         dxy = 0.1
@@ -34,7 +64,7 @@ class TestPatterns(unittest.TestCase):
 
         theta = 25 * np.pi / 180 * np.ones(npattern)
         phis = np.arange(npattern) / npattern * 2*np.pi
-        beam_frqs = angles2frqs(no, wavelength, theta, phis)
+        beam_frqs = angles2frqs(theta, phis, no / wavelength)
 
         model = tm.fwd_model_linear(beam_frqs[..., 0],
                                     beam_frqs[..., 1],
@@ -86,7 +116,7 @@ class TestPatterns(unittest.TestCase):
 
         theta = 25 * np.pi / 180 * np.ones(npattern)
         phis = np.arange(npattern) / npattern * 2*np.pi
-        beam_frqs = angles2frqs(no, wavelength, theta, phis)
+        beam_frqs = angles2frqs(theta, phis, no / wavelength)
 
         model = tm.fwd_model_linear(beam_frqs[..., 0],
                                     beam_frqs[..., 1],
