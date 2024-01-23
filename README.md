@@ -150,3 +150,10 @@ Example scripts which are useful for controlling various instruments during test
 # Instrument design
 A [parts list](parts_list.md) is available here. Mechanical drawings and 3D models of custom parts such as the DMD mount 
 are available on Zenodo (coming soon!). For a more complete description of the optical path, see our BOE paper linked above.
+
+# Documentation
+Documentation is generated from function docstrings and built with Sphinx. e.g. navigate to [docs](docs) and run
+```
+make html
+```
+Then open `docs/_build/html/index.html` in your browser
