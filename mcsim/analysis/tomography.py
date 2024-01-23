@@ -1186,7 +1186,6 @@ class tomography:
                 try:
                     if e_scatt_out is not None:
                         e_scatt_out[block_ind] = to_cpu(efield_scattered)
-
                     del efield_scattered
                 except NameError:
                     pass
@@ -2738,7 +2737,7 @@ def plot_odt_sampling(frqs: np.ndarray,
     :param frqs: nfrqs x 2 array of [[fx0, fy0], [fx1, fy1], ...]
     :param na_detect: detection NA
     :param na_excite: excitation NA
-    :param ni: index of refraction of medium that sample is immersed in.
+    :param no: index of refraction of medium that sample is immersed in.
     :param wavelength:
     :param kwargs: passed through to figure
     :return figh:
@@ -2885,7 +2884,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
     ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_zlim([-1, 1]) # todo: set based on na's
+    ax.set_zlim([-1, 1])  # todo: set based on na's
 
     ax.set_xlabel("$f_x$ (1/$\mu m$)")
     ax.set_ylabel("$f_y$ (1/$\mu m$)")
@@ -2922,9 +2921,13 @@ def display_tomography_recon(recon_fname: str,
     :param time_axis:
     :param time_range:
     :param phase_lim:
+    :param n_lim:
+    :param e_lim:
+    :param escatt_lim:
     :param block_while_display:
     :param real_cmap:
     :param phase_cmap:
+    :param scale_z:
     :return: viewer
     """
 
@@ -3341,6 +3344,7 @@ def display_tomography_recon(recon_fname: str,
 
     return viewer
 
+
 def get_2d_projections(n: np.ndarray,
                        z_to_xy_ratio: float = 1,
                        use_slice: bool = False,
@@ -3399,6 +3403,7 @@ def get_2d_projections(n: np.ndarray,
 
     return img
 
+
 def get_color_projection(n: np.ndarray,
                          contrast_limits=(0, 1),
                          mask: Optional[np.ndarray] = None,
@@ -3414,6 +3419,8 @@ def get_color_projection(n: np.ndarray,
     :param contrast_limits: (nmin, nmax)
     :param mask: only consider points where mask value is True
     :param cmap: matplotlib colormap
+    :param max_z: whether to perform a max projection, or sum all slices
+    :param background_color:
     :return: n_proj, colors
     """
 
@@ -3448,6 +3455,7 @@ def get_color_projection(n: np.ndarray,
     n_proj[is_bg, :] = background_color
 
     return n_proj, colors
+
 
 class RIOptimizer(Optimizer):
 
@@ -3588,7 +3596,6 @@ class RIOptimizer(Optimizer):
 
         return x_real + 1j * x_imag
 
-
     def cost(self, x, inds=None):
         if inds is None:
             inds = list(range(self.n_samples))
@@ -3610,7 +3617,6 @@ class RIOptimizer(Optimizer):
                 costs += (1 - self.efield_cost_factor) * 0.5 * (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).mean(axis=-1)
 
         return costs
-
 
 
 class LinearScatt(RIOptimizer):
@@ -3752,7 +3758,6 @@ class LinearScatt(RIOptimizer):
 
     def run(self, x_start, **kwargs):
         return super(LinearScatt, self).run(x_start, **kwargs)
-
 
 
 class BPM(RIOptimizer):
@@ -3954,7 +3959,6 @@ class SSNP(RIOptimizer):
         kz[xp.isnan(kz)] = 0
         self.kz = kz
 
-
     def phi_fwd(self, x, inds=None):
         """
         Return the forward model field and the forward model derivative. Since we do not measure the derivative,
@@ -3982,10 +3986,8 @@ class SSNP(RIOptimizer):
                                             apodization=self.apodization)
         return phi_fwd
 
-
     def fwd_model(self, x, inds=None):
         return self.phi_fwd(x, inds=inds)[..., 0]
-
 
     def gradient(self, x, inds=None):
         if isinstance(x, cp.ndarray) and _gpu_available:
