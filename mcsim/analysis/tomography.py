@@ -908,6 +908,8 @@ class tomography:
                       e_fwd_out: Optional[array] = None,
                       e_scatt_out: Optional[array] = None,
                       n_start_out: Optional[array] = None,
+                      print_fft_cache: bool = False,
+                      dz_refocus: float = 1.,
                       **kwargs) -> (array, tuple, dict):
 
         """
@@ -931,6 +933,7 @@ class tomography:
           from the inferred refractive index. chunk-size should be (1, ..., 1, ny, nx) for fastests saving
         :param e_scatt_out:
         :param n_start_out:
+        :param print_fft_cache: optionally print memory usage of GPU FFT cache at each iteration
         :param **kwargs: passed through to both the constructor and the run() method of the optimizer.
           These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
           Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details
@@ -983,6 +986,9 @@ class tomography:
                                  xp.asarray(tukey(n_size[-1], alpha=0.1)))
 
         if mode == "born" or mode == "rytov":
+            if dz_refocus != 0:
+                raise NotImplementedError()
+
             optimizer = mode
             dz_final = None
             # affine transformation from reconstruction coordinates to pixel indices
@@ -1036,7 +1042,7 @@ class tomography:
 
             # position z=0 in the middle of the volume, accounting for the fact
             # the efields and n are shifted by dz/2
-            dz_final = -drs_n[0] * ((n_size[0] - 1) - n_size[0] // 2 + 0.5)
+            dz_final = -drs_n[0] * ((n_size[0] - 1) - n_size[0] // 2 + 0.5) + dz_refocus
 
             # affine transformation from reconstruction coordinates to pixel indices
             # coordinates in finer coordinates
@@ -1101,6 +1107,7 @@ class tomography:
                   step,
                   optimizer,
                   verbose,
+                  print_fft_cache,
                   n_guess=None,
                   e_fwd_out=None,
                   e_scatt_out=None,
@@ -1115,8 +1122,10 @@ class tomography:
 
             if block_id is None:
                 block_ind = None
+                label = ""
             else:
                 block_ind = block_id[:nextra_dims]
+                label = f"{block_id} "
 
             if use_gpu:
                 efields_ft = xp.asarray(efields_ft)
@@ -1194,12 +1203,12 @@ class tomography:
             # optionally write out starting refractive index
             # ############
             if n_start_out is not None:
-                if self.verbose:
+                if verbose:
                     print("saving n_start")
                 n_start_out[block_ind] = to_cpu(get_n(ift3(v_fts_start, no_cache=True), no, wavelength))
 
             print(f"starting inference")
-            if use_gpu and verbose:
+            if use_gpu and print_fft_cache:
                 print(f"gpu memory usage = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
                 print(cp.fft.config.get_plan_cache())
 
@@ -1217,6 +1226,7 @@ class tomography:
                 results = model.run(v_fts_start,
                                     step=step,
                                     verbose=verbose,
+                                    label=label,
                                     **kwargs
                                     )
                 n = get_n(ift3(results["x"]), no, wavelength)
@@ -1254,6 +1264,7 @@ class tomography:
                 results = model.run(n_start,
                                     step=step,
                                     verbose=verbose,
+                                    label=label,
                                     **kwargs
                                     )
                 n = results["x"]
@@ -1263,7 +1274,7 @@ class tomography:
             # ################
             if e_fwd_out is not None:
                 tstart_efwd = time.perf_counter()
-                if self.verbose:
+                if verbose:
                     print("computing forward model")
 
                 if optimizer == "born" or optimizer == "rytov":
@@ -1276,14 +1287,13 @@ class tomography:
                         ind_now = block_ind + (ii,)
                         e_fwd_out[ind_now] = to_cpu(model.fwd_model(n.squeeze(), inds=[ii])[slices]).squeeze()
 
-                if self.verbose:
+                if verbose:
                     print(f"computed forward model in {time.perf_counter() - tstart_efwd:.2f}s")
 
-            if self.verbose and use_gpu:
+            if use_gpu and print_fft_cache:
                 print(f"gpu memory usage = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
                 print(cp.fft.config.get_plan_cache())
 
-            # todo: reshape here?
             return to_cpu(n).reshape((1,) * nextra_dims + n_size)
 
         # #######################
@@ -1304,6 +1314,7 @@ class tomography:
                           step,
                           optimizer,
                           self.verbose,
+                          print_fft_cache,
                           n_guess=n_guess,
                           e_fwd_out=e_fwd_out,
                           e_scatt_out=e_scatt_out,

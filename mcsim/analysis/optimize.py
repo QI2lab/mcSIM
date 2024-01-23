@@ -165,6 +165,7 @@ class Optimizer():
             stop_on_nan: bool = True,
             xtol: float = 0.0,
             print_newline: bool = False,
+            label:str = "",
             **kwargs) -> dict:
 
         """
@@ -358,7 +359,7 @@ class Optimizer():
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
 
-                    status = f"iteration {ii + 1:d}/{max_iterations:d}," \
+                    status = f"{label:s}iteration {ii + 1:d}/{max_iterations:d}," \
                              f" cost={np.nanmean(costs[ii]):.3g}," \
                              f" diff={xdiffs[ii]:.3g}," \
                              f" step={steps[ii]:.3g}," \
