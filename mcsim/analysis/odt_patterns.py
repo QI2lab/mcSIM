@@ -2,6 +2,7 @@ import time
 from typing import Optional
 import numpy as np
 
+
 def get_odt_spot_locations(nmax: int,
                            fmax: float = 0.95,
                            fx_max: float = 1.,
@@ -69,6 +70,7 @@ def get_odt_spot_locations(nmax: int,
             centers = np.stack((cxcx[to_use], cycy[to_use]), axis=1)
 
     return centers
+
 
 def get_multiplexed_patterns(centers: np.ndarray,
                              n_multiplex: int,
@@ -203,6 +205,7 @@ def get_multiplexed_patterns(centers: np.ndarray,
 
     return center_sets
 
+
 def _nearest_pt_line(pt, slope, pt_line):
     """
     Get shortest distance between a point and a line.
@@ -261,7 +264,7 @@ def get_odt_patterns(center_set: list[np.ndarray],
     """
     Generate DMD patterns from a list of center positions
 
-    :param center_set:
+    :param center_set: N x 2 array in order (cx, cy)
     :param dmd_size: (ny, nx)
     :param rad: spot radius in mirrors
     :param mag_dmd2bfp: magnification factor between DMD and back focal plane of detection objective
@@ -269,8 +272,8 @@ def get_odt_patterns(center_set: list[np.ndarray],
     :param wavelength: in um
     :param na_detection:
     :param dm: DMD mirror size in um
-    :param fc: in 1/mirrors
-    :param phase:
+    :param fc: carrier frequency (fx, fy) in 1/mirrors
+    :param phase: phase of carrier frequency pattern
     :param drs: distances (dx, dy) in um for the final beam to be displaced from the center of the field-of-view
       This should be a list of arrays of the same size as center_set.
     :param use_off_mirrors:
@@ -340,6 +343,7 @@ def get_odt_patterns(center_set: list[np.ndarray],
                                  "pupil_angle": pupil_angles.tolist()})
 
     return odt_patterns, odt_pattern_data
+
 
 def get_subset(centers: np.ndarray,
                n_subset: int,
