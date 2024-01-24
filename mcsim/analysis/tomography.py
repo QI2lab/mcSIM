@@ -680,7 +680,8 @@ class tomography:
                         fit_translations: bool = False,
                         translation_thresh: float = 1/30,
                         apodization: Optional[np.ndarray] = None,
-                        use_gpu: bool = False):
+                        use_gpu: bool = False,
+                        dz_refocus: float = 0.,):
         """
         Unmix and preprocess holograms
 
@@ -693,6 +694,7 @@ class tomography:
         :param translation_thresh:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         :param use_gpu:
+        :param dz_refocus: distance to numerically refocus holograms
         :return:
         """
         self.reconstruction_settings.update({"fit_translations": fit_translations})
@@ -769,9 +771,6 @@ class tomography:
                                             apodization=apodization,
                                             dtype=complex)
 
-        # compute reference
-        # holo_ft_ref = holograms_ft_bg[ref_slice].compute()
-
         # #########################
         # fit translations between signal and background electric fields
         # #########################
@@ -812,12 +811,10 @@ class tomography:
                 return e_ft_out
 
             dr_chunks = holograms_ft.chunksize[:-2] + (1, 1)
-            dxs = da.from_array(self.translations[..., 0], chunks=dr_chunks)
-            dys = da.from_array(self.translations[..., 1], chunks=dr_chunks)
             holograms_ft = da.map_blocks(translate,
                                          holograms_ft,
-                                         dxs,
-                                         dys,
+                                         da.from_array(self.translations[..., 0], chunks=dr_chunks),
+                                         da.from_array(self.translations[..., 1], chunks=dr_chunks),
                                          self.fxs,
                                          self.fys,
                                          dtype=complex,
@@ -836,13 +833,10 @@ class tomography:
                                                      new_axis=-1,
                                                      chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
 
-                dxs_bg = da.from_array(self.translations_bg[..., 0], chunks=dr_chunks)
-                dys_bg = da.from_array(self.translations_bg[..., 1], chunks=dr_chunks)
-
                 holograms_ft_bg = da.map_blocks(translate,
                                                 holograms_ft_bg,
-                                                dxs_bg,
-                                                dys_bg,
+                                                da.from_array(self.translations_bg[..., 0], chunks=dr_chunks),
+                                                da.from_array(self.translations_bg[..., 1], chunks=dr_chunks),
                                                 self.fxs,
                                                 self.fys,
                                                 dtype=complex,
@@ -889,6 +883,20 @@ class tomography:
 
         self.holograms_ft = holograms_ft * self.phase_params
 
+        # #########################
+        # numerically refocus
+        # #########################
+        if dz_refocus != 0.:
+            kernel = field_prop.get_angular_spectrum_kernel(dz_refocus,
+                                                            self.wavelength,
+                                                            self.no,
+                                                            (self.ny, self.nx),
+                                                            (self.dxy, self.dxy))
+
+            self.holograms_ft *= kernel
+            self.holograms_ft_bg *= kernel
+
+
         return self.holograms_ft, self.holograms_ft_bg
 
     def reconstruct_n(self,
@@ -909,7 +917,6 @@ class tomography:
                       e_scatt_out: Optional[array] = None,
                       n_start_out: Optional[array] = None,
                       print_fft_cache: bool = False,
-                      dz_refocus: float = 1.,
                       **kwargs) -> (array, tuple, dict):
 
         """
@@ -986,9 +993,6 @@ class tomography:
                                  xp.asarray(tukey(n_size[-1], alpha=0.1)))
 
         if mode == "born" or mode == "rytov":
-            if dz_refocus != 0:
-                raise NotImplementedError()
-
             optimizer = mode
             dz_final = None
             # affine transformation from reconstruction coordinates to pixel indices
@@ -1042,7 +1046,7 @@ class tomography:
 
             # position z=0 in the middle of the volume, accounting for the fact
             # the efields and n are shifted by dz/2
-            dz_final = -drs_n[0] * ((n_size[0] - 1) - n_size[0] // 2 + 0.5) + dz_refocus
+            dz_final = -drs_n[0] * ((n_size[0] - 1) - n_size[0] // 2 + 0.5)
 
             # affine transformation from reconstruction coordinates to pixel indices
             # coordinates in finer coordinates
@@ -1203,12 +1207,19 @@ class tomography:
             # ############
             if n_start_out is not None:
                 if verbose:
-                    print("saving n_start")
+                    print("saving n_start", end="\r")
+                    tstart_nstart = time.perf_counter()
+
                 n_start_out[block_ind] = to_cpu(get_n(ift3(v_fts_start, no_cache=True), no, wavelength))
 
-            print(f"starting inference")
+                if verbose:
+                    print(f"saved n_start in {time.perf_counter() - tstart_nstart:.2f}s")
+
+            if verbose:
+                print(f"starting inference", end="\r")
+
             if use_gpu and print_fft_cache:
-                print(f"gpu memory usage = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
+                print(f"gpu memory usage before inference = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
                 print(cp.fft.config.get_plan_cache())
 
             if optimizer == "born" or optimizer == "rytov":
@@ -1290,7 +1301,7 @@ class tomography:
                     print(f"computed forward model in {time.perf_counter() - tstart_efwd:.2f}s")
 
             if use_gpu and print_fft_cache:
-                print(f"gpu memory usage = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
+                print(f"gpu memory usage after inference = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
                 print(cp.fft.config.get_plan_cache())
 
             return to_cpu(n).reshape((1,) * nextra_dims + n_size)
@@ -2226,7 +2237,10 @@ def unmix_hologram(img: array,
                    apodization: array = 1,
                    mask: Optional[array] = None) -> array:
     """
-    Given an off-axis hologram image, determine the electric field
+    Given an off-axis hologram image, determine the electric field.
+    (1) Fourier transform the raw hologram
+    (2) shift the hologram region near f_ref to the center of the image
+    (3) set regions beyond fmax to zero
 
     :param img: n1 x ... x n_{-3} x n_{-2} x n_{-1} array
     :param dxy: pixel size
@@ -2234,7 +2248,7 @@ def unmix_hologram(img: array,
     :param fx_ref: x-component of hologram reference frequency
     :param fy_ref: y-component of hologram reference frequency
     :param apodization: apodization window applied to real-space image before Fourier transformation
-    :param mask:
+    :param mask: region of hologram to set to zero.
     :return efield_ft: hologram electric field
     """
 
@@ -2245,16 +2259,14 @@ def unmix_hologram(img: array,
 
     apodization = xp.asarray(apodization)
 
-    # FT of image
-    img_ft = ft2(img * apodization)
-
     # get frequency data
-    ny, nx = img_ft.shape[-2:]
+    ny, nx = img.shape[-2:]
     fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
     fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
     ff_perp = np.sqrt(fxs[None, :] ** 2 + fys[:, None] ** 2)
 
     # compute efield
+    img_ft = ft2(img * apodization)
     efield_ft = translate_ft(img_ft, fx_ref, fy_ref, drs=(dxy, dxy))
     efield_ft[..., ff_perp > fmax_int / 2] = 0.
 
