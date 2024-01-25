@@ -113,10 +113,9 @@ class DMD:
         :param gamma_off:
         :param rot_axis_on:
         :param rot_axis_off:
+        :param nx:
+        :param ny:
         """
-
-        if dx < wx or dy < wy:
-            raise ValueError('w must be <= d.')
 
         self.gamma_on = float(gamma_on)
         self.gamma_off = float(gamma_off)
