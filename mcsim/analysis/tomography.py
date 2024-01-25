@@ -1367,7 +1367,7 @@ class tomography:
                                                                 1, 0, odt_recon_roi[0]])
             xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
 
-            xforms.update({"affine_xform_recon_2_raw_camera_roi": xform_odt_recon_to_cam_roi,})
+            xforms.update({"affine_xform_recon_2_raw_camera_roi": xform_odt_recon_to_cam_roi})
             if cam_roi is not None:
                 xforms["camera roi"] = np.asarray(cam_roi)
 
@@ -3355,6 +3355,61 @@ def display_tomography_recon(recon_fname: str,
     viewer.show(block=block_while_display)
 
     return viewer
+
+def compare_recons(fnames,
+                   vmax: float = 0.05,
+                   block_while_display: bool = True):
+    """
+
+    :param fnames:
+    :param vmax:
+    :param block_while_display:
+    :return:
+    """
+
+    import napari
+
+    if isinstance(fnames, (Path, str)):
+        fnames = [fnames]
+
+    swap_xy = np.array([[0, 1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
+
+    v = napari.Viewer()
+    for f in fnames:
+        znow = zarr.open(f, "r")
+        affine_now = swap_xy.dot(np.array(znow.attrs["affine_xform_recon_2_raw_camera_roi"]).dot(swap_xy))
+        no = znow.attrs["no"]
+
+        if znow.n.shape[-3] == 2:
+            n_now = da.from_zarr(znow.n[..., 0, :, :]) - no
+        else:
+            n_now = da.from_zarr(znow.n).real - no
+
+        nz = znow.n.shape[-3]
+        dz_now = znow.attrs["dr"][0]
+
+        # todo: should correct for numerical refocusing
+        zs = (np.arange(nz) - nz // 2) * dz_now
+
+        v.add_image(n_now,
+                    scale=(dz_now, 1, 1),
+                    translate=(zs[0], 0, 0),
+                    affine=affine_now,
+                    name=f"{f.parent.name:s}",
+                    contrast_limits=[0, vmax],
+                    colormap="bone"
+                    )
+
+        # set to first position
+        v.dims.set_current_step(axis=0, value=0)
+        # set to first time
+        v.dims.set_current_step(axis=1, value=0)
+
+        v.show(block=block_while_display)
+
+    return v
 
 
 def get_2d_projections(n: np.ndarray,
