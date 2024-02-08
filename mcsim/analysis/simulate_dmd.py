@@ -1231,7 +1231,7 @@ def solve_diffraction_output(uvecs_in: array,
     bx - ax = wavelength / d * nx
     by - ay = wavelength / d * ny
 
-    :param uvecs_in: n0 x n1 x ... x nk x 3
+    :param uvecs_in: n0 x n1 x ... x nk x 3 in order (x, y, z)
     :param dx: x-dmd pitch
     :param dy: y-dmd pitch
     :param wavelength:
@@ -1429,7 +1429,7 @@ def solve_combined_condition(d: float,
                              gamma: float,
                              rot_axis: Sequence[float],
                              wavelength: float,
-                             order: Sequence[int]) -> (Callable, Callable):
+                             order: Sequence[int]) -> (Callable, Callable, np.ndarray):
     """
     Solve the combined diffraction/blaze condition. Since in general the system of equation is overdetermined,
     return the vectors which solve the diffraction condition and minimize the blaze condition cost, defined by
@@ -1445,11 +1445,23 @@ def solve_combined_condition(d: float,
     :return ab_from_ax: function which returns the full vectors a(ax), b(ax). If ax is a vector of length N,
       then this will return two vectors of size 2 x N x 3, since there are two solutions for eaach ax
     :return ab_from_ay: function which return the full vectors a(ay), b(ay)
+    :return b_unique
     """
 
     nx, ny = order
     rot_mat = get_rot_mat(rot_axis, gamma)
 
+    # ##########################
+    # solution case 1:
+    # ##########################
+    bx_unique = 0.5 * nx * wavelength / d
+    by_unique = 0.5 * ny * wavelength / d
+    bz_unique = np.sqrt(1 - bx_unique**2 - by_unique**2)
+    b_unique = np.array([bx_unique, by_unique, bz_unique])
+
+    # ##########################
+    # solution case 2:
+    # ##########################
     # differences between vectors b and a
     # this condition derived from Lagrange multiplier method
     bma_z = (-wavelength / d * (nx * (rot_mat[2, 0] * rot_mat[0, 0] + rot_mat[2, 1] * rot_mat[0, 1]) +
@@ -1512,7 +1524,7 @@ def solve_combined_condition(d: float,
 
         return a, b
 
-    return ab_from_ax, ab_from_ay
+    return ab_from_ax, ab_from_ay, b_unique
 
 
 def solve_blazed_pattern_frequency(dx: float,
