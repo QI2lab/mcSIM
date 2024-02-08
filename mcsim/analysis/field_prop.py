@@ -46,7 +46,7 @@ def frqs2angles(frqs: array,
     with np.errstate(invalid="ignore"):
         theta = xp.array(np.arccos(xp.dot(frqs, xp.array([0, 0, 1])) / magnitude))
         theta[xp.isnan(theta)] = 0
-        phi = xp.angle(frqs[:, 0] + 1j * frqs[:, 1])
+        phi = xp.angle(frqs[..., 0] + 1j * frqs[..., 1])
         phi[xp.isnan(phi)] = 0
 
         # todo: want to do this?
