@@ -674,7 +674,7 @@ class tomography:
         return xform_dmd2frq
 
     def unmix_holograms(self,
-                        bg_average_axes: tuple[int],
+                        bg_average_axes: Optional[tuple[int]] = None,
                         fourier_mask: Optional[np.ndarray] = None,
                         fit_phases: bool = False,
                         fit_translations: bool = False,
@@ -708,6 +708,8 @@ class tomography:
         # slice used as reference for computing phase shifts/translations/etc
         # if we are going to average along a dimension (i.e. if it is in bg_average_axes) then need to use
         # single slice as background for that dimension.
+        if bg_average_axes is None:
+            bg_average_axes = ()
         ref_slice = tuple([slice(0, 1) if a in bg_average_axes else slice(None) for a in range(self.nextra_dims)] +
                        [slice(None)] * 3)
 
@@ -913,9 +915,11 @@ class tomography:
                       cam_roi: Optional[list] = None,
                       data_roi: Optional[list] = None,
                       use_weighted_phase_unwrap: bool = False,
-                      e_fwd_out: Optional[array] = None,
-                      e_scatt_out: Optional[array] = None,
-                      n_start_out: Optional[array] = None,
+                      e_fwd_out: Optional[zarr.Array] = None,
+                      e_scatt_out: Optional[zarr.Array] = None,
+                      n_start_out: Optional[zarr.Array] = None,
+                      costs_out: Optional[zarr.Array] = None,
+                      steps_out: Optional[zarr.Array] = None,
                       print_fft_cache: bool = False,
                       **kwargs) -> (array, tuple, dict):
 
@@ -940,6 +944,8 @@ class tomography:
           from the inferred refractive index. chunk-size should be (1, ..., 1, ny, nx) for fastests saving
         :param e_scatt_out:
         :param n_start_out:
+        :param costs_out:
+        :param steps_out:
         :param print_fft_cache: optionally print memory usage of GPU FFT cache at each iteration
         :param **kwargs: passed through to both the constructor and the run() method of the optimizer.
           These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
@@ -1063,7 +1069,7 @@ class tomography:
 
         # general info
         if self.verbose:
-            print(f"computing index of refraction for {np.prod(self.imgs_raw.shape[:-3]):d} images "
+            print(f"computing index of refraction for {int(np.prod(self.imgs_raw.shape[:-3])):d} images "
                   f"using mode {mode:s}.\n"
                   f"Image size = {self.npatterns} x {self.ny:d} x {self.nx:d},\n"
                   f"reconstruction size = {n_size[0]:d} x {n_size[1]:d} x {n_size[2]:d}")
@@ -1278,6 +1284,19 @@ class tomography:
                                     **kwargs
                                     )
                 n = results["x"]
+
+            # ################
+            # optionally store costs
+            # ################
+            if costs_out is not None:
+                if verbose:
+                    print("storing costs")
+                costs_out[block_ind] = to_cpu(results["costs"])
+
+            if steps_out is not None:
+                if verbose:
+                    print("storing steps")
+                steps_out[block_ind] = to_cpu(results["steps"])
 
             # ################
             # optionally compute predicated e_field based on n
