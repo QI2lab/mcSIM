@@ -19,7 +19,7 @@ from localize_psf import fit_psf
 _cupy_available = True
 try:
     import cupy as cp
-except:
+except ImportError:
     _cupy_available = False
 
 # ############################
@@ -41,11 +41,8 @@ k = 2*np.pi / wavelength
 # ############################
 # DMD parameters
 # ############################
-dm = 7.56  # DMD pitch
-gamma = 12 * np.pi/180
-rot_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0)
-nx = 1920
-ny = 1080
+dmd = sdmd.DLP6500()
+ny, nx = dmd.size
 
 xx, yy = xp.meshgrid(xp.arange(nx) - nx // 2,
                      xp.arange(ny) - ny // 2)
@@ -61,7 +58,7 @@ extent_fxy_dmd = [fxs_dmd[0] - 0.5 * dfx_dmd, fxs_dmd[-1] + 0.5 * dfx_dmd,
 # collection lens properties
 # ############################
 fl = 200e3  # lens focal length, mm
-rl = 0.5 * 25.4e3 # lens aperture radius, mm
+rl = 0.5 * 25.4e3  # lens aperture radius, mm
 na = np.sin(np.arctan(rl/fl))
 fmax_efield = na / wavelength
 
@@ -110,29 +107,45 @@ phase_errs = xp.random.normal(scale=phase_err_size, size=(ny, nx))
 
 # set beam profile
 w = 8e3
-beam = xp.exp(-(xx**2 + yy**2) * dm**2 / w**2)
+beam = xp.exp(-(xx**2 + yy**2) * dmd.dx**2 / w**2)
 
 # ############################
 # get output angles assuming perfect alignment for blue
 # ############################
-_, uvecs_out = sdmd.solve_1color_1d(0.465, dm, gamma, 4)
+_, uvecs_out = sdmd.solve_1color_1d(0.465, dmd.dx, dmd.gamma_on, 4)
 optical_axis = uvecs_out[1]
 tp_oa, tm_oa = sdmd.uvector2tmtp(*optical_axis)
 
 # find input angle for IR
 order_ir = (-3, 3)
 # calculate b_out so that the main diffraction order of our pattern lines up with the optical axis
-bx_out = optical_axis[0] - wavelength / dm * frqs[0][0]
-by_out = optical_axis[1] - wavelength / dm * frqs[0][1]
-bz_out = np.sqrt(1 - bx_out**2 - by_out**2)
-main_ir_order_out = np.stack((bx_out, by_out, bz_out))
-
-# uvec_in = sdmd.solve_diffraction_input(uvec_out, dm, dm, wavelength, order_ir)
-uvec_in_ir = sdmd.solve_diffraction_input(main_ir_order_out,
-                                          dm,
-                                          dm,
+uvec_in_ir = sdmd.solve_diffraction_input(optical_axis,
+                                          dmd.dx,
+                                          dmd.dy,
                                           wavelength,
-                                          order_ir)
+                                          order_ir[0],
+                                          order_ir[1],
+                                          frqs[0][0],
+                                          frqs[0][1])
+main_ir_order_out = sdmd.solve_diffraction_output(uvec_in_ir,
+                                                  dmd.dx,
+                                                  dmd.dy,
+                                                  wavelength,
+                                                  order_ir[0],
+                                                  order_ir[1])
+
+# bx_out = optical_axis[0] - wavelength / dmd.dx * frqs[0][0]
+# by_out = optical_axis[1] - wavelength / dmd.dy * frqs[0][1]
+# bz_out = np.sqrt(1 - bx_out**2 - by_out**2)
+# main_ir_order_out = np.stack((bx_out, by_out, bz_out))
+#
+# # uvec_in = sdmd.solve_diffraction_input(uvec_out, dm, dm, wavelength, order_ir)
+# uvec_in_ir = sdmd.solve_diffraction_input(main_ir_order_out,
+#                                           dmd.dx,
+#                                           dmd.dy,
+#                                           wavelength,
+#                                           order_ir[0],
+#                                           order_ir[1])
 tp, tm = sdmd.uvector2tmtp(*uvec_in_ir.ravel())
 print("%.0fnm input angles:" % (wavelength * 1e3))
 print("theta_p = %0.2fdeg" % (tp * 180/np.pi))
@@ -146,7 +159,7 @@ print("theta_m = %0.2fdeg" % (tm_out_main * 180/np.pi))
 print("unit vector = (%0.3f, %0.3f, %0.3f)" % tuple(main_ir_order_out.ravel()))
 
 # blaze angle out
-uvec_blaze_off = sdmd.solve_blaze_output(uvec_in_ir, -gamma)
+uvec_blaze_off = sdmd.solve_blaze_output(uvec_in_ir, dmd.gamma_off, dmd.rot_axis_off)
 tp_blaze, tm_blaze = sdmd.uvector2tmtp(*uvec_blaze_off.squeeze())
 
 # sanity check ...
@@ -156,42 +169,48 @@ tp_blaze, tm_blaze = sdmd.uvector2tmtp(*uvec_blaze_off.squeeze())
 # ############################
 # get positions of carrier frequency spot
 # ############################
-uvec_opt_axis_carrier = np.array(sdmd.dmd_frq2opt_axis_uvec(frqs[0][0],
-                                                            frqs[0][1],
-                                                            main_ir_order_out,
-                                                            optical_axis,
-                                                            dm,
-                                                            dm,
-                                                            wavelength)).ravel()
+# uvec_opt_axis_carrier = np.array(sdmd.dmd_frq2opt_axis_uvec(frqs[0][0],
+#                                                             frqs[0][1],
+#                                                             main_ir_order_out,
+#                                                             optical_axis,
+#                                                             dmd.dx,
+#                                                             dmd.dy,
+#                                                             wavelength)).ravel()
+
+bf_x, bf_y, bf_z = sdmd.dmd_frq2uvec(main_ir_order_out,
+                                     frqs[0][0],
+                                     frqs[0][1],
+                                     wavelength,
+                                     dmd.dx,
+                                     dmd.dy)
+bf_xp, bf_yp, bf_zp = sdmd.dmd_uvec2opt_axis_uvec(np.stack((bf_x, bf_y, bf_z), axis=-1),
+                                                  optical_axis,
+                                                  )
+uvec_opt_axis_carrier = np.stack((bf_xp, bf_yp, bf_zp)).ravel()
+
 xc_carrier = uvec_opt_axis_carrier[0] * fl
 yc_carrier = uvec_opt_axis_carrier[1] * fl
 
 # ############################
 # get DFT positions
 # ############################
-efields_dft, _, _, sinc_on_dft, sinc_off_dft, bvecs_dft = sdmd.simulate_dmd_dft(pattern,
-                                                                                beam * np.exp(1j * phase_errs),
-                                                                                wavelength,
-                                                                                gamma,
-                                                                                -gamma,
-                                                                                dm, dm, dm, dm,
-                                                                                uvec_in_ir,
-                                                                                order_ir)
-efields_dft_no_err, _, _, _, _, _ = sdmd.simulate_dmd_dft(pattern,
-                                                          beam * xp.ones(pattern.shape),
-                                                          wavelength,
-                                                          gamma,
-                                                          -gamma,
-                                                          dm, dm, dm, dm,
-                                                          uvec_in_ir,
-                                                          order_ir)
+efields_dft, _, _, sinc_on_dft, sinc_off_dft, bvecs_dft = dmd.simulate_pattern_dft(wavelength,
+                                                                                   pattern,
+                                                                                   beam * np.exp(1j * phase_errs),
+                                                                                   uvec_in_ir,
+                                                                                   order_ir)
+efields_dft_no_err, _, _, _, _, _ = dmd.simulate_pattern_dft(wavelength,
+                                                             pattern,
+                                                             beam * xp.ones(pattern.shape),
+                                                             uvec_in_ir,
+                                                             order_ir)
 
 xf_dft, yf_dft, _ = sdmd.dmd_uvec2opt_axis_uvec(bvecs_dft, optical_axis)
 xf_dft *= fl
 yf_dft *= fl
 
 # sample at uniform grid in Fourier plane
-sigma_eff_dmd = rad / np.sqrt(2 * np.log(2)) * dm
+sigma_eff_dmd = rad / np.sqrt(2 * np.log(2)) * dmd.dx
 sigma_eff_fourier = fl * wavelength / (2*np.pi * sigma_eff_dmd)
 
 rad_fourier_fov = 2 * np.sqrt(2 * np.log(2)) * sigma_eff_fourier
@@ -217,35 +236,26 @@ dmd_uvecs_out = np.stack(sdmd.opt_axis_uvec2dmd_uvec(opt_axis_uvecs, optical_axi
 # ############################
 # do simulations
 # ############################
-efields, _, _ = sdmd.simulate_dmd(pattern,
-                                  wavelength,
-                                  gamma,
-                                  -gamma,
-                                  dm, dm, dm, dm,
-                                  uvec_in_ir,
-                                  dmd_uvecs_out,
-                                  rot_axis_on=rot_axis,
-                                  rot_axis_off=rot_axis,
-                                  phase_errs=phase_errs,
-                                  efield_profile=beam)
+efields, _, _ = dmd.simulate_pattern(wavelength,
+                                     pattern,
+                                     uvec_in_ir,
+                                     dmd_uvecs_out,
+                                     phase_errs=phase_errs,
+                                     efield_profile=beam)
 
-efields_interp = sdmd.interpolate_dmd_data(pattern,
-                                           beam,
-                                           wavelength,
-                                           gamma,
-                                           -gamma,
-                                           dm, dm, dm, dm,
-                                           uvec_in_ir,
-                                           order_ir,
-                                           dmd_uvecs_out,
-                                           rot_axis,
-                                           rot_axis)
+efields_interp = dmd.interpolate_pattern_data(wavelength,
+                                              pattern,
+                                              beam,
+                                              uvec_in_ir,
+                                              order_ir,
+                                              dmd_uvecs_out)
 
 # ############################
 # ideal PSF of lens
 # ############################
 nyf, nxf = xf.shape
 def pupil_fn(r): return r < rl
+
 
 dxp = fl * wavelength / (nxf * dxyf)
 dyp = fl * wavelength / (nyf * dxyf)
@@ -300,8 +310,11 @@ figh.suptitle(f"Simulation of DMD pattern imaged by lens of f={fl * 1e-3:.1f}mm\
 # electric field versus output angle
 # #####################
 ax = figh.add_subplot(grid[0, 0])
-ax.imshow(np.abs(efields_dft)**2, origin="lower", extent=extent_fxy_dmd,
-           norm=PowerNorm(gamma=0.2), cmap="bone")
+ax.imshow(np.abs(efields_dft)**2,
+          origin="lower",
+          extent=extent_fxy_dmd,
+          norm=PowerNorm(gamma=0.2),
+          cmap="bone")
 ax.add_artist(Circle(frqs[0], radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frqs[0], radius=0.01, fill=False, color="m"))
 ax.set_xlabel("$f_x$ (1/mirrors)")
@@ -322,8 +335,11 @@ ax.set_title("$ang[E(b(f) - a)]$ from DFT")
 # blaze envelopes
 # #####################
 ax = figh.add_subplot(grid[0, 1])
-ax.imshow(np.abs(sinc_on_dft)**2 / dm**4, origin="lower", extent=extent_fxy_dmd,
-           norm=PowerNorm(gamma=1, vmin=0, vmax=1), cmap="bone")
+ax.imshow(np.abs(sinc_on_dft)**2 / dmd.dx**2 / dmd.dy**2,
+          origin="lower",
+          extent=extent_fxy_dmd,
+          norm=PowerNorm(gamma=1, vmin=0, vmax=1),
+          cmap="bone")
 ax.add_artist(Circle(frqs[0], radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frqs[0], radius=0.01, fill=False, color="m"))
 ax.set_xlabel("$f_x$ (1/mirrors)")
@@ -331,8 +347,11 @@ ax.set_ylabel("$f_y$ (1/mirrors)")
 ax.set_title("Blaze envelope, on mirrors, $|E|^2$")
 
 ax = figh.add_subplot(grid[1, 1])
-im = ax.imshow(np.abs(sinc_off_dft)**2 / dm**4, origin="lower", extent=extent_fxy_dmd,
-           norm=PowerNorm(gamma=1, vmin=0, vmax=1), cmap="bone")
+im = ax.imshow(np.abs(sinc_off_dft)**2 / dmd.dx**2 / dmd.dy**2,
+               origin="lower",
+               extent=extent_fxy_dmd,
+               norm=PowerNorm(gamma=1, vmin=0, vmax=1),
+               cmap="bone")
 ax.add_artist(Circle(frqs[0], radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frqs[0], radius=0.01, fill=False, color="m"))
 ax.set_xlabel("$f_x$ (1/mirrors)")

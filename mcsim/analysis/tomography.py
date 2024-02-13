@@ -674,13 +674,14 @@ class tomography:
         return xform_dmd2frq
 
     def unmix_holograms(self,
-                        bg_average_axes: tuple[int],
+                        bg_average_axes: Optional[tuple[int]] = None,
                         fourier_mask: Optional[np.ndarray] = None,
                         fit_phases: bool = False,
                         fit_translations: bool = False,
                         translation_thresh: float = 1/30,
                         apodization: Optional[np.ndarray] = None,
-                        use_gpu: bool = False):
+                        use_gpu: bool = False,
+                        dz_refocus: float = 0.,):
         """
         Unmix and preprocess holograms
 
@@ -693,6 +694,7 @@ class tomography:
         :param translation_thresh:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         :param use_gpu:
+        :param dz_refocus: distance to numerically refocus holograms
         :return:
         """
         self.reconstruction_settings.update({"fit_translations": fit_translations})
@@ -706,6 +708,8 @@ class tomography:
         # slice used as reference for computing phase shifts/translations/etc
         # if we are going to average along a dimension (i.e. if it is in bg_average_axes) then need to use
         # single slice as background for that dimension.
+        if bg_average_axes is None:
+            bg_average_axes = ()
         ref_slice = tuple([slice(0, 1) if a in bg_average_axes else slice(None) for a in range(self.nextra_dims)] +
                        [slice(None)] * 3)
 
@@ -769,9 +773,6 @@ class tomography:
                                             apodization=apodization,
                                             dtype=complex)
 
-        # compute reference
-        # holo_ft_ref = holograms_ft_bg[ref_slice].compute()
-
         # #########################
         # fit translations between signal and background electric fields
         # #########################
@@ -812,12 +813,10 @@ class tomography:
                 return e_ft_out
 
             dr_chunks = holograms_ft.chunksize[:-2] + (1, 1)
-            dxs = da.from_array(self.translations[..., 0], chunks=dr_chunks)
-            dys = da.from_array(self.translations[..., 1], chunks=dr_chunks)
             holograms_ft = da.map_blocks(translate,
                                          holograms_ft,
-                                         dxs,
-                                         dys,
+                                         da.from_array(self.translations[..., 0], chunks=dr_chunks),
+                                         da.from_array(self.translations[..., 1], chunks=dr_chunks),
                                          self.fxs,
                                          self.fys,
                                          dtype=complex,
@@ -836,13 +835,10 @@ class tomography:
                                                      new_axis=-1,
                                                      chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
 
-                dxs_bg = da.from_array(self.translations_bg[..., 0], chunks=dr_chunks)
-                dys_bg = da.from_array(self.translations_bg[..., 1], chunks=dr_chunks)
-
                 holograms_ft_bg = da.map_blocks(translate,
                                                 holograms_ft_bg,
-                                                dxs_bg,
-                                                dys_bg,
+                                                da.from_array(self.translations_bg[..., 0], chunks=dr_chunks),
+                                                da.from_array(self.translations_bg[..., 1], chunks=dr_chunks),
                                                 self.fxs,
                                                 self.fys,
                                                 dtype=complex,
@@ -889,6 +885,20 @@ class tomography:
 
         self.holograms_ft = holograms_ft * self.phase_params
 
+        # #########################
+        # numerically refocus
+        # #########################
+        if dz_refocus != 0.:
+            kernel = field_prop.get_angular_spectrum_kernel(dz_refocus,
+                                                            self.wavelength,
+                                                            self.no,
+                                                            (self.ny, self.nx),
+                                                            (self.dxy, self.dxy))
+
+            self.holograms_ft *= kernel
+            self.holograms_ft_bg *= kernel
+
+
         return self.holograms_ft, self.holograms_ft_bg
 
     def reconstruct_n(self,
@@ -901,14 +911,16 @@ class tomography:
                       realspace_mask: Optional[np.ndarray] = None,
                       step: float = 1e-5,
                       use_gpu: bool = False,
-                      f_radius_factor: float = 0.15,
                       n_guess: Optional[array] = None,
                       cam_roi: Optional[list] = None,
                       data_roi: Optional[list] = None,
                       use_weighted_phase_unwrap: bool = False,
-                      e_fwd_out: Optional[array] = None,
-                      e_scatt_out: Optional[array] = None,
-                      n_start_out: Optional[array] = None,
+                      e_fwd_out: Optional[zarr.Array] = None,
+                      e_scatt_out: Optional[zarr.Array] = None,
+                      n_start_out: Optional[zarr.Array] = None,
+                      costs_out: Optional[zarr.Array] = None,
+                      steps_out: Optional[zarr.Array] = None,
+                      print_fft_cache: bool = False,
                       **kwargs) -> (array, tuple, dict):
 
         """
@@ -924,7 +936,6 @@ class tomography:
         :param realspace_mask: indicate which parts of image to exclude/keep
         :param step: ignored if mode is "born" or "rytov"
         :param use_gpu:
-        :param f_radius_factor:
         :param n_guess:
         :param cam_roi:
         :param data_roi:
@@ -933,6 +944,9 @@ class tomography:
           from the inferred refractive index. chunk-size should be (1, ..., 1, ny, nx) for fastests saving
         :param e_scatt_out:
         :param n_start_out:
+        :param costs_out:
+        :param steps_out:
+        :param print_fft_cache: optionally print memory usage of GPU FFT cache at each iteration
         :param **kwargs: passed through to both the constructor and the run() method of the optimizer.
           These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
           Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details
@@ -1055,7 +1069,7 @@ class tomography:
 
         # general info
         if self.verbose:
-            print(f"computing index of refraction for {np.prod(self.imgs_raw.shape[:-3]):d} images "
+            print(f"computing index of refraction for {int(np.prod(self.imgs_raw.shape[:-3])):d} images "
                   f"using mode {mode:s}.\n"
                   f"Image size = {self.npatterns} x {self.ny:d} x {self.nx:d},\n"
                   f"reconstruction size = {n_size[0]:d} x {n_size[1]:d} x {n_size[2]:d}")
@@ -1103,6 +1117,7 @@ class tomography:
                   step,
                   optimizer,
                   verbose,
+                  print_fft_cache,
                   n_guess=None,
                   e_fwd_out=None,
                   e_scatt_out=None,
@@ -1117,8 +1132,10 @@ class tomography:
 
             if block_id is None:
                 block_ind = None
+                label = ""
             else:
                 block_ind = block_id[:nextra_dims]
+                label = f"{block_id} "
 
             if use_gpu:
                 efields_ft = xp.asarray(efields_ft)
@@ -1145,45 +1162,40 @@ class tomography:
                                                 scattered_field_regularization)
                     efield_scattered_ft = ft2(efield_scattered)
                 else:
-                    tstart_demultiplex = time.perf_counter()
-
                     e_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
                     ebg_unmulti = xp.zeros_like(e_unmulti)
 
-                    # todo: think this plan is ok to cache
-                    plan_scatt = None
-                    if use_gpu:
-                        plan_scatt = fft_gpu.get_fft_plan(e_unmulti[0])
-
                     for ii in range(nimgs):
                         for jj in range(nmax_multiplex):
-                            mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
-                                           (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > \
-                                    (f_radius_factor * na_detection / wavelength)
+                            dists = np.linalg.norm(mean_beam_frqs_arr[:, ii, :2] -
+                                                   mean_beam_frqs_arr[jj, ii, :2], axis=1)
+                            min_dist = 0.5 * np.min(dists[dists > 0.])
+                            # min_dist = f_radius_factor * na_detection / wavelength
 
-                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask), plan=plan_scatt)
-                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask), plan=plan_scatt)
+                            mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
+                                           (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > min_dist
+                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask))
+                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask))
 
                     # compute scattered field
                     efield_scattered = scatt_fn(e_unmulti,
                                                 ebg_unmulti,
                                                 scattered_field_regularization)
-                    efield_scattered_ft = ft2(efield_scattered, plan=plan_scatt)
-                    del plan_scatt
+                    efield_scattered_ft = ft2(efield_scattered)
                     del e_unmulti
                     del ebg_unmulti
 
                     # set regions we don't want to use to nans
-                    if optimizer == "born":
-                        raise NotImplementedError("demultiplexing not implemented for mode 'born'")
-                    else:
-                        efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
+                    # todo: testing ... I don't really think this is needed?
+                    # if optimizer == "born":
+                    #     raise NotImplementedError("demultiplexing not implemented for mode 'born'")
+                    # else:
+                    #     efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
 
                 # optionally export scattered field
                 try:
                     if e_scatt_out is not None:
                         e_scatt_out[block_ind] = to_cpu(efield_scattered)
-
                     del efield_scattered
                 except NameError:
                     pass
@@ -1200,13 +1212,20 @@ class tomography:
             # optionally write out starting refractive index
             # ############
             if n_start_out is not None:
-                if self.verbose:
-                    print("saving n_start")
+                if verbose:
+                    print("saving n_start", end="\r")
+                    tstart_nstart = time.perf_counter()
+
                 n_start_out[block_ind] = to_cpu(get_n(ift3(v_fts_start, no_cache=True), no, wavelength))
 
-            print(f"starting inference")
-            if use_gpu and verbose:
-                print(f"gpu memory usage = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
+                if verbose:
+                    print(f"saved n_start in {time.perf_counter() - tstart_nstart:.2f}s")
+
+            if verbose:
+                print(f"starting inference", end="\r")
+
+            if use_gpu and print_fft_cache:
+                print(f"gpu memory usage before inference = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
                 print(cp.fft.config.get_plan_cache())
 
             if optimizer == "born" or optimizer == "rytov":
@@ -1223,6 +1242,7 @@ class tomography:
                 results = model.run(v_fts_start,
                                     step=step,
                                     verbose=verbose,
+                                    label=label,
                                     **kwargs
                                     )
                 n = get_n(ift3(results["x"]), no, wavelength)
@@ -1260,39 +1280,49 @@ class tomography:
                 results = model.run(n_start,
                                     step=step,
                                     verbose=verbose,
+                                    label=label,
                                     **kwargs
                                     )
                 n = results["x"]
+
+            # ################
+            # optionally store costs
+            # ################
+            if costs_out is not None:
+                if verbose:
+                    print("storing costs")
+                costs_out[block_ind] = to_cpu(results["costs"])
+
+            if steps_out is not None:
+                if verbose:
+                    print("storing steps")
+                steps_out[block_ind] = to_cpu(results["steps"])
 
             # ################
             # optionally compute predicated e_field based on n
             # ################
             if e_fwd_out is not None:
                 tstart_efwd = time.perf_counter()
-                if self.verbose:
+                if verbose:
                     print("computing forward model")
 
                 if optimizer == "born" or optimizer == "rytov":
                     e_fwd_out[block_ind] = to_cpu(ift2(model.fwd_model(ft3(get_v(n, no, wavelength)))))
                 else:
-                    if optimizer == BPM:
-                        slices = (slice(0, 1), slice(-1, None), slice(None), slice(None))  # [0, -1, :, :]
-                    else:
-                        slices = (slice(0, 1), slice(-1, None), slice(None), slice(None), slice(0, 1))  # [0, -1, :, :, 0]
+                    slices = (slice(0, 1), slice(-1, None), slice(None), slice(None))  # [0, -1, :, :]
 
                     tstart_efwd = time.perf_counter()
                     for ii in range(nimgs):
                         ind_now = block_ind + (ii,)
                         e_fwd_out[ind_now] = to_cpu(model.fwd_model(n.squeeze(), inds=[ii])[slices]).squeeze()
 
-                if self.verbose:
+                if verbose:
                     print(f"computed forward model in {time.perf_counter() - tstart_efwd:.2f}s")
 
-            if self.verbose and use_gpu:
-                print(f"gpu memory usage = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
+            if use_gpu and print_fft_cache:
+                print(f"gpu memory usage after inference = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
                 print(cp.fft.config.get_plan_cache())
 
-            # todo: reshape here?
             return to_cpu(n).reshape((1,) * nextra_dims + n_size)
 
         # #######################
@@ -1313,6 +1343,7 @@ class tomography:
                           step,
                           optimizer,
                           self.verbose,
+                          print_fft_cache,
                           n_guess=n_guess,
                           e_fwd_out=e_fwd_out,
                           e_scatt_out=e_scatt_out,
@@ -1355,7 +1386,7 @@ class tomography:
                                                                 1, 0, odt_recon_roi[0]])
             xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
 
-            xforms.update({"affine_xform_recon_2_raw_camera_roi": xform_odt_recon_to_cam_roi,})
+            xforms.update({"affine_xform_recon_2_raw_camera_roi": xform_odt_recon_to_cam_roi})
             if cam_roi is not None:
                 xforms["camera roi"] = np.asarray(cam_roi)
 
@@ -2225,7 +2256,10 @@ def unmix_hologram(img: array,
                    apodization: array = 1,
                    mask: Optional[array] = None) -> array:
     """
-    Given an off-axis hologram image, determine the electric field
+    Given an off-axis hologram image, determine the electric field.
+    (1) Fourier transform the raw hologram
+    (2) shift the hologram region near f_ref to the center of the image
+    (3) set regions beyond fmax to zero
 
     :param img: n1 x ... x n_{-3} x n_{-2} x n_{-1} array
     :param dxy: pixel size
@@ -2233,7 +2267,7 @@ def unmix_hologram(img: array,
     :param fx_ref: x-component of hologram reference frequency
     :param fy_ref: y-component of hologram reference frequency
     :param apodization: apodization window applied to real-space image before Fourier transformation
-    :param mask:
+    :param mask: region of hologram to set to zero.
     :return efield_ft: hologram electric field
     """
 
@@ -2244,16 +2278,14 @@ def unmix_hologram(img: array,
 
     apodization = xp.asarray(apodization)
 
-    # FT of image
-    img_ft = ft2(img * apodization)
-
     # get frequency data
-    ny, nx = img_ft.shape[-2:]
+    ny, nx = img.shape[-2:]
     fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
     fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
     ff_perp = np.sqrt(fxs[None, :] ** 2 + fys[:, None] ** 2)
 
     # compute efield
+    img_ft = ft2(img * apodization)
     efield_ft = translate_ft(img_ft, fx_ref, fy_ref, drs=(dxy, dxy))
     efield_ft[..., ff_perp > fmax_int / 2] = 0.
 
@@ -2727,7 +2759,7 @@ def inverse_model_linear(efield_fts: array,
 def plot_odt_sampling(frqs: np.ndarray,
                       na_detect: float,
                       na_excite: float,
-                      ni: float,
+                      no: float,
                       wavelength: float,
                       **kwargs) -> matplotlib.figure.Figure:
     """
@@ -2736,22 +2768,21 @@ def plot_odt_sampling(frqs: np.ndarray,
     :param frqs: nfrqs x 2 array of [[fx0, fy0], [fx1, fy1], ...]
     :param na_detect: detection NA
     :param na_excite: excitation NA
-    :param ni: index of refraction of medium that samle is immersed in. This may differ from the immersion medium
-    of the objectives
+    :param no: index of refraction of medium that sample is immersed in.
     :param wavelength:
     :param kwargs: passed through to figure
     :return figh:
     """
-    frq_norm = ni / wavelength
-    alpha_det = np.arcsin(na_detect / ni)
+    frq_norm = no / wavelength
+    alpha_det = np.arcsin(na_detect / no)
 
-    if na_excite / ni < 1:
-        alpha_exc = np.arcsin(na_excite / ni)
+    if na_excite / no < 1:
+        alpha_exc = np.arcsin(na_excite / no)
     else:
         # if na_excite is immersion objective and beam undergoes TIR at interface for full NA
         alpha_exc = np.pi/2
 
-    fzs = get_fzs(frqs[:, 0], frqs[:, 1], ni, wavelength)
+    fzs = get_fzs(frqs[:, 0], frqs[:, 1], no, wavelength)
     frqs_3d = np.concatenate((frqs, np.expand_dims(fzs, axis=1)), axis=1)
 
     figh = plt.figure(**kwargs)
@@ -2779,7 +2810,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     # draw arcs for the extremal angles
     fx_edge = na_excite / wavelength
-    fz_edge = np.sqrt((ni / wavelength)**2 - fx_edge**2)
+    fz_edge = np.sqrt((no / wavelength)**2 - fx_edge**2)
 
     ax.plot(-fx_edge, -fz_edge, 'r.')
     ax.plot(fx_edge, -fz_edge, 'r.')
@@ -2819,7 +2850,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     # draw arcs for the extremal angles
     fy_edge = na_excite / wavelength
-    fz_edge = np.sqrt((ni / wavelength)**2 - fy_edge**2)
+    fz_edge = np.sqrt((no / wavelength)**2 - fy_edge**2)
 
     ax.plot(-fy_edge, -fz_edge, 'r.')
     ax.plot(fy_edge, -fz_edge, 'r.')
@@ -2875,7 +2906,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     fxfx[ff > fmax] = np.nan
     fyfy[ff > fmax] = np.nan
-    fzfz = np.sqrt((ni / wavelength)**2 - fxfx**2 - fyfy**2)
+    fzfz = np.sqrt((no / wavelength)**2 - fxfx**2 - fyfy**2)
 
     # kx0, ky0, kz0
     fxyz0 = np.stack((fxfx, fyfy, fzfz), axis=-1)
@@ -2884,7 +2915,7 @@ def plot_odt_sampling(frqs: np.ndarray,
 
     ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
     ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_zlim([-1, 1]) # todo: set based on na's
+    ax.set_zlim([-1, 1])  # todo: set based on na's
 
     ax.set_xlabel("$f_x$ (1/$\mu m$)")
     ax.set_ylabel("$f_y$ (1/$\mu m$)")
@@ -2897,15 +2928,18 @@ def display_tomography_recon(recon_fname: str,
                              raw_data_fname: Optional[str] = None,
                              raw_data_component: str = "cam2/odt",
                              show_raw: bool = True,
-                             show_raw_ft: bool = False,
                              show_efields: bool = False,
                              compute: bool = True,
                              time_axis: int = 1,
                              time_range: Optional[list[int]] = None,
                              phase_lim: float = np.pi,
+                             n_lim: tuple[float] = (0., 0.05),
+                             e_lim: tuple[float] = (0., 500.),
+                             escatt_lim: tuple[float] = (-5., 5.),
                              block_while_display: bool = True,
                              real_cmap="bone",
-                             phase_cmap="RdBu"):
+                             phase_cmap="RdBu",
+                             scale_z: bool = True):
     """
     Display reconstruction results and (optionally) raw data in Napari
 
@@ -2913,19 +2947,20 @@ def display_tomography_recon(recon_fname: str,
     :param raw_data_fname: raw data stored in zar file
     :param raw_data_component:
     :param show_raw:
-    :param show_raw_ft:
     :param show_efields:
     :param compute:
     :param time_axis:
     :param time_range:
     :param phase_lim:
+    :param n_lim:
+    :param e_lim:
+    :param escatt_lim:
     :param block_while_display:
     :param real_cmap:
     :param phase_cmap:
+    :param scale_z:
     :return: viewer
     """
-
-    # todo: accept slice argument?
 
     import napari
 
@@ -2940,32 +2975,27 @@ def display_tomography_recon(recon_fname: str,
         show_efields = False
 
     # raw data sizes
-    dxy_cam = img_z.attrs["camera_path_attributes"]["dx_um"]
+    # dxy_cam = img_z.attrs["camera_path_attributes"]["dx_um"]
     proc_roi = img_z.attrs["processing roi"]
     ny = proc_roi[1] - proc_roi[0]
     nx = proc_roi[3] - proc_roi[2]
 
-    try:
-        cam_roi = img_z.attrs["camera_path_attributes"]["camera_roi"]
-        ny_raw = cam_roi[1] - cam_roi[0]
-        nx_raw = cam_roi[3] - cam_roi[2]
-    except KeyError:
-        ny_raw = ny
-        nx_raw = nx
-
     drs_n = img_z.attrs["dr"]
     n_axis_names = img_z.attrs["dimensions"]
-    wavelength = img_z.attrs["wavelength"]
+    # wavelength = img_z.attrs["wavelength"]
     no = img_z.attrs["no"]
 
     # load affine xforms
     # Napari is using convention (y, x) whereas I'm using (x, y), so need to swap these dimensions in affine xforms
-    swap_xy = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+    swap_xy = np.array([[0, 1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
     try:
         affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
     except KeyError:
         affine_recon2cam_xy = affine.params2xform([1, 0, 0, 1, 0, 0])
     affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
+    affine_cam2recon = np.linalg.inv(affine_recon2cam)
 
     # ######################
     # prepare n
@@ -2997,6 +3027,8 @@ def display_tomography_recon(recon_fname: str,
             if compute:
                 with ProgressBar():
                     n_start = n_start.compute()
+        else:
+            n_start = no * np.ones(1)
 
     else:
         n = no * np.ones(1)
@@ -3013,18 +3045,14 @@ def display_tomography_recon(recon_fname: str,
     slices_raw = slices + (slice(None), slice(None), slice(None))
     if show_raw:
         imgs = da.expand_dims(da.from_zarr(raw_data[raw_data_component])[slices_raw], axis=-3)
-        imgs_raw_ft = da.map_blocks(ft2, imgs, dtype=complex)
 
         if compute:
             print("loading raw images")
             with ProgressBar():
-                c = dask.compute([imgs, imgs_raw_ft])
-                imgs, imgs_raw_ft = c[0]
+                imgs = imgs.compute()
     else:
         imgs = np.ones(1)
         imgs_raw_ft = np.ones(1)
-
-    imgs_raw_ft_abs = da.abs(imgs_raw_ft)
 
     # ######################
     # prepare electric fields
@@ -3086,7 +3114,6 @@ def display_tomography_recon(recon_fname: str,
         if compute:
             print("loading fwd electric fields")
             with ProgressBar():
-                # c = dask.compute([e_fwd])
                 e_fwd = e_fwd.compute()
 
         e_fwd_abs = da.abs(e_fwd)
@@ -3111,7 +3138,12 @@ def display_tomography_recon(recon_fname: str,
     if compute:
         n_extra_dims = n_real.ndim - 4
         nz = n_real.shape[-3]
-        npatt = e_abs.shape[-4]
+
+        if show_efields:
+            npatt = e_abs.shape[-4]
+        else:
+            npatt = 1
+
         bcast_shape = (1,) * n_extra_dims + (npatt, nz) + (1, 1)
 
         # broadcast refractive index arrays
@@ -3124,7 +3156,6 @@ def display_tomography_recon(recon_fname: str,
         # broadcast raw images
         bcast_shape_raw = np.broadcast_shapes(imgs.shape, bcast_shape)
         imgs = np.broadcast_to(imgs, bcast_shape_raw)
-        imgs_raw_ft_abs = np.broadcast_to(imgs_raw_ft_abs, bcast_shape_raw)
 
         # broadcast electric fields
         bcast_shape_e = np.broadcast_shapes(e_abs.shape, bcast_shape)
@@ -3150,7 +3181,10 @@ def display_tomography_recon(recon_fname: str,
     # ######################
     viewer = napari.Viewer(title=str(recon_fname))
 
-    scale = (drs_n[0] / drs_n[1], 1, 1)
+    if scale_z:
+        scale = (drs_n[0] / drs_n[1], 1, 1)
+    else:
+        scale = (1, 1, 1)
 
     # ######################
     # raw data
@@ -3160,61 +3194,14 @@ def display_tomography_recon(recon_fname: str,
                          scale=scale,
                          name="raw images",
                          colormap=real_cmap,
+                         affine=affine_cam2recon,
                          contrast_limits=[0, 4096])
 
-        if show_raw_ft:
-            viewer.add_image(imgs_raw_ft_abs,
-                             scale=scale,
-                             name="raw images ft",
-                             gamma=0.2,
-                             colormap=real_cmap,
-                             translate=(ny_raw, 0))
-
-    # ######################
-    # reconstructed index of refraction
-    # ######################
-
-    if show_n:
-        # for convenience of affine xforms, keep xy in pixels
-        viewer.add_image(n_start_imag,
-                         scale=scale,
-                         name=f"n start.imaginary",
-                         affine=affine_recon2cam,
-                         contrast_limits=[0, 0.05],
-                         colormap=real_cmap,
-                         visible=True)
-
-        viewer.add_image(n_start_real,
-                         scale=scale,
-                         name=f"n start - no",
-                         affine=affine_recon2cam,
-                         colormap=real_cmap,
-                         contrast_limits=[0, 0.05])
-
-        viewer.add_image(n_imag,
-                         scale=scale,
-                         name=f"n.imaginary",
-                         affine=affine_recon2cam,
-                         contrast_limits=[0, 0.05],
-                         colormap=real_cmap,
-                         visible=True)
-
-        viewer.add_image(n_real,
-                         scale=scale,
-                         name=f"n-no",
-                         affine=affine_recon2cam,
-                         colormap=real_cmap,
-                         contrast_limits=[0, 0.05])
-
-    # ######################
-    # show ROI in image
-    # ######################
-    if show_raw:
-        # draw so that points inside rectangle are in the ROI. Points under rectangle are not
-        proc_roi_rect = np.array([[[proc_roi[0] - 1, proc_roi[2] - 1],
-                                   [proc_roi[0] - 1, proc_roi[3]],
-                                   [proc_roi[1], proc_roi[3]],
-                                   [proc_roi[1], proc_roi[2] - 1]
+        # processed ROI
+        proc_roi_rect = np.array([[[0 - 1, 0 - 1],
+                                   [0 - 1, nx],
+                                   [ny, nx],
+                                   [ny, 0 - 1]
                                    ]])
 
         viewer.add_shapes(proc_roi_rect,
@@ -3225,6 +3212,38 @@ def display_tomography_recon(recon_fname: str,
                           face_color=[0, 0, 0, 0])
 
     # ######################
+    # reconstructed index of refraction
+    # ######################
+
+    if show_n:
+        # for convenience of affine xforms, keep xy in pixels
+        viewer.add_image(n_start_imag,
+                         scale=scale,
+                         name=f"n start.imaginary",
+                         contrast_limits=n_lim,
+                         colormap=real_cmap,
+                         visible=False)
+
+        viewer.add_image(n_start_real,
+                         scale=scale,
+                         name=f"n start - no",
+                         colormap=real_cmap,
+                         contrast_limits=n_lim)
+
+        viewer.add_image(n_imag,
+                         scale=scale,
+                         name=f"n.imaginary",
+                         contrast_limits=n_lim,
+                         colormap=real_cmap,
+                         visible=False)
+
+        viewer.add_image(n_real,
+                         scale=scale,
+                         name=f"n-no",
+                         colormap=real_cmap,
+                         contrast_limits=n_lim)
+
+    # ######################
     # electric fields
     # ######################
     if show_efields:
@@ -3232,24 +3251,24 @@ def display_tomography_recon(recon_fname: str,
         viewer.add_image(ebg_abs,
                          scale=scale,
                          name="|e bg|",
-                         contrast_limits=[0, 500],
+                         contrast_limits=e_lim,
                          colormap=real_cmap,
-                         translate=[0, nx_raw])
+                         translate=[0, nx])
 
         if show_efields_fwd:
             viewer.add_image(e_fwd_bas,
                             scale=scale,
                             name="|E fwd|",
-                            contrast_limits=[0, 500],
+                            contrast_limits=e_lim,
                             colormap=real_cmap,
-                            translate=[0, nx_raw])
+                            translate=[0, nx])
 
         viewer.add_image(e_abs,
                          scale=scale,
                          name="|e|",
-                         contrast_limits=[0, 500],
+                         contrast_limits=e_lim,
                          colormap=real_cmap,
-                         translate=[0, nx_raw])
+                         translate=[0, nx])
 
         # field phases
         viewer.add_image(ebg_angle,
@@ -3257,7 +3276,7 @@ def display_tomography_recon(recon_fname: str,
                          name="angle(e bg)",
                          contrast_limits=[-np.pi, np.pi],
                          colormap=phase_cmap,
-                         translate=[ny, nx_raw])
+                         translate=[ny, nx])
 
         if show_efields_fwd:
             viewer.add_image(e_fwd_angle,
@@ -3265,30 +3284,30 @@ def display_tomography_recon(recon_fname: str,
                              name="ange(E fwd)",
                              contrast_limits=[-np.pi, np.pi],
                              colormap=phase_cmap,
-                             translate=[ny, nx_raw])
+                             translate=[ny, nx])
 
         viewer.add_image(e_angle,
                          scale=scale,
                          name="angle(e)",
                          contrast_limits=[-np.pi, np.pi],
                          colormap=phase_cmap,
-                         translate=[ny, nx_raw])
+                         translate=[ny, nx])
 
         # difference of absolute values
         if show_efields_fwd:
             viewer.add_image(efwd_ebg_abs_diff,
                              scale=scale,
                              name="|e fwd| - |e bg|",
-                             contrast_limits=[-500, 500],
+                             contrast_limits=[-e_lim[1], e_lim[1]],
                              colormap=phase_cmap,
-                             translate=[0, nx_raw + nx])
+                             translate=[0, 2*nx])
 
         viewer.add_image(e_ebg_abs_diff,
                          scale=scale,
                          name="|e| - |e bg|",
-                         contrast_limits=[-500, 500],
+                         contrast_limits=[-e_lim[1], e_lim[1]],
                          colormap=phase_cmap,
-                         translate=[0, nx_raw + nx])
+                         translate=[0, 2*nx])
 
         # difference of phases
         if show_efields_fwd:
@@ -3297,7 +3316,7 @@ def display_tomography_recon(recon_fname: str,
                              name="angle(e fwd) - angle(e bg)",
                              contrast_limits=[-phase_lim, phase_lim],
                              colormap=phase_cmap,
-                             translate=[ny, nx_raw + nx]
+                             translate=[ny, 2*nx]
                              )
 
         viewer.add_image(e_ebg_phase_diff,
@@ -3305,13 +3324,13 @@ def display_tomography_recon(recon_fname: str,
                          name="angle(e) - angle(e bg)",
                          contrast_limits=[-phase_lim, phase_lim],
                          colormap=phase_cmap,
-                         translate=[ny, nx_raw + nx]
+                         translate=[ny, 2*nx]
                          )
 
         viewer.add_image(escatt_real,
                          scale=scale,
                          name="Re(e scatt)",
-                         contrast_limits=[-10, 10],
+                         contrast_limits=escatt_lim,
                          colormap=phase_cmap,
                          translate=[ny, 0]
                          )
@@ -3319,16 +3338,16 @@ def display_tomography_recon(recon_fname: str,
         viewer.add_image(escatt_imag,
                          scale=scale,
                          name="Im(e scatt)",
-                         contrast_limits=[-10, 10],
+                         contrast_limits=escatt_lim,
                          colormap=phase_cmap,
                          translate=[ny, 0]
                          )
 
         # label
-        translations = np.array([[0, nx_raw],
-                                 [ny, nx_raw],
-                                 [0, nx_raw + nx],
-                                 [ny, nx_raw + nx],
+        translations = np.array([[0, nx],
+                                 [ny, nx],
+                                 [0, 2*nx],
+                                 [ny, 2*nx],
                                  [ny, 0]
                                  ])
         ttls = ["|E|",
@@ -3356,6 +3375,173 @@ def display_tomography_recon(recon_fname: str,
 
     return viewer
 
+def compare_recons(fnames,
+                   vmax: float = 0.05,
+                   block_while_display: bool = True):
+    """
+
+    :param fnames:
+    :param vmax:
+    :param block_while_display:
+    :return:
+    """
+
+    import napari
+
+    if isinstance(fnames, (Path, str)):
+        fnames = [fnames]
+
+    swap_xy = np.array([[0, 1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
+
+    v = napari.Viewer()
+    for f in fnames:
+        znow = zarr.open(f, "r")
+        affine_now = swap_xy.dot(np.array(znow.attrs["affine_xform_recon_2_raw_camera_roi"]).dot(swap_xy))
+        no = znow.attrs["no"]
+
+        if znow.n.shape[-3] == 2:
+            n_now = da.from_zarr(znow.n[..., 0, :, :]) - no
+        else:
+            n_now = da.from_zarr(znow.n).real - no
+
+        nz = znow.n.shape[-3]
+        dz_now = znow.attrs["dr"][0]
+
+        # todo: should correct for numerical refocusing
+        zs = (np.arange(nz) - nz // 2) * dz_now
+
+        v.add_image(n_now,
+                    scale=(dz_now, 1, 1),
+                    translate=(zs[0], 0, 0),
+                    affine=affine_now,
+                    name=f"{f.parent.name:s}",
+                    contrast_limits=[0, vmax],
+                    colormap="bone"
+                    )
+
+        # set to first position
+        v.dims.set_current_step(axis=0, value=0)
+        # set to first time
+        v.dims.set_current_step(axis=1, value=0)
+
+        v.show(block=block_while_display)
+
+    return v
+
+
+def get_2d_projections(n: np.ndarray,
+                       z_to_xy_ratio: float = 1,
+                       use_slice: bool = False,
+                       n_pix_sep: int = 5
+                       ) -> np.ndarray:
+    """
+    Generate an image showing 3 orthogonal projections from a 3D array.
+
+    :param n: 3D array
+    :param z_to_xy_ratio: pixel size ratio dz/dxy
+    :param use_slice: use the central slice. If False, max project
+    :param n_pix_sep: number of blank pixels between projections
+    :return img: 2D image showing projections
+    """
+
+    nz, ny, nx = n.shape
+
+    if use_slice:
+        iz = nz // 2
+        iy = ny // 2
+        ix = nx // 2
+        n_xy = n[iz]
+        n_yz_before_xform = n[:, :, ix].transpose()
+        n_xz_before_xform = n[:, iy, :]
+    else:
+        # max projection
+        n_xy = np.max(n, axis=0)
+        n_yz_before_xform = np.max(n, axis=2).transpose()
+        n_xz_before_xform = np.max(n, axis=1)
+
+    ny_img = ny + n_pix_sep + int(np.ceil(nz * z_to_xy_ratio))
+    nx_img = nx + n_pix_sep + int(np.ceil(nz * z_to_xy_ratio))
+
+    img = np.zeros((ny_img, nx_img))
+
+    # xy slice
+    img[:ny, :nx] = n_xy
+
+    xx, yy = np.meshgrid(range(nx_img), range(ny_img))
+
+    # yz slice
+    xform_yz = affine.params2xform([z_to_xy_ratio, 0, nx + n_pix_sep, 1, 0, 0])
+    n_yz = affine.xform_mat(n_yz_before_xform,
+                            xform_yz,
+                            (xx[:ny, nx + n_pix_sep:], yy[:ny, nx + n_pix_sep:]))
+    img[:ny, nx + n_pix_sep:] = n_yz
+
+    xform_xz = affine.params2xform([1, 0, 0, z_to_xy_ratio, 0, ny + n_pix_sep])
+    n_xz = affine.xform_mat(n_xz_before_xform,
+                            xform_xz,
+                            (xx[ny + n_pix_sep:, :nx],
+                             yy[ny + n_pix_sep:, :nx]))
+    img[ny + n_pix_sep:, :nx] = n_xz
+
+    img[np.isnan(img)] = 0
+
+    return img
+
+
+def get_color_projection(n: np.ndarray,
+                         contrast_limits=(0, 1),
+                         mask: Optional[np.ndarray] = None,
+                         cmap="turbo",
+                         max_z: bool = False,
+                         background_color: np.ndarray = np.array([0., 0., 0.])) -> (np.ndarray, np.ndarray):
+    """
+    Given a 3D refractive index distribution, take the max-z projection and color code the results
+    by height. For each xy position, only consider the voxel along z with the maximum value.
+    Display this in the final array in a color based on the height where that voxel was.
+
+    :param n: refractive index array of size n0 x ... x nm x nz x ny x nx
+    :param contrast_limits: (nmin, nmax)
+    :param mask: only consider points where mask value is True
+    :param cmap: matplotlib colormap
+    :param max_z: whether to perform a max projection, or sum all slices
+    :param background_color:
+    :return: n_proj, colors
+    """
+
+    background_color = np.asarray(background_color)
+
+    if mask is None:
+        maxz_args = np.argmax(n, axis=-3)
+    else:
+        maxz_args = np.argmax(n * mask, axis=-3)
+
+    nz, _, _ = n.shape[-3:]
+    shape = list(n.shape + (3,))
+    shape[-4] = 1
+
+    colors = plt.get_cmap(cmap)(np.linspace(0, 1, nz))
+
+    n_proj = np.zeros(shape, dtype=float)
+    for ii in range(nz):
+        if max_z:
+            to_use = maxz_args == ii
+        else:
+            to_use = np.ones(n[..., ii, :, :].shape, dtype=bool)
+
+        intensity = (n[..., ii, :, :][to_use] - contrast_limits[0]) / ((contrast_limits[1] - contrast_limits[0]))
+        intensity[intensity < 0] = 0
+        intensity[intensity > 1] = 1
+
+        n_proj[np.expand_dims(to_use, axis=-3), :] += np.expand_dims(intensity, axis=-1) * colors[ii, :3][None, :]
+
+    # different background color
+    is_bg = np.sum(n_proj, axis=-1) == 0
+    n_proj[is_bg, :] = background_color
+
+    return n_proj, colors
+
 
 class RIOptimizer(Optimizer):
 
@@ -3379,6 +3565,7 @@ class RIOptimizer(Optimizer):
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
                  max_imaginary_part: float = np.inf,
+                 efield_cost_factor: float = 1.,
                  **kwargs
                  ):
         """
@@ -3416,6 +3603,10 @@ class RIOptimizer(Optimizer):
         self.dz_final = dz_final
         self.atf = atf
         self.apodization = apodization
+
+        self.efield_cost_factor = float(efield_cost_factor)
+        if self.efield_cost_factor > 1 or self.efield_cost_factor < 0:
+            raise ValueError(f"efield_cost_factor must be between 0 and 1, but was {self.efield_cost_factor}")
 
         if mask is not None:
             if mask.dtype.kind != "b":
@@ -3491,6 +3682,28 @@ class RIOptimizer(Optimizer):
 
         return x_real + 1j * x_imag
 
+    def cost(self, x, inds=None):
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        # todo: how to unify these?
+        e_fwd = self.fwd_model(x, inds=inds)
+
+        costs = 0
+        if self.efield_cost_factor > 0:
+            if self.mask is None:
+                costs += self.efield_cost_factor * 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+            else:
+                costs += self.efield_cost_factor * 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
+
+        if (1 - self.efield_cost_factor) > 0:
+            if self.mask is None:
+                costs += (1 - self.efield_cost_factor) * 0.5 * (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).mean(axis=(-1, -2))
+            else:
+                costs += (1 - self.efield_cost_factor) * 0.5 * (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).mean(axis=-1)
+
+        return costs
+
 
 class LinearScatt(RIOptimizer):
     def __init__(self,
@@ -3532,6 +3745,10 @@ class LinearScatt(RIOptimizer):
                                           None,
                                           None,
                                           **kwargs)
+
+        if self.efield_cost_factor != 1:
+            raise NotImplementedError(f"Linear scattering models only support self.efield_cost_factor=1, "
+                                      f"but values was {self.efield_cost_factor:.3f}")
 
         if isinstance(self.e_measured, cp.ndarray) and _gpu_available:
             self.model = sp_gpu.csr_matrix(model)
@@ -3686,7 +3903,7 @@ class BPM(RIOptimizer):
 
         # include cosine oblique factor
         if self.beam_frqs is not None:
-            self.thetas, _ = frqs2angles(self.beam_frqs, self.no, self.wavelength)
+            self.thetas, _ = frqs2angles(self.beam_frqs, self.no / self.wavelength)
         else:
             self.thetas = np.zeros((self.n_samples,))
 
@@ -3719,7 +3936,13 @@ class BPM(RIOptimizer):
         e_fwd = self.fwd_model(x, inds=inds)
 
         # back propagation ... build the gradient from this to save memory
-        dtemp = e_fwd[:, -1, :, :] - self.e_measured[inds]
+        dtemp = 0
+        if self.efield_cost_factor > 0:
+            dtemp += self.efield_cost_factor * (e_fwd[:, -1, :, :] - self.e_measured[inds])
+
+        if (1 - self.efield_cost_factor) > 0:
+            dtemp += (1 - self.efield_cost_factor) * (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) * e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])
+
         if self.mask is not None:
             dtemp *= self.mask
 
@@ -3759,19 +3982,6 @@ class BPM(RIOptimizer):
         dc_dn *= e_fwd[:, 1:-1, :, :]
 
         return dc_dn
-
-    def cost(self, x, inds=None):
-        if inds is None:
-            inds = list(range(self.n_samples))
-
-        e_fwd = self.fwd_model(x, inds=inds)
-
-        if self.mask is None:
-            costs = 0.5 * (abs(e_fwd[:, -1] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
-        else:
-            costs = 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
-
-        return costs
 
     def get_estart(self, inds=None):
         if inds is None:
@@ -3835,11 +4045,19 @@ class SSNP(RIOptimizer):
         kz[xp.isnan(kz)] = 0
         self.kz = kz
 
-    def fwd_model(self, x, inds=None):
+    def phi_fwd(self, x, inds=None):
+        """
+        Return the forward model field and the forward model derivative. Since we do not measure the derivative,
+        we do not consider it part of our forward models
+
+        :param x:
+        :param inds:
+        :return:
+        """
         if inds is None:
             inds = list(range(self.n_samples))
 
-        # initial field
+            # initial field
         e_start, de_dz_start = self.get_estart(inds=inds)
 
         # forward propagation
@@ -3854,6 +4072,9 @@ class SSNP(RIOptimizer):
                                             apodization=self.apodization)
         return phi_fwd
 
+    def fwd_model(self, x, inds=None):
+        return self.phi_fwd(x, inds=inds)[..., 0]
+
     def gradient(self, x, inds=None):
         if isinstance(x, cp.ndarray) and _gpu_available:
             xp = cp
@@ -3863,12 +4084,19 @@ class SSNP(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        phi_fwd = self.fwd_model(x, inds=inds)
+        phi_fwd = self.phi_fwd(x, inds=inds)
 
         # back propagation
         # this is the backpropagated field, but we will eventually transform it into the gradient
         # do things this way to reduce memory overhead
-        dtemp = phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds]
+
+        # back propagation ... build the gradient from this to save memory
+        dtemp = 0
+        if self.efield_cost_factor > 0:
+            dtemp += self.efield_cost_factor * (phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds])
+
+        if (1 - self.efield_cost_factor) > 0:
+            dtemp += (1 - self.efield_cost_factor) * (abs(phi_fwd[:, -1, :, :, 0]) - abs(self.e_measured[inds])) * phi_fwd[:, -1, :, :, 0] / abs(phi_fwd[:, -1, :, :, 0])
 
         if self.mask is not None:
             dtemp *= self.mask
@@ -3900,22 +4128,8 @@ class SSNP(RIOptimizer):
         # conjugate in place to avoid using extra memory
         xp.conjugate(phi_fwd, out=phi_fwd)
         dc_dn *= phi_fwd[:, :-2, :, :, 0]
-        # dc_dn *= phi_fwd[:, :-2, :, :, 0].conj()
 
         return dc_dn
-
-    def cost(self, x, inds=None):
-        if inds is None:
-            inds = list(range(self.n_samples))
-
-        e_fwd = self.fwd_model(x, inds=inds)[..., 0]
-
-        if self.mask is None:
-            costs = 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
-        else:
-            costs = 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
-
-        return costs
 
     def get_estart(self, inds=None):
         if inds is None:

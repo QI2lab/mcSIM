@@ -22,18 +22,19 @@ array = Union[np.ndarray, cp.ndarray]
 
 # spatial frequency helper functions
 def frqs2angles(frqs: array,
-                no: float,
-                wavelength: float) -> (array, array):
+                magnitude: float = 1.) -> (array, array):
     """
     Convert from frequency vectors to angle vectors
 
     :param frqs: N x 3 array with order (fx, fy, fz).
       Frequency vectors should be normalized such that
       norm(frqs, axis=1) = no / wavelength
-    :param no: background index of refraction
-    :param wavelength:
+    :param magnitude: norm of frequency vectors. For frequency (in "hertz") this is  no/wavelength
+      while for angular frequency (in "radians") this is 2*np.pi * no / wavelength
     :return: theta, phi
     """
+    # todo: replace no and wavelength and magnitude argument
+
     if isinstance(frqs, cp.ndarray) and _gpu_available:
         xp = cp
     else:
@@ -41,10 +42,11 @@ def frqs2angles(frqs: array,
 
     frqs = xp.atleast_2d(frqs)
 
+    # magnitude = (no / wavelength)
     with np.errstate(invalid="ignore"):
-        theta = xp.array(np.arccos(xp.dot(frqs, xp.array([0, 0, 1])) / (no / wavelength)))
+        theta = xp.array(np.arccos(xp.dot(frqs, xp.array([0, 0, 1])) / magnitude))
         theta[xp.isnan(theta)] = 0
-        phi = xp.angle(frqs[:, 0] + 1j * frqs[:, 1])
+        phi = xp.angle(frqs[..., 0] + 1j * frqs[..., 1])
         phi[xp.isnan(phi)] = 0
 
         # todo: want to do this?
@@ -57,19 +59,19 @@ def frqs2angles(frqs: array,
     return theta, phi
 
 
-def angles2frqs(no: float,
-                wavelength: float,
-                theta: array,
-                phi: array) -> array:
+def angles2frqs(theta: array,
+                phi: array,
+                magnitude: float = 1.) -> array:
     """
-    Get frequency vector from angles
+    Get frequency vector from angles. Inverse function for frqs2angles()
 
-    :param no:
-    :param wavelength:
     :param theta:
     :param phi:
+    :param magnitude: e.g. no/wavelength
     :return:
     """
+
+    # replace no and wavelength with magnitude argument
 
     if isinstance(theta, cp.ndarray) and _gpu_available:
         xp = cp
@@ -78,9 +80,10 @@ def angles2frqs(no: float,
 
     phi = xp.asarray(phi)
 
-    fz = no / wavelength * xp.cos(theta)
-    fy = no / wavelength * xp.sin(theta) * xp.sin(phi)
-    fx = no / wavelength * xp.sin(theta) * xp.cos(phi)
+    # magnitude = no / wavelength
+    fz = magnitude * xp.cos(theta)
+    fy = magnitude * xp.sin(theta) * xp.sin(phi)
+    fx = magnitude * xp.sin(theta) * xp.cos(phi)
     f = xp.stack((fx, fy, fz), axis=1)
 
     return f
@@ -130,7 +133,8 @@ def get_angular_spectrum_kernel(dz: float,
     :param wavelength:
     :param no:
     :param shape:
-    :param drs:
+    :param drs: (dy, dx)
+    :param use_gpu:
     :return kernel:
     """
 
@@ -290,7 +294,8 @@ def propagate_homogeneous(efield_start: array,
                           zs: array,
                           no: float,
                           drs: list[float],
-                          wavelength: float) -> array:
+                          wavelength: float,
+                          adjoint_operator: bool = False) -> array:
     """
     Propagate the Fourier transform of an optical field a distance z through a medium with homogeneous index
     of refraction n using the angular spectrum method
@@ -300,29 +305,48 @@ def propagate_homogeneous(efield_start: array,
     :param no: homogeneous refractive index
     :param drs: (dy, dx)
     :param wavelength: wavelength in the same units as drs and zs
+    :param adjoint_operator: if True, perform the adjoint operation instead of beam propagation
     :return efield_prop: propagated electric field of shape no x ... x nm x nz x ny x nx
     """
-
     use_gpu = isinstance(efield_start, cp.ndarray) and _gpu_available
     if use_gpu:
         xp = cp
     else:
         xp = np
 
+    zs = np.atleast_1d(zs)
+
+    # prepare output array
     nz = len(zs)
     ny, nx = efield_start.shape[-2:]
-
-    efield_start_ft = ft2(efield_start)
-
     new_size = efield_start.shape[:-2] + (nz, ny, nx)
     efield_ft_prop = xp.zeros(new_size, dtype=complex)
+
+    # propagation
+    if not adjoint_operator:
+        efield_start_ft = ft2(efield_start)
+    else:
+        efield_start_ft = ift2_adj(efield_start)
+
     for ii in range(len(zs)):
         # construct propagation kernel
-        kernel = get_angular_spectrum_kernel(zs[ii], wavelength, no, (ny, nx), drs=drs, use_gpu=use_gpu)
+        kernel = get_angular_spectrum_kernel(zs[ii],
+                                             wavelength,
+                                             no,
+                                             (ny, nx),
+                                             drs=drs,
+                                             use_gpu=use_gpu)
+
+        if adjoint_operator:
+            xp.conjugate(kernel, out=kernel)
+
         # propagate field with kernel
         efield_ft_prop[..., ii, :, :] = efield_start_ft * kernel
 
-    efield_prop = ift2(efield_ft_prop)
+    if not adjoint_operator:
+        efield_prop = ift2(efield_ft_prop)
+    else:
+        efield_prop = ft2_adj(efield_ft_prop)
 
     return efield_prop
 
@@ -349,6 +373,8 @@ def propagate_bpm(efield_start: array,
     :param no: background index of refraction
     :param drs: (dz, dy, dx) voxel size in same units as wavelength. efield is assumed to have the same dy, dx
     :param wavelength: wavelength in same units as drs
+    :param dz_final:
+    :param atf:
     :param apodization:
     :param thetas: assuming a plane wave input, this is the angle between the plane wave propagation direction
       and the optical axis. This provides a better approximation for the phase shift of the beam through a
@@ -394,10 +420,16 @@ def propagate_bpm(efield_start: array,
     efield = xp.zeros(out_shape, dtype=complex)
     efield[..., 0, :, :] = efield_start
     for ii in range(nz):
-        efield[..., ii + 1, :, :] = ift2(ft2(efield[..., ii, :, :]) * prop_kernel * apodization) * xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas))
+        efield[..., ii + 1, :, :] = (ift2(ft2(efield[..., ii, :, :]) * prop_kernel * apodization) *
+                                     xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas)))
 
     # propagate to imaging plane
-    kernel_img = xp.asarray(get_angular_spectrum_kernel(dz_final, wavelength, no, n.shape[1:], drs[1:], use_gpu))
+    kernel_img = xp.asarray(get_angular_spectrum_kernel(dz_final,
+                                                        wavelength,
+                                                        no,
+                                                        n.shape[1:],
+                                                        drs[1:],
+                                                        use_gpu))
     efield[..., -1, :, :] = ift2(ft2(efield[..., -2, :, :]) * kernel_img * atf)
 
     return efield
@@ -422,6 +454,8 @@ def backpropagate_bpm(efield_end: array,
     :param no: background index of refraction
     :param drs: (dz, dy, dx) voxel size in same units as wavelength. efield is assumed to have the same dy, dx
     :param wavelength: wavelength in same units as drs
+    :param dz_final:
+    :param atf:
     :param apodization:
     :param thetas: assuming a plane wave input, this is the angle between the plane wave propagation direction
       and the optical axis. This provides a better approximation for the phase shift of the beam through a
@@ -471,7 +505,9 @@ def backpropagate_bpm(efield_end: array,
     efield[..., -2, :, :] = ft2_adj(ift2_adj(efield[..., -1, :, :]) * kernel_img.conj() * xp.conj(atf))
 
     for ii in range(nz - 1, -1, -1):
-        efield[..., ii, :, :] = ft2_adj(ift2_adj(efield[..., ii + 1, :, :] * xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas)).conj()) * prop_kernel.conj() * xp.conj(apodization))
+        efield[..., ii, :, :] = ft2_adj(ift2_adj(efield[..., ii + 1, :, :] *
+                                                 xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas)).conj()) *
+                                        prop_kernel.conj() * xp.conj(apodization))
 
     return efield
 
@@ -525,14 +561,22 @@ def propagate_ssnp(efield_start: array,
         q[..., 0, 1] = 0
         q[..., 1, 0] = ko**2 * (no**2 - n[ii]**2) * dz
 
-        phi[..., ii + 1, :, :, :, :] = ift2(xp.matmul(p, (ft2(xp.matmul(q, phi[..., ii, :, :, :, :]), axes=yx_axes)) * apodization), axes=yx_axes)
+        phi[..., ii + 1, :, :, :, :] = ift2(xp.matmul(p, (ft2(xp.matmul(q, phi[..., ii, :, :, :, :]),
+                                                              axes=yx_axes)) * apodization),
+                                            axes=yx_axes)
 
     # propagate to imaging plane and aply coherent transfer function
-    fb_proj = forward_backward_proj(wavelength, no, n.shape[1:], drs[1:], use_gpu=use_gpu)[..., slice(0, 1), :]
+    fb_proj = forward_backward_proj(wavelength,
+                                    no,
+                                    n.shape[1:],
+                                    drs[1:],
+                                    use_gpu=use_gpu)[..., slice(0, 1), :]
 
     # the last element of phi is fundamentally different than the others because fb_proj changes the basis
     # so this is (phi_f, phi_b) wherease the others are (phi, dphi / dz)
-    phi[..., -1, :, :, 0, :] = ift2(xp.matmul(fb_proj, atf * xp.matmul(p_img, ft2(phi[..., -2, :, :, :, :], axes=yx_axes))), axes=yx_axes)[..., 0, :]
+    phi[..., -1, :, :, 0, :] = ift2(xp.matmul(fb_proj, atf * xp.matmul(p_img,
+                                                                       ft2(phi[..., -2, :, :, :, :], axes=yx_axes))),
+                                    axes=yx_axes)[..., 0, :]
 
     # strip off extra dim
     return phi[..., 0]
@@ -595,20 +639,31 @@ def backpropagate_ssnp(efield_end: array,
     phi[..., -1, :, :, 0, 0] = xp.asarray(efield_end)
 
     #
-    fb_proj_adj = forward_backward_proj(wavelength, no, n.shape[1:], drs[1:], use_gpu=use_gpu).conj()[..., slice(0, 1), :].swapaxes(-1, -2)
+    fb_proj_adj = forward_backward_proj(wavelength,
+                                        no,
+                                        n.shape[1:],
+                                        drs[1:],
+                                        use_gpu=use_gpu).conj()[..., slice(0, 1), :].swapaxes(-1, -2)
 
     # adjoint of imaging/final prop operation
-    fadj = ft2_adj(xp.matmul(p_img_adj, xp.conj(atf) * xp.matmul(fb_proj_adj, ift2_adj(phi[..., -1, :, :, slice(0, 1), :], axes=yx_axes))), axes=yx_axes)
+    fadj = ft2_adj(xp.matmul(p_img_adj, xp.conj(atf) * xp.matmul(fb_proj_adj,
+                                                                 ift2_adj(phi[..., -1, :, :, slice(0, 1), :],
+                                                                          axes=yx_axes))),
+                   axes=yx_axes)
 
     # last propagation also
-    phi[..., -2, :, :, :, :] = ft2_adj(xp.matmul(p_adj, ift2_adj(fadj, axes=yx_axes)), axes=yx_axes)
+    phi[..., -2, :, :, :, :] = ft2_adj(xp.matmul(p_adj, ift2_adj(fadj, axes=yx_axes)),
+                                       axes=yx_axes)
     # loop backwards through z-stack
     for ii in range(nz - 1, -1, -1):
         q_adj = xp.ones((n.shape[1:]) + (2, 2), dtype=complex)
         q_adj[..., 0, 1] = ko**2 * (no**2 - n[ii]**2).conj() * dz
         q_adj[..., 1, 0] = 0
 
-        phi[..., ii, :, :, :, :] = ft2_adj(xp.matmul(p_adj, ift2_adj(xp.matmul(q_adj, phi[..., ii + 1, :, :, :, :]), axes=yx_axes)), axes=yx_axes)
+        phi[..., ii, :, :, :, :] = ft2_adj(xp.matmul(p_adj,
+                                                     ift2_adj(xp.matmul(q_adj, phi[..., ii + 1, :, :, :, :]),
+                                                              axes=yx_axes)),
+                                           axes=yx_axes)
 
     # strip off extra dim
     return phi[..., 0]

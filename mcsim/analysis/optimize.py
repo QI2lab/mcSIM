@@ -162,9 +162,11 @@ class Optimizer():
             compute_all_costs: bool = False,
             line_search: bool = False,
             line_search_factor: float = 0.5,
+            restart_line_search: bool = False,
             stop_on_nan: bool = True,
             xtol: float = 0.0,
             print_newline: bool = False,
+            label:str = "",
             **kwargs) -> dict:
 
         """
@@ -182,6 +184,8 @@ class Optimizer():
         :param compute_all_costs:
         :param line_search: use line search to shrink step-size as necessary
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
+        :param restart_line_search: if true, restart line search from initial value at each iteration. If false,
+          restart line search from step-size determined at previous iteration
         :param stop_on_nan:
         :param xtol: When norm(x[t] - x[t-1]) / norm(x[0]) < xtol, stop iteration
         :param print_newline:
@@ -305,7 +309,11 @@ class Optimizer():
                 # initialize line-search
                 liters += 1
                 if ii != 0:
-                    steps[ii] = steps[ii - 1]
+                    if restart_line_search:
+                        steps[ii] = step
+                    else:
+                        steps[ii] = steps[ii - 1]
+
                 y = self.prox(x - steps[ii] * gx, steps[ii])
 
                 def lipschitz_condition_violated(y, cx, gx):
@@ -358,7 +366,7 @@ class Optimizer():
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
 
-                    status = f"iteration {ii + 1:d}/{max_iterations:d}," \
+                    status = f"{label:s}iteration {ii + 1:d}/{max_iterations:d}," \
                              f" cost={np.nanmean(costs[ii]):.3g}," \
                              f" diff={xdiffs[ii]:.3g}," \
                              f" step={steps[ii]:.3g}," \

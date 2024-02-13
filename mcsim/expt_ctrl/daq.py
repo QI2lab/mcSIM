@@ -11,7 +11,11 @@ import ctypes as ct
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-import PyDAQmx as daqmx
+import warnings
+try:
+    import PyDAQmx as daqmx
+except ImportError:
+    warnings.warn("PyDAQmx could not be imported")
 
 
 class daq():

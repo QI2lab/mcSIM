@@ -64,7 +64,7 @@ reconstruction options are available, largely following either the approach of
 [openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980).
 To get started with reconstructing SIM data, see the example scripts\
 [reconstruct_sim_simulated_single.py](examples/reconstruct_sim_simulated_single.py),
-[reconstruction_sim_simulated_timelapse.py](examples/reconstruction_sim_simulated_timelapse.py), and
+[reconstruction_sim_simulated_timelapse.py](examples/reconstruct_sim_simulated_timelapse.py), and
 [reconstruct_sim_experiment_multichannel.py](examples/reconstruct_sim_experiment_multichannel.py). 
 
 # DMD simulation code
@@ -150,3 +150,10 @@ Example scripts which are useful for controlling various instruments during test
 # Instrument design
 A [parts list](parts_list.md) is available here. Mechanical drawings and 3D models of custom parts such as the DMD mount 
 are available on Zenodo (coming soon!). For a more complete description of the optical path, see our BOE paper linked above.
+
+# Documentation
+Documentation is generated from function docstrings and built with Sphinx. e.g. navigate to [docs](docs) and run
+```
+make html
+```
+Then open `docs/_build/html/index.html` in your browser

@@ -4,28 +4,21 @@ diffraction in the tx=-ty plane, and in "2D", i.e. considering the full output s
 
 Unlike simulate_multicolor_sim_patterns_1d.py, this file simulates the same input angles for all wavelength considered
 """
+import matplotlib
+matplotlib.use("TkAgg")
 import numpy as np
 import matplotlib.pyplot as plt
-import mcsim.analysis.simulate_dmd as dmd
+import mcsim.analysis.simulate_dmd as sdmd
 
-wavelengths = [465e-9, 532e-9, 635e-9]
+# load DMD model, or define your own
+dmd = sdmd.DLP6500()
+
+wavelengths = [0.465, 0.532, 0.635]  # in um
 colors = ["b", "g", "r"]
 
 tx_ins = -np.array([35]) * np.pi / 180
 ty_ins = np.array([30]) * np.pi / 180
-_, tm_ins = dmd.angle2pm(tx_ins, ty_ins)
-
-# pixel spacing (DMD pitch)
-dx = 7.56e-6  # meters
-dy = dx
-# pixel size, inferred from coverage fraction
-coverage_f = 0.92
-wx = np.sqrt(coverage_f) * dx
-wy = wx
-# on and off angle of mirrors from the normal plane of the DMD body
-gamma_on = 12 * np.pi / 180
-gamma_off = -12 * np.pi / 180
-rot_axis = (1/np.sqrt(2), 1/np.sqrt(2), 0)
+_, tm_ins = sdmd.angle2pm(tx_ins, ty_ins)
 
 # create pattern
 nx = 50
@@ -42,33 +35,19 @@ pattern[pattern > 0] = 1
 pattern = pattern.astype(bool)
 
 # sample 1D simulation
-data1d = dmd.simulate_1d(pattern,
-                         wavelengths,
-                         gamma_on,
-                         rot_axis,
-                         gamma_off,
-                         rot_axis,
-                         dx,
-                         dy,
-                         wx,
-                         wy,
-                         tm_ins)
-dmd.plot_1d_sim(data1d, colors, save_dir=None)
+data1d = sdmd.simulate_1d(pattern,
+                          wavelengths,
+                          dmd,
+                          tm_ins)
+sdmd.plot_1d_sim(data1d, colors, save_dir=None)
 
 # sample 2D simulation
-data2d = dmd.simulate_2d(pattern,
-                         wavelengths,
-                         gamma_on,
-                         rot_axis,
-                         gamma_off,
-                         rot_axis,
-                         dx,
-                         dy,
-                         wx,
-                         wy,
-                         tx_ins,
-                         ty_ins,
-                         tout_offsets=np.linspace(-10, 10, 201) * np.pi / 180)
-dmd.plot_2d_sim(data2d, save_dir=None)
+data2d = sdmd.simulate_2d(pattern,
+                          wavelengths,
+                          dmd,
+                          tx_ins,
+                          ty_ins,
+                          tout_offsets=np.linspace(-10, 10, 201) * np.pi / 180)
+sdmd.plot_2d_sim(data2d, save_dir=None)
 
 plt.show()

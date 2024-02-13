@@ -74,7 +74,7 @@ for ii in range(nimgs):
     # ######################
     fbeams[ii] = hologram_frqs[ii] - frq_refs[ii]
     fz_beam = tm.get_fz(fbeams[ii, 0], fbeams[ii, 1], no, wavelength)
-    theta, phi = tm.frqs2angles(np.array([fbeams[ii, 0], fbeams[ii, 1], fz_beam]), no, wavelength)
+    theta, phi = tm.frqs2angles(np.array([fbeams[ii, 0], fbeams[ii, 1], fz_beam]), no / wavelength)
 
     # #######################
     # plot ref freq results
