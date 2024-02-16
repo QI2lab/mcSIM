@@ -3370,11 +3370,14 @@ def display_tomography_recon(recon_fname: str,
 
 def compare_recons(fnames,
                    vmax: float = 0.05,
-                   block_while_display: bool = True):
+                   compute: bool = True,
+                   block_while_display: bool = True,
+                   verbose: bool = False):
     """
 
     :param fnames:
     :param vmax:
+    :param compute:
     :param block_while_display:
     :return:
     """
@@ -3389,37 +3392,45 @@ def compare_recons(fnames,
                         [0, 0, 1]])
 
     v = napari.Viewer()
+    tstart = time.perf_counter()
     for f in fnames:
+        if verbose:
+            print(f"loading {str(f):s}, elapsed time = {time.perf_counter() - tstart:.2f}s")
+
         znow = zarr.open(f, "r")
         affine_now = swap_xy.dot(np.array(znow.attrs["affine_xform_recon_2_raw_camera_roi"]).dot(swap_xy))
         no = znow.attrs["no"]
-
-        if znow.n.shape[-3] == 2:
-            n_now = da.from_zarr(znow.n[..., 0, :, :]) - no
-        else:
-            n_now = da.from_zarr(znow.n).real - no
-
-        nz = znow.n.shape[-3]
         dz_now = znow.attrs["dr"][0]
 
+        if znow.n.shape[-3] == 2:
+            if compute:
+                n_now = np.array(znow.n[..., 0, :, :]) - no
+            else:
+                n_now = da.from_zarr(znow.n[..., 0, :, :]) - no
+        else:
+            if compute:
+                n_now = np.array(znow.n).real - no
+            else:
+                n_now = da.from_zarr(znow.n).real - no
+
         # todo: should correct for numerical refocusing
+        nz = znow.n.shape[-3]
         zs = (np.arange(nz) - nz // 2) * dz_now
 
         v.add_image(n_now,
                     scale=(dz_now, 1, 1),
                     translate=(zs[0], 0, 0),
                     affine=affine_now,
-                    name=f"{f.parent.name:s}",
+                    name=f"{f.parent.name:s} n real",
                     contrast_limits=[0, vmax],
                     colormap="bone"
                     )
 
-        # set to first position
-        v.dims.set_current_step(axis=0, value=0)
-        # set to first time
-        v.dims.set_current_step(axis=1, value=0)
 
-        v.show(block=block_while_display)
+    v.dims.set_current_step(axis=0, value=0)
+    v.dims.set_current_step(axis=1, value=0)
+
+    v.show(block=block_while_display)
 
     return v
 
