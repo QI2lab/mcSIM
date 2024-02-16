@@ -72,22 +72,23 @@ def get_odt_spot_locations(nmax: int,
     return centers
 
 
-def get_multiplexed_patterns(centers: np.ndarray,
-                             n_multiplex: int,
-                             max_dist: float = 0.25,
-                             n_swap_cycles: int = 5,
-                             n_swaps_per_pair: int = 300,
-                             verbose: bool = False
-                             ) -> list[np.ndarray]:
+def get_multiplexed_spot_positions(centers: np.ndarray,
+                                   n_multiplex: int,
+                                   max_dist: float = 0.25,
+                                   n_swap_cycles: int = 5,
+                                   n_swaps_per_pair: int = 300,
+                                   verbose: bool = False
+                                   ) -> list[np.ndarray]:
     """
-    Generate multiplexed patterns with
+    Generate multiplexed spot positions from a list of initial spot positions
+    Try and optimize this set so that no spots are near each other
 
-    :param centers:
+    :param centers: Spot pattern center positions
     :param n_multiplex: number of centers to multiplex
-    :param max_dist:
-    :param n_swap_cycles:
-    :param n_swaps_per_pair:
-    :param verbose:
+    :param max_dist: spot distances above this threshold experience the same penalty
+    :param n_swap_cycles: number of times to loop through pairs of patterns
+    :param n_swaps_per_pair: for each pair of patterns, randomly swap this many spot positions and search for lower cost
+    :param verbose: print progress of swapping algorithm
     :return center_sets:
     """
 
@@ -280,6 +281,8 @@ def get_odt_patterns(center_set: list[np.ndarray],
     :return odt_patterns, odt_pattern_data:
     """
 
+    # todo: replace drs with carrier_frqs ... ideally don't use any physical units here
+
     # pupil size
     pupil_rad = fl_detection * na_detection / mag_dmd2bfp
     pupil_rad_mirrors = pupil_rad / dm
@@ -306,8 +309,6 @@ def get_odt_patterns(center_set: list[np.ndarray],
         if len(centers_now) != len(drs_now):
             raise ValueError("center positions must match size of drs")
 
-        # h_bfp = f * frq * wavelength / mag
-        # frq_mirrors = frq * dm  = h_bfp * mag / (f * wavelength) * dm
         frqs_mirrors = drs_now * mag_dmd2bfp / (fl_detection * wavelength) * dm + fc
 
         # loop over centers and create spots
@@ -315,9 +316,10 @@ def get_odt_patterns(center_set: list[np.ndarray],
             to_use = np.sqrt((xx - (nx // 2) - centers_now[kk, 0] * pupil_rad_mirrors) ** 2 +
                              (yy - (ny // 2) - centers_now[kk, 1] * pupil_rad_mirrors) ** 2) <= rad
 
-            pnow = np.round(
-                np.cos(2 * np.pi * (xx[to_use] * frqs_mirrors[kk, 0] +
-                                    yy[to_use] * frqs_mirrors[kk, 1]) + phase), 12)
+            pnow = np.round(np.cos(2 * np.pi * (xx[to_use] * frqs_mirrors[kk, 0] +
+                                                yy[to_use] * frqs_mirrors[kk, 1]) + phase),
+                            12)
+
             pnow[pnow <= 0] = 0
             pnow[pnow > 0] = 1
 
