@@ -3438,7 +3438,8 @@ def compare_recons(fnames,
 def get_2d_projections(n: np.ndarray,
                        z_to_xy_ratio: float = 1,
                        use_slice: bool = False,
-                       n_pix_sep: int = 5
+                       n_pix_sep: int = 5,
+                       boundary_value: float = 0.,
                        ) -> np.ndarray:
     """
     Generate an image showing 3 orthogonal projections from a 3D array.
@@ -3468,7 +3469,12 @@ def get_2d_projections(n: np.ndarray,
     ny_img = ny + n_pix_sep + int(np.ceil(nz * z_to_xy_ratio))
     nx_img = nx + n_pix_sep + int(np.ceil(nz * z_to_xy_ratio))
 
+    # projected image
     img = np.zeros((ny_img, nx_img))
+
+    # set boundary
+    img[ny:ny + n_pix_sep, :] = boundary_value
+    img[:, nx:nx + n_pix_sep] = boundary_value
 
     # xy slice
     img[:ny, :nx] = n_xy
