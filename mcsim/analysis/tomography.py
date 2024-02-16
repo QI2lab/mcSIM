@@ -1170,7 +1170,6 @@ class tomography:
                             dists = np.linalg.norm(mean_beam_frqs_arr[:, ii, :2] -
                                                    mean_beam_frqs_arr[jj, ii, :2], axis=1)
                             min_dist = 0.5 * np.min(dists[dists > 0.])
-                            # min_dist = f_radius_factor * na_detection / wavelength
 
                             mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
                                            (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > min_dist
@@ -1184,13 +1183,6 @@ class tomography:
                     efield_scattered_ft = ft2(efield_scattered)
                     del e_unmulti
                     del ebg_unmulti
-
-                    # set regions we don't want to use to nans
-                    # todo: testing ... I don't really think this is needed?
-                    # if optimizer == "born":
-                    #     raise NotImplementedError("demultiplexing not implemented for mode 'born'")
-                    # else:
-                    #     efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
 
                 # optionally export scattered field
                 try:
@@ -1390,6 +1382,7 @@ class tomography:
             if cam_roi is not None:
                 xforms["camera roi"] = np.asarray(cam_roi)
 
+                # todo: is there a problem with this transform?
                 # transform from camera roi to uncropped chip
                 xform_cam_roi_to_full = affine.params2xform([1, 0, cam_roi[2],
                                                              1, 0, cam_roi[0]])
