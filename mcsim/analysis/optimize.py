@@ -350,7 +350,8 @@ class Optimizer():
 
             q = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
             if ii == 0 or not use_fista or stop:
-                x = y
+                # must copy, otherwise y_last will be updated with x, and xtol comparison will fail
+                x = xp.array(y, copy=True)
             else:
                 x = y + (q_last - 1) / q * (y - y_last)
 
