@@ -3168,6 +3168,7 @@ def display_tomography_recon(recon_fname: str,
         bcast_shape_scatt = np.broadcast_shapes(escatt_real.shape, bcast_root_scatt)
         escatt_real = np.broadcast_to(escatt_real, bcast_shape_scatt)
         escatt_imag = np.broadcast_to(escatt_imag, bcast_shape_scatt)
+        print('finished broadcasting')
 
     # ######################
     # create viewer
@@ -3540,9 +3541,8 @@ def get_color_projection(n: np.ndarray,
         else:
             to_use = np.ones(n[..., ii, :, :].shape, dtype=bool)
 
-        intensity = (n[..., ii, :, :][to_use] - contrast_limits[0]) / ((contrast_limits[1] - contrast_limits[0]))
-        intensity[intensity < 0] = 0
-        intensity[intensity > 1] = 1
+        intensity = np.clip((n[..., ii, :, :][to_use] - contrast_limits[0]) / ((contrast_limits[1] - contrast_limits[0])),
+                            0, 1)
 
         n_proj[np.expand_dims(to_use, axis=-3), :] += np.expand_dims(intensity, axis=-1) * colors[ii, :3][None, :]
 
