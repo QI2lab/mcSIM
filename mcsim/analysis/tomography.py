@@ -3653,21 +3653,8 @@ class RIOptimizer(Optimizer):
     def prox(self, x, step):
 
         # todo: is one order better than another for L1 and TV?
-
-        # ###########################
-        # TV proximal operators
-        # ###########################
-
-        # note cucim TV implementation requires ~10x memory as array does
-        if self.prox_parameters["tau_tv_real"] != 0:
-            x_real = tv_prox(x.real, self.prox_parameters["tau_tv_real"] * step)
-        else:
-            x_real = x.real
-
-        if self.prox_parameters["tau_tv_imag"] != 0:
-            x_imag = tv_prox(x.imag, self.prox_parameters["tau_tv_imag"] * step)
-        else:
-            x_imag = x.imag
+        x_real = x.real
+        x_imag = x.imag
 
         # ###########################
         # L1 proximal operators (softmax)
@@ -3677,6 +3664,16 @@ class RIOptimizer(Optimizer):
 
         if self.prox_parameters["tau_l1_imag"] != 0:
             x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"] * step, x_imag)
+
+        # ###########################
+        # TV proximal operators
+        # ###########################
+        # note cucim TV implementation requires ~10x memory as array does
+        if self.prox_parameters["tau_tv_real"] != 0:
+            x_real = tv_prox(x_real, self.prox_parameters["tau_tv_real"] * step)
+
+        if self.prox_parameters["tau_tv_imag"] != 0:
+            x_imag = tv_prox(x_imag, self.prox_parameters["tau_tv_imag"] * step)
 
         # ###########################
         # projection constraints
