@@ -14,11 +14,14 @@ files are described in more detail below.
 # Published work using this code
 * This DMD simulation tools and SIM reconstruction code were originally created for our Biomedical Optics Express paper 
 [Multicolor structured illumination microscopy and quantitative control of polychromatic light with a digital micromirror device](https://doi.org/10.1364/BOE.422703)
-([preprint](https://doi.org/10.1101/2020.07.27.223941)). The repository state at the time of publication is archived [here](https://doi.org/10.5281/zenodo.4773865), or available as
-a [release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0) on GitHub.
-* The SIM reconstruction code was also used in [Resolution doubling in light-sheet microscopy via oblique plane structured illumination ](https://doi.org/10.1038/s41592-022-01635-8) 
-([preprint](https://doi.org/10.1101/2022.05.19.492671)). This version is archived [here](https://doi.org/10.5281/zenodo.6419901) or available as a [release](https://github.com/QI2lab/mcSIM/releases/tag/v0.2.0)
+([bioRxiv](https://doi.org/10.1101/2020.07.27.223941)). The repository state at the time of publication is archived [here](https://doi.org/10.5281/zenodo.4773865), or available as [release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0) on GitHub.
 * For a tutorial on SIM reconstruction, see our [I2K 2022 talks](https://github.com/QI2lab/I2K2022-SIM).
+* [Resolution doubling in light-sheet microscopy via oblique plane structured illumination ](https://doi.org/10.1038/s41592-022-01635-8) 
+([bioRxiv](https://doi.org/10.1101/2022.05.19.492671)). This version is archived [here](https://doi.org/10.5281/zenodo.6419901) or available as a [release](https://github.com/QI2lab/mcSIM/releases/tag/v0.2.0)
+* [Spatial wavefront shaping with a multipolar-resonant metasurface for structured illumination microscopy]() ([arXiv](https://doi.org/10.48550/arXiv.2309.14456)).
+* [A Structured Illumination Microscopy Framework with Spatial-Domain Noise Propagation]() ([bioRxiv](https://doi.org/10.1101/2023.12.07.570701)).
+This version is archived [here](https://doi.org/10.5281/zenodo.10037896) or available as [release v1.5.0](https://github.com/QI2lab/mcSIM/releases/tag/v1.5.0).
+* [Fourier synthesis optical diffraction tomography for kilohertz rate volumetric imaging]() ([arXiv](https://arxiv.org/abs/2309.16912)).
 
 # Installation
 The best way to use this python package is to install it with pip
@@ -62,10 +65,10 @@ or the tag v22.12.00 can be replaced with the most recent version
 Code for reconstructing SIM images from raw data using a Gustafsson/Heintzmann Wiener filter style reconstruction. Several
 reconstruction options are available, largely following either the approach of
 [openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980).
-To get started with reconstructing SIM data, see the example scripts\
-[reconstruct_sim_simulated_single.py](examples/reconstruct_sim_simulated_single.py),
-[reconstruction_sim_simulated_timelapse.py](examples/reconstruct_sim_simulated_timelapse.py), and
-[reconstruct_sim_experiment_multichannel.py](examples/reconstruct_sim_experiment_multichannel.py). 
+To get started with reconstructing SIM data, see the example scripts
+* [reconstruct_sim_simulated_single.py](examples/reconstruct_sim_simulated_single.py)
+* [reconstruction_sim_simulated_timelapse.py](examples/reconstruct_sim_simulated_timelapse.py)
+* [reconstruct_sim_experiment_multichannel.py](examples/reconstruct_sim_experiment_multichannel.py) 
 
 # DMD simulation code
 ### [simulate_dmd.py](mcsim/analysis/simulate_dmd.py)
@@ -73,7 +76,12 @@ Code for simulating the diffraction patterns produced by the DMD. Various
 scripts illustrating the usage of this code can be found in the [examples](examples)
 directory. This simulation code has many useful features, including an analytic solution
 for the joint blaze/diffraction condition, pattern simulation tools, tools for extracting the intensity pattern
-in the Fourier plane of a collecting lens, etc.
+in the Fourier plane of a collecting lens, etc. For example usage, see
+* [solve_multicolor_blaze_condition.py](examples/solve_multicolor_blaze_condition.py)
+* [simulate_dmd_diffraction_pattern.py](examples/simulate_dmd_diffraction_pattern.py)
+* [simulate_multicolor_sim_patterns_1d.py](examples/simulate_multicolor_sim_patterns_1d.py)
+* [simulate_dmd_diffraction_fourier_plane.py](examples/simulate_dmd_diffraction_fourier_plane.py)
+* [dmd_solution_explorer_gui.py](examples/dmd_solution_explorer_gui.py)
 
 ### [dmd_patterns.py](mcsim/analysis/dmd_patterns.py)
 This file can be used to generate multicolor SIM patterns and other useful calibrations
@@ -86,7 +94,8 @@ in a compact and computationally efficient form.
 Code to fit the affine transformation between the DMD coordinates and camera coordinates
 using imaging data from a DMD pattern consisting of many small points. These code relies
 on tools for working with affine transformations found 
-[here](https://github.com/QI2lab/localize-psf/blob/master/localize_psf/affine.py)
+[here](https://github.com/QI2lab/localize-psf/blob/master/localize_psf/affine.py). For example usage, see
+* [calibrate_affine_xform.py](examples/calibrate_affine_xform.py)
 
 ### [otf_tools.py](mcsim/analysis/otf_tools.py)
 Code for extracting optical transfer function from measurement of the strength of various Fourier peaks for a given SIM DMD pattern.
