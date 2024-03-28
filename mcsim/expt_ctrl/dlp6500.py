@@ -8,7 +8,7 @@ Extensions to Linux can be accomplished by implementing only two functions, _sen
 in the dlp6500ix() class. This would likely also require importing a Linux compatible HID module.
 
 Although Texas Instruments has an SDK for this evaluation module (http://www.ti.com/tool/DLP-ALC-LIGHTCRAFTER-SDK), but
-it is not very well documented and we had difficulty building it. Further, it is intended to produce a static library
+it is not very well documented, and we had difficulty building it. Further, it is intended to produce a static library
 which cannot be used with e.g. python and the ctypes library as a dll could be.
 
 This DMD control code was originally based on refactoring https://github.com/mazurenko/Lightcrafter6500DMDControl.
@@ -32,17 +32,18 @@ try:
 except ImportError:
     warnings.warn("pywinusb could not be imported")
 
+
 ##############################################
 # compress DMD pattern data
 ##############################################
-def combine_patterns(patterns, bit_depth=1):
+def combine_patterns(patterns, bit_depth: int = 1):
     """
     Given a series of binary patterns, combine these into 24 bit RGB images to send to DMD. For binary patterns,
     the DMD supports sending a group of up to 24 patterns as an RGB image, with each bit of the 24 bit
     RGB values giving the pattern for one image.
 
     :param patterns: nimgs x ny x nx array of uint8
-    :param int bit_depth: 1
+    :param bit_depth: 1
     :return combined_patterns:
     """
 
@@ -193,7 +194,6 @@ def encode_rle(pattern):
     :param pattern:
     :return:
     """
-    # pattern must be uint8
     if pattern.dtype != np.uint8:
         raise ValueError('pattern must be of type uint8')
 
@@ -361,7 +361,7 @@ def erle_len2bytes(length):
     msb = length >> 7
 
     :param length: integer 0-(2**15-1)
-    :return:
+    :return len_bytes:
     """
 
     # check input
@@ -410,8 +410,9 @@ def erle_bytes2len(byte_list):
 def firmware_index_2pic_bit(firmware_indices):
     """
     convert from single firmware pattern index to picture and bit indices
+
     :param firmware_indices:
-    :return:
+    :return pic_inds, bit_inds:
     """
     pic_inds = np.asarray(firmware_indices) // 24
     bit_inds = firmware_indices - 24 * np.asarray(pic_inds)
@@ -422,9 +423,10 @@ def firmware_index_2pic_bit(firmware_indices):
 def pic_bit_ind_2firmware_ind(pic_inds, bit_inds):
     """
     Convert from picture and bit indices to single firmware pattern index
+
     :param pic_inds:
     :param bit_inds:
-    :return:
+    :return firmware_inds:
     """
     firmware_inds = pic_inds * 24 + bit_inds
     return firmware_inds
@@ -433,10 +435,10 @@ def pic_bit_ind_2firmware_ind(pic_inds, bit_inds):
 ##############################################
 # firmware configuration
 ##############################################
-def validate_channel_map(cm):
+def validate_channel_map(cm: dict) -> (bool, str):
     """
     check that channel_map is of the correct format
-    :param cm:
+    :param cm: dictionary defining channels
     :return success, message:
     """
     for ch in list(cm.keys()):
@@ -645,6 +647,12 @@ class dlp6500:
     height = 1080  # pixels
     pitch = 7.56  # um
 
+    max_lut_index = 511
+
+    dmd_type_code = {0: "unknown",
+                     1: "DLP6500",
+                     2: "DLP9000"}
+
     # tried to match with the DLP6500 GUI names where possible
     command_dict = {'Read_Error_Code': 0x0100,
                     'Read_Error_Description': 0x0101,
@@ -665,7 +673,8 @@ class dlp6500:
                     'TRIG_OUT1_CTL': 0x1A1D,
                     'TRIG_OUT2_CTL': 0x1A1E,
                     'TRIG_IN1_CTL': 0x1A35,
-                    'TRIG_IN2_CTL': 0x1A36}
+                    'TRIG_IN2_CTL': 0x1A36
+                    }
 
     err_dictionary = {'no error': 0,
                       'batch file checksum error': 1,
@@ -685,7 +694,28 @@ class dlp6500:
                       'pattern number is out of range': 15,
                       'invalid pattern definition': 16,
                       'pattern image memory address is out of range': 17,
-                      'internal error': 255}
+                      'internal error': 255
+                      }
+
+    status_strs = ['DMD micromirrors are parked',
+                   'sequencer is running normally',
+                   'video is frozen',
+                   'external video source is locked',
+                   'port 1 syncs valid',
+                   'port 2 syncs valid',
+                   'reserved',
+                   'reserved'
+                   ]
+
+    hw_status_strs = ['internal initialization success',
+                      'incompatible controller or DMD',
+                      'DMD rest controller error',
+                      'forced swap error',
+                      'slave controller present',
+                      'reserved',
+                      'sequence abort status error',
+                      'sequencer error'
+                      ]
 
     def __init__(self,
                  vendor_id: int = 0x0451,
@@ -719,7 +749,9 @@ class dlp6500:
         :param dmd_index: If multiple DMD's are attached, choose this one. Indexing starts at zero
         """
 
-        if config_file is not None and (firmware_pattern_info is not None or presets is not None or firmware_patterns is not None):
+        if config_file is not None and (firmware_pattern_info is not None or
+                                        presets is not None or
+                                        firmware_patterns is not None):
             raise ValueError("both config_file and either firmware_pattern_info, presets, or firmware_patterns"
                              " were provided. But if config file is provided, these other settings should not be"
                              " set directly.")
@@ -757,10 +789,11 @@ class dlp6500:
         # find device
         self.vendor_id = vendor_id
         self.product_id = product_id
+        self.dmd_index = dmd_index
 
         self.initialized = initialize
         if self.initialize:
-            self._get_device(vendor_id, product_id, dmd_index)
+            self._get_device()
 
     def __del__(self):
         pass
@@ -769,12 +802,10 @@ class dlp6500:
         self.__init__(initialize=True, **kwargs)
 
     # sending and receiving commands, operating system dependence
-    def _get_device(self, vendor_id, product_id, dmd_index: int):
+    def _get_device(self):
         """
         Return handle to DMD. This command can contain OS dependent implementation
 
-        :param vendor_id: usb vendor id
-        :param product_id: usb product id
         :return:
         """
         pass
@@ -930,7 +961,7 @@ class dlp6500:
 
         :param buffer:
         :param mode:
-        :return:
+        :return flag_byte, sequence_byte, data_len, cmd, data:
         """
 
         if mode == 'first-packet':
@@ -972,7 +1003,7 @@ class dlp6500:
         return result
 
     def decode_response(self,
-                        buffer):
+                        buffer) -> dict:
         """
         Parse USB response from DMD into useful info
 
@@ -1055,11 +1086,9 @@ class dlp6500:
         resp = self.decode_response(buffer)
 
         errs = [(2**ii & resp['data'][0]) != 0 for ii in range(8)]
-        err_names = ['internal initialization success', 'incompatible controller or DMD',
-                     'DMD rest controller error', 'forced swap error', 'slave controller present',
-                     'reserved', 'sequence abort status error', 'sequencer error']
+
         result = {}
-        for e, en in zip(errs, err_names):
+        for e, en in zip(errs, self.hw_status_strs):
             result[en] = e
 
         return result
@@ -1070,7 +1099,9 @@ class dlp6500:
 
         :return:
         """
-        buffer = self.send_command('r', True, self.command_dict["Get_System_Status"])
+        buffer = self.send_command('r',
+                                   True,
+                                   self.command_dict["Get_System_Status"])
         resp = self.decode_response(buffer)
 
         return {'internal memory test passed': bool(resp['data'][0])}
@@ -1082,26 +1113,28 @@ class dlp6500:
         :return:
         """
         # todo: which byte gives info? first data byte?
-        buffer = self.send_command('r', True, self.command_dict["Get_Main_Status"])
+        buffer = self.send_command('r',
+                                   True,
+                                   self.command_dict["Get_Main_Status"])
         resp = self.decode_response(buffer)
 
         errs = [2 ** ii & resp['data'][0] != 0 for ii in range(8)]
-        err_names = ['DMD micromirrors are parked', 'sequencer is running normally', 'video is frozen',
-                     'external video source is locked', 'port 1 syncs valid', 'port 2 syncs valid',
-                     'reserved', 'reserved']
+
         result = {}
-        for e, en in zip(errs, err_names):
+        for e, en in zip(errs, self.status_strs):
             result[en] = e
 
         return result
 
-    def get_firmware_version(self):
+    def get_firmware_version(self) -> dict:
         """
         Get firmware version information from DMD
 
         :return:
         """
-        buffer = self.send_command('r', True, self.command_dict["Get_Firmware_Version"])
+        buffer = self.send_command('r',
+                                   True,
+                                   self.command_dict["Get_Firmware_Version"])
         resp = self.decode_response(buffer)
 
         app_version = resp['data'][0:4]
@@ -1128,13 +1161,14 @@ class dlp6500:
         sqc_major = sequencer_config_revision[3]
         sqc_version_str = '%d.%d.%d' % (sqc_major, sqc_minor, sqc_patch)
 
-        result = {'app version': app_version_str, 'api version': api_version_str,
+        result = {'app version': app_version_str,
+                  'api version': api_version_str,
                   'software configuration revision': swc_version_str,
                   'sequence configuration revision': sqc_version_str}
 
         return result
 
-    def get_firmware_type(self):
+    def get_firmware_type(self) -> dict:
         """
         Get DMD type and firmware tag
 
@@ -1144,14 +1178,20 @@ class dlp6500:
         resp = self.decode_response(buffer)
 
         dmd_type_flag = resp['data'][0]
-        if dmd_type_flag == 0:
-            dmd_type = 'unknown'
-        elif dmd_type_flag == 1:
-            dmd_type = 'DLP6500'
-        elif dmd_type_flag == 2:
-            dmd_type = 'DLP9000'
-        else:
-            raise ValueError("Unknown DMD type index %d. Expected 1 or 2", dmd_type_flag)
+        try:
+            dmd_type = self.dmd_type_code[dmd_type_flag]
+        except KeyError:
+            raise ValueError(f"Unknown DMD type index {dmd_type_flag:d}. "
+                             f"Allowed values are {self.dmd_type_code}")
+
+        # if dmd_type_flag == 0:
+        #     dmd_type = 'unknown'
+        # elif dmd_type_flag == 1:
+        #     dmd_type = 'DLP6500'
+        # elif dmd_type_flag == 2:
+        #     dmd_type = 'DLP9000'
+        # else:
+        #     raise ValueError("Unknown DMD type index %d. Expected 1 or 2", dmd_type_flag)
 
         # in principle could receive two packets. TODO: handle that case
         firmware_tag = ''
@@ -1229,8 +1269,8 @@ class dlp6500:
         Trigger input 1 is used to advance the pattern displayed on the DMD, provided trigger_in2 is
         in the appropriate state
 
-        :param int delay_us:
-        :param str edge_to_advance: 'rsiing' or 'falling'
+        :param delay_us:
+        :param edge_to_advance: 'rising' or 'falling'
         :return:
         """
 
@@ -1385,13 +1425,16 @@ class dlp6500:
         :param num_repeat: number of times to repeat the pattern sequence
         :return:
         """
-        if num_patterns > 511:
-            raise ValueError("num_patterns must be <= 511 but was %d" % num_patterns)
+        if num_patterns > self.max_lut_index:
+            raise ValueError(f"num_patterns must be <= {self.max_lut_index:d} but was {num_patterns:d}")
 
         num_patterns_bytes = list(struct.unpack('BB', struct.pack('<H', num_patterns)))
         num_repeats_bytes = list(struct.unpack('BBBB', struct.pack('<I', num_repeat)))
 
-        return self.send_command('w', True, self.command_dict["PAT_CONFIG"], data=num_patterns_bytes + num_repeats_bytes)
+        return self.send_command('w',
+                                 True,
+                                 self.command_dict["PAT_CONFIG"],
+                                 data=num_patterns_bytes + num_repeats_bytes)
 
     def pattern_display_lut_definition(self,
                                        sequence_position_index,
@@ -1816,10 +1859,13 @@ class dlp6500:
 
         # set image parameters for look up table_
         for ii, (et, dt) in enumerate(zip(exp_times, dark_times)):
-            buffer = self.pattern_display_lut_definition(ii, exposure_time_us=et, dark_time_us=dt,
+            buffer = self.pattern_display_lut_definition(ii,
+                                                         exposure_time_us=et,
+                                                         dark_time_us=dt,
                                                          wait_for_trigger=triggered,
                                                          clear_pattern_after_trigger=clear_pattern_after_trigger,
-                                                         bit_depth=bit_depth, stored_image_index=image_indices[ii],
+                                                         bit_depth=bit_depth,
+                                                         stored_image_index=image_indices[ii],
                                                          stored_image_bit_index=bit_indices[ii])
             resp = self.decode_response(buffer)
             if resp['error']:
@@ -1914,7 +1960,8 @@ class dlp6500:
             mode_pattern_indices = mode_pattern_indices * nmodes
 
         if len(mode_pattern_indices) != nmodes:
-            raise ValueError(f"len(mode_pattern_indices)={len(mode_pattern_indices):d} and nmodes={nmodes:d}, but these must be equal")
+            raise ValueError(f"len(mode_pattern_indices)={len(mode_pattern_indices):d} and "
+                             f"nmodes={nmodes:d}, but these must be equal")
 
         # check nrepeats argument
         if isinstance(nrepeats, int):
@@ -2054,9 +2101,13 @@ class dlp6500:
         :return:
         """
 
-        pic_inds, bit_inds = self.get_dmd_sequence(modes, channels, nrepeats=nrepeats,
-                                                   noff_before=noff_before, noff_after=noff_after,
-                                                   blank=blank, mode_pattern_indices=mode_pattern_indices)
+        pic_inds, bit_inds = self.get_dmd_sequence(modes,
+                                                   channels,
+                                                   nrepeats=nrepeats,
+                                                   noff_before=noff_before,
+                                                   noff_after=noff_after,
+                                                   blank=blank,
+                                                   mode_pattern_indices=mode_pattern_indices)
 
         self.debug = verbose
         self.start_stop_sequence('stop')
@@ -2064,9 +2115,15 @@ class dlp6500:
         delay1_us, mode_trig1 = self.get_trigger_in1()
         mode_trig2 = self.get_trigger_in2()
 
-        self.set_pattern_sequence(pic_inds, bit_inds, exp_time_us, 0, triggered=triggered,
+        self.set_pattern_sequence(pic_inds,
+                                  bit_inds,
+                                  exp_time_us,
+                                  0,
+                                  triggered=triggered,
                                   clear_pattern_after_trigger=clear_pattern_after_trigger,
-                                  bit_depth=1, num_repeats=0, mode='pre-stored')
+                                  bit_depth=1,
+                                  num_repeats=0,
+                                  mode='pre-stored')
 
         if verbose:
             print(f"{len(pic_inds):d} picture indices: {pic_inds}")
@@ -2090,26 +2147,22 @@ class dlp6500win(dlp6500):
         except AttributeError:
             pass  # this will fail if object destroyed before being initialized
 
-    def _get_device(self, vendor_id, product_id, dmd_index: int = 0):
+    def _get_device(self):
         """
-        Return handle to DMD. This command can contain OS dependent implenetation
-
-        :param vendor_id: usb vendor id
-        :param product_id: usb product id
-        :param dmd_index:
-        :return:
+        Return handle to DMD. This command can contain OS dependent implementation
         """
 
-        filter = pyhid.HidDeviceFilter(vendor_id=vendor_id, product_id=product_id)
+        filter = pyhid.HidDeviceFilter(vendor_id=self.vendor_id,
+                                       product_id=self.product_id)
         devices = filter.get_devices()
 
         dmd_indices = [ii for ii, d in enumerate(devices) if d.product_name == "DLPC900"]
 
-        if len(dmd_indices) <= dmd_index:
-            raise ValueError(f"Not enough DMD's detected for dmd_index={dmd_index:d}."
+        if len(dmd_indices) <= self.dmd_index:
+            raise ValueError(f"Not enough DMD's detected for dmd_index={self.dmd_index:d}."
                              f"Only {len(dmd_indices):d} DMD's were detected.")
 
-        chosen_index = dmd_indices[dmd_index]
+        chosen_index = dmd_indices[self.dmd_index]
 
         self.dmd = devices[chosen_index]
         self.dmd.open()
@@ -2120,12 +2173,15 @@ class dlp6500win(dlp6500):
         response_handler = lambda data: self._response.append(data[1:])
         self.dmd.set_raw_data_handler(response_handler)
 
-    def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
+    def _send_raw_packet(self,
+                         buffer,
+                         listen_for_reply: bool = False,
+                         timeout=5):
         """
         Send a single USB packet.
 
         :param buffer: list of bytes to send to device
-        :param listen_for_reply: whether or not to listen for a reply
+        :param listen_for_reply: whether to listen for a reply
         :param timeout: timeout in seconds
         :return: reply: a list of bytes
         """
@@ -2175,7 +2231,7 @@ class dlp6500ix(dlp6500):
     def __del__(self):
         pass
 
-    def _get_device(self, vendor_id, product_id, dmd_index: int):
+    def _get_device(self):
         pass
 
     def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
@@ -2187,7 +2243,7 @@ class dlp6500dummy(dlp6500):
     def __init__(self, **kwargs):
         super(dlp6500dummy, self).__init__(**kwargs)
 
-    def _get_device(self, vendor_id, product_id, dmd_index: int):
+    def _get_device(self):
         pass
 
     def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
@@ -2243,7 +2299,8 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--pattern_indices", type=int, help=pattern_indices_help)
 
     parser.add_argument("-r", "--nrepeats", type=int, default=1,
-                        help="number of times to repeat the patterns specificed by `channels`, `modes`, and `pattern_indices`")
+                        help="number of times to repeat the patterns specificed by `channels`, "
+                             "`modes`, and `pattern_indices`")
 
     # other
     parser.add_argument("-t", "--triggered", action="store_true",
@@ -2253,8 +2310,10 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--noff_after", type=int, default=0,
                         help="set number of off frames to be added after each channel/mode combination")
     parser.add_argument("-b", "--blank", action="store_true",
-                        help="set whether or not to insert off patterns after each pattern in each channel/mode combination to blank laser")
-    parser.add_argument("-v", "--verbose", action="store_true", help="print more verbose DMD programming information")
+                        help="set whether or not to insert off patterns after each pattern in "
+                             "each channel/mode combination to blank laser")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="print more verbose DMD programming information")
     parser.add_argument("--illumination_time", type=int, default=105,
                         help="illumination time in microseconds. Ignored if triggered is true")
     args = parser.parse_args()
