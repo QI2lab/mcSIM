@@ -38,29 +38,29 @@ def to_cpu(m):
         return m
 
 
-def soft_threshold(t: float,
+def soft_threshold(tau: float,
                    x: array) -> array:
     """
     Soft-threshold function, which is the proximal operator for the LASSO (L1 regularization) problem
 
-    x* = argmin{ 0.5 * |x - y|_2^2 + t |x - y|_1}
+    x_out = argmin{ 0.5 * |x - y|_2^2 + t * |x - y|_1}
 
-    :param t: softmax parameter
+    :param tau: softmax parameter
     :param x: array to take softmax of
     :return x_out:
     """
     x_out = x.copy()
-    x_out[x > t] -= t
-    x_out[x < -t] += t
-    x_out[abs(x) <= t] = 0
+    x_out[x > tau] -= tau
+    x_out[x < -tau] += tau
+    x_out[abs(x) <= tau] = 0
 
     return x_out
 
 
 def tv_prox(x: array,
-            tau: float):
+            tau: float) -> array:
     """
-    TV helper function which runs on CPU or GPU
+    Apply TV proximal operator to x. Helper function which runs on CPU or GPU
 
     :param x:
     :param tau:
@@ -155,8 +155,8 @@ class Optimizer():
             step: float,
             max_iterations: int = 100,
             use_fista: bool = True,
-            stochastic_descent: bool = True,
-            nmax_stochastic_descent: int = 1,
+            n_batch: int = 1,
+            compute_batch_grad_parallel: bool = True,
             verbose: bool = False,
             compute_cost: bool = False,
             compute_all_costs: bool = False,
@@ -165,8 +165,10 @@ class Optimizer():
             restart_line_search: bool = False,
             stop_on_nan: bool = True,
             xtol: float = 0.0,
+            ftol: float = 0.0,
+            gtol: float = 0.0,
             print_newline: bool = False,
-            label:str = "",
+            label: str = "",
             **kwargs) -> dict:
 
         """
@@ -174,21 +176,24 @@ class Optimizer():
 
         :param x_start: initial guess
         :param step: step-size
-        :param max_iterations:
-        :param use_fista:
-        :param stochastic_descent: either select random subset of samples to use at each time step or use
-          average of all samples at each time-step
-        :param nmax_stochastic_descent: maximum size of random subset
+        :param max_iterations: maximum number of iterations
+        :param use_fista: use momentum term in update step to accelerate convergence
+        :param n_batch: number of samples to average gradient over at each iteration. If None, use all samples
+        :param compute_batch_grad_parallel: compute all gradients in a single batch in a vectorized way
+          advantageous for speed, but requires more memory
         :param verbose: print iteration info
         :param compute_cost: optionally compute and store the cost. This can make optimization slower
-        :param compute_all_costs:
+        :param compute_all_costs: compute costs for all samples, even those not in the current batch
         :param line_search: use line search to shrink step-size as necessary
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
         :param restart_line_search: if true, restart line search from initial value at each iteration. If false,
           restart line search from step-size determined at previous iteration
-        :param stop_on_nan:
+        :param stop_on_nan: stop if there are NaN's in x
         :param xtol: When norm(x[t] - x[t-1]) / norm(x[0]) < xtol, stop iteration
+        :param ftol: stop iterating when cost function relative change < ftol. Not yet implemented
+        :param gtol: stop iterating when gradient is less thn gtol. Not yet implemented
         :param print_newline:
+        :param label: if verbose, print this information
         :return results: dictionary containing results
         """
 
@@ -199,8 +204,8 @@ class Optimizer():
         else:
             xp = np
 
-        if nmax_stochastic_descent is None or nmax_stochastic_descent > self.n_samples:
-            nmax_stochastic_descent = self.n_samples
+        if n_batch is None or n_batch > self.n_samples:
+            n_batch = self.n_samples
 
         # ###################################
         # initialize
@@ -231,17 +236,10 @@ class Optimizer():
         x = xp.array(x_start, copy=True)
 
         for ii in range(max_iterations):
-            # select which subsets of views/angles to use
-            if stochastic_descent:
-                # select random subset of angles
-                num = random.sample(range(1, nmax_stochastic_descent + 1), 1)[0]
-                inds = random.sample(range(self.n_samples), num)
-            else:
-                # use all angles
-                inds = list(range(self.n_samples))
+            # select batch indices
+            inds = random.sample(range(self.n_samples), n_batch)
 
             if stop_on_nan:
-                # if any nans, break
                 if xp.any(xp.isnan(x)):
                     results["stop_condition"] = "stopped on NaN"
                     break
@@ -250,7 +248,7 @@ class Optimizer():
             # proximal gradient descent
             # ###################################
 
-            liters = 0
+            ls_iters = 0
             if not line_search:
                 # ###################################
                 # compute cost
@@ -270,7 +268,14 @@ class Optimizer():
                 # ###################################
                 tstart_grad = time.perf_counter()
 
-                x -= steps[ii] * xp.mean(self.gradient(x, inds=inds), axis=0)
+                if compute_batch_grad_parallel:
+                    x -= steps[ii] * xp.mean(self.gradient(x, inds=inds), axis=0)
+                else:
+                    grad_mean = 0
+                    for inow in inds:
+                        grad_mean += self.gradient(x, inds=[inow])[0] / n_batch
+
+                    x -= steps[ii] * grad_mean
 
                 timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
 
@@ -300,14 +305,20 @@ class Optimizer():
 
                 # gradient at current point
                 tstart_grad = time.perf_counter()
-                gx = xp.mean(self.gradient(x, inds=inds), axis=0)
+                if compute_batch_grad_parallel:
+                    gx = xp.mean(self.gradient(x, inds=inds), axis=0)
+                else:
+                    gx = 0
+                    for inow in inds:
+                        gx += self.gradient(x, inds=[inow])[0] / n_batch
+
                 timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
 
                 # line-search
                 tstart_prox = time.perf_counter()
 
                 # initialize line-search
-                liters += 1
+                ls_iters += 1
                 if ii != 0:
                     if restart_line_search:
                         steps[ii] = step
@@ -326,12 +337,12 @@ class Optimizer():
                 while lipschitz_condition_violated(y, cx, gx):
                     steps[ii] *= line_search_factor
                     y = self.prox(x - steps[ii] * gx, steps[ii])
-                    liters += 1
+                    ls_iters += 1
 
                 # not exclusively prox
                 timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
 
-            line_search_iters[ii] = liters
+            line_search_iters[ii] = ls_iters
 
             # ###################################
             # stop conditions
@@ -340,6 +351,12 @@ class Optimizer():
                 ynorm = xp.sqrt(xp.sum(xp.abs(y)**2))
             else:
                 xdiffs[ii] = to_cpu(xp.sqrt(xp.sum(xp.abs(y - y_last)**2)) / ynorm)
+
+            if ftol != 0:
+                raise NotImplementedError("ftol != 0 not implemented")
+
+            if gtol != 0:
+                raise NotImplementedError("gtol != 0 not implemented")
 
             stop = xdiffs[ii] < xtol or ii == (max_iterations - 1)
 
@@ -350,7 +367,8 @@ class Optimizer():
 
             q = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
             if ii == 0 or not use_fista or stop:
-                x = y
+                # must copy, otherwise y_last will be updated with x, and xtol comparison will fail
+                x = xp.array(y, copy=True)
             else:
                 x = y + (q_last - 1) / q * (y - y_last)
 

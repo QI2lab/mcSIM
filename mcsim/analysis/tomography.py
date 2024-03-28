@@ -1170,7 +1170,6 @@ class tomography:
                             dists = np.linalg.norm(mean_beam_frqs_arr[:, ii, :2] -
                                                    mean_beam_frqs_arr[jj, ii, :2], axis=1)
                             min_dist = 0.5 * np.min(dists[dists > 0.])
-                            # min_dist = f_radius_factor * na_detection / wavelength
 
                             mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
                                            (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > min_dist
@@ -1184,13 +1183,6 @@ class tomography:
                     efield_scattered_ft = ft2(efield_scattered)
                     del e_unmulti
                     del ebg_unmulti
-
-                    # set regions we don't want to use to nans
-                    # todo: testing ... I don't really think this is needed?
-                    # if optimizer == "born":
-                    #     raise NotImplementedError("demultiplexing not implemented for mode 'born'")
-                    # else:
-                    #     efield_scattered_ft[:, xp.sqrt(fxfx**2 + fyfy**2) > f_radius_factor * na_detection / wavelength] = np.nan
 
                 # optionally export scattered field
                 try:
@@ -1390,6 +1382,7 @@ class tomography:
             if cam_roi is not None:
                 xforms["camera roi"] = np.asarray(cam_roi)
 
+                # todo: is there a problem with this transform?
                 # transform from camera roi to uncropped chip
                 xform_cam_roi_to_full = affine.params2xform([1, 0, cam_roi[2],
                                                              1, 0, cam_roi[0]])
@@ -3175,6 +3168,7 @@ def display_tomography_recon(recon_fname: str,
         bcast_shape_scatt = np.broadcast_shapes(escatt_real.shape, bcast_root_scatt)
         escatt_real = np.broadcast_to(escatt_real, bcast_shape_scatt)
         escatt_imag = np.broadcast_to(escatt_imag, bcast_shape_scatt)
+        print('finished broadcasting')
 
     # ######################
     # create viewer
@@ -3377,11 +3371,14 @@ def display_tomography_recon(recon_fname: str,
 
 def compare_recons(fnames,
                    vmax: float = 0.05,
-                   block_while_display: bool = True):
+                   compute: bool = True,
+                   block_while_display: bool = True,
+                   verbose: bool = False):
     """
 
     :param fnames:
     :param vmax:
+    :param compute:
     :param block_while_display:
     :return:
     """
@@ -3396,37 +3393,45 @@ def compare_recons(fnames,
                         [0, 0, 1]])
 
     v = napari.Viewer()
+    tstart = time.perf_counter()
     for f in fnames:
+        if verbose:
+            print(f"loading {str(f):s}, elapsed time = {time.perf_counter() - tstart:.2f}s")
+
         znow = zarr.open(f, "r")
         affine_now = swap_xy.dot(np.array(znow.attrs["affine_xform_recon_2_raw_camera_roi"]).dot(swap_xy))
         no = znow.attrs["no"]
-
-        if znow.n.shape[-3] == 2:
-            n_now = da.from_zarr(znow.n[..., 0, :, :]) - no
-        else:
-            n_now = da.from_zarr(znow.n).real - no
-
-        nz = znow.n.shape[-3]
         dz_now = znow.attrs["dr"][0]
 
+        if znow.n.shape[-3] == 2:
+            if compute:
+                n_now = np.array(znow.n[..., 0, :, :]) - no
+            else:
+                n_now = da.from_zarr(znow.n[..., 0, :, :]) - no
+        else:
+            if compute:
+                n_now = np.array(znow.n).real - no
+            else:
+                n_now = da.from_zarr(znow.n).real - no
+
         # todo: should correct for numerical refocusing
+        nz = znow.n.shape[-3]
         zs = (np.arange(nz) - nz // 2) * dz_now
 
         v.add_image(n_now,
                     scale=(dz_now, 1, 1),
                     translate=(zs[0], 0, 0),
                     affine=affine_now,
-                    name=f"{f.parent.name:s}",
+                    name=f"{f.parent.name:s} n real",
                     contrast_limits=[0, vmax],
                     colormap="bone"
                     )
 
-        # set to first position
-        v.dims.set_current_step(axis=0, value=0)
-        # set to first time
-        v.dims.set_current_step(axis=1, value=0)
 
-        v.show(block=block_while_display)
+    v.dims.set_current_step(axis=0, value=0)
+    v.dims.set_current_step(axis=1, value=0)
+
+    v.show(block=block_while_display)
 
     return v
 
@@ -3434,7 +3439,8 @@ def compare_recons(fnames,
 def get_2d_projections(n: np.ndarray,
                        z_to_xy_ratio: float = 1,
                        use_slice: bool = False,
-                       n_pix_sep: int = 5
+                       n_pix_sep: int = 5,
+                       boundary_value: float = 0.,
                        ) -> np.ndarray:
     """
     Generate an image showing 3 orthogonal projections from a 3D array.
@@ -3464,7 +3470,12 @@ def get_2d_projections(n: np.ndarray,
     ny_img = ny + n_pix_sep + int(np.ceil(nz * z_to_xy_ratio))
     nx_img = nx + n_pix_sep + int(np.ceil(nz * z_to_xy_ratio))
 
+    # projected image
     img = np.zeros((ny_img, nx_img))
+
+    # set boundary
+    img[ny:ny + n_pix_sep, :] = boundary_value
+    img[:, nx:nx + n_pix_sep] = boundary_value
 
     # xy slice
     img[:ny, :nx] = n_xy
@@ -3530,9 +3541,8 @@ def get_color_projection(n: np.ndarray,
         else:
             to_use = np.ones(n[..., ii, :, :].shape, dtype=bool)
 
-        intensity = (n[..., ii, :, :][to_use] - contrast_limits[0]) / ((contrast_limits[1] - contrast_limits[0]))
-        intensity[intensity < 0] = 0
-        intensity[intensity > 1] = 1
+        intensity = np.clip((n[..., ii, :, :][to_use] - contrast_limits[0]) / ((contrast_limits[1] - contrast_limits[0])),
+                            0, 1)
 
         n_proj[np.expand_dims(to_use, axis=-3), :] += np.expand_dims(intensity, axis=-1) * colors[ii, :3][None, :]
 
@@ -3643,21 +3653,8 @@ class RIOptimizer(Optimizer):
     def prox(self, x, step):
 
         # todo: is one order better than another for L1 and TV?
-
-        # ###########################
-        # TV proximal operators
-        # ###########################
-
-        # note cucim TV implementation requires ~10x memory as array does
-        if self.prox_parameters["tau_tv_real"] != 0:
-            x_real = tv_prox(x.real, self.prox_parameters["tau_tv_real"] * step)
-        else:
-            x_real = x.real
-
-        if self.prox_parameters["tau_tv_imag"] != 0:
-            x_imag = tv_prox(x.imag, self.prox_parameters["tau_tv_imag"] * step)
-        else:
-            x_imag = x.imag
+        x_real = x.real
+        x_imag = x.imag
 
         # ###########################
         # L1 proximal operators (softmax)
@@ -3667,6 +3664,16 @@ class RIOptimizer(Optimizer):
 
         if self.prox_parameters["tau_l1_imag"] != 0:
             x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"] * step, x_imag)
+
+        # ###########################
+        # TV proximal operators
+        # ###########################
+        # note cucim TV implementation requires ~10x memory as array does
+        if self.prox_parameters["tau_tv_real"] != 0:
+            x_real = tv_prox(x_real, self.prox_parameters["tau_tv_real"] * step)
+
+        if self.prox_parameters["tau_tv_imag"] != 0:
+            x_imag = tv_prox(x_imag, self.prox_parameters["tau_tv_imag"] * step)
 
         # ###########################
         # projection constraints

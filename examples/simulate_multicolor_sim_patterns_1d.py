@@ -12,8 +12,6 @@ theta_in~43deg and output angle theta_out~19deg.
 
 For a complete description of the geometry and coordinate systems, see the docstring for simulate_dmd.py
 """
-import matplotlib
-matplotlib.use("TkAgg")
 import numpy as np
 import matplotlib.pyplot as plt
 import mcsim.analysis.simulate_dmd as sdmd
@@ -40,61 +38,59 @@ xx, yy = np.meshgrid(range(n_pattern), range(n_pattern))
 # get exact input/ouput angles and do simulation
 uvecs_in_exact = np.zeros((len(wlens), 3))
 tins_exact = np.zeros(len(wlens))
+blaze_deviations = np.zeros_like(tins_exact)
 simulation_data = []
 for ii in range(len(wlens)):
     if inverted[ii]:
         gamma_use = dmd.gamma_off
+        rot_axis_use = dmd.rot_axis_off
     else:
         gamma_use = dmd.gamma_on
+        rot_axis_use = dmd.rot_axis_on
 
-    # for the first/main wavelength, ensure we satisfy the blaze and diffraction conditions
     if ii == 0:
+        # for the first/main wavelength, ensure we satisfy the blaze and diffraction conditions
         uvecs_in, uvecs_out = sdmd.solve_1color_1d(wlens[ii],
                                                    dmd.dx,
                                                    gamma_use,
                                                    diff_orders[ii])
         uvecs_in_exact[ii] = uvecs_in[1]
         uvec_out = uvecs_out[1]
-
-        tx_in, ty_in = sdmd.uvector2txty(*uvecs_in_exact[ii])
-        tp_in, tm_in = sdmd.angle2pm(tx_in, ty_in)
-        tins_exact[ii] = tm_in
-        uvec_in_pm = np.array(sdmd.xyz2mpz(*uvecs_in_exact[ii]))
-
         tx_out, ty_out = sdmd.uvector2txty(*uvec_out)
         tp_out, tm_out = sdmd.angle2pm(tx_out, ty_out)
         uvec_out_pm = np.array(sdmd.xyz2mpz(*uvec_out))
 
         print(f"output angle, determined from {wlens[ii] * 1e3:.0f}nm, order {diff_orders[ii]:d}")
-        print("output angle (tx, ty) = (%0.2f, %0.2f)deg" % (tx_out * 180/np.pi, ty_out * 180/np.pi))
-        print("output angle (tm, tp) = (%0.2f, %0.2f)deg" % (tm_out * 180/np.pi, tp_out))
+        print(f"output angle (tx, ty) = ({tx_out * 180/np.pi:2f}, {ty_out * 180/np.pi:.2f})deg")
+        print(f"output angle (tm, tp) = ({tm_out * 180/np.pi:.2f}, {tp_out * 180/np.pi:.2f})deg")
         print("(bx, by, bz) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_out.squeeze()))
         print("(bm, bp, bz) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_out_pm))
-
-        print("input data for %.0fnm, order %d:" % (wlens[ii] * 1e3, diff_orders[ii]))
-        print("input angle (tx, ty) = (%0.2f, %0.2f)deg" % (tx_in * 180/np.pi, ty_in * 180/np.pi))
-        print("input angle (tm, tp) = (%0.2f, %0.2f)deg" % (tins_exact[ii] * 180/np.pi, 0))
-        print("(ax, ay, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvecs_in_exact[ii].squeeze()))
-        print("(am, ap, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_in_pm))
-
-    # for other wavelength, make sure the output direction is the same
     else:
+        # for other wavelength, make sure the output direction is the same
         uvecs_in_exact[ii] = sdmd.solve_diffraction_input(uvec_out,
                                                           dmd.dx,
                                                           dmd.dy,
                                                           wlens[ii],
                                                           diff_orders[ii],
                                                           -diff_orders[ii])
-        tx_in, ty_in = sdmd.uvector2txty(*uvecs_in_exact[ii])
-        tp_in, tm_in = sdmd.angle2pm(tx_in, ty_in)
-        tins_exact[ii] = tm_in
-        uvec_in_pm = np.array(sdmd.xyz2mpz(*uvecs_in_exact[ii]))
 
-        print("input data for %.0fnm, order %d:" % (wlens[ii] * 1e3, diff_orders[ii]))
-        print("input angle (tx, ty) = (%0.2f, %0.2f)deg" % (tx_in * 180 / np.pi, ty_in * 180 / np.pi))
-        print("input angle (tm, tp) = (%0.2f, %0.2f)deg" % (tins_exact[ii] * 180 / np.pi, 0))
-        print("(ax, ay, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvecs_in_exact[ii].squeeze()))
-        print("(am, ap, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_in_pm))
+    tx_in, ty_in = sdmd.uvector2txty(*uvecs_in_exact[ii])
+    tp_in, tm_in = sdmd.angle2pm(tx_in, ty_in)
+    tins_exact[ii] = tm_in
+    uvec_in_pm = np.array(sdmd.xyz2mpz(*uvecs_in_exact[ii]))
+
+    blaze = sdmd.solve_blaze_output(uvecs_in_exact[ii], gamma_use, rot_axis_use)
+    blaze_tm, blaze_tp = sdmd.uvector2tmtp(*blaze[0])
+    blaze_deviations[ii] = np.arccos(np.clip(np.sum(blaze[0] * uvec_out), -1, 1))
+
+
+    print(f"input data for {wlens[ii] * 1e3:.0f}nm, order {diff_orders[ii]:d}:")
+    print(f"input angle (tx, ty) = ({tx_in * 180 / np.pi:.2f}, {ty_in * 180 / np.pi:.2f})deg")
+    print(f"input angle (tm, tp) = ({tins_exact[ii] * 180 / np.pi:.2f}, {0:.2f})deg")
+    print("(ax, ay, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvecs_in_exact[ii].squeeze()))
+    print("(am, ap, az) = (%0.4f, %0.4f, %0.4f)" % tuple(uvec_in_pm))
+    print(f"blaze angle (tm, tp) = ({blaze_tp * 180 / np.pi:.2f}, {blaze_tm * 180 / np.pi:.2f}) deg")
+    print(f"blaze deviation = {blaze_deviations[ii] * 180 / np.pi:.2f} deg")
 
     # generate pattern for this wavelength
     periods[ii] = base_period * wlens[ii] / wlens[0]
@@ -155,7 +151,8 @@ for ii in range(len(wlens)):
              f" = {tins_exact[ii] * 180/np.pi:.2f}deg\n"
              f"a=({uvecs_in_exact[ii][0]:.3f}, "
              f"{uvecs_in_exact[ii][1]:.3f}, "
-             f"{uvecs_in_exact[ii][2]:.3f})")
+             f"{uvecs_in_exact[ii][2]:.3f})\n"
+             f"blaze deviation = {blaze_deviations[ii]*180/np.pi:.2f}deg")
 
     ax.plot(tout * 180/np.pi,
             int,

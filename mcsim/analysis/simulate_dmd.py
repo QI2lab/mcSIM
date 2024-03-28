@@ -1282,8 +1282,6 @@ def get_diffraction_order_limits(wavelength: float,
     :return nmax, nmin: maximum and minimum indices of diffraction order
     """
 
-    # todo: can this be combined with get_physical_diffraction_orders()
-
     if np.linalg.norm(np.array(rot_axis) - np.array(_dlp_1stgen_axis)) > 1e-12:
         raise NotImplementedError("get_diffraction_order_limits() not get implemented for arbitrary rotation axis")
     rot_mat = get_rot_mat(rot_axis, gamma)
@@ -1325,10 +1323,8 @@ def solve_1color_1d(wavelength: float,
     :return uvecs_in: list of input angle solutions as unit vectors
     :return uvecs_out: list of output angle solutions as unit vectors
     """
-    # uvec_fn, _ = solve_combined_condition(d, gamma, wavelength, order, rot_axis=(1/np.sqrt(2), 1/np.sqrt(2), 0))
     # 1D solutions are the solutions where a_{x+y} = 0
     # this implies a1 = -a2
-
     a3 = -1 / np.sqrt(2) / np.sin(gamma) * wavelength / d * order
     a1_p = np.sqrt(1 - a3**2) / np.sqrt(2)
     a2_p = - a1_p
