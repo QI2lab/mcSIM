@@ -16,9 +16,9 @@ The combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycr
 """
 import sys
 import time
-import struct
+from struct import pack, unpack
 import numpy as np
-import copy
+from copy import deepcopy
 import datetime
 import argparse
 # for dealing with configuration files
@@ -26,7 +26,7 @@ import json
 import zarr
 import warnings
 from pathlib import Path
-import numcodecs
+from numcodecs import packbits
 try:
     import pywinusb.hid as pyhid
 except ImportError:
@@ -36,7 +36,7 @@ except ImportError:
 ##############################################
 # compress DMD pattern data
 ##############################################
-def combine_patterns(patterns, bit_depth: int = 1):
+def combine_patterns(patterns: np.ndarray, bit_depth: int = 1):
     """
     Given a series of binary patterns, combine these into 24 bit RGB images to send to DMD. For binary patterns,
     the DMD supports sending a group of up to 24 patterns as an RGB image, with each bit of the 24 bit
@@ -47,7 +47,6 @@ def combine_patterns(patterns, bit_depth: int = 1):
     :return combined_patterns:
     """
 
-    # todo: don't know if there is a pattern combination for other bit depths?
     if bit_depth != 1:
         raise NotImplementedError('not implemented')
 
@@ -55,7 +54,6 @@ def combine_patterns(patterns, bit_depth: int = 1):
         raise ValueError('patterns must be binary')
 
     combined_patterns = []
-
     # determine number of compressed images and create them
     n_combined_patterns = int(np.ceil(len(patterns) / 24))
     for num_pat in range(n_combined_patterns):
@@ -76,7 +74,7 @@ def combine_patterns(patterns, bit_depth: int = 1):
     return combined_patterns
 
 
-def split_combined_patterns(combined_patterns):
+def split_combined_patterns(combined_patterns) -> np.ndarray:
     """
     Split binary patterns which have been combined into a single uint8 RGB image back to separate images.
 
@@ -99,7 +97,7 @@ def split_combined_patterns(combined_patterns):
     return patterns
 
 
-def encode_erle(pattern):
+def encode_erle(pattern: np.ndarray) -> list:
     """
     Encode a 24bit pattern in enhanced run length encoding (ERLE).
 
@@ -171,7 +169,7 @@ def encode_erle(pattern):
     return pattern_compressed
 
 
-def encode_rle(pattern):
+def encode_rle(pattern: np.ndarray) -> list:
     """
     Compress pattern use run length encoding (RLE)
     row_rgb length encoding (RLE). Information is encoded as number of repeats
@@ -192,7 +190,7 @@ def encode_rle(pattern):
     n>0        , n/a       , repeat following RGB pixel n times
 
     :param pattern:
-    :return:
+    :return pattern_compressed:
     """
     if pattern.dtype != np.uint8:
         raise ValueError('pattern must be of type uint8')
@@ -255,13 +253,13 @@ def encode_rle(pattern):
     return pattern_compressed
 
 
-def decode_erle(dmd_size, pattern_bytes):
+def decode_erle(dmd_size, pattern_bytes: list):
     """
     Decode pattern from ERLE or RLE.
 
     :param dmd_size: [ny, nx]
     :param pattern_bytes: list of bytes representing encoded pattern
-    :return:
+    :return rgb_pattern:
     """
 
     ii = 0  # counter tracking position in compressed byte array
@@ -348,7 +346,7 @@ def decode_erle(dmd_size, pattern_bytes):
     return rgb_pattern
 
 
-def erle_len2bytes(length):
+def erle_len2bytes(length: int) -> list:
     """
     Encode a length between 0-2**15-1 as 1 or 2 bytes for use in erle encoding format.
 
@@ -389,7 +387,7 @@ def erle_len2bytes(length):
     return len_bytes
 
 
-def erle_bytes2len(byte_list):
+def erle_bytes2len(byte_list: list) -> int:
     """
     Convert a 1 or 2 byte list in little endian order to length
     :param list byte_list: [byte] or [lsb, msb]
@@ -476,7 +474,7 @@ def validate_channel_map(cm: dict) -> (bool, str):
     return True, "array validated"
 
 
-def save_config_file(fname,
+def save_config_file(fname: str,
                      pattern_data: list[dict],
                      channel_map: dict = None,
                      firmware_patterns: np.ndarray = None,
@@ -510,7 +508,7 @@ def save_config_file(fname,
     tstamp = datetime.datetime.now().strftime("%Y_%m_%d_%H;%M;%S")
 
     # ensure no numpy arrays in pattern_data
-    pattern_data_list = copy.deepcopy(pattern_data)
+    pattern_data_list = deepcopy(pattern_data)
     for p in pattern_data_list:
         for k, v in p.items():
             if isinstance(v, np.ndarray):
@@ -524,7 +522,7 @@ def save_config_file(fname,
             raise ValueError(f"channel_map validation failed with error '{error:s}'")
 
         # numpy arrays are not seriablizable ... so avoid these
-        channel_map_list = copy.deepcopy(channel_map)
+        channel_map_list = deepcopy(channel_map)
         for _, current_ch_dict in channel_map_list.items():
             for mode in current_ch_dict.keys():
                 for k, v in current_ch_dict[mode].items():
@@ -537,7 +535,7 @@ def save_config_file(fname,
         if firmware_patterns is not None:
             z.array("firmware_patterns",
                     firmware_patterns.astype(bool),
-                    compressor=numcodecs.packbits.PackBits(),
+                    compressor=packbits.PackBits(),
                     dtype=bool,
                     chunks=(1, firmware_patterns.shape[-2], firmware_patterns.shape[-1]))
 
@@ -556,7 +554,7 @@ def save_config_file(fname,
                        "channel_map": channel_map_list}, f, indent="\t")
 
 
-def load_config_file(fname):
+def load_config_file(fname: str):
     """
     Load DMD firmware data from json configuration file
 
@@ -587,7 +585,7 @@ def load_config_file(fname):
             firmware_patterns = None
 
     else:
-        raise ValueError("fname suffix was 'fname.suffix' but must be '.json' or '.zarr'")
+        raise ValueError(f"fname suffix was '{fname.suffix:s}' but must be '.json' or '.zarr'")
 
     # convert entries to numpy arrays
     for p in pattern_data:
@@ -642,20 +640,24 @@ def get_preset_info(preset: dict,
 
 class dlpc900_dmd:
     """
-    Base class for communicating with any DMD using the DLPC900 controller,
-    including the DLP6500 and DLP9000
+    Base class for communicating with any DMD using the DLPC900 controller, including the DLP6500 and DLP9000.
+    OS specific code should only appear in private functions _get_device(), _send_raw_packet(), and __del__()
     """
 
     width = None  # pixels
     height = None  # pixels
     pitch = None  # um
+    dual_controller = None
 
     # these used internally
-    dmd = None
+    _dmd = None
     _response = []
+    # USB packet length not including report_id_byte
+    _packet_length_bytes = 64
 
     max_lut_index = 511
     min_time_us = 105
+    _max_cmd_payload = 504
 
     dmd_type_code = {0: "unknown",
                      1: "DLP6500",
@@ -665,8 +667,20 @@ class dlpc900_dmd:
                      5: "DLP5500"
                      }
 
+    pattern_modes = {'video': 0x00,
+                     'pre-stored': 0x01,
+                     'video-pattern': 0x02,
+                     'on-the-fly': 0x03
+                     }
+
+    compression_modes = {'none': 0x00,
+                         'rle': 0x01,
+                         'erle': 0x02
+                         }
+
     # tried to match with the TI GUI names where possible
     # see TI "DLPC900 Programmer's Guide", dlpu018.pdf, appendix A for reference
+    # available at http://www.ti.com/product/DLPC900/technicaldocuments
     command_dict = {'Read_Error_Code': 0x0100,
                     'Read_Error_Description': 0x0101,
                     'Get_Hardware_Status': 0x1A0A,
@@ -683,6 +697,8 @@ class dlpc900_dmd:
                     'PAT_CONFIG': 0x1A31,
                     'PATMEM_LOAD_INIT_MASTER': 0x1A2A,
                     'PATMEM_LOAD_DATA_MASTER': 0x1A2B,
+                    'PATMEM_LOAD_INIT_SECONDARY': 0x1A2C,
+                    'PATMEM_LOAD_DATA_SECONDARY': 0x1A2D,
                     'TRIG_OUT1_CTL': 0x1A1D,
                     'TRIG_OUT2_CTL': 0x1A1E,
                     'TRIG_IN1_CTL': 0x1A35,
@@ -796,8 +812,6 @@ class dlpc900_dmd:
         # on-the-fly patterns
         self.on_the_fly_patterns = None
 
-        # USB packet length not including report_id_byte
-        self.packet_length_bytes = 64
         self.debug = debug
 
         # info to find device
@@ -818,7 +832,7 @@ class dlpc900_dmd:
     def __del__(self):
         if self.platform == "win32":
             try:
-                self.dmd.close()
+                self._dmd.close()
             except AttributeError:
                 pass  # this will fail if object destroyed before being initialized
 
@@ -834,10 +848,6 @@ class dlpc900_dmd:
         """
 
         if self.platform == "win32":
-            """
-                   Return handle to DMD. This command can contain OS dependent implementation
-                   """
-
             filter = pyhid.HidDeviceFilter(vendor_id=self.vendor_id,
                                            product_id=self.product_id)
             devices = filter.get_devices()
@@ -848,19 +858,16 @@ class dlpc900_dmd:
                 raise ValueError(f"Not enough DMD's detected for dmd_index={self.dmd_index:d}."
                                  f"Only {len(dmd_indices):d} DMD's were detected.")
 
-            chosen_index = dmd_indices[self.dmd_index]
+            self._dmd = devices[dmd_indices[self.dmd_index]]
+            self._dmd.open()
 
-            self.dmd = devices[chosen_index]
-            self.dmd.open()
-
-            # variable for holding response of dmd
-            self._response = []
-            # strip off first return byte
-            self.dmd.set_raw_data_handler(lambda data: self._response.append(data[1:]))
+            # strip off first return byte and add rest to self._response
+            self._dmd.set_raw_data_handler(lambda data: self._response.append(data[1:]))
         elif self.platform == "none":
             pass
         else:
-            raise NotImplementedError("DMD control is only implemented on windows")
+            raise NotImplementedError(f"Platform was '{self.platform:s}', "
+                                      f"but DMD control is only implemented on 'win32'")
 
     def _send_raw_packet(self,
                          buffer,
@@ -870,7 +877,7 @@ class dlpc900_dmd:
         Send a single USB packet. This command can contain OS dependent implementations
 
         :param buffer: list of bytes to send to device
-        :param listen_for_reply: whether or not to listen for a reply
+        :param listen_for_reply: whether to listen for a reply
         :param timeout: timeout in seconds
         :return reply: a list of bytes
         """
@@ -880,7 +887,7 @@ class dlpc900_dmd:
 
         if self.platform == "win32":
             # ensure packet is correct length
-            assert len(buffer) == self.packet_length_bytes
+            assert len(buffer) == self._packet_length_bytes
 
             report_id_byte = [0x00]
 
@@ -888,7 +895,7 @@ class dlpc900_dmd:
             self._response = []
 
             # send
-            reports = self.dmd.find_output_reports()
+            reports = self._dmd.find_output_reports()
             reports[0].send(report_id_byte + buffer)
 
             # only wait for a reply if necessary
@@ -904,7 +911,7 @@ class dlpc900_dmd:
                             break
 
             if self._response != []:
-                reply = copy.deepcopy(self._response[0])
+                reply = deepcopy(self._response[0])
             else:
                 reply = []
 
@@ -935,16 +942,14 @@ class dlpc900_dmd:
         while data_counter < len(buffer):
 
             # ensure data is correct length
-            data_counter_next = data_counter + self.packet_length_bytes
+            data_counter_next = data_counter + self._packet_length_bytes
             data_to_send = buffer[data_counter:data_counter_next]
 
-            if len(data_to_send) < self.packet_length_bytes:
+            if len(data_to_send) < self._packet_length_bytes:
                 # pad with zeros if necessary
-                data_to_send += [0x00] * (self.packet_length_bytes - len(data_to_send))
+                data_to_send += [0x00] * (self._packet_length_bytes - len(data_to_send))
 
             packet_reply = self._send_raw_packet(data_to_send, listen_for_reply, timeout)
-            # if packet_reply != []:
-            #     reply.append(packet_reply)
             reply += packet_reply
 
             # increment for next packet
@@ -959,8 +964,7 @@ class dlpc900_dmd:
                      data=(),
                      sequence_byte=0x00):
         """
-        Send USB command to DMD. Only works on Windows. For documentation of DMD commands, see dlpu018.pdf,
-        available at http://www.ti.com/product/DLPC900/technicaldocuments
+        Send USB command to DMD
 
         DMD uses little endian byte order. They also use the convention that, when converting from binary to hex
         the MSB is the rightmost. i.e. \b11000000 = \x03.
@@ -1002,10 +1006,10 @@ class dlpc900_dmd:
         # second byte is sequence byte. This is used only to identify responses to given commands.
         # third and fourth are length of payload, respectively LSB and MSB bytes
         len_payload = len(data) + 2
-        len_lsb, len_msb = struct.unpack('BB', struct.pack('H', len_payload))
+        len_lsb, len_msb = unpack('BB', pack('H', len_payload))
 
         # get USB command bytes
-        cmd_lsb, cmd_msb = struct.unpack('BB', struct.pack('H', command))
+        cmd_lsb, cmd_msb = unpack('BB', pack('H', command))
 
         # this does not exactly correspond with what TI calls the header. It is a combination of
         # the report id_byte, the header, and the USB command bytes
@@ -1050,10 +1054,10 @@ class dlpc900_dmd:
             flag_byte = bin(buffer[1])
             sequence_byte = hex(buffer[2])
 
-            len_bytes = struct.pack('B', buffer[4]) + struct.pack('B', buffer[3])
-            data_len = struct.unpack('H', len_bytes)[0]
+            len_bytes = pack('B', buffer[4]) + pack('B', buffer[3])
+            data_len = unpack('H', len_bytes)[0]
 
-            cmd = struct.pack('B', buffer[6]) + struct.pack('B', buffer[5])
+            cmd = pack('B', buffer[6]) + pack('B', buffer[5])
             data = buffer[7:]
         elif mode == 'nth-packet':
             flag_byte = None
@@ -1090,7 +1094,7 @@ class dlpc900_dmd:
         Parse USB response from DMD into useful info
 
         :param buffer:
-        :return:
+        :return response:
         """
 
         if buffer == []:
@@ -1102,8 +1106,8 @@ class dlpc900_dmd:
         sequence_byte = buffer[1]
 
         # len of data
-        len_bytes = struct.pack('B', buffer[2]) + struct.pack('B', buffer[3])
-        data_len = struct.unpack('<H', len_bytes)[0]
+        len_bytes = pack('B', buffer[2]) + pack('B', buffer[3])
+        data_len = unpack('<H', len_bytes)[0]
 
         # data
         data = buffer[4:4 + data_len]
@@ -1194,7 +1198,7 @@ class dlpc900_dmd:
 
         :return:
         """
-        # todo: which byte gives info? first data byte?
+
         buffer = self.send_command('r',
                                    True,
                                    self.command_dict["Get_Main_Status"])
@@ -1220,25 +1224,25 @@ class dlpc900_dmd:
         resp = self.decode_response(buffer)
 
         app_version = resp['data'][0:4]
-        app_patch = struct.unpack('<H', b"".join([b.to_bytes(1, 'big') for b in app_version[0:2]]))[0]
+        app_patch = unpack('<H', b"".join([b.to_bytes(1, 'big') for b in app_version[0:2]]))[0]
         app_minor = app_version[2]
         app_major = app_version[3]
         app_version_str = '%d.%d.%d' % (app_major, app_minor, app_patch)
 
         api_version = resp['data'][4:8]
-        api_patch = struct.unpack('<H', b"".join([b.to_bytes(1, 'big') for b in api_version[0:2]]))[0]
+        api_patch = unpack('<H', b"".join([b.to_bytes(1, 'big') for b in api_version[0:2]]))[0]
         api_minor = api_version[2]
         api_major = api_version[3]
         api_version_str = '%d.%d.%d' % (api_major, api_minor, api_patch)
 
         software_config_revision = resp['data'][8:12]
-        swc_patch = struct.unpack('<H', b"".join([b.to_bytes(1, 'big') for b in software_config_revision[0:2]]))[0]
+        swc_patch = unpack('<H', b"".join([b.to_bytes(1, 'big') for b in software_config_revision[0:2]]))[0]
         swc_minor = software_config_revision[2]
         swc_major = software_config_revision[3]
         swc_version_str = '%d.%d.%d' % (swc_major, swc_minor, swc_patch)
 
         sequencer_config_revision = resp['data'][12:16]
-        sqc_patch = struct.unpack('<H', b"".join([b.to_bytes(1, 'big') for b in sequencer_config_revision[0:2]]))[0]
+        sqc_patch = unpack('<H', b"".join([b.to_bytes(1, 'big') for b in sequencer_config_revision[0:2]]))[0]
         sqc_minor = sequencer_config_revision[2]
         sqc_major = sequencer_config_revision[3]
         sqc_version_str = '%d.%d.%d' % (sqc_major, sqc_minor, sqc_patch)
@@ -1266,10 +1270,10 @@ class dlpc900_dmd:
             raise ValueError(f"Unknown DMD type index {dmd_type_flag:d}. "
                              f"Allowed values are {self.dmd_type_code}")
 
-        # in principle could receive two packets. TODO: handle that case
+        # TODO: in principle could receive two packets. handle that case
         firmware_tag = ''
         for d in resp['data'][1:]:
-            # terminate on \x00. This represents end of string (e.g. in C language)
+            # terminate on end of string \x00
             if d == 0:
                 break
             firmware_tag += chr(d)
@@ -1285,14 +1289,15 @@ class dlpc900_dmd:
         """
         Set DMD output trigger delays and polarity. Trigger 1 is the "advance frame" trigger and trigger 2 is the
         "enable" trigger
-        # todo: test this function
 
         :param trigger_number:
         :param invert:
         :param rising_edge_delay_us:
         :param falling_edge_delay_us:
-        :return:
+        :return response:
         """
+
+        # todo: test this function
 
         if rising_edge_delay_us < -20 or rising_edge_delay_us > 20e3:
             raise ValueError('rising edge delay must be in range -20 -- 20000us')
@@ -1305,8 +1310,8 @@ class dlpc900_dmd:
 
         # data
         trig_byte = [int(invert)]
-        rising_edge_bytes = struct.unpack('BB', struct.pack('<h', rising_edge_delay_us))
-        falling_edge_bytes = struct.unpack('BB', struct.pack('<h', falling_edge_delay_us))
+        rising_edge_bytes = unpack('BB', pack('<h', rising_edge_delay_us))
+        falling_edge_bytes = unpack('BB', pack('<h', falling_edge_delay_us))
         data = trig_byte + list(rising_edge_bytes) + list(falling_edge_bytes)
 
         if trigger_number == 1:
@@ -1327,7 +1332,7 @@ class dlpc900_dmd:
         buffer = self.send_command('r', True, self.command_dict["TRIG_IN1_CTL"], [])
         resp = self.decode_response(buffer)
         data = resp['data']
-        delay_us, = struct.unpack('<H', struct.pack('B', data[0]) + struct.pack('B', data[1]))
+        delay_us, = unpack('<H', pack('B', data[0]) + pack('B', data[1]))
         mode = data[2]
 
         return delay_us, mode
@@ -1350,7 +1355,7 @@ class dlpc900_dmd:
             raise ValueError(f'delay time must be {self.min_time_us:.0f}us or longer.')
 
         # todo: is this supposed to be a signed or unsigned integer.
-        delay_byte = list(struct.unpack('BB', struct.pack('<H', delay_us)))
+        delay_byte = list(unpack('BB', pack('<H', delay_us)))
 
         if edge_to_advance == 'rising':
             advance_byte = [0x00]
@@ -1399,16 +1404,10 @@ class dlpc900_dmd:
         :param mode: 'video', 'pre-stored', 'video-pattern', or 'on-the-fly'
         :return response:
         """
-        if mode == 'video':
-            data = [0x00]
-        elif mode == 'pre-stored':
-            data = [0x01]
-        elif mode == 'video-pattern':
-            data = [0x02]
-        elif mode == 'on-the-fly':
-            data = [0x03]
-        else:
-            raise ValueError("mode '%s' is not allowed" % mode)
+        if mode not in self.pattern_modes.keys():
+            raise ValueError(f"mode was '{mode:s}', but the only supported values are {self.pattern_modes}")
+
+        data = [self.pattern_modes[mode]]
 
         return self.send_command('w', True, self.command_dict["DISP_MODE"], data)
 
@@ -1479,7 +1478,7 @@ class dlpc900_dmd:
         """
         raise NotImplementedError("this function not yet implemented. testing needed")
 
-        data = struct.unpack('BBBB', struct.pack('<I', delay_ms))
+        data = unpack('BBBB', pack('<I', delay_ms))
         data = list(data[:3])
         return self.send_command('w', True, self.command_dict["Set_Firmware_Batch_Command_Delay_Time"], data)
 
@@ -1502,8 +1501,8 @@ class dlpc900_dmd:
         if num_patterns > self.max_lut_index:
             raise ValueError(f"num_patterns must be <= {self.max_lut_index:d} but was {num_patterns:d}")
 
-        num_patterns_bytes = list(struct.unpack('BB', struct.pack('<H', num_patterns)))
-        num_repeats_bytes = list(struct.unpack('BBBB', struct.pack('<I', num_repeat)))
+        num_patterns_bytes = list(unpack('BB', pack('<H', num_patterns)))
+        num_repeats_bytes = list(unpack('BBBB', pack('<I', num_repeat)))
 
         return self.send_command('w',
                                  True,
@@ -1547,9 +1546,9 @@ class dlpc900_dmd:
 
         # assert pattern_index < 256 and pattern_index >= 0
 
-        pattern_index_bytes = list(struct.unpack('BB', struct.pack('<H', sequence_position_index)))
+        pattern_index_bytes = list(unpack('BB', pack('<H', sequence_position_index)))
         # actually can only use the first 3 bytes
-        exposure_bytes = list(struct.unpack('BBBB', struct.pack('<I', exposure_time_us)))[:-1]
+        exposure_bytes = list(unpack('BBBB', pack('<I', exposure_time_us)))[:-1]
 
         # next byte contains various different information
         # first bit gives
@@ -1576,7 +1575,7 @@ class dlpc900_dmd:
 
         misc_byte = [int(misc_byte_str[::-1], 2)]
 
-        dark_time_bytes = list(struct.unpack('BB', struct.pack('<H', dark_time_us))) + [0]
+        dark_time_bytes = list(unpack('BB', pack('<H', dark_time_us))) + [0]
         if disable_trig_2:
             trig2_output_bytes = [0x00]
         else:
@@ -1586,7 +1585,7 @@ class dlpc900_dmd:
         img_pattern_index_byte = [stored_image_index]
         # todo: how to set this byte?
         # actually only bits 11:15
-        # don't really understand why, but this is what GUI sets for these...
+        # don't understand why, but this is what GUI sets for these...
         # NOTE: can reuse a pattern in the LUT by setting this bit to the same as another
         # in that case would not need to send the PATMEM_LOAD_INIT_MASTER or -TAMEM_LOAD_DATA_MASTER commands
         pattern_bit_index_byte = [8 * stored_image_bit_index]
@@ -1596,9 +1595,10 @@ class dlpc900_dmd:
 
         return self.send_command('w', True, self.command_dict["MBOX_DATA"], data)
 
-    def init_pattern_bmp_load(self,
+    def _init_pattern_bmp_load(self,
                               pattern_length: int,
-                              pattern_index: int):
+                              pattern_index: int,
+                              primary_controller: bool = True):
         """
         Initialize pattern BMP load command.
 
@@ -1610,19 +1610,28 @@ class dlpc900_dmd:
 
         :param pattern_length:
         :param pattern_index:
+        :param primary_controller: whether to send command to primary or secondary controller.
+          Not all DMD models have a secondary controller.
         :return response:
         """
 
         # packing and unpacking bytes doesn't do anything...but for consistency...
-        index_bin = list(struct.unpack('BB', struct.pack('<H', pattern_index)))
-        num_bytes = list(struct.unpack('BBBB', struct.pack('<I', pattern_length)))
+        index_bin = list(unpack('BB', pack('<H', pattern_index)))
+        num_bytes = list(unpack('BBBB', pack('<I', pattern_length)))
         data = index_bin + num_bytes
 
-        return self.send_command('w', True, self.command_dict["PATMEM_LOAD_INIT_MASTER"], data=data)
+        if primary_controller:
+            cmd = self.command_dict["PATMEM_LOAD_INIT_MASTER"]
+        else:
+            cmd = self.command_dict["PATMEM_LOAD_INIT_SECONDARY"]
 
-    def pattern_bmp_load(self,
-                         compressed_pattern: list,
-                         compression_mode: str):
+        return self.send_command('w', True, cmd, data=data)
+
+    def _pattern_bmp_load(self,
+                          compressed_pattern: list,
+                          compression_mode: str,
+                          pattern_index: int = 0,
+                          primary_controller: bool = True):
         """
         Load DMD pattern data for use in pattern on-the-fly mode. To load all necessary data to DMD correctly,
         invoke this from upload_pattern_sequence()
@@ -1636,29 +1645,25 @@ class dlpc900_dmd:
 
         :param compressed_pattern:
         :param compression_mode:
+        :param primary_controller: whether to send command to primary or secondary controller.
+          Not all DMD models have a secondary controller.
         :return:
         """
-        max_cmd_payload = 504
 
-        # get the header
+        # get the header, 48 bytes long
         # Note: taken directly from sniffer of the TI GUI
         signature_bytes = [0x53, 0x70, 0x6C, 0x64]
-        width_byte = list(struct.unpack('BB', struct.pack('<H', self.width)))
-        height_byte = list(struct.unpack('BB', struct.pack('<H', self.height)))
+        width_byte = list(unpack('BB', pack('<H', self.width)))
+        height_byte = list(unpack('BB', pack('<H', self.height)))
         # Number of bytes in encoded image_data
-        num_encoded_bytes = list(struct.unpack('BBBB', struct.pack('<I', len(compressed_pattern))))
+        num_encoded_bytes = list(unpack('BBBB', pack('<I', len(compressed_pattern))))
         reserved_bytes = [0xFF] * 8  # reserved
         bg_color_bytes = [0x00] * 4  # BG color BB, GG, RR, 00
 
-        # encoding 0 none, 1 rle, 2 erle
-        if compression_mode == 'none':
-            encoding_byte = [0x00]
-        elif compression_mode == 'rle':
-            encoding_byte = [0x01]
-        elif compression_mode == 'erle':
-            encoding_byte = [0x02]
-        else:
-            raise ValueError("compression_mode must be 'none', 'rle', or 'erle' but was '%s'" % compression_mode)
+        if compression_mode not in self.compression_modes.keys():
+            raise ValueError(f"compression_mode was '{compression_mode:s}', "
+                             f"but must be one of {self.compression_modes.keys()}")
+        encoding_byte = [self.compression_modes[compression_mode]]
 
         general_data = signature_bytes + width_byte + height_byte + num_encoded_bytes + \
                        reserved_bytes + bg_color_bytes + [0x01] + encoding_byte + \
@@ -1666,22 +1671,34 @@ class dlpc900_dmd:
 
         data = general_data + compressed_pattern
 
+        # call init before loading pattern
+        # todo: check len(data) = len(compressed_pattern) + 48 and replace in command
+        buffer = self._init_pattern_bmp_load(len(compressed_pattern) + 48,
+                                            pattern_index=pattern_index,
+                                            primary_controller=primary_controller)
+        resp = self.decode_response(buffer)
+        if resp['error']:
+            print(self.read_error_description())
+
+        # send pattern
+        if primary_controller:
+            cmd = self.command_dict["PATMEM_LOAD_DATA_MASTER"]
+        else:
+            cmd = self.command_dict["PATMEM_LOAD_DATA_SECONDARY"]
+
         # send multiple commands, each of maximum size 512 bytes including header
         data_index = 0
         command_index = 0
         while data_index < len(data):
             # slice data to get block to send in this command
-            data_index_next = np.min([data_index + max_cmd_payload, len(data)])
+            data_index_next = np.min([data_index + self._max_cmd_payload, len(data)])
             data_current = data[data_index:data_index_next]
 
             # len of current data block
-            data_len_bytes = list(struct.unpack('BB', struct.pack('<H', len(data_current))))
+            data_len_bytes = list(unpack('BB', pack('<H', len(data_current))))
 
             # send command
-            self.send_command('w',
-                              False,
-                              self.command_dict["PATMEM_LOAD_DATA_MASTER"],
-                              data=data_len_bytes + data_current)
+            self.send_command('w', False, cmd, data=data_len_bytes + data_current)
 
             data_index = data_index_next
             command_index += 1
@@ -1701,8 +1718,8 @@ class dlpc900_dmd:
         # todo: seems I need to call set_pattern_sequence() after this command to actually get sequence running. Why?
 
         The DMD behaves differently depending on the state of the trigger in signals when this command is issued.
-        If the trigger in signals are HIGH, then the patterns will be displayed when the trigger is high. If the
-        trigger in signals are LOW, then the patterns will be displayed when the trigger is low.
+        If the trigger in signals are high, then the patterns will be displayed when the trigger is high. If the
+        trigger in signals are low, then the patterns will be displayed when the trigger is low.
 
         :param patterns: N x Ny x Nx NumPy array of uint8
         :param exp_times: exposure times in us. Either a single uint8 number, or a list the same
@@ -1750,12 +1767,26 @@ class dlpc900_dmd:
         if patterns.shape[0] > 1 and len(dark_times) == 1:
             dark_times = dark_times * patterns.shape[0]
 
+        if compression_mode not in self.compression_modes.keys():
+            raise ValueError(f"compression mode was '{compression_mode:s}', "
+                             f"but must be one of {self.compression_modes.keys()}")
+
+        if compression_mode != "erle":
+            raise NotImplementedError("Currently only `erle` compression is implemented")
+
+        if compression_mode == 'none':
+            def compression_fn(p): return np.packbits(p.ravel())
+        elif compression_mode == 'rle':
+            compression_fn = encode_rle
+        elif compression_mode == 'erle':
+            compression_fn = encode_erle
+
         # #########################
         # #########################
         # store patterns so we can check what is uploaded later
         self.on_the_fly_patterns = patterns
 
-        # need to issue stop before changing mode. Otherwise DMD will sometimes lock up and not be responsive.
+        # need to issue stop before changing mode, otherwise DMD will sometimes lock up and not be responsive.
         self.start_stop_sequence('stop')
 
         # set to on-the-fly mode
@@ -1764,15 +1795,13 @@ class dlpc900_dmd:
         if resp['error']:
             print(self.read_error_description())
 
-        # stop any currently running sequences
-        # note: want to stop after changing pattern mode, because otherwise may throw error
+        # stop after changing pattern mode, otherwise may throw error
         self.start_stop_sequence('stop')
 
         # set image parameters for look up table
         # When uploading 1 bit image, each set of 24 images are first combined to a single 24 bit RGB image.
         # pattern_index refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to
         # which bit of that image (i.e. in the RGB bytes, it is stored in.
-        # todo: decide if is smaller to send compressed as 24 bit RGB or individual image...
         stored_image_indices = np.zeros(npatterns, dtype=int)
         stored_bit_indices = np.zeros(npatterns, dtype=int)
         for ii, (p, et, dt) in enumerate(zip(patterns, exp_times, dark_times)):
@@ -1796,7 +1825,6 @@ class dlpc900_dmd:
             print(self.read_error_description())
 
         # can combine images if bit depth = 1
-        # todo: test if things work if I don't combine images in the 24bit format
         if combine_images:
             if bit_depth == 1:
                 patterns = combine_patterns(patterns)
@@ -1804,44 +1832,38 @@ class dlpc900_dmd:
                 raise NotImplementedError("Combining multiple images into a 24-bit RGB image is only"
                                           " implemented for bit depth 1.")
 
-        # compress and load images
-        # images must be loaded in backwards order according to programming manual
+        # compress and load images in backwards order
         for ii, dmd_pattern in reversed(list(enumerate(patterns))):
             if self.debug:
-                print("sending pattern %d/%d" % (ii + 1, len(patterns)))
+                print(f"sending pattern {ii + 1:d}/{len(patterns):d}")
 
-            if compression_mode == 'none':
-                raise NotImplementedError("compression mode 'none' has not been tested.")
-                compressed_pattern = np.packbits(dmd_pattern.ravel())
-            elif compression_mode == 'rle':
-                raise NotImplementedError("compression mode 'rle' as not been tested.")
-                compressed_pattern = encode_rle(dmd_pattern)
-            elif compression_mode == 'erle':
-                compressed_pattern = encode_erle(dmd_pattern)
+            if self.dual_controller:
+                p0, p1 = np.array_split(dmd_pattern, 2, axis=-1)
+                cp0 = compression_fn(p0)
+                cp1 = compression_mode(p1)
+                self._pattern_bmp_load(cp0,
+                                       compression_mode,
+                                       pattern_index=ii,
+                                       primary_controller=True)
+                self._pattern_bmp_load(cp1,
+                                       compression_mode,
+                                       pattern_index=ii,
+                                       primary_controller=False)
+            else:
+                compressed_pattern = compression_fn(dmd_pattern)
+                self._pattern_bmp_load(compressed_pattern,
+                                       compression_mode,
+                                       pattern_index=ii,
+                                       primary_controller=True)
 
-            # pattern has an additional 48 bytes which must be sent also.
-            # todo: Maybe I should nest the call to init_pattern_bmp_load in pattern_bmp_load?
-            buffer = self.init_pattern_bmp_load(len(compressed_pattern) + 48, pattern_index=ii)
-            resp = self.decode_response(buffer)
-            if resp['error']:
-                print(self.read_error_description())
-
-            self.pattern_bmp_load(compressed_pattern, compression_mode)
-
-        # this PAT_CONFIG command is necessary, otherwise subsequent calls to set_pattern_sequence() will not behave
-        # as expected.
+        # this command is necessary, otherwise subsequent calls to set_pattern_sequence() will not behave as expected
         buffer = self.pattern_display_lut_configuration(npatterns, num_repeats)
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
 
-        # start sequence
         self.start_stop_sequence('start')
 
-        # some weird behavior where wants to be STOPPED before starting triggered sequence. This seems to happen
-        # intermittently. Probably due to some other DMD setting that I'm not aware of?
-        # todo: is this still true? One problem is the way the patterns respond depends on what the DMD's
-        # trigger state is when loading
         if triggered:
             self.start_stop_sequence('stop')
 
@@ -2114,8 +2136,10 @@ class dlpc900_dmd:
         # insert off patterns at the start or end of the sequence
         for ii in range(nmodes):
             if noff_before[ii] != 0 or noff_after[ii] != 0:
-                ipic_off_before = self.presets[channels[ii]]["off"]["picture_indices"] * np.ones(noff_before[ii], dtype=int)
-                ibit_off_before = self.presets[channels[ii]]["off"]["bit_indices"] * np.ones(noff_before[ii], dtype=int)
+                ipic_off_before = self.presets[channels[ii]]["off"]["picture_indices"] * \
+                                  np.ones(noff_before[ii], dtype=int)
+                ibit_off_before = self.presets[channels[ii]]["off"]["bit_indices"] * \
+                                  np.ones(noff_before[ii], dtype=int)
 
                 ipic_off_after = self.presets[channels[ii]]["off"]["picture_indices"] * np.ones(noff_after[ii], dtype=int)
                 ibit_off_after = self.presets[channels[ii]]["off"]["bit_indices"] * np.ones(noff_after[ii], dtype=int)
@@ -2172,7 +2196,7 @@ class dlpc900_dmd:
         :param exp_time_us:
         :param clear_pattern_after_trigger:
         :param verbose:
-        :return:
+        :return pic_inds, bit_inds:
         """
 
         pic_inds, bit_inds = self.get_dmd_sequence(modes,
@@ -2211,9 +2235,10 @@ class dlp6500(dlpc900_dmd):
     width = 1920  # pixels
     height = 1080  # pixels
     pitch = 7.56  # um
+    dual_controller = False
 
-    def __init__(self, **kwargs):
-        super(dlp6500, self).__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super(dlp6500, self).__init__(*args, **kwargs)
 
 
 # Include this alias for dlp6500 to avoid external code changes
@@ -2224,14 +2249,15 @@ class dlp9000(dlpc900_dmd):
     width = 2560  # pixels
     height = 1600  # pixels
     pitch = 7.56  # um
+    dual_controller = True
 
-    def __init__(self, **kwargs):
-        super(dlp9000, self).__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super(dlp9000, self).__init__(*args, **kwargs)
 
 
 if __name__ == "__main__":
     # #######################
-    # example command line parser
+    # load config fiile
     # #######################
 
     fname = "dmd_config.zarr"
@@ -2241,6 +2267,22 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"configuration file `{fname:s}` was not found. For the command line parser to work,"
                                 f"create this file using save_config_file(), and place it in the same"
                                 f" directory as dlp6500.py")
+
+    # #######################
+    # load DLP6500 or DLP9000
+    # #######################
+    _dmd_helper = dlpc900_dmd()
+    dmd_model = _dmd_helper.get_firmware_type()["dmd type"]
+    del _dmd_helper
+
+    if dmd_model == "DLP6500":
+        cls = dlp6500
+    elif dmd_model == "DLP9000":
+        cls = dlp9000
+    else:
+        raise NotImplementedError(f"DMD model {dmd_model:s} is not supported or has not been tested")
+
+    dmd = cls(firmware_pattern_info=pattern_data, presets=presets)
 
     # #######################
     # define arguments
@@ -2300,12 +2342,8 @@ if __name__ == "__main__":
     if args.verbose:
         print(args)
 
-    # #######################
-    # load DMD
-    # #######################
-    dmd = dlp6500(firmware_pattern_info=pattern_data, presets=presets)
-
-    pic_inds, bit_inds = dmd.program_dmd_seq(args.modes, args.channels,
+    pic_inds, bit_inds = dmd.program_dmd_seq(args.modes,
+                                             args.channels,
                                              nrepeats=args.nrepeats,
                                              noff_before=args.noff_before,
                                              noff_after=args.noff_after,
