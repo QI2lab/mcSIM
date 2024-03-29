@@ -166,3 +166,6 @@ Documentation is generated from function docstrings and built with Sphinx. e.g. 
 make html
 ```
 Then open `docs/_build/html/index.html` in your browser
+
+# Acknowlegements
+Thank you to Songyun Gu for extending the DMD control code to work with the [DLP9000](https://www.ti.com/product/DLP9000)
