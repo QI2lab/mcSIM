@@ -306,7 +306,8 @@ def decode_erle(dmd_size, pattern_bytes):
                     ii += 4
 
                 # copy bytes from same position in previous line
-                current_line[:, line_pos:line_pos + n_to_copy] = rgb_pattern[:, line_no-1, line_pos:line_pos + n_to_copy]
+                current_line[:, line_pos:line_pos + n_to_copy] = \
+                    rgb_pattern[:, line_no-1, line_pos:line_pos + n_to_copy]
                 line_pos += n_to_copy
 
             # next n bytes unencoded
@@ -639,21 +640,33 @@ def get_preset_info(preset: dict,
 ##############################################
 
 
-class dlp6500:
+class dlpc900_dmd:
     """
-    Base class for communicating with DLP6500
+    Base class for communicating with any DMD using the DLPC900 controller,
+    including the DLP6500 and DLP9000
     """
-    width = 1920  # pixels
-    height = 1080  # pixels
-    pitch = 7.56  # um
+
+    width = None  # pixels
+    height = None  # pixels
+    pitch = None  # um
+
+    # these used internally
+    dmd = None
+    _response = []
 
     max_lut_index = 511
+    min_time_us = 105
 
     dmd_type_code = {0: "unknown",
                      1: "DLP6500",
-                     2: "DLP9000"}
+                     2: "DLP9000",
+                     3: "DLP670S",
+                     4: "DLP500YX",
+                     5: "DLP5500"
+                     }
 
-    # tried to match with the DLP6500 GUI names where possible
+    # tried to match with the TI GUI names where possible
+    # see TI "DLPC900 Programmer's Guide", dlpu018.pdf, appendix A for reference
     command_dict = {'Read_Error_Code': 0x0100,
                     'Read_Error_Description': 0x0101,
                     'Get_Hardware_Status': 0x1A0A,
@@ -673,28 +686,28 @@ class dlp6500:
                     'TRIG_OUT1_CTL': 0x1A1D,
                     'TRIG_OUT2_CTL': 0x1A1E,
                     'TRIG_IN1_CTL': 0x1A35,
-                    'TRIG_IN2_CTL': 0x1A36
+                    'TRIG_IN2_CTL': 0x1A36,
                     }
 
-    err_dictionary = {'no error': 0,
-                      'batch file checksum error': 1,
-                      'device failure': 2,
-                      'invalid command number': 3,
-                      'incompatible controller/dmd': 4,
-                      'command not allowed in current mode': 5,
-                      'invalid command parameter': 6,
-                      'item referred by the parameter is not present': 7,
-                      'out of resource (RAM/flash)': 8,
-                      'invalid BMP compression type': 9,
-                      'pattern bit number out of range': 10,
-                      'pattern BMP not present in flash': 11,
-                      'pattern dark time is out of range': 12,
-                      'signal delay parameter is out of range': 13,
-                      'pattern exposure time is out of range': 14,
-                      'pattern number is out of range': 15,
-                      'invalid pattern definition': 16,
-                      'pattern image memory address is out of range': 17,
-                      'internal error': 255
+    err_dictionary = {0: 'no error',
+                      1: 'batch file checksum error',
+                      2: 'device failure',
+                      3: 'invalid command number',
+                      4: 'incompatible controller/dmd',
+                      5: 'command not allowed in current mode',
+                      6: 'invalid command parameter',
+                      7: 'item referred by the parameter is not present',
+                      8: 'out of resource (RAM/flash)',
+                      9: 'invalid BMP compression type',
+                      10: 'pattern bit number out of range',
+                      11: 'pattern BMP not present in flash',
+                      12: 'pattern dark time is out of range',
+                      13: 'signal delay parameter is out of range',
+                      14: 'pattern exposure time is out of range',
+                      15: 'pattern number is out of range',
+                      16: 'invalid pattern definition',
+                      17: 'pattern image memory address is out of range',
+                      255: 'internal error'
                       }
 
     status_strs = ['DMD micromirrors are parked',
@@ -726,14 +739,15 @@ class dlp6500:
                  config_file: str = None,
                  firmware_patterns: np.ndarray = None,
                  initialize: bool = True,
-                 dmd_index: int = 0):
+                 dmd_index: int = 0,
+                 platform: str = None):
         """
         Get instance of DLP LightCrafter evaluation module (DLP6500 or DLP9000). This is the base class which os
         dependent classes should inherit from. The derived classes only need to implement _get_device and
         _send_raw_packet.
 
-        Note that DMD can be instantiated before being loaded. In this case, use constructor with initialize=False
-        and later call the initialize() method with the desired arguments.
+        Note that DMD can be instantiated before being loaded. In this case, use the constructor with initialize=False
+        and later call initialize() method with the desired arguments.
 
         :param vendor_id: vendor id, used to find DMD USB device
         :param product_id: product id, used to find DMD USB device
@@ -756,7 +770,7 @@ class dlp6500:
                              " were provided. But if config file is provided, these other settings should not be"
                              " set directly.")
 
-            # load configuration file
+        # load configuration file
         if config_file is not None:
             firmware_pattern_info, presets, firmware_patterns, _ = load_config_file(config_file)
 
@@ -786,17 +800,27 @@ class dlp6500:
         self.packet_length_bytes = 64
         self.debug = debug
 
-        # find device
+        # info to find device
         self.vendor_id = vendor_id
         self.product_id = product_id
         self.dmd_index = dmd_index
+
+        # get platform
+        if platform is None:
+            self.platform = sys.platform
+        else:
+            self.platform = platform
 
         self.initialized = initialize
         if self.initialize:
             self._get_device()
 
     def __del__(self):
-        pass
+        if self.platform == "win32":
+            try:
+                self.dmd.close()
+            except AttributeError:
+                pass  # this will fail if object destroyed before being initialized
 
     def initialize(self, **kwargs):
         self.__init__(initialize=True, **kwargs)
@@ -808,27 +832,86 @@ class dlp6500:
 
         :return:
         """
-        pass
+
+        if self.platform == "win32":
+            """
+                   Return handle to DMD. This command can contain OS dependent implementation
+                   """
+
+            filter = pyhid.HidDeviceFilter(vendor_id=self.vendor_id,
+                                           product_id=self.product_id)
+            devices = filter.get_devices()
+
+            dmd_indices = [ii for ii, d in enumerate(devices) if d.product_name == "DLPC900"]
+
+            if len(dmd_indices) <= self.dmd_index:
+                raise ValueError(f"Not enough DMD's detected for dmd_index={self.dmd_index:d}."
+                                 f"Only {len(dmd_indices):d} DMD's were detected.")
+
+            chosen_index = dmd_indices[self.dmd_index]
+
+            self.dmd = devices[chosen_index]
+            self.dmd.open()
+
+            # variable for holding response of dmd
+            self._response = []
+            # strip off first return byte
+            self.dmd.set_raw_data_handler(lambda data: self._response.append(data[1:]))
+        elif self.platform == "none":
+            pass
+        else:
+            raise NotImplementedError("DMD control is only implemented on windows")
 
     def _send_raw_packet(self,
                          buffer,
                          listen_for_reply: bool = False,
                          timeout: float = 5):
         """
-        Send a single USB packet.
-
-        todo: this command can contain os dependent implementation
-        one interesting issue is it seems on linux the report ID byte is stripped
-        by the driver, so we would not need to worry about it here. For windows, we must handle manually.
+        Send a single USB packet. This command can contain OS dependent implementations
 
         :param buffer: list of bytes to send to device
         :param listen_for_reply: whether or not to listen for a reply
         :param timeout: timeout in seconds
-        :return:
+        :return reply: a list of bytes
         """
-        pass
 
-    # sending and receiving commands, no operating system dependence
+        # one interesting issue is it seems on linux the report ID byte is stripped
+        # by the driver, so we would not need to worry about it here. For windows, we must handle manually.
+
+        if self.platform == "win32":
+            # ensure packet is correct length
+            assert len(buffer) == self.packet_length_bytes
+
+            report_id_byte = [0x00]
+
+            # clear reply buffer before sending
+            self._response = []
+
+            # send
+            reports = self.dmd.find_output_reports()
+            reports[0].send(report_id_byte + buffer)
+
+            # only wait for a reply if necessary
+            if listen_for_reply:
+                tstart = time.time()
+                while self._response == []:
+                    time.sleep(0.1)
+                    tnow = time.time()
+
+                    if timeout is not None:
+                        if (tnow - tstart) > timeout:
+                            print('read command timed out')
+                            break
+
+            if self._response != []:
+                reply = copy.deepcopy(self._response[0])
+            else:
+                reply = []
+
+            return reply
+        else:
+            raise NotImplementedError("DMD control is only implemented on windows")
+
     def send_raw_command(self,
                          buffer,
                          listen_for_reply: bool = False,
@@ -837,6 +920,8 @@ class dlp6500:
         Send a raw command over USB, possibly including multiple packets. In contrast to send_command,
         this function does not generate the required header data. It deals with splitting
         one command into multiple packets and appropriately padding the supplied buffer.
+        This command should not be operating system dependent. All operating system dependence should be
+        in _send_raw_packet()
 
         :param buffer: buffer to send. List of bytes.
         :param listen_for_reply: Boolean. Whether to wait for a reply form USB device
@@ -874,14 +959,11 @@ class dlp6500:
                      data=(),
                      sequence_byte=0x00):
         """
-        Send USB command to DLP6500 DMD. Only works on Windows. For documentation of DMD commands, see dlpu018.pdf,
+        Send USB command to DMD. Only works on Windows. For documentation of DMD commands, see dlpu018.pdf,
         available at http://www.ti.com/product/DLPC900/technicaldocuments
 
         DMD uses little endian byte order. They also use the convention that, when converting from binary to hex
         the MSB is the rightmost. i.e. \b11000000 = \x03.
-
-        TODO: is this actually true??? Seems to not be true wrt to flag_byte, but true wrt to
-        pattern defining bytes...maybe only care about this for data that is passed through the DMD?
 
         :param rw_mode: 'r' for read, or 'w' for write
         :param reply: boolean
@@ -918,7 +1000,6 @@ class dlp6500:
         flag_byte = int(flagstring, 2)
 
         # second byte is sequence byte. This is used only to identify responses to given commands.
-
         # third and fourth are length of payload, respectively LSB and MSB bytes
         len_payload = len(data) + 2
         len_lsb, len_msb = struct.unpack('BB', struct.pack('H', len_payload))
@@ -953,6 +1034,7 @@ class dlp6500:
 
         return self.send_raw_command(buffer, reply)
 
+    @staticmethod
     def decode_command(self,
                        buffer,
                        mode: str = 'first-packet'):
@@ -960,7 +1042,7 @@ class dlp6500:
         Decode DMD command into constituent pieces
 
         :param buffer:
-        :param mode:
+        :param mode: 'first-packet' or 'nth-packet'
         :return flag_byte, sequence_byte, data_len, cmd, data:
         """
 
@@ -985,13 +1067,13 @@ class dlp6500:
 
         return flag_byte, sequence_byte, data_len, cmd, data
 
-    def decode_flag_byte(self,
-                         flag_byte):
+    @staticmethod
+    def decode_flag_byte(flag_byte) -> dict:
         """
         Get parameters from flags set in the flag byte
 
         :param flag_byte:
-        :return:
+        :return result:
         """
 
         errs = [2 ** ii & flag_byte != 0 for ii in range(5, 8)]
@@ -1032,11 +1114,12 @@ class dlp6500:
         return response
 
     # check DMD info
-    def read_error_code(self):
+    def read_error_code(self) -> (str, int):
         """
-        # todo: DMD complains about this command...says invalid command number 0x100
         Retrieve error code number from last executed command
         """
+
+        # todo: DMD complains about this command...says invalid command number 0x100
 
         buffer = self.send_command('w', True, self.command_dict["Read_Error_Code"])
         resp = self.decode_response(buffer)
@@ -1045,15 +1128,14 @@ class dlp6500:
         else:
             err_code = None
 
-        error_type = 'not defined'
-        for k, v in self.err_dictionary.items():
-            if v == err_code:
-                error_type = k
-                break
+        try:
+            error_type = self.err_dictionary[err_code]
+        except KeyError:
+            error_type = 'not defined'
 
         return error_type, err_code
 
-    def read_error_description(self):
+    def read_error_description(self) -> str:
         """
         Retrieve error code description for the last error.
 
@@ -1061,7 +1143,7 @@ class dlp6500:
         If the new error messages is shorter than the previous one, the remaining characters from earlier errors
         will still be in the buffer and may be returned.
 
-        :return:
+        :return err_description:
         """
         buffer = self.send_command('r', True, self.command_dict["Read_Error_Description"])
         resp = self.decode_response(buffer)
@@ -1076,7 +1158,7 @@ class dlp6500:
 
         return err_description
 
-    def get_hw_status(self):
+    def get_hw_status(self) -> dict:
         """
         Get hardware status of DMD
 
@@ -1093,7 +1175,7 @@ class dlp6500:
 
         return result
 
-    def get_system_status(self):
+    def get_system_status(self) -> dict:
         """
         Get status of internal memory test
 
@@ -1106,7 +1188,7 @@ class dlp6500:
 
         return {'internal memory test passed': bool(resp['data'][0])}
 
-    def get_main_status(self):
+    def get_main_status(self) -> dict:
         """
         Get DMD main status
 
@@ -1130,7 +1212,7 @@ class dlp6500:
         """
         Get firmware version information from DMD
 
-        :return:
+        :return dict:
         """
         buffer = self.send_command('r',
                                    True,
@@ -1172,7 +1254,7 @@ class dlp6500:
         """
         Get DMD type and firmware tag
 
-        :return:
+        :return dict:
         """
         buffer = self.send_command('r', True, self.command_dict["Get_Firmware_Type"])
         resp = self.decode_response(buffer)
@@ -1184,22 +1266,12 @@ class dlp6500:
             raise ValueError(f"Unknown DMD type index {dmd_type_flag:d}. "
                              f"Allowed values are {self.dmd_type_code}")
 
-        # if dmd_type_flag == 0:
-        #     dmd_type = 'unknown'
-        # elif dmd_type_flag == 1:
-        #     dmd_type = 'DLP6500'
-        # elif dmd_type_flag == 2:
-        #     dmd_type = 'DLP9000'
-        # else:
-        #     raise ValueError("Unknown DMD type index %d. Expected 1 or 2", dmd_type_flag)
-
         # in principle could receive two packets. TODO: handle that case
         firmware_tag = ''
         for d in resp['data'][1:]:
             # terminate on \x00. This represents end of string (e.g. in C language)
             if d == 0:
                 break
-
             firmware_tag += chr(d)
 
         return {'dmd type': dmd_type, 'firmware tag': firmware_tag}
@@ -1271,11 +1343,11 @@ class dlp6500:
 
         :param delay_us:
         :param edge_to_advance: 'rising' or 'falling'
-        :return:
+        :return response:
         """
 
         if delay_us < 104:
-            raise ValueError('delay time must be 105us or longer.')
+            raise ValueError(f'delay time must be {self.min_time_us:.0f}us or longer.')
 
         # todo: is this supposed to be a signed or unsigned integer.
         delay_byte = list(struct.unpack('BB', struct.pack('<H', delay_us)))
@@ -1293,7 +1365,7 @@ class dlp6500:
         """
         Query polarity of trigger in 2 ("enable" trigger)
 
-        :return:
+        :return mode:
         """
         buffer = self.send_command('r', True, self.command_dict["TRIG_IN2_CTL"], [])
         resp = self.decode_response(buffer)
@@ -1307,7 +1379,7 @@ class dlp6500:
         Trigger input 2 is used to start or stop the DMD pattern display.
 
         :param edge_to_start:
-        :return:
+        :return response:
         """
         if edge_to_start == 'rising':
             start_byte = [0x00]
@@ -1325,6 +1397,7 @@ class dlp6500:
         Change the DMD display mode
 
         :param mode: 'video', 'pre-stored', 'video-pattern', or 'on-the-fly'
+        :return response:
         """
         if mode == 'video':
             data = [0x00]
@@ -1347,6 +1420,7 @@ class dlp6500:
         "PAT_START_STOP" according to GUI
 
         :param cmd: string. 'start', 'stop' or 'pause'
+        :return response:
         """
         if cmd == 'start':
             data = [0x02]
@@ -1366,12 +1440,12 @@ class dlp6500:
     # commands for working batch files in firmware
     #######################################
     def get_fwbatch_name(self,
-                         batch_index: int):
+                         batch_index: int) -> str:
         """
         Return name of batch file stored on firmware at batch_index
 
         :param batch_index:
-        :return:
+        :return bach_name:
         """
         buffer = self.send_command('r', True, self.command_dict["Get_Firmware_Batch_File_Name"], [batch_index])
         resp = self.decode_response(buffer)
@@ -1391,7 +1465,7 @@ class dlp6500:
         Execute batch file stored on firmware at index batch_index
 
         :param batch_index:
-        :return:
+        :return response:
         """
         return self.send_command('w', True, self.command_dict["Execute_Firmware_Batch_File"], [batch_index])
 
@@ -1401,7 +1475,7 @@ class dlp6500:
         Set delay between batch file commands
 
         :param delay_ms:
-        :return:
+        :return response:
         """
         raise NotImplementedError("this function not yet implemented. testing needed")
 
@@ -1423,7 +1497,7 @@ class dlp6500:
 
         :param num_patterns: Number of LUT entries, 0-511
         :param num_repeat: number of times to repeat the pattern sequence
-        :return:
+        :return response:
         """
         if num_patterns > self.max_lut_index:
             raise ValueError(f"num_patterns must be <= {self.max_lut_index:d} but was {num_patterns:d}")
@@ -1468,7 +1542,7 @@ class dlp6500:
         :param stored_image_index:
         :param stored_image_bit_index: index of the RGB image (in DMD memory) storing the given pattern
           this index tells which bit to look at in that image. This should be 0-23
-        :return:
+        :return response:
         """
 
         # assert pattern_index < 256 and pattern_index >= 0
@@ -1536,7 +1610,7 @@ class dlp6500:
 
         :param pattern_length:
         :param pattern_index:
-        :return:
+        :return response:
         """
 
         # packing and unpacking bytes doesn't do anything...but for consistency...
@@ -1587,8 +1661,8 @@ class dlp6500:
             raise ValueError("compression_mode must be 'none', 'rle', or 'erle' but was '%s'" % compression_mode)
 
         general_data = signature_bytes + width_byte + height_byte + num_encoded_bytes + \
-                 reserved_bytes + bg_color_bytes + [0x01] + encoding_byte + \
-                 [0x01] + [0x00] * 2 + [0x01] + [0x00] * 18  # reserved
+                       reserved_bytes + bg_color_bytes + [0x01] + encoding_byte + \
+                       [0x01] + [0x00] * 2 + [0x01] + [0x00] * 18  # reserved
 
         data = general_data + compressed_pattern
 
@@ -1626,13 +1700,13 @@ class dlp6500:
         Upload on-the-fly pattern sequence to DMD. This command is based on Table 5-3 in the DLP programming manual
         # todo: seems I need to call set_pattern_sequence() after this command to actually get sequence running. Why?
 
-        The DLP6500 behaves differently depending on the state of the trigger in signals when this command is issued.
+        The DMD behaves differently depending on the state of the trigger in signals when this command is issued.
         If the trigger in signals are HIGH, then the patterns will be displayed when the trigger is high. If the
         trigger in signals are LOW, then the patterns will be displayed when the trigger is low.
 
         :param patterns: N x Ny x Nx NumPy array of uint8
         :param exp_times: exposure times in us. Either a single uint8 number, or a list the same
-          length as the number of patterns. >=105us
+          length as the number of patterns. Must be >= self.minimum_time_us
         :param dark_times: dark times in us. Either a single uint8 number or a list the same length
           as the number of patterns
         :param triggered: Whether or not DMD should wait to be triggered to display the next pattern
@@ -1695,9 +1769,9 @@ class dlp6500:
         self.start_stop_sequence('stop')
 
         # set image parameters for look up table
-        # When uploading 1 bit image, each set of 24 images are first combined to a single 24 bit RGB image. pattern_index
-        # refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to which bit of that image (i.e.
-        # in the RGB bytes, it is stored in.
+        # When uploading 1 bit image, each set of 24 images are first combined to a single 24 bit RGB image.
+        # pattern_index refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to
+        # which bit of that image (i.e. in the RGB bytes, it is stored in.
         # todo: decide if is smaller to send compressed as 24 bit RGB or individual image...
         stored_image_indices = np.zeros(npatterns, dtype=int)
         stored_bit_indices = np.zeros(npatterns, dtype=int)
@@ -2133,124 +2207,26 @@ class dlp6500:
         return pic_inds, bit_inds
 
 
-class dlp6500win(dlp6500):
-    """
-    Class for handling dlp6500 on windows os
-    """
+class dlp6500(dlpc900_dmd):
+    width = 1920  # pixels
+    height = 1080  # pixels
+    pitch = 7.56  # um
 
     def __init__(self, **kwargs):
-        super(dlp6500win, self).__init__(**kwargs)
-
-    def __del__(self):
-        try:
-            self.dmd.close()
-        except AttributeError:
-            pass  # this will fail if object destroyed before being initialized
-
-    def _get_device(self):
-        """
-        Return handle to DMD. This command can contain OS dependent implementation
-        """
-
-        filter = pyhid.HidDeviceFilter(vendor_id=self.vendor_id,
-                                       product_id=self.product_id)
-        devices = filter.get_devices()
-
-        dmd_indices = [ii for ii, d in enumerate(devices) if d.product_name == "DLPC900"]
-
-        if len(dmd_indices) <= self.dmd_index:
-            raise ValueError(f"Not enough DMD's detected for dmd_index={self.dmd_index:d}."
-                             f"Only {len(dmd_indices):d} DMD's were detected.")
-
-        chosen_index = dmd_indices[self.dmd_index]
-
-        self.dmd = devices[chosen_index]
-        self.dmd.open()
-
-        # variable for holding response of dmd
-        self._response = []
-        # strip off first return byte
-        response_handler = lambda data: self._response.append(data[1:])
-        self.dmd.set_raw_data_handler(response_handler)
-
-    def _send_raw_packet(self,
-                         buffer,
-                         listen_for_reply: bool = False,
-                         timeout=5):
-        """
-        Send a single USB packet.
-
-        :param buffer: list of bytes to send to device
-        :param listen_for_reply: whether to listen for a reply
-        :param timeout: timeout in seconds
-        :return: reply: a list of bytes
-        """
-
-        # ensure packet is correct length
-        assert len(buffer) == self.packet_length_bytes
-
-        report_id_byte = [0x00]
-
-        # clear reply buffer before sending
-        self._response = []
-
-        # send
-        reports = self.dmd.find_output_reports()
-        reports[0].send(report_id_byte + buffer)
-
-        # only wait for a reply if necessary
-        if listen_for_reply:
-            tstart = time.time()
-            while self._response == []:
-                time.sleep(0.1)
-                tnow = time.time()
-
-                if timeout is not None:
-                    if (tnow - tstart) > timeout:
-                        print('read command timed out')
-                        break
-
-        if self._response != []:
-            reply = copy.deepcopy(self._response[0])
-        else:
-            reply = []
-
-        return reply
+        super(dlp6500, self).__init__(**kwargs)
 
 
-class dlp6500ix(dlp6500):
-    """
-    Class for handling dlp6500 on linux os
-    """
+# Include this alias for dlp6500 to avoid external code changes
+dlp6500win = dlp6500
+
+
+class dlp9000(dlpc900_dmd):
+    width = 2560  # pixels
+    height = 1600  # pixels
+    pitch = 7.56  # um
 
     def __init__(self, **kwargs):
-        raise NotImplementedError("dlp6500ix has not been fully implemented. The functions _get_device() and"
-                                  " _send_raw_packet() need to be implemented.")
-        super(dlp6500ix, self).__init__(**kwargs)
-
-    def __del__(self):
-        pass
-
-    def _get_device(self):
-        pass
-
-    def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
-        pass
-
-
-class dlp6500dummy(dlp6500):
-    """Dummy class, useful for testing command generation when no DMD is connected"""
-    def __init__(self, **kwargs):
-        super(dlp6500dummy, self).__init__(**kwargs)
-
-    def _get_device(self):
-        pass
-
-    def _send_raw_packet(self, buffer, listen_for_reply=False, timeout=5):
-        pass
-
-    def read_error_description(self):
-        return [['']]
+        super(dlp9000, self).__init__(**kwargs)
 
 
 if __name__ == "__main__":
@@ -2270,7 +2246,7 @@ if __name__ == "__main__":
     # define arguments
     # #######################
 
-    parser = argparse.ArgumentParser(description="Set DLP6500 DMD pattern sequence from the command line.")
+    parser = argparse.ArgumentParser(description="Set DMD pattern sequence from the command line.")
 
     # allowed channels
     all_channels = list(presets.keys())
@@ -2290,11 +2266,14 @@ if __name__ == "__main__":
 
     # pattern indices
     pattern_indices_help = "Among the patterns specified in the subset specified by `channels` and `modes`," \
-                           " only run these indices. For a given channel and mode, allowed indices range from 0 to npatterns - 1." \
-                           "This options is most commonly used when only a single channel and mode are provided.\n"
+                           " only run these indices. For a given channel and mode, allowed indices range from 0 " \
+                           "to npatterns - 1. This options is most commonly used when only a single channel and " \
+                           "mode are provided.\n"
     for c in list(presets.keys()):
         for m in list(presets[c].keys()):
-            pattern_indices_help += "channel '%s` and mode '%s' npatterns = %d.\n" % (c, m, len(presets[c][m]["picture_indices"]))
+            pattern_indices_help += f"channel '{c:s}' and " \
+                                    f"mode '{m:s}' " \
+                                    f"npatterns = {len(presets[c][m]['picture_indices']):d}.\n"
 
     parser.add_argument("-i", "--pattern_indices", type=int, help=pattern_indices_help)
 
@@ -2324,18 +2303,7 @@ if __name__ == "__main__":
     # #######################
     # load DMD
     # #######################
-    use_dummy = False
-
-    if use_dummy:
-        dmd = dlp6500dummy(firmware_pattern_info=pattern_data, presets=presets)
-    else:
-        # detect system
-        if sys.platform == "win32":
-            dmd = dlp6500win(firmware_pattern_info=pattern_data, presets=presets)
-        elif sys.platform == "linux":
-            dmd = dlp6500ix(firmware_pattern_info=pattern_data, presets=presets)
-        else:
-            raise NotImplementedError(f"platform was '{sys.platform:s}' but must be 'win32' or 'linux'")
+    dmd = dlp6500(firmware_pattern_info=pattern_data, presets=presets)
 
     pic_inds, bit_inds = dmd.program_dmd_seq(args.modes, args.channels,
                                              nrepeats=args.nrepeats,
