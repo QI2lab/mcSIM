@@ -1650,10 +1650,15 @@ class dlpc900_dmd:
         :return:
         """
 
+        if self.dual_controller:
+            width = self.width // 2
+        else:
+            width = self.width
+
         # get the header, 48 bytes long
         # Note: taken directly from sniffer of the TI GUI
         signature_bytes = [0x53, 0x70, 0x6C, 0x64]
-        width_byte = list(unpack('BB', pack('<H', self.width)))
+        width_byte = list(unpack('BB', pack('<H', width)))
         height_byte = list(unpack('BB', pack('<H', self.height)))
         # Number of bytes in encoded image_data
         num_encoded_bytes = list(unpack('BBBB', pack('<I', len(compressed_pattern))))
@@ -1840,7 +1845,7 @@ class dlpc900_dmd:
             if self.dual_controller:
                 p0, p1 = np.array_split(dmd_pattern, 2, axis=-1)
                 cp0 = compression_fn(p0)
-                cp1 = compression_mode(p1)
+                cp1 = compression_fn(p1)
                 self._pattern_bmp_load(cp0,
                                        compression_mode,
                                        pattern_index=ii,
