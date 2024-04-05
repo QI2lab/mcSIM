@@ -38,18 +38,17 @@ Should maybe use a scipy conjugate descent.
 import numpy as np
 import scipy.fft as fft_cpu
 
-_gpu_available = True
 try:
     import cupy as cp
     import cupyx.scipy.fft as fft_gpu
 except ImportError:
-    _gpu_available = False
-    fft_gpu = fft_cpu
+    cp = None
+    fft_gpu = None
 
 
 def phase_unwrap_ref(psi, weight, kmax=100):
 
-    if isinstance(psi, cp.ndarray):
+    if cp and isinstance(psi, cp.ndarray):
         xp = cp
         fft = fft_gpu
     else:
@@ -114,7 +113,7 @@ def phase_unwrap_ref(psi, weight, kmax=100):
 def solvePoisson(rho):
     """Solve the poisson equation "P phi = rho" using DCT
     """
-    if isinstance(rho, cp.ndarray):
+    if cp and isinstance(rho, cp.ndarray):
         xp = cp
         fft = fft_gpu
     else:
@@ -137,7 +136,7 @@ def solvePoisson_precomped(rho, scale):
 
     Uses precomputed scaling factors `scale`
     """
-    if isinstance(rho, cp.ndarray):
+    if cp and isinstance(rho, cp.ndarray):
         xp = cp
         fft = fft_gpu
     else:
@@ -151,7 +150,7 @@ def solvePoisson_precomped(rho, scale):
 
 
 def precomp_Poissonscaling(rho):
-    if isinstance(rho, cp.ndarray):
+    if cp and isinstance(rho, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -169,7 +168,7 @@ def precomp_Poissonscaling(rho):
 
 def applyQ(p, WWx, WWy):
     """Apply the weighted transformation (A^T)(W^T)(W)(A) to 2D matrix p"""
-    if isinstance(p, cp.ndarray):
+    if cp and isinstance(p, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -193,7 +192,7 @@ def applyQ(p, WWx, WWy):
 
 
 def _wrapToPi(x):
-    if isinstance(x, cp.ndarray):
+    if cp and isinstance(x, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -214,7 +213,7 @@ def phase_unwrap(psi, weight=None, kmax=100):
     of the complex image.
     """
 
-    if isinstance(psi, cp.ndarray):
+    if cp and isinstance(psi, cp.ndarray):
         xp = cp
         fft = fft_gpu
     else:

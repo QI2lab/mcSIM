@@ -5,25 +5,26 @@ Tools for solving inverse problems using accelerated proximal gradient methods
 import warnings
 import numpy as np
 import time
-import random
+from random import sample
 from typing import Union
 from skimage.restoration import denoise_tv_chambolle
 
-_gpu_available = True
+
 try:
     import cupy as cp
 except ImportError:
-    cp = np
-    _gpu_available = False
+    cp = None
 
 
-_gpu_tv_available = True
 try:
     from cucim.skimage.restoration import denoise_tv_chambolle as denoise_tv_chambolle_gpu
 except ImportError:
     denoise_tv_chambolle_gpu = None
 
-array = Union[np.ndarray, cp.ndarray]
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 
 def to_cpu(m):
@@ -32,7 +33,7 @@ def to_cpu(m):
     :param m:
     :return m_cpu:
     """
-    if _gpu_available and isinstance(m, cp.ndarray):
+    if cp and isinstance(m, cp.ndarray):
         return m.get()
     else:
         return m
@@ -67,8 +68,8 @@ def tv_prox(x: array,
     :return x_tv:
     """
 
-    if isinstance(x, cp.ndarray) and _gpu_available:
-        if not _gpu_tv_available:
+    if cp and isinstance(x, cp.ndarray):
+        if not denoise_tv_chambolle_gpu:
             raise ValueError("array x is a CuPy array, but a GPU compatible TV implementation was not"
                              " imported successfully. Convert x to NumPy array or correctly install GPU compatible TV")
 
@@ -79,7 +80,7 @@ def tv_prox(x: array,
     return tv(x, weight=tau, channel_axis=None)
 
 
-class Optimizer():
+class Optimizer:
     def __init__(self):
         self.n_samples = None
         self.prox_parameters = {}
@@ -106,7 +107,7 @@ class Optimizer():
         :return grad, grad_numerical:
         """
 
-        use_gpu = isinstance(x, cp.ndarray) and _gpu_available
+        use_gpu = cp and isinstance(x, cp.ndarray)
         if use_gpu:
             xp = cp
         else:
@@ -197,7 +198,7 @@ class Optimizer():
         :return results: dictionary containing results
         """
 
-        use_gpu = isinstance(x_start, cp.ndarray) and _gpu_available
+        use_gpu = cp and isinstance(x_start, cp.ndarray)
         if use_gpu:
             xp = cp
             mempool = cp.get_default_memory_pool()
@@ -237,7 +238,7 @@ class Optimizer():
 
         for ii in range(max_iterations):
             # select batch indices
-            inds = random.sample(range(self.n_samples), n_batch)
+            inds = sample(range(self.n_samples), n_batch)
 
             if stop_on_nan:
                 if xp.any(xp.isnan(x)):

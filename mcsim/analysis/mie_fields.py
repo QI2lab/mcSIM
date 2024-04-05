@@ -7,7 +7,7 @@ from miepython.miepython import _mie_An_Bn
 from scipy.special import spherical_jn, spherical_yn, lpmv
 from localize_psf.affine import euler_mat, euler_mat_inv
 
-_gpu_available = False
+
 try:
     import cupy as cp
     from cupyx.scipy.special import lpmv as lpmv_gpu
@@ -97,13 +97,17 @@ try:
 
         return out[:, :n], derivative[:, :n]
 
-
-    _gpu_available = True
 except ImportError:
-    cp = np
+    cp = None
+    lpmv_gpu = None
+    yn = None
+    jn = None
 
 
-array = Union[np.ndarray, cp.ndarray]
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 
 # helper function
@@ -146,7 +150,7 @@ def mie_efield(wavelength: float,
     :return exyz, exyz_o, exyz_in, exyz_in_o:
     """
 
-    if use_gpu and _gpu_available:
+    if cp and use_gpu:
         xp = cp
     else:
         xp = np

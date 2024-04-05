@@ -24,6 +24,7 @@ Given a function defined on object space, :math:`g(x_o, y_o)`, we can define a c
 """
 
 from typing import Optional
+from collections.abc import Sequence
 import json
 from pathlib import Path
 import numpy as np
@@ -34,8 +35,8 @@ from matplotlib.colors import PowerNorm
 from localize_psf import affine, rois, fit
 
 
-def get_affine_fit_pattern(dmd_size: list[int],
-                           radii: tuple[float] = (1., 1.5, 2.),
+def get_affine_fit_pattern(dmd_size: Sequence[int, int],
+                           radii: Sequence[float] = (1., 1.5, 2.),
                            corner_size: int = 4,
                            point_spacing: int = 61,
                            mark_sep: int = 15):
@@ -129,10 +130,10 @@ def get_affine_fit_pattern(dmd_size: list[int],
 
 def fit_pattern_peaks(img: np.ndarray,
                       centers,
-                      centers_init: list[list[float]],
-                      indices_init: list[list[int]],
+                      centers_init: Sequence[Sequence[float]],
+                      indices_init: Sequence[Sequence[int]],
                       roi_size: int,
-                      chi_squared_relative_max: float = np.inf, #1.5,
+                      chi_squared_relative_max: float = np.inf,
                       max_position_err: float = 0.1,
                       img_sd: Optional[np.ndarray] = None,
                       debug: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
@@ -211,7 +212,7 @@ def fit_pattern_peaks(img: np.ndarray,
     # #############################
     # guess spacing between spots, i.e. vec_a, vec_b, from initial fits
     # #############################
-    #iia = np.array(indices_init)
+    # iia = np.array(indices_init)
     ias1, ias2 = np.meshgrid(indices_init[:, 0], indices_init[:, 0])
     adiffs = ias1 - ias2
     ibs1, ibs2 = np.meshgrid(indices_init[:, 1], indices_init[:, 1])
@@ -242,7 +243,7 @@ def fit_pattern_peaks(img: np.ndarray,
         # use broadcasting to minimize distance sum
         dists = np.asarray(
             np.sum(np.square(iaia[:, :, None] - ia_fitted) + np.square(ibib[:, :, None] - ib_fitted), axis=2),
-            dtype=np.float)
+            dtype=float)
         # exclude points already considered
         dists[completed_fits] = np.nan
         # find minimum
@@ -250,7 +251,7 @@ def fit_pattern_peaks(img: np.ndarray,
         ind_tuple = np.unravel_index(ind, chisqs.shape)
 
         # also find nearest successfully fitted point for later use
-        dists = np.asarray((iaia - ind_tuple[0]) ** 2 + (ibib - ind_tuple[1]) ** 2, dtype=np.float)
+        dists = np.asarray((iaia - ind_tuple[0]) ** 2 + (ibib - ind_tuple[1]) ** 2, dtype=float)
         dists[np.logical_not(successful_fits)] = np.nan
         nearest_ind = np.nanargmin(dists)
         nearest_ind_tuple = np.unravel_index(nearest_ind, chisqs.shape)
@@ -362,7 +363,7 @@ def plot_affine_summary(img: np.ndarray,
                         dmd_centers: np.ndarray,
                         affine_xform: np.ndarray,
                         options: dict,
-                        indices_init: Optional[list[list[int]]] = None,
+                        indices_init: Optional[Sequence[Sequence[int]]] = None,
                         vmin_percentile: float = 5,
                         vmax_percentile: float = 99.9,
                         gamma: float = 1.,
@@ -434,8 +435,7 @@ def plot_affine_summary(img: np.ndarray,
                          [xc_dmd, yc_dmd],
                          [xc_dmd, yc_dmd + nvec]])
 
-    dmd_axes_cam = affine.xform_points(dmd_axes,
-                                   affine_xform)
+    dmd_axes_cam = affine.xform_points(dmd_axes, affine_xform)
 
     # residual position error
     residual_dist_err = np.zeros((fps.shape[0], fps.shape[1])) * np.nan
@@ -515,7 +515,10 @@ def plot_affine_summary(img: np.ndarray,
     ax = fig.add_subplot(grid[:3, 2:4])
     ax.set_title('raw image and fits')
 
-    im = ax.imshow(img, norm=PowerNorm(vmin=np.percentile(img, vmin_percentile), vmax=np.percentile(img, vmax_percentile), gamma=gamma),
+    im = ax.imshow(img,
+                   norm=PowerNorm(vmin=np.percentile(img, vmin_percentile),
+                                  vmax=np.percentile(img, vmax_percentile),
+                                  gamma=gamma),
                    cmap="bone")
     ax.plot(xcam, ycam, 'rx', label="fit points")
     ax.plot(xdmd_xform, ydmd_xform, 'y1', label="affine xform")
@@ -570,18 +573,18 @@ def plot_affine_summary(img: np.ndarray,
 def estimate_xform(img: np.ndarray,
                    mask: np.ndarray,
                    pattern_centers,
-                   centers_init: list[list[float]],
-                   indices_init: list[list[float]],
+                   centers_init: Sequence[Sequence[float]],
+                   indices_init: Sequence[Sequence[float]],
                    options: dict,
                    roi_size: int = 25,
                    export_fname: str = "affine_xform",
                    plot: bool = True,
-                   export_dir: Optional[str] = None,
+                   export_dir: Optional[str, Path] = None,
                    debug: bool = False,
                    vmin_percentile: float = 5.,
                    vmax_percentile: float = 99.,
                    gamma: float = 1.,
-                   figsize=(16, 12),
+                   figsize: Sequence[float, float] = (16., 12.),
                    **kwargs) -> (dict, matplotlib.figure.Figure):
     """
     Estimate affine transformation from DMD space to camera image space from an image.

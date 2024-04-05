@@ -7,17 +7,19 @@ This is natural when working with discrete Fourier transforms
 """
 
 from typing import Union, Optional
+from collections.abc import Sequence
 import numpy as np
 from mcsim.analysis.fft import ft2, ift2, ft2_adj, ift2_adj
 
-_gpu_available = True
 try:
     import cupy as cp
 except ImportError:
-    cp = np
-    _gpu_available = False
+    cp = None
 
-array = Union[np.ndarray, cp.ndarray]
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 
 # spatial frequency helper functions
@@ -35,7 +37,7 @@ def frqs2angles(frqs: array,
     """
     # todo: replace no and wavelength and magnitude argument
 
-    if isinstance(frqs, cp.ndarray) and _gpu_available:
+    if cp and isinstance(frqs, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -73,7 +75,7 @@ def angles2frqs(theta: array,
 
     # replace no and wavelength with magnitude argument
 
-    if isinstance(theta, cp.ndarray) and _gpu_available:
+    if cp and isinstance(theta, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -103,7 +105,7 @@ def get_fzs(fx: array,
     :return fzs:
     """
 
-    if isinstance(fx, cp.ndarray) and _gpu_available:
+    if cp and isinstance(fx, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -120,8 +122,8 @@ def get_fzs(fx: array,
 def get_angular_spectrum_kernel(dz: float,
                                 wavelength: float,
                                 no: float,
-                                shape: tuple[int],
-                                drs: tuple[float],
+                                shape: Sequence[int, int],
+                                drs: Sequence[float, float],
                                 use_gpu: bool = False) -> array:
     """
     Get the angular spectrum/plane wave expansion kernel for propagating an electric field by distance dz
@@ -132,13 +134,13 @@ def get_angular_spectrum_kernel(dz: float,
     :param dz:
     :param wavelength:
     :param no:
-    :param shape:
+    :param shape: (ny, nx)
     :param drs: (dy, dx)
     :param use_gpu:
     :return kernel:
     """
 
-    if _gpu_available and use_gpu:
+    if cp and use_gpu:
         xp = cp
     else:
         xp = np
@@ -163,8 +165,8 @@ def get_angular_spectrum_kernel(dz: float,
 def propagation_kernel(dz: float,
                        wavelength: float,
                        no: float,
-                       shape: tuple[int],
-                       drs: tuple[float],
+                       shape: Sequence[int, int],
+                       drs: Sequence[float, float],
                        use_gpu: bool = False) -> array:
     """
     Propagation kernel for field represented by field value and derivative. Note that this can alternatively be
@@ -173,13 +175,13 @@ def propagation_kernel(dz: float,
     :param dz:
     :param wavelength:
     :param no:
-    :param shape:
-    :param drs:
+    :param shape: (ny, nx)
+    :param drs: (dy, dx)
     :param use_gpu:
     :return kernel:
     """
 
-    if _gpu_available and use_gpu:
+    if cp and use_gpu:
         xp = cp
     else:
         xp = np
@@ -208,20 +210,20 @@ def propagation_kernel(dz: float,
 
 def forward_backward_proj(wavelength: float,
                           no: float,
-                          shape: tuple[int],
-                          drs: tuple[float],
+                          shape: Sequence[int, int],
+                          drs: Sequence[float, float],
                           use_gpu: bool = False) -> array:
     """
     matrix converting from (phi, dphi/dz) -> (phi_f, phi_b) representation
 
     :param wavelength:
     :param no:
-    :param shape:
-    :param drs:
+    :param shape: (ny, nx)
+    :param drs: (dy, dx)
     :param use_gpu:
     :return:
     """
-    if _gpu_available and use_gpu:
+    if cp and use_gpu:
         xp = cp
     else:
         xp = np
@@ -250,20 +252,20 @@ def forward_backward_proj(wavelength: float,
 
 def field_deriv_proj(wavelength: float,
                      no: float,
-                     shape: tuple[int],
-                     drs: tuple[float],
+                     shape: Sequence[int, int],
+                     drs: Sequence[float, float],
                      use_gpu: bool = False) -> array:
     """
     matrix converting from (phi, dphi/dz) -> (phi_f, phi_b) representation
 
     :param wavelength:
     :param no:
-    :param shape:
-    :param drs:
+    :param shape: (ny, nx)
+    :param drs: (dy, dx)
     :param use_gpu:
     :return:
     """
-    if _gpu_available and use_gpu:
+    if cp and use_gpu:
         xp = cp
     else:
         xp = np
@@ -293,7 +295,7 @@ def field_deriv_proj(wavelength: float,
 def propagate_homogeneous(efield_start: array,
                           zs: array,
                           no: float,
-                          drs: list[float],
+                          drs: Sequence[float, float],
                           wavelength: float,
                           adjoint_operator: bool = False) -> array:
     """
@@ -308,7 +310,7 @@ def propagate_homogeneous(efield_start: array,
     :param adjoint_operator: if True, perform the adjoint operation instead of beam propagation
     :return efield_prop: propagated electric field of shape no x ... x nm x nz x ny x nx
     """
-    use_gpu = isinstance(efield_start, cp.ndarray) and _gpu_available
+    use_gpu = cp and isinstance(efield_start, cp.ndarray)
     if use_gpu:
         xp = cp
     else:
@@ -354,7 +356,7 @@ def propagate_homogeneous(efield_start: array,
 def propagate_bpm(efield_start: array,
                   n: array,
                   no: float,
-                  drs: tuple[float],
+                  drs: Sequence[float, float, float],
                   wavelength: float,
                   dz_final: float = 0.,
                   atf: Optional[array] = None,
@@ -382,7 +384,7 @@ def propagate_bpm(efield_start: array,
     :return efield: n0 x ... x nm x nz x ny x nx electric field
     """
 
-    use_gpu = isinstance(efield_start, cp.ndarray) and _gpu_available
+    use_gpu = cp and isinstance(efield_start, cp.ndarray)
 
     if use_gpu:
         xp = cp
@@ -438,7 +440,7 @@ def propagate_bpm(efield_start: array,
 def backpropagate_bpm(efield_end: array,
                       n: array,
                       no: float,
-                      drs: tuple[float],
+                      drs: Sequence[float, float, float],
                       wavelength: float,
                       dz_final: float = 0.,
                       atf: Optional[array] = None,
@@ -463,7 +465,7 @@ def backpropagate_bpm(efield_end: array,
     :return efield: n0 x ... x nm x nz x ny x nx electric field
     """
 
-    use_gpu = isinstance(efield_end, cp.ndarray) and _gpu_available
+    use_gpu = cp and isinstance(efield_end, cp.ndarray)
     if use_gpu:
         xp = cp
     else:
@@ -516,13 +518,26 @@ def propagate_ssnp(efield_start: array,
                    de_dz_start: array,
                    n: array,
                    no: float,
-                   drs: tuple[float],
+                   drs: Sequence[float, float, float],
                    wavelength: float,
                    dz_final: float = 0.,
                    atf: Optional[array] = None,
                    apodization: Optional[array] = None):
+    """
 
-    use_gpu = isinstance(efield_start, cp.ndarray) and _gpu_available
+    :param efield_start:
+    :param de_dz_start:
+    :param n:
+    :param no:
+    :param drs: (dz, dy, dx)
+    :param wavelength:
+    :param dz_final:
+    :param atf:
+    :param apodization:
+    :return phi:
+    """
+
+    use_gpu = cp and isinstance(efield_start, cp.ndarray)
     if use_gpu:
         xp = cp
     else:
@@ -585,7 +600,7 @@ def propagate_ssnp(efield_start: array,
 def backpropagate_ssnp(efield_end: array,
                        n: array,
                        no: float,
-                       drs: tuple[float],
+                       drs: Sequence[float, float, float],
                        wavelength: float,
                        dz_final: float = 0.,
                        atf: Optional[array] = None,
@@ -601,10 +616,10 @@ def backpropagate_ssnp(efield_end: array,
     :param dz_final:
     :param atf:
     :param apodization:
-    :return:
+    :return efield_back:
     """
 
-    use_gpu = isinstance(efield_end, cp.ndarray) and _gpu_available
+    use_gpu = cp and isinstance(efield_end, cp.ndarray)
     if use_gpu:
         xp = cp
     else:

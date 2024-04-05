@@ -5,16 +5,18 @@ passed to them are NumPy or CuPy arrays
 
 import numpy as np
 from typing import Union, Optional
+from collections.abc import Sequence
 import localize_psf.rois as rois
 
-_cupy_available = True
 try:
     import cupy as cp
 except ImportError:
-    cp = np
-    _cupy_available = False
+    cp = None
 
-array = Union[np.ndarray, cp.ndarray]
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 
 # geometry tools
@@ -36,7 +38,7 @@ def get_peak_value(img: array,
     :return: estimated value of the peak
     """
 
-    if isinstance(img, cp.ndarray) and _cupy_available:
+    if cp and isinstance(img, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -86,7 +88,7 @@ def pixel_overlap(centers1: array,
     :return: overlap area of pixels
     """
 
-    if isinstance(centers1, cp.ndarray) and _cupy_available:
+    if cp and isinstance(centers1, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -114,9 +116,9 @@ def pixel_overlap(centers1: array,
 
 # translating images
 def translate_pix(img: array,
-                  shifts: tuple[float],
-                  dr: tuple[float] = (1, 1),
-                  axes: tuple[int] = (-2, -1),
+                  shifts: Sequence[float],
+                  dr: Sequence[float] = (1, 1),
+                  axes: Sequence[int] = (-2, -1),
                   wrap: bool = True,
                   pad_val: float = 0) -> (array, list[int]):
     """
@@ -138,7 +140,7 @@ def translate_pix(img: array,
     :return img_shifted, pix_shifts:
     """
 
-    if isinstance(img, cp.ndarray) and _cupy_available:
+    if cp and isinstance(img, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -175,11 +177,11 @@ def translate_pix(img: array,
 def translate_im(img: array,
                  xshift: np.ndarray,
                  yshift: np.ndarray,
-                 drs: tuple[float] = (1, 1)) -> array:
+                 drs: Sequence[float] = (1, 1)) -> array:
     """
     Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
 
-    e.g. suppose the pixel spacing dx = 0.05 um and we want to shift the image by 0.0366 um,
+    e.g. suppose the pixel spacing dx = 0.05 um, and we want to shift the image by 0.0366 um,
     then dx = 0.05 and shift = [0, 0.0366]
 
     :param img: NumPy or CuPy array, size ny x nx. If CuPy array will run on GPU
@@ -201,7 +203,7 @@ def translate_im(img: array,
 def translate_ft(img_ft: array,
                  fx: np.ndarray,
                  fy: np.ndarray,
-                 drs: Optional[list[float, float]] = None) -> array:
+                 drs: Optional[Sequence[float, float]] = None) -> array:
     """
     Given img_ft(f), return the translated function
     img_ft_shifted(f) = img_ft(f + shift_frq)
@@ -225,7 +227,7 @@ def translate_ft(img_ft: array,
     :return: shifted images, same size as img_ft
     """
 
-    if isinstance(img_ft, cp.ndarray) and _cupy_available:
+    if cp and isinstance(img_ft, cp.ndarray):
         xp = cp
     else:
         xp = np

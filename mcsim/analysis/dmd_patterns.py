@@ -5,7 +5,8 @@ See the supplemental material of  https://doi.org/10.1038/nmeth.1734 for more di
 Note: we interpret the pattern params(x, y) = M[i_y, i_x], where M is the matrix representing the pattern. matplotlib
 will display the matrix with i_y = 1 on top.
 """
-from typing import Union, Optional, Sequence
+from typing import Union, Optional
+from collections.abc import Sequence
 import warnings
 import time
 import datetime

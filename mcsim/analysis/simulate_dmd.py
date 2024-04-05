@@ -64,7 +64,8 @@ If the DMD is tilted, the DMD pattern frequencies f will not exactly match the o
 In particular, although the DMD pattern will have components at f and -f the optical system frequencies will
 not be perfectly centered on the optical axis.
 """
-from typing import Union, Optional, Sequence, Callable
+from typing import Union, Optional
+from collections.abc import Sequence, Callable
 import warnings
 from pathlib import Path
 import numpy as np
@@ -75,14 +76,15 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
 
-_cupy_available = True
 try:
     import cupy as cp
 except ImportError:
-    cp = np
-    _cupy_available = False
+    cp = None
 
-array = Union[np.ndarray, cp.ndarray]
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 # ###########################################
 # main simulation functions
@@ -158,7 +160,7 @@ class DMD:
         :return efields, sinc_efield_on, sinc_efield_off:
         """
 
-        if isinstance(pattern, cp.ndarray):
+        if cp and isinstance(pattern, cp.ndarray):
             xp = cp
         else:
             xp = np
@@ -259,7 +261,7 @@ class DMD:
         :return efields, sinc_efield_on, sinc_efield_off, b:
         """
 
-        if isinstance(pattern, cp.ndarray):
+        if cp and isinstance(pattern, cp.ndarray):
             xp = cp
         else:
             xp = np
@@ -346,7 +348,7 @@ class DMD:
         :return efields:
         """
 
-        if isinstance(pattern, cp.ndarray):
+        if cp and isinstance(pattern, cp.ndarray):
             xp = cp
         else:
             xp = np
@@ -624,7 +626,7 @@ def sinc_fn(x: array) -> array:
     :param x:
     :return sinc(x):
     """
-    if isinstance(x, cp.ndarray):
+    if cp and isinstance(x, cp.ndarray):
         xp = cp
     else:
         xp = np
