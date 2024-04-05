@@ -334,7 +334,6 @@ class TestPatterns(unittest.TestCase):
         x_actual = np.array([0, 1, 2])
         y_actual = np.array([0, 1, 2])
 
-
         np.testing.assert_allclose(cell, cell_actual, atol=1e-12)
         np.testing.assert_allclose(x, x_actual, atol=1e-12)
         np.testing.assert_allclose(y, y_actual, atol=1e-12)

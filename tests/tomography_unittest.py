@@ -22,10 +22,10 @@ class TestPatterns(unittest.TestCase):
         w = np.random.rand(nxy, nxy) + 1j * np.random.rand(nxy, nxy)
 
         op_v = propagate_homogeneous(v,
-                                   z,
-                                   no,
-                                   (dxy, dxy),
-                                   wlen)
+                                     z,
+                                     no,
+                                     (dxy, dxy),
+                                     wlen)
         opadj_w = propagate_homogeneous(w,
                                         z,
                                         no,
@@ -39,7 +39,6 @@ class TestPatterns(unittest.TestCase):
         np.testing.assert_allclose(w_dot_op_v,
                                    opadj_w_dot_v,
                                    atol=1e-10)
-
 
     def test_born_grad(self):
         dxy = 0.1

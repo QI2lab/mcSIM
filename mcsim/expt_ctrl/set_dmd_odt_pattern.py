@@ -4,7 +4,6 @@ This script is typically run manually and not called from other code
 """
 import numpy as np
 import matplotlib
-matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import mcsim.expt_ctrl.dlp6500 as dlp6500
 

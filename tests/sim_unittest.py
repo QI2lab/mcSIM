@@ -146,21 +146,10 @@ class TestSIM(unittest.TestCase):
                                                   (nx // nbin, nx // nbin),
                                                   freq,
                                                   [phi],
+                                                  [1],
                                                   n_oversampled=nbin
                                                   )
             gt = bin(pattern, (nbin, nbin))
-
-            # gt, _, _, _ = sim.get_simulated_sim_imgs(np.ones((nx, nx)),
-            #                                          frqs=freq,
-            #                                          phases=phi,
-            #                                          mod_depths=[1.],
-            #                                          gains=1,
-            #                                          offsets=0,
-            #                                          readout_noise_sds=0,
-            #                                          pix_size=dxy,
-            #                                          photon_shot_noise=False,
-            #                                          nbin=nbin)
-
             gt = gt[0, 0, 0]
             gt_ft = fft.fftshift(fft.fft2(fft.ifftshift(gt)))
 
@@ -214,7 +203,8 @@ class TestSIM(unittest.TestCase):
         sim_rs_ft = np.zeros((nangles, nphases, ny, nx), dtype=complex)
         for ii in range(nangles):
             for jj in range(nphases):
-                pattern = amps[ii, jj] * (1 + mods[ii] * np.cos(2*np.pi * (xx * frqs[ii, 0] + yy * frqs[ii, 1]) + phases[ii, jj]))
+                pattern = amps[ii, jj] * (1 + mods[ii] * np.cos(2*np.pi * (xx * frqs[ii, 0] + yy * frqs[ii, 1]) +
+                                                                phases[ii, jj]))
                 sim_rs[ii, jj] = gt * pattern
                 sim_rs_ft[ii, jj] = fft.fftshift(fft.fft2(fft.ifftshift(sim_rs[ii, jj])))
 
@@ -291,9 +281,9 @@ class TestSIM(unittest.TestCase):
         arr_ex = fft.fftshift(fft.ifft2(fft.ifftshift(arr_ft_ex)))
 
         self.assertTrue(np.array_equal(arr_ex.real, np.array([[1, 1.5, 2, 1.5],
-                                                               [2, 2.5, 3, 2.5],
-                                                               [3, 3.5, 4, 3.5],
-                                                               [2, 2.5, 3, 2.5]])))
+                                                              [2, 2.5, 3, 2.5],
+                                                              [3, 3.5, 4, 3.5],
+                                                              [2, 2.5, 3, 2.5]])))
 
     def test_expand_fourier_sp_odd1d(self):
         """

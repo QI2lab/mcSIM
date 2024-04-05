@@ -30,6 +30,7 @@ from numcodecs import packbits
 try:
     import pywinusb.hid as pyhid
 except ImportError:
+    pyhid = None
     warnings.warn("pywinusb could not be imported")
 
 
@@ -1039,35 +1040,30 @@ class dlpc900_dmd:
         return self.send_raw_command(buffer, reply)
 
     @staticmethod
-    def decode_command(self,
-                       buffer,
-                       mode: str = 'first-packet'):
+    def decode_command(buffer,
+                       is_first_packet: bool = True):
         """
         Decode DMD command into constituent pieces
 
         :param buffer:
-        :param mode: 'first-packet' or 'nth-packet'
+        :param is_first_packet:
         :return flag_byte, sequence_byte, data_len, cmd, data:
         """
 
-        if mode == 'first-packet':
+        if is_first_packet:
             flag_byte = bin(buffer[1])
             sequence_byte = hex(buffer[2])
-
             len_bytes = pack('B', buffer[4]) + pack('B', buffer[3])
             data_len = unpack('H', len_bytes)[0]
-
             cmd = pack('B', buffer[6]) + pack('B', buffer[5])
             data = buffer[7:]
-        elif mode == 'nth-packet':
+        else:
             flag_byte = None
             sequence_byte = None
             len_bytes = None
             data_len = None
             cmd = None
             data = buffer[1:]
-        else:
-            raise ValueError("mode must be 'first-packet' or 'nth-packet', but was '%s'" % mode)
 
         return flag_byte, sequence_byte, data_len, cmd, data
 

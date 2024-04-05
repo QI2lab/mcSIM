@@ -359,10 +359,12 @@ def get_odt_sequence(daq_do_map: dict,
     # DMD advance trigger
     do_odt[n_odt_stabilize - n_dmd_pre_trigger:nsteps_active-nsteps_frame:nsteps_frame, daq_do_map["dmd_advance"]] = 1
 
-    # ending point is -nsteps_odt_frame to avoid having extra trigger at the end which is really the pretrigger for the next frame
+    # ending point is -nsteps_odt_frame to avoid having extra trigger at the end
+    # which is really the pretrigger for the next frame
     if use_dmd_as_shutter:
         # extra advance trigger to "turn off" DMD and end exposure
-        do_odt[n_odt_stabilize - n_dmd_pre_trigger + nsteps_exposure:nsteps_active:nsteps_frame, daq_do_map["dmd_advance"]] = 1
+        do_odt[n_odt_stabilize - n_dmd_pre_trigger + nsteps_exposure:nsteps_active:nsteps_frame,
+               daq_do_map["dmd_advance"]] = 1
 
     # monitor lines
     do_odt[:, daq_do_map["signal_monitor"]] = do_odt[:, daq_do_map["dmd_advance"]]
@@ -520,10 +522,12 @@ def get_sim_sequence(daq_do_map: dict,
 
     # check if DMD on time is supported
     if n_dmd_on < n_dmd_pre_trigger:
-        raise ValueError(f"number of DMD on frames < number of DMD pre-trigger frames, {n_dmd_on:d}<{n_dmd_pre_trigger:d}")
+        raise ValueError(f"number of DMD on frames < number of DMD pre-trigger frames, "
+                         f"{n_dmd_on:d}<{n_dmd_pre_trigger:d}")
 
     if n_dmd_off < n_dmd_pre_trigger:
-        raise ValueError(f"number of DMD off frames < number of DMD pre-trigger frames, {n_dmd_off:d}<{n_dmd_pre_trigger:d}")
+        raise ValueError(f"number of DMD off frames < number of DMD pre-trigger frames, "
+                         f"{n_dmd_off:d}<{n_dmd_pre_trigger:d}")
 
     # ######################################
     # set total time and create digital array
