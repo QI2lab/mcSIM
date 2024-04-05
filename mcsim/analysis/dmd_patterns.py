@@ -601,15 +601,10 @@ def get_reciprocal_vects(vec_a: np.ndarray,
                          vec_b: np.ndarray) -> (np.ndarray, np.ndarray):
     """
     Compute the reciprocal vectors for (real-space) lattice vectors vec_a and vec_b.
-    exp[ i 2*pi*ai * bj] = 1
-
-    If we call the lattice vectors a_i and the
-    reciprocal vectors b_j, then these should be defined such that dot(a_i, b_j) = delta_{ij}.
-
+    If we call the lattice vectors a_i and the reciprocal vectors b_j, then these should be defined such that
+    dot(a_i, b_j) = delta_{ij}, i.e. exp[ i 2*pi*ai * bj] = 1.
     This means the b_j are frequency like (i.e. equivalent of Hz). Note that they are instead sometimes defined
-     dot(a_i, b_j) = 2*pi * delta_{ij},
-    which would make them angular-frequency like (i.e. in radians).
-
+    dot(a_i, b_j) = 2*pi * delta_{ij}, which would make them angular-frequency like (i.e. in radians).
     Cast this as matrix problem
     [[Ax, Ay]   *  [[R1_x, R2_x]   =  [[1, 0]
      [Bx, By]]      [R1_y, R2_y]]      [0, 1]]
@@ -2150,15 +2145,13 @@ def find_rational_approx_angle(angle: float,
 
 def find_allowed_periods(angle: float,
                          nphases: int,
-                         nmax: int):
+                         nmax: int) -> (list[float], list[int], list):
     """
     Given a DMD pattern with fixed angle, get allowed pattern periods which allow perfect phase shifting for nphases
-
     Recall that for vec_a = [dxa, dya] and vec_b = [dxb, 0], and dxb = l * nphases for perfect phase shifting
     period = dxb * dya/|vec_a| = dxb * cos(theta)
     theta = angle(vec_a_perp) = arctan(-dxa / dya)
     P = np.cos(theta) * l*nphases
-
     on the other hand, if vec_b = [0, dyb]
     period = dyb * -dxa/|vec_a = dyb * sin(theta)
     P = np.sin(theta) * l*nphases
@@ -2166,10 +2159,7 @@ def find_allowed_periods(angle: float,
     :param angle:
     :param nphases:
     :param nmax:
-
-    :return list[float] periods:
-    :return list[int] ls:
-    :return list[] is_xlike:
+    :return periods, ls, is_xlike:
     """
     ls = np.arange(1, int(np.floor(nmax / nphases)))
 
@@ -2202,14 +2192,10 @@ def find_nearest_leakage_peaks(vec_as: np.ndarray,
     :param vec_bs: list of b vectors
     :param nphases:
     :param minimum_relative_peak_size: peaks smaller than this size (compared with the maximum peak,
-     i.e. the DC peak)
-    will not be included.
+     i.e. the DC peak) will not be included.
     :param wavelength: can be provided so that distance will be appropriately scaled for different wavelengths
     :param pitch:
-
-    :return min_angle_all:
-    :return min_angle_leakage_peaks:
-    :return leakage_order_pattern_index:
+    :return min_angle_all, min_angle_leakage_peaks, leakage_order_pattern_index:
     """
 
     # find frequencies
@@ -2579,11 +2565,10 @@ def export_all_pattern_sets(dmd_size: Sequence[int],
     :param save_dir: directory to save results
     :param plot_results:
     :param kwargs: arguments passed through to find_closest_multicolor_set(). Use them to set the
-    angle/period tolerances and search range for that function.
-
+      angle/period tolerances and search range for that function.
     :return data_all: [[dict_period0_wlen0, dict_period0, wlen1, ...], [dict_period1, wlen0, ...]]
-    list of list of dictionary objects. First level sublists are data for different periods, second sublevel is data
-    for different wavelengths.
+      list of list of dictionary objects. First level sublists are data for different periods, second sublevel is data
+      for different wavelengths.
     """
 
     if wavelengths is None:

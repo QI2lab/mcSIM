@@ -43,7 +43,13 @@ In addition to the xyz coordinate system, we also use two other convenient coord
 1. the mpz coordinate system:
 This coordinate system is convenient for dealing with diffraction from the DMD, as discussed above. Note
 that the mirrors swivel about the ep direction
-em = (ex - ey) / sqrt(2); ep = (ex + ey) / sqrt(2)
+
+.. math::
+
+    e_m = \\frac{e_x - e_y}{\\sqrt{2}}
+
+    e_p = \\frac{e_x + e_y}{\\sqrt{2}}
+
 2. the 123 or "mirror" coordinate system:
 This coordinate system is specialized to dealing with the blaze condition. Here the unit vector e3 is the normal to the
 DMD mirror, e2 is along the (x+y)/sqrt(2) direction, and e1 is orthogonal to these two. Since e3 is normal
@@ -53,8 +59,12 @@ In whichever coordinate system, if we want to specify directions we have the cho
 unit vectors or an angular parameterization. Typically unit vectors are easier to work with, although angles
 may be easier to interpret. We use different angular parameterizations for incoming and outgoing unit vectors.
 For example, in the xy coordinate system we use
-a = az * [tan(tx_a), tan(ty_a), -1]
-b = |bz| * [tan(tb_x), tan(tb_y), 1]
+
+.. math::
+
+   a = a_z * \\left[ \\tan(t^a_x), \\tan(t^a_y), -1 \\right]
+
+   b = |b_z| * \\left[ \\tan(t^b_x), \\tan(t^b_y), 1 \\right]
 
 If light is incident towards the DMD as a plane wave from some direction determined by a unit vector, a, then it
 is then diffracted into different output directions depending on the spatial frequencies of the DMD pattern.
@@ -654,7 +664,7 @@ def get_rot_mat(rot_axis: Sequence[float],
 
     :param rot_axis: unit vector specifying axis to rotate about, [nx, ny, nz]
     :param gamma: rotation angle in radians to transform point. A positive angle corresponds right-handed rotation
-    about the given axis
+      about the given axis
     :return mat: 3x3 rotation matrix
     """
     if np.abs(np.linalg.norm(rot_axis) - 1) > 1e-12:
@@ -908,7 +918,6 @@ def xy2uvector(tx: array,
                incoming: bool) -> (array, array, array):
     """
     Get incoming or outgoing unit vector of light propagation parameterized by angles tx and ty
-
     Let a represent an incoming vector, and b and outgoing one. We parameterize these by
     a = az * [tan(tx_a), tan(ty_a), -1]
     b = |bz| * [tan(tb_x), tan(tb_y), 1]
@@ -1083,9 +1092,16 @@ def blaze_envelope(wavelength: float,
     """
     Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
     This is the result of doing the integral
-    envelope(b-a) = \int ds dt exp[ ik Rn*(s,t,0) \cdot (a-b)] / w**2
-    = \int ds dt exp[ ik * (A_+*s + A_-*t)] / w**2
-    = sinc(0.5 * k * w * A_+) * sinc(0.5 * k * w * A_-)
+
+    .. math::
+
+      E(b-a) = \\frac{1}{w^2} \\int \\exp[ ik R_n*(s,t,0) \\cdot (a-b)] ds dt
+
+
+             = \\frac{1}{w^2} \\int \\exp[ ik * (A_+s + A_-t)]ds dt
+
+
+             = sinc(0.5 k w A_+) sinc(0.5 k w A_-).
 
     The overall electric field is given by
     E(b-a) = (diffraction from mirror pattern) x envelope(b-a)
@@ -1109,10 +1125,9 @@ def blaze_condition_fn(gamma: float,
                        b_minus_a: array,
                        rot_axis: Sequence[float]) -> (array, array):
     """
-    Return the dimensionsless part of the sinc function argument which determines the blaze condition.
+    Return the dimensionless part of the sinc function argument which determines the blaze condition.
     We refer to these functions as A_+(b-a, gamma) and A_-(b-a, gamma).
-
-    These are related to the overall electric field by
+    These are related to the overall electric field by:
     E(b-a) = (diffraction from mirror pattern) x w**2 * sinc(0.5 * k * w * A_+) * sinc(0.5 * k * w * A_-)
 
     :param gamma: angle micro-mirror normal makes with device normal
@@ -1309,21 +1324,16 @@ def solve_1color_1d(wavelength: float,
     """
     Solve for the input and output angles satisfying both the diffraction condition and blaze angle for a given
     diffraction order (if possible). These function assumes that (1) the mirror rotation axis is the (x+y) axis and
-    (2) the input and output beams are in the x-y plane.
-
-    The two conditions to be solved are
+    (2) the input and output beams are in the x-y plane. The two conditions to be solved are:
     (1) theta_in - theta_out = 2*gamma
     (2) sin(theta_in) - sin(theta_out) = sqrt(2) * wavelength / d * n
-
     This function is a wrapper for solve_combined_condition() simplified for the 1D geometry.
 
     :param wavelength: wavelength of light
     :param d: mirror pitch (in same units as wavelength)
     :param gamma: angle mirror normal makes with DMD body normal
     :param order: diffraction order index. Full order index is (nx, ny) = (order, -order)
-
-    :return uvecs_in: list of input angle solutions as unit vectors
-    :return uvecs_out: list of output angle solutions as unit vectors
+    :return uvecs_in, uvecs_out: list of input and output angle solutions as unit vectors
     """
     # 1D solutions are the solutions where a_{x+y} = 0
     # this implies a1 = -a2

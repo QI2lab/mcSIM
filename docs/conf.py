@@ -32,6 +32,8 @@ autoclass_content = "both"
 
 autodoc_typehints = "description"
 
+add_module_names = False
+
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 

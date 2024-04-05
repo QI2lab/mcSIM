@@ -176,7 +176,7 @@ def encode_rle(pattern: np.ndarray) -> list:
     row_rgb length encoding (RLE). Information is encoded as number of repeats
     of a given value and values. In RLE the number of repeats is given by a single byte.
     e.g. AAABBCCCCD = 3A2B4C1D
-    The DMD uses a `24bit RGB' encoding scheme, meaning four bits represent each piece of information. The first byte
+    The DMD uses a '24bit RGB' encoding scheme, meaning four bits represent each piece of information. The first byte
     (i.e. the control byte) gives the length, and the next three give the values for RGB.
     The only exceptions occur when the control byte is 0x00, in this case there are several options. If the next byte
     is 0x00 this indicates 'end of line', if it is 0x01 this indicates 'end of image', and if it is any other number n,

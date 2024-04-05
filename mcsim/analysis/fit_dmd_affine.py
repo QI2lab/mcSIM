@@ -23,7 +23,7 @@ Given a function defined on object space, :math:`g(x_o, y_o)`, we can define a c
 :math:`\\tilde{g}(r_i) = g(T^{-1} r_i)`
 """
 
-from typing import Optional
+from typing import Optional, Union
 from collections.abc import Sequence
 import json
 from pathlib import Path
@@ -579,7 +579,7 @@ def estimate_xform(img: np.ndarray,
                    roi_size: int = 25,
                    export_fname: str = "affine_xform",
                    plot: bool = True,
-                   export_dir: Optional[str, Path] = None,
+                   export_dir: Optional[Union[str, Path]] = None,
                    debug: bool = False,
                    vmin_percentile: float = 5.,
                    vmax_percentile: float = 99.,
@@ -607,7 +607,7 @@ def estimate_xform(img: np.ndarray,
     :param vmax_percentile:
     :param gamma:
     :param figsize:
-    :return : (data, figure) affine trasnformation data and figure handle
+    :return (data, figure): affine trasnformation data and figure handle
     """
 
     # fit points

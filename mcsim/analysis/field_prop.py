@@ -70,7 +70,7 @@ def angles2frqs(theta: array,
     :param theta:
     :param phi:
     :param magnitude: e.g. no/wavelength
-    :return:
+    :return frqs:
     """
 
     # replace no and wavelength with magnitude argument
@@ -221,7 +221,7 @@ def forward_backward_proj(wavelength: float,
     :param shape: (ny, nx)
     :param drs: (dy, dx)
     :param use_gpu:
-    :return:
+    :return kernel:
     """
     if cp and use_gpu:
         xp = cp
@@ -263,7 +263,7 @@ def field_deriv_proj(wavelength: float,
     :param shape: (ny, nx)
     :param drs: (dy, dx)
     :param use_gpu:
-    :return:
+    :return kernel:
     """
     if cp and use_gpu:
         xp = cp
@@ -522,7 +522,7 @@ def propagate_ssnp(efield_start: array,
                    wavelength: float,
                    dz_final: float = 0.,
                    atf: Optional[array] = None,
-                   apodization: Optional[array] = None):
+                   apodization: Optional[array] = None) -> array:
     """
 
     :param efield_start:
@@ -604,7 +604,7 @@ def backpropagate_ssnp(efield_end: array,
                        wavelength: float,
                        dz_final: float = 0.,
                        atf: Optional[array] = None,
-                       apodization: Optional[array] = None):
+                       apodization: Optional[array] = None) -> array:
     """
     This acts with the adjoint operators required when taking the gradient
 

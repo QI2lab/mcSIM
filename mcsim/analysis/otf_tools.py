@@ -159,7 +159,7 @@ def get_all_fourier_exp(imgs: np.ndarray,
     :param fmax_img:
     :param to_use:
     :param use_guess_frqs: if True, use guess frequencies computed from frq_vects_theory, if False use fitting
-    procedure to find peak
+      procedure to find peak
     :param max_frq_shift_pix:
     :param force_start_from_guess:
     :param peak_pix: number of pixels to use when calculating peak. Typically 2.

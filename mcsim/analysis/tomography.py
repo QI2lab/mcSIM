@@ -1,7 +1,7 @@
 """
 Tools for reconstructing optical diffraction tomography (ODT) data using either the Born approximation,
- Rytov approximation, or multislice (paraxial) beam propogation method (BPM) and a FISTA solver. The primary
- reconstruction tasks are carried out with the tomography class
+Rytov approximation, or multislice (paraxial) beam propogation method (BPM) and a FISTA solver. The primary
+reconstruction tasks are carried out with the tomography class
 """
 import time
 import datetime
@@ -88,7 +88,7 @@ class tomography:
         :param reference_frq_guess: [fx, fy] hologram reference frequency
         :param hologram_frqs_guess: npatterns x nmulti x 2 array
         :param imgs_raw_bg: background intensity images. If no background images are provided, then a time
-        average of imgs_raw will be used as the background
+          average of imgs_raw will be used as the background
         :param phase_offsets: phase shifts between images and corresponding background images
         :param axes_names: names of first m + 1 axes
         :param verbose:
@@ -459,9 +459,10 @@ class tomography:
                                ):
         """
         Estimate hologram reference frequency
+
         :param mode: if "fit" fit the residual speckle pattern to try and estimate the reference frequency.
-         If "average" take the average of self.hologram_frqs as the reference frequency.
-         If "set" use the frequency argument to set the value
+          If "average" take the average of self.hologram_frqs as the reference frequency.
+          If "set" use the frequency argument to set the value
         :param frq: set reference frequency to this value
         :return figure: a diagnostic figure is generated if mode is "fit", otherwise None is returned
         """
@@ -912,16 +913,16 @@ class tomography:
     def reconstruct_n(self,
                       efields_ft: array,
                       efields_bg_ft: array,
-                      drs_n: Sequence[float],
-                      n_size: Sequence[int],
+                      drs_n: Sequence[float, float, float],
+                      n_size: Sequence[int, int, int],
                       mode: str = "rytov",
                       scattered_field_regularization: float = 50.,
                       realspace_mask: Optional[np.ndarray] = None,
                       step: float = 1e-5,
                       use_gpu: bool = False,
                       n_guess: Optional[array] = None,
-                      cam_roi: Optional[list] = None,
-                      data_roi: Optional[list] = None,
+                      cam_roi: Optional[Sequence] = None,
+                      data_roi: Optional[Sequence] = None,
                       use_weighted_phase_unwrap: bool = False,
                       e_fwd_out: Optional[zarr.Array] = None,
                       e_scatt_out: Optional[zarr.Array] = None,
@@ -1403,7 +1404,7 @@ class tomography:
     def plot_translations(self,
                           index: tuple[int],
                           time_axis: int = 1,
-                          figsize: tuple[float] = (30., 8.),
+                          figsize: Sequence[float, float] = (30., 8.),
                           **kwargs):
 
         if len(index) != (self.nextra_dims - 1):
@@ -1452,13 +1453,13 @@ class tomography:
     def plot_frqs(self,
                   index: Sequence[int],
                   time_axis: int = 1,
-                  figsize: Sequence[float] = (30., 8.),
+                  figsize: Sequence[float, float] = (30., 8.),
                   **kwargs):
         """
 
         :param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
-        axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
-        could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
+          axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
+          could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
         :param time_axis:
         :param figsize:
         :param kwargs: passed through to matplotlib.pyplot.figure
@@ -1530,14 +1531,14 @@ class tomography:
     def plot_phases(self,
                     index: tuple[int],
                     time_axis: int = 1,
-                    figsize: tuple[float] = (30., 8.),
+                    figsize: Sequence[float, float] = (30., 8.),
                     **kwargs):
         """
         Plot phase drift fits versus time for a single slice
 
         :param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
-        axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
-        could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
+          axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
+          could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
         :param time_axis:
         :param figsize:
         :param kwargs: passed through to matplotlib.pyplot.figure
@@ -1585,7 +1586,7 @@ class tomography:
     def plot_powers(self,
                     index: tuple[int],
                     time_axis: int = 1,
-                    figsize: tuple[float] = (30., 8.),
+                    figsize: Sequence[float, float] = (30., 8.),
                     **kwargs
                     ):
         """
@@ -2331,9 +2332,9 @@ def get_reconstruction_nyquist_sampling(no: float,
                                         na_det: float,
                                         na_exc: float,
                                         wavelength: float,
-                                        fov: Sequence[int],
-                                        sampling_factors: Sequence[float] = (1., 1., 1.)
-                                        ) -> (tuple[float], tuple[int]):
+                                        fov: Sequence[int, int, int],
+                                        sampling_factors: Sequence[float, float, float] = (1., 1., 1.)
+                                        ) -> (tuple[float, float, float], tuple[int, int, int]):
     """
     Helper function for computing Nyquist sampled grid size for scattering potential based on incoming beam angles.
     Note that this may not always be the ideal grid size, especially for multislice methods where the accuracy
@@ -2342,7 +2343,7 @@ def get_reconstruction_nyquist_sampling(no: float,
     :param no: background index of refraction
     :param na_det: numerical aperture of detection objective
     :param na_exc: maximum excitation numerical aperture (i.e. corresponding to the steepest input beam and not nec.
-    the objective).
+      the objective).
     :param wavelength: wavelength
     :param fov: (nz, ny, nx) field of view voxels
     :param sampling_factors: (sz, sy, sx) spacing as a fraction of the nyquist limit
@@ -2373,10 +2374,10 @@ def fwd_model_linear(beam_fx: array,
                      no: float,
                      na_det: float,
                      wavelength: float,
-                     e_shape: Sequence[int],
-                     drs_e: Sequence[float],
-                     v_shape: Sequence[int],
-                     drs_v: Sequence[float],
+                     e_shape: Sequence[int, int],
+                     drs_e: Sequence[float, float],
+                     v_shape: Sequence[int, int, int],
+                     drs_v: Sequence[float, float, float],
                      mode: str = "born",
                      interpolate: bool = False,
                      use_gpu: bool = False) -> csr_matrix:
@@ -2669,7 +2670,7 @@ def fwd_model_linear(beam_fx: array,
 
 def inverse_model_linear(efield_fts: array,
                          model: csr_matrix,
-                         v_shape: tuple[int],
+                         v_shape: Sequence[int, int, int],
                          regularization: float = 0.,
                          no_data_value: float = np.nan) -> array:
     """
@@ -2677,10 +2678,10 @@ def inverse_model_linear(efield_fts: array,
     Fourier space
 
     :param efield_fts: The exact definition of efield_fts depends on whether "born" or "rytov" mode is used.
-    Any points in efield_fts which are NaN will be ignored. efield_fts can have an arbitrary number of leading
-    singleton dimensions, but must have at least three dimensions.
-    i.e. it should have shape 1 x ... x 1 x nimgs x ny x nx
-    :param model: forward model matrix. Generated from fwd_model_linear(). Should have interpolate=False
+      Any points in efield_fts which are NaN will be ignored. efield_fts can have an arbitrary number of leading
+      singleton dimensions, but must have at least three dimensions.
+      i.e. it should have shape 1 x ... x 1 x nimgs x ny x nx
+    :param model: forward model matrix. Generated from fwd_model_linear(), which should have interpolate set to False
     :param v_shape:
     :param regularization: regularization factor
     :param no_data_value: value of any points in v_ft where no data is available

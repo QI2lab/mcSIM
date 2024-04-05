@@ -129,13 +129,13 @@ def mie_efield(wavelength: float,
                beam_psi: float = 0.,
                use_gpu: bool = False) -> (array, array, array, array):
     """
-    Use miepython to compute multipolar coefficients, and use scipy special functions to
-    calculate fields
+    Use miepython to compute multipolar coefficients, and use either scipy special functions
+    or GPU accelerated custom CuPy kernels to calculate fields. There are many good references
+    for computing scattered electric fields from spherical particles using Mie theory.
+    This code follows "Absorption and scattering of light by small particles" Bohren, 1983,
+    https://doi.org/10.1364/AO.39.005117. Bohren uses the phase convention exp(ikx - iwt),
+    as described in the start of ch 3.
 
-    Several good references for this.
-    "Absorption and scattering of light by small particles" Bohren (1983).
-    Bohren phasors are exp(ikx - iwt) (start of ch 3)
-    https://doi.org/10.1364/AO.39.005117
     :param wavelength:
     :param no:
     :param radius:
@@ -147,7 +147,8 @@ def mie_efield(wavelength: float,
     :param beam_phi:
     :param beam_psi:
     :param use_gpu:
-    :return exyz, exyz_o, exyz_in, exyz_in_o:
+    :return exyz:
+    :return exyz_o, exyz_in, exyz_in_o:
     """
 
     if cp and use_gpu:
