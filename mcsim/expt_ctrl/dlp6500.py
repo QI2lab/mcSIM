@@ -14,30 +14,34 @@ which cannot be used with e.g. python and the ctypes library as a dll could be.
 This DMD control code was originally based on refactoring https://github.com/mazurenko/Lightcrafter6500DMDControl.
 The combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycrafter6500.
 """
+from collections.abc import Sequence
+from typing import Union, Optional
 import sys
 import time
 from struct import pack, unpack
 import numpy as np
 from copy import deepcopy
 import datetime
-import argparse
+from argparse import ArgumentParser
 # for dealing with configuration files
 import json
 import zarr
-import warnings
+from warnings import warn
 from pathlib import Path
 from numcodecs import packbits
+
 try:
     import pywinusb.hid as pyhid
 except ImportError:
     pyhid = None
-    warnings.warn("pywinusb could not be imported")
+    warn("pywinusb could not be imported")
 
 
 ##############################################
 # compress DMD pattern data
 ##############################################
-def combine_patterns(patterns: np.ndarray, bit_depth: int = 1):
+def combine_patterns(patterns: np.ndarray,
+                     bit_depth: int = 1):
     """
     Given a series of binary patterns, combine these into 24 bit RGB images to send to DMD. For binary patterns,
     the DMD supports sending a group of up to 24 patterns as an RGB image, with each bit of the 24 bit
@@ -81,7 +85,7 @@ def split_combined_patterns(combined_patterns) -> np.ndarray:
 
     :param combined_patterns: 3 x Ny x Nx uint8 array representing up to 24 combined patterns. Actually
       will accept input of arbitrary dimensions as long as first dimension has size 3.
-    :return: 24 x Ny x Nx array. This will always have first dimension of 24 because the number of
+    :return: 24 x Ny x Nx array. This will always have a first dimension of size 24 because the number of
       zero patterns at the end is ambiguous.
     """
     patterns = np.zeros((24,) + combined_patterns.shape[1:], dtype=np.uint8)
@@ -254,7 +258,8 @@ def encode_rle(pattern: np.ndarray) -> list:
     return pattern_compressed
 
 
-def decode_erle(dmd_size, pattern_bytes: list):
+def decode_erle(dmd_size,
+                pattern_bytes: list):
     """
     Decode pattern from ERLE or RLE.
 
@@ -407,7 +412,7 @@ def erle_bytes2len(byte_list: list) -> int:
 ##############################################
 # firmware indexing helper functions
 ##############################################
-def firmware_index_2pic_bit(firmware_indices):
+def firmware_index_2pic_bit(firmware_indices: Sequence[int]) -> (np.ndarray, np.ndarray):
     """
     convert from single firmware pattern index to picture and bit indices
 
@@ -420,7 +425,8 @@ def firmware_index_2pic_bit(firmware_indices):
     return pic_inds, bit_inds
 
 
-def pic_bit_ind_2firmware_ind(pic_inds, bit_inds):
+def pic_bit_ind_2firmware_ind(pic_inds: Sequence[int],
+                              bit_inds: Sequence[int]) -> np.ndarray:
     """
     Convert from picture and bit indices to single firmware pattern index
 
@@ -428,7 +434,7 @@ def pic_bit_ind_2firmware_ind(pic_inds, bit_inds):
     :param bit_inds:
     :return firmware_inds:
     """
-    firmware_inds = pic_inds * 24 + bit_inds
+    firmware_inds = np.asarray(pic_inds) * 24 + np.asarray(bit_inds)
     return firmware_inds
 
 
@@ -476,9 +482,9 @@ def validate_channel_map(cm: dict) -> (bool, str):
 
 
 def save_config_file(fname: str,
-                     pattern_data: list[dict],
-                     channel_map: dict = None,
-                     firmware_patterns: np.ndarray = None,
+                     pattern_data: Sequence[dict],
+                     channel_map: Optional[dict] = None,
+                     firmware_patterns: Optional[np.ndarray] = None,
                      use_zarr: bool = True):
     """
     Save DMD firmware configuration data to zarr or json file
@@ -546,7 +552,7 @@ def save_config_file(fname: str,
 
     else:
         if firmware_patterns is not None:
-            warnings.warn("firmware_patterns were provided but json configuration file was selected."
+            warn("firmware_patterns were provided but json configuration file was selected."
                           " Use zarr instead to save firmware patterns")
 
         with open(fname, "w") as f:
@@ -555,11 +561,11 @@ def save_config_file(fname: str,
                        "channel_map": channel_map_list}, f, indent="\t")
 
 
-def load_config_file(fname: str):
+def load_config_file(fname: Union[str, Path]):
     """
     Load DMD firmware data from json configuration file
 
-    :param fname:
+    :param fname: configuration file path
     :return pattern_data, channel_map, firmware_patterns, tstamp:
     """
 
@@ -611,7 +617,7 @@ def load_config_file(fname: str):
 
 
 def get_preset_info(preset: dict,
-                    pattern_data):
+                    pattern_data: Sequence):
     """
     Get useful data from preset
 
@@ -751,13 +757,13 @@ class dlpc900_dmd:
                  vendor_id: int = 0x0451,
                  product_id: int = 0xc900,
                  debug: bool = True,
-                 firmware_pattern_info: list = None,
-                 presets: dict = None,
-                 config_file: str = None,
-                 firmware_patterns: np.ndarray = None,
+                 firmware_pattern_info: Optional[list] = None,
+                 presets: Optional[dict] = None,
+                 config_file: Optional[Union[str, Path]] = None,
+                 firmware_patterns: Optional[np.ndarray] = None,
                  initialize: bool = True,
                  dmd_index: int = 0,
-                 platform: str = None):
+                 platform: Optional[str] = None):
         """
         Get instance of DLP LightCrafter evaluation module (DLP6500 or DLP9000). This is the base class which os
         dependent classes should inherit from. The derived classes only need to implement _get_device and
@@ -775,7 +781,7 @@ class dlpc900_dmd:
         :param firmware_patterns: npatterns x ny x nx array of patterns stored in DMD firmware. NOTE, this class
           does not deal with loading or reading patterns from the firmware. Do this with the TI GUI
         :param initialize: whether to connect to the DMD. In certain cases it is convenient to create this object
-          before connecting to the DMD, if e.g. we want to pass the DMD to another class but we don't know what
+          before connecting to the DMD, if e.g. we want to pass the DMD to another class, but we don't know what
           DMD index we want yet
         :param dmd_index: If multiple DMD's are attached, choose this one. Indexing starts at zero
         """
@@ -1465,7 +1471,7 @@ class dlpc900_dmd:
         return self.send_command('w', True, self.command_dict["Execute_Firmware_Batch_File"], [batch_index])
 
     def set_fwbatch_delay(self,
-                          delay_ms):
+                          delay_ms: int):
         """
         Set delay between batch file commands
 
@@ -1506,7 +1512,7 @@ class dlpc900_dmd:
                                  data=num_patterns_bytes + num_repeats_bytes)
 
     def pattern_display_lut_definition(self,
-                                       sequence_position_index,
+                                       sequence_position_index: int,
                                        exposure_time_us: int = 105,
                                        dark_time_us: int = 0,
                                        wait_for_trigger: bool = True,
@@ -1524,8 +1530,8 @@ class dlpc900_dmd:
         display data input source is set to streaming the image indices do not need to be set.
 
         When uploading 1 bit image, each set of 24 images are first combined to a single 24 bit RGB image. pattern_index
-        refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to which bit of that image (i.e.
-        in the RGB bytes, it is stored in.
+        refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to which bit of that image
+        it is stored in.
 
         :param sequence_position_index:
         :param exposure_time_us:
@@ -1592,9 +1598,9 @@ class dlpc900_dmd:
         return self.send_command('w', True, self.command_dict["MBOX_DATA"], data)
 
     def _init_pattern_bmp_load(self,
-                              pattern_length: int,
-                              pattern_index: int,
-                              primary_controller: bool = True):
+                               pattern_length: int,
+                               pattern_index: int,
+                               primary_controller: bool = True):
         """
         Initialize pattern BMP load command.
 
@@ -1675,8 +1681,8 @@ class dlpc900_dmd:
         # call init before loading pattern
         # todo: check len(data) = len(compressed_pattern) + 48 and replace in command
         buffer = self._init_pattern_bmp_load(len(compressed_pattern) + 48,
-                                            pattern_index=pattern_index,
-                                            primary_controller=primary_controller)
+                                             pattern_index=pattern_index,
+                                             primary_controller=primary_controller)
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
@@ -1871,8 +1877,8 @@ class dlpc900_dmd:
         return stored_image_indices, stored_bit_indices
 
     def set_pattern_sequence(self,
-                             image_indices: list[int],
-                             bit_indices: list[int],
+                             image_indices: Sequence[int],
+                             bit_indices: Sequence[int],
                              exp_times: int,
                              dark_times: int,
                              triggered: bool = False,
@@ -1992,13 +1998,13 @@ class dlpc900_dmd:
     # supplied at instantiation using the "presets" argument
     #######################################
     def get_dmd_sequence(self,
-                         modes: list[str],
-                         channels: list[str],
-                         nrepeats: list[int] = 1,
-                         noff_before: list[int] = 0,
-                         noff_after: list[int] = 0,
-                         blank: list[bool] = False,
-                         mode_pattern_indices: list[list[int]] = None):
+                         modes: Sequence[str],
+                         channels: Sequence[str],
+                         nrepeats: Sequence[int] = 1,
+                         noff_before: Sequence[int] = 0,
+                         noff_after: Sequence[int] = 0,
+                         blank: Sequence[bool] = False,
+                         mode_pattern_indices: Sequence[Sequence[int]] = None):
         """
         Generate DMD patterns from a list of modes and channels
 
@@ -2142,8 +2148,10 @@ class dlpc900_dmd:
                 ibit_off_before = self.presets[channels[ii]]["off"]["bit_indices"] * \
                                   np.ones(noff_before[ii], dtype=int)
 
-                ipic_off_after = self.presets[channels[ii]]["off"]["picture_indices"] * np.ones(noff_after[ii], dtype=int)
-                ibit_off_after = self.presets[channels[ii]]["off"]["bit_indices"] * np.ones(noff_after[ii], dtype=int)
+                ipic_off_after = (self.presets[channels[ii]]["off"]["picture_indices"] *
+                                  np.ones(noff_after[ii], dtype=int))
+                ibit_off_after = (self.presets[channels[ii]]["off"]["bit_indices"] *
+                                  np.ones(noff_after[ii], dtype=int))
 
                 pic_inds[ii] = np.concatenate((ipic_off_before, pic_inds[ii], ipic_off_after), axis=0).astype(int)
                 bit_inds[ii] = np.concatenate((ibit_off_before, bit_inds[ii], ibit_off_after), axis=0).astype(int)
@@ -2172,13 +2180,13 @@ class dlpc900_dmd:
         return pic_inds, bit_inds
 
     def program_dmd_seq(self,
-                        modes: list[str],
-                        channels: list[str],
-                        nrepeats: list[int] = 1,
-                        noff_before: list[int] = 0,
-                        noff_after: list[int] = 0,
-                        blank: list[bool] = False,
-                        mode_pattern_indices: list[list[int]] = None,
+                        modes: Sequence[str],
+                        channels: Sequence[str],
+                        nrepeats: Sequence[int] = 1,
+                        noff_before: Sequence[int] = 0,
+                        noff_after: Sequence[int] = 0,
+                        blank: Sequence[bool] = False,
+                        mode_pattern_indices: Sequence[Sequence[int]] = None,
                         triggered: bool = False,
                         exp_time_us: int = 105,
                         clear_pattern_after_trigger: bool = False,
@@ -2289,7 +2297,7 @@ if __name__ == "__main__":
     # define arguments
     # #######################
 
-    parser = argparse.ArgumentParser(description="Set DMD pattern sequence from the command line.")
+    parser = ArgumentParser(description="Set DMD pattern sequence from the command line.")
 
     # allowed channels
     all_channels = list(presets.keys())
