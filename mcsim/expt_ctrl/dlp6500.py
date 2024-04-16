@@ -1356,7 +1356,7 @@ class dlpc900_dmd:
         if delay_us < 104:
             raise ValueError(f'delay time must be {self.min_time_us:.0f}us or longer.')
 
-        # todo: is this supposed to be a signed or unsigned integer.
+        # todo: is this supposed to be a signed or unsigned integer?
         delay_byte = list(unpack('BB', pack('<H', delay_us)))
 
         if edge_to_advance == 'rising':
@@ -1712,35 +1712,31 @@ class dlpc900_dmd:
 
     def upload_pattern_sequence(self,
                                 patterns: np.ndarray,
-                                exp_times: list[int],
-                                dark_times: list[int],
+                                exp_times: Union[Sequence[int], int],
+                                dark_times: Union[Sequence[int], int],
                                 triggered: bool = False,
                                 clear_pattern_after_trigger: bool = True,
                                 bit_depth: int = 1,
                                 num_repeats: int = 0,
-                                compression_mode: str = 'erle',
-                                combine_images: bool = True):
+                                compression_mode: str = 'erle') -> (np.ndarray, np.ndarray):
         """
-        Upload on-the-fly pattern sequence to DMD. This command is based on Table 5-3 in the DLP programming manual
-        # todo: seems I need to call set_pattern_sequence() after this command to actually get sequence running. Why?
-
-        The DMD behaves differently depending on the state of the trigger in signals when this command is issued.
-        If the trigger in signals are high, then the patterns will be displayed when the trigger is high. If the
-        trigger in signals are low, then the patterns will be displayed when the trigger is low.
+        Upload on-the-fly pattern sequence to DMD. This command is based on Table 5-3 in the DLP programming manual.
+        After loading patterns, the pattern sequence can be configured with set_pattern_sequence().
+        Note that after programming you may need to issue a start command, using start_stop_sequence(), to start the
+        sequence. Note also that the DMD behaves differently depending on the state of the trigger input lines when
+        this command is issued. If the trigger in signals are high, then the patterns will be displayed when the
+        trigger is high. If the trigger in signals are low, then the patterns will be displayed when the trigger is low.
 
         :param patterns: N x Ny x Nx NumPy array of uint8
-        :param exp_times: exposure times in us. Either a single uint8 number, or a list the same
+        :param exp_times: exposure times in us. Either a uint8, or a sequence the same
           length as the number of patterns. Must be >= self.minimum_time_us
-        :param dark_times: dark times in us. Either a single uint8 number or a list the same length
-          as the number of patterns
-        :param triggered: Whether or not DMD should wait to be triggered to display the next pattern
-        :param clear_pattern_after_trigger: Whether or not to keep displaying the pattern at the
-          end of exposure time,
-          i.e. during time while DMD is waiting for the next trigger.
-        :param bit_depth: Bit depth of patterns
+        :param dark_times: dark times in us. Either a uint8, or a sequence the same length as the number of patterns
+        :param triggered: Whether the DMD should wait for any advance frame trigger to display the next pattern
+        :param clear_pattern_after_trigger: Whether to keep displaying the pattern at the end of the exposure time,
+          while DMD is waiting for the next trigger.
+        :param bit_depth: bit depth of patterns
         :param num_repeats: Number of repeats. 0 means infinite.
         :param compression_mode: 'erle', 'rle', or 'none'
-        :param combine_images:
         :return stored_image_indices, stored_bit_indices: image and bit indices where each image was stored
         """
         # #########################
@@ -1832,12 +1828,11 @@ class dlpc900_dmd:
             print(self.read_error_description())
 
         # can combine images if bit depth = 1
-        if combine_images:
-            if bit_depth == 1:
-                patterns = combine_patterns(patterns)
-            else:
-                raise NotImplementedError("Combining multiple images into a 24-bit RGB image is only"
-                                          " implemented for bit depth 1.")
+        if bit_depth == 1:
+            patterns = combine_patterns(patterns)
+        else:
+            raise NotImplementedError("Combining multiple images into a 24-bit RGB image is only"
+                                      " implemented for bit depth 1.")
 
         # compress and load images in backwards order
         for ii, dmd_pattern in reversed(list(enumerate(patterns))):
@@ -1879,8 +1874,8 @@ class dlpc900_dmd:
     def set_pattern_sequence(self,
                              image_indices: Sequence[int],
                              bit_indices: Sequence[int],
-                             exp_times: int,
-                             dark_times: int,
+                             exp_times: Union[Sequence[int], int],
+                             dark_times: Union[Sequence[int], int],
                              triggered: bool = False,
                              clear_pattern_after_trigger: bool = True,
                              bit_depth: int = 1,
@@ -1888,9 +1883,8 @@ class dlpc900_dmd:
                              mode: str = 'pre-stored'):
         """
         Setup pattern sequence from patterns previously stored in DMD memory, either in on-the-fly pattern mode,
-        or in pre-stored pattern mode
-
-        In most cases, use program_dmd_seq() instead of calling this function directly
+        or in pre-stored pattern mode. If you have uploaded patterns into the firmware and defined modes and channels,
+        then, use program_dmd_seq() instead of calling this function directly.
 
         :param image_indices:
         :param bit_indices:
@@ -2190,7 +2184,7 @@ class dlpc900_dmd:
                         triggered: bool = False,
                         exp_time_us: int = 105,
                         clear_pattern_after_trigger: bool = False,
-                        verbose: bool = False):
+                        verbose: bool = False) -> (np.ndarray, np.ndarray):
         """
         convenience function for generating DMD pattern and programming DMD
 
