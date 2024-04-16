@@ -163,8 +163,8 @@ def encode_erle(pattern: np.ndarray) -> list:
                                        np.array([nx - inds_change[-1]])))
 
             # now build compressed list
-            for ii, rlen in zip(inds_change, run_lens):
-                v = row_rgb[:, ii]
+            for jj, rlen in zip(inds_change, run_lens):
+                v = row_rgb[:, jj]
                 length_bytes = erle_len2bytes(rlen)
                 pattern_compressed += length_bytes + [v[0], v[1], v[2]]
 
@@ -236,8 +236,8 @@ def encode_rle(pattern: np.ndarray) -> list:
                                        np.array([nx - inds_change[-1]])))
 
             # now build compressed list
-            for ii, rlen in zip(inds_change, run_lens):
-                v = row_rgb[:, ii]
+            for jj, rlen in zip(inds_change, run_lens):
+                v = row_rgb[:, jj]
                 if rlen <= 255:
                     pattern_compressed += [rlen, v[0], v[1], v[2]]
                 else:  # if run is longer than one byte, need to break it up
