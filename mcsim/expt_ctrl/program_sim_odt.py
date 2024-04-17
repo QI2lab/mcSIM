@@ -3,16 +3,16 @@ Create DAQ program for SIM/ODT experiment
 
 Relies on DAQ line mapping scheme used in daq.py and daq_map.py
 """
-
-import numpy as np
-import re
 from typing import Optional
+from collections.abc import Sequence
+from re import match
+import numpy as np
 
 
 def get_sim_odt_sequence(daq_do_map: dict,
                          daq_ao_map: dict,
                          presets: dict,
-                         acquisition_modes: list[dict],
+                         acquisition_modes: Sequence[dict],
                          odt_exposure_time: float,
                          sim_exposure_time: float,
                          dt: float,
@@ -27,7 +27,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                          shutter_delay_time: float = 50e-3,
                          stage_delay_time: float = 0.,
                          n_xy_positions: int = 1,
-                         z_voltages: list[float] = None,
+                         z_voltages: Sequence[float] = None,
                          use_dmd_as_odt_shutter: bool = False,
                          n_digital_ch: int = 16,
                          n_analog_ch: int = 4,
@@ -545,7 +545,7 @@ def get_sim_sequence(daq_do_map: dict,
     # turn off laser during long intervals (optional)
     # ######################################
     if turn_laser_off_during_interval:
-        laser_line = [l for l, v in preset["digital"].items() if v and re.match(".*_laser", l)][0]
+        laser_line = [l for l, v in preset["digital"].items() if v and match(".*_laser", l)][0]
         do[n_active:, daq_do_map[laser_line]] = 0
 
     # ######################################

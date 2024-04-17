@@ -5,18 +5,19 @@ Different models of DAQ card should inherit from the class daq (think of this li
 """
 from typing import Optional
 import datetime
-import re
+from re import match
 import json
 import ctypes as ct
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib
-import warnings
+from matplotlib.figure import Figure
+from warnings import warn
+
 try:
     import PyDAQmx as daqmx
 except ImportError:
     daqmx = None
-    warnings.warn("PyDAQmx could not be imported")
+    warn("PyDAQmx could not be imported")
 
 
 class daq:
@@ -159,7 +160,7 @@ class nidaq(daq):
         :return:
         """
         # todo: remove if not useful
-        m = re.match(self.do_re, address)
+        m = match(self.do_re, address)
 
         if m is None:
             raise ValueError("")
@@ -753,9 +754,9 @@ class nidaq(daq):
 
 
 def plot_daq_program(arr: np.ndarray,
-                     line_map: dict = None,
+                     line_map: Optional[dict] = None,
                      title: str = "",
-                     **kwargs) -> matplotlib.figure.Figure:
+                     **kwargs) -> Figure:
     """
     Plot DAQ program as an array
 
