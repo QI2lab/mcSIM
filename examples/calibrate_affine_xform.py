@@ -6,8 +6,6 @@ import numpy as np
 from pathlib import Path
 import json
 import tifffile
-import matplotlib
-matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
 from mcsim.analysis import fit_dmd_affine
@@ -24,9 +22,9 @@ save_dir = img_fname.parent / f"{time_stamp:s}_affine_calibration"
 # set guesses for three "spots" from DMD pattern
 # ###########################
 # all colors are close enough can use same center guesses
-centers_init = [[1039, 918], [982, 976], [1091, 979]] # [[cy, cx], ...]
+centers_init = [[1039, 918], [982, 976], [1091, 979]]  # [[cy, cx], ...]
 # indices start at zero
-indices_init = [[10, 16], [9, 16], [10, 15]] #[dmd short axis index, dmd long axis index]
+indices_init = [[10, 16], [9, 16], [10, 15]]  #[dmd short axis index, dmd long axis index]
 
 # ###########################
 # set other parameters for fitting
@@ -36,8 +34,10 @@ options = {'cam_pix': 6.5e-6,
            'dmd2cam_mag_expected': 180 / 300 * 400 / 200,
            'cam_mag': 100}
 
+
 def sigma_pix(wl1, wl2, na, cam_mag):
     return np.sqrt(wl1**2 + wl2**2) / 2 / na / (2 * np.sqrt(2 * np.log(2))) / (options["cam_pix"] / cam_mag)
+
 
 # load DMD pattern and dmd_centers
 dmd_size = [1920, 1080]

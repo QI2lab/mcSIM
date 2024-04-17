@@ -1,16 +1,16 @@
 """
 Reconstruct single channel, single time point synthetic SIM image of closely spaced line pairs.
 """
-import matplotlib
-matplotlib.use("TkAgg")
-import matplotlib.pyplot as plt
 import datetime
 import time
 from PIL import Image
 from pathlib import Path
 import numpy as np
 from localize_psf.fit_psf import gridded_psf_model, get_psf_coords
-import mcsim.analysis.sim_reconstruction as sim
+from mcsim.analysis.sim_reconstruction import (SimImageSet,
+                                               get_sinusoidal_patterns,
+                                               get_simulated_sim_imgs,
+                                               show_sim_napari)
 
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 root_dir = Path("data")
@@ -24,7 +24,7 @@ max_photons_per_pix = 1000
 
 dxy = 0.065
 nbin = 4
-dxy_gt = dxy /nbin
+dxy_gt = dxy / nbin
 na = 1.3
 wavelength = 0.532
 fmax = 2 * na / wavelength
@@ -34,11 +34,16 @@ fmax = 2 * na / wavelength
 # ############################################
 nxy_gt = 2048
 
-def get_lines_test_pattern(img_size, angles=(15,), line_center_sep = np.arange(26, 0, -2)):
+
+def get_lines_test_pattern(img_size,
+                           angles=(15,),
+                           line_center_sep=np.arange(26, 0, -2)):
     """
     Generate patterns similar to argolight slide
+
     :param img_size:
     :param angles:
+    :param line_center_sep:
     :return test_patterns:
     :return line_sep: in pixels
     """
@@ -76,7 +81,7 @@ def get_lines_test_pattern(img_size, angles=(15,), line_center_sep = np.arange(2
     test_patterns = []
     for a in angles:
         img = Image.fromarray(gtp)
-        test_patterns.append(np.asarray(img.rotate(a, expand=0)))
+        test_patterns.append(np.asarray(img.rotate(a, expand=False)))
 
     test_patterns = np.asarray(test_patterns)
 
@@ -103,25 +108,25 @@ frqs_gt = np.array([[1, 0],
                     ]) * 0.8 * fmax
 
 phases_gt = np.stack([np.array([0, 2*np.pi/3, 4*np.pi/3])] * 3, axis=0)
-mod_depths_gt = np.ones((3))
+mod_depths_gt = np.ones(3)
 amps_gt = np.ones((3, 3))
 
-patterns = sim.get_sinusoidal_patterns(dxy,
-                                       (nxy_gt // nbin, nxy_gt // nbin),
-                                       np.kron(frqs_gt, np.ones((3, 1))), # reshaped into 9 x 2
-                                       phases_gt.reshape(9),
-                                       np.kron(mod_depths_gt, np.ones(3)),
-                                       amps_gt.reshape(9),
-                                       n_oversampled=nbin
-                                       )
+patterns = get_sinusoidal_patterns(dxy,
+                                   (nxy_gt // nbin, nxy_gt // nbin),
+                                   np.kron(frqs_gt, np.ones((3, 1))),  # reshaped into 9 x 2
+                                   phases_gt.reshape(9),
+                                   np.kron(mod_depths_gt, np.ones(3)),
+                                   amps_gt.reshape(9),
+                                   n_oversampled=nbin
+                                   )
 
-imgs, snrs = sim.get_simulated_sim_imgs(gt,
-                                        patterns,
-                                        gains=2,
-                                        offsets=100,
-                                        readout_noise_sds=5,
-                                        psf=psf,
-                                        nbin=nbin)
+imgs, snrs = get_simulated_sim_imgs(gt,
+                                    patterns,
+                                    gains=2,
+                                    offsets=100,
+                                    readout_noise_sds=5,
+                                    psf=psf,
+                                    nbin=nbin)
 
 # reshape from 9 x nxy x nxy to 3 x 3 x nxy x nxy
 imgs = imgs.reshape((3, 3, nxy_gt // nbin, nxy_gt // nbin))
@@ -133,23 +138,23 @@ tstart = time.perf_counter()
 
 save_dir = root_dir / f"{tstamp:s}_sim_reconstruction_simulated"
 
-imgset = sim.SimImageSet.initialize({"pixel_size": dxy,
-                                     "na": na,
-                                     "wavelength": wavelength},
-                                    imgs,
-                                    otf=None,
-                                    wiener_parameter=0.3,
-                                    frq_estimation_mode="band-correlation",
-                                    frq_guess=frqs_gt,
-                                    phase_estimation_mode="wicker-iterative",
-                                    phases_guess=phases_gt,
-                                    combine_bands_mode="fairSIM",
-                                    fmax_exclude_band0=0.4,
-                                    normalize_histograms=False,
-                                    background=100,
-                                    gain=2,
-                                    min_p2nr=0.5,
-                                    use_gpu=use_gpu)
+imgset = SimImageSet.initialize({"pixel_size": dxy,
+                                 "na": na,
+                                 "wavelength": wavelength},
+                                imgs,
+                                otf=None,
+                                wiener_parameter=0.3,
+                                frq_estimation_mode="band-correlation",
+                                frq_guess=frqs_gt,
+                                phase_estimation_mode="wicker-iterative",
+                                phases_guess=phases_gt,
+                                combine_bands_mode="fairSIM",
+                                fmax_exclude_band0=0.4,
+                                normalize_histograms=False,
+                                background=100,
+                                gain=2,
+                                min_p2nr=0.5,
+                                use_gpu=use_gpu)
 
 # run reconstruction
 imgset.reconstruct(compute_widefield=True,
@@ -171,4 +176,4 @@ print(f"reconstructing images, plotting diagnostics, and saving results took "
       f"{time.perf_counter() - tstart:.2f}s")
 
 # display results in napari
-sim.show_sim_napari(fname_out)
+show_sim_napari(fname_out)

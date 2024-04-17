@@ -3,8 +3,6 @@ Explore expected diffraction order strengths for difference choices of
 wavelengths, pixel pitch, angle, and rotation axis
 """
 import numpy as np
-import matplotlib
-matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from matplotlib.widgets import Slider, TextBox

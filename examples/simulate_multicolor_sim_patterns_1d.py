@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import mcsim.analysis.simulate_dmd as sdmd
 
 # load DMD model, or define your own
-dmd = sdmd.DLP6500() # NOTE: DMD object stores spatial information in um
+dmd = sdmd.DLP6500()  # NOTE: DMD object stores spatial information in um
 
 # output angles offset around the main output direction
 tout_offsets = np.linspace(-10, 10, 4800) * np.pi / 180
@@ -82,7 +82,6 @@ for ii in range(len(wlens)):
     blaze = sdmd.solve_blaze_output(uvecs_in_exact[ii], gamma_use, rot_axis_use)
     blaze_tm, blaze_tp = sdmd.uvector2tmtp(*blaze[0])
     blaze_deviations[ii] = np.arccos(np.clip(np.sum(blaze[0] * uvec_out), -1, 1))
-
 
     print(f"input data for {wlens[ii] * 1e3:.0f}nm, order {diff_orders[ii]:d}:")
     print(f"input angle (tx, ty) = ({tx_in * 180 / np.pi:.2f}, {ty_in * 180 / np.pi:.2f})deg")

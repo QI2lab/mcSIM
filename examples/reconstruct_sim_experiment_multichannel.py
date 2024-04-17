@@ -3,14 +3,14 @@ Reconstruct multichannel SIM images of argoSIM slide pattern of closely spaced l
 """
 import datetime
 import numpy as np
-from numpy import fft
+from numpy.fft import fftshift, fftfreq
 import pickle
 import tifffile
 from pathlib import Path
-import matplotlib
-matplotlib.use("TkAgg")
-import mcsim.analysis.sim_reconstruction as sim
-from localize_psf import fit_psf, affine, rois
+from mcsim.analysis.sim_reconstruction import SimImageSet
+from localize_psf.affine import xform_sinusoid_params_roi
+from localize_psf.rois import get_centered_rois
+from localize_psf.fit_psf import circ_aperture_otf
 
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 
@@ -33,7 +33,7 @@ imgs = tifffile.imread(fname_raw_data).reshape([ncolors, nangles, nphases, ny, n
 # ############################################
 # set ROI to reconstruction, [cy, cx]
 # ############################################
-roi = rois.get_centered_rois([791, 896], [850, 851])[0]
+roi = get_centered_rois([791, 896], [850, 851])[0]
 nx_roi = roi[3] - roi[2]
 ny_roi = roi[1] - roi[0]
 
@@ -50,7 +50,11 @@ excitation_wavelengths = [0.465, 0.532]
 # ############################################
 # determined by fit to measured OTF
 otf_attenuation_params = np.array([2.446])
-def otf_fn(f, fmax): return 1 / (1 + (f / fmax * otf_attenuation_params[0]) ** 2) * fit_psf.circ_aperture_otf(f, 0, na, 2 * na / fmax)
+
+
+def otf_fn(f, fmax): return (1 / (1 + (f / fmax * otf_attenuation_params[0]) ** 2) *
+                             circ_aperture_otf(f, 0, na, 2 * na / fmax))
+
 
 # ############################################
 # load affine transformations from DMD to camera
@@ -92,8 +96,8 @@ for kk in range(ncolors):
     # construct otf matrix
     # ###########################################
     fmax = 1 / (0.5 * emission_wavelengths[kk] / na)
-    fx = fft.fftshift(fft.fftfreq(nx_roi, pixel_size))
-    fy = fft.fftshift(fft.fftfreq(ny_roi, pixel_size))
+    fx = fftshift(fftfreq(nx_roi, pixel_size))
+    fy = fftshift(fftfreq(ny_roi, pixel_size))
     ff = np.sqrt(np.expand_dims(fx, axis=0) ** 2 +
                  np.expand_dims(fy, axis=1) ** 2)
     otf = otf_fn(ff, fmax)
@@ -107,15 +111,14 @@ for kk in range(ncolors):
     for ii in range(nangles):
         for jj in range(nphases):
             # estimate frequencies based on affine_xform
-            frqs_guess[ii, 0],\
-            frqs_guess[ii, 1],\
-            phases_guess[ii, jj] = \
-                affine.xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0],
-                                                 frqs_dmd[kk, ii, 1],
-                                                 phases_dmd[kk, ii, jj],
-                                                 [dmd_ny, dmd_nx],
-                                                 roi,
-                                                 xform)
+            (frqs_guess[ii, 0],
+             frqs_guess[ii, 1],
+             phases_guess[ii, jj]) = xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0],
+                                                               frqs_dmd[kk, ii, 1],
+                                                               phases_dmd[kk, ii, jj],
+                                                               [dmd_ny, dmd_nx],
+                                                               roi,
+                                                               xform)
 
     # convert frequencies from 1/mirrors to 1/um
     frqs_guess = frqs_guess / pixel_size
@@ -125,21 +128,21 @@ for kk in range(ncolors):
     # ###########################################
     save_dir = root_dir / f"{tstamp:s}_sim_reconstruction_{excitation_wavelengths[kk] * 1e3:.0f}nm"
 
-    imgset = sim.SimImageSet.initialize({"pixel_size": pixel_size, "na": na, "wavelength": emission_wavelengths[kk]},
-                                        imgs[kk, :, :, roi[0]:roi[1], roi[2]:roi[3]],
-                                        otf=otf,
-                                        wiener_parameter=0.1,
-                                        frq_estimation_mode="band-correlation",
-                                        frq_guess=frqs_guess,
-                                        phase_estimation_mode="wicker-iterative",
-                                        phases_guess=phases_guess,
-                                        combine_bands_mode="fairSIM",
-                                        fmax_exclude_band0=0.4,
-                                        normalize_histograms=False,
-                                        background=100,
-                                        gain=2,
-                                        min_p2nr=0.5,
-                                        use_gpu=use_gpu)
+    imgset = SimImageSet.initialize({"pixel_size": pixel_size, "na": na, "wavelength": emission_wavelengths[kk]},
+                                    imgs[kk, :, :, roi[0]:roi[1], roi[2]:roi[3]],
+                                    otf=otf,
+                                    wiener_parameter=0.1,
+                                    frq_estimation_mode="band-correlation",
+                                    frq_guess=frqs_guess,
+                                    phase_estimation_mode="wicker-iterative",
+                                    phases_guess=phases_guess,
+                                    combine_bands_mode="fairSIM",
+                                    fmax_exclude_band0=0.4,
+                                    normalize_histograms=False,
+                                    background=100,
+                                    gain=2,
+                                    min_p2nr=0.5,
+                                    use_gpu=use_gpu)
 
     # ###########################################
     # run reconstruction
@@ -158,11 +161,11 @@ for kk in range(ncolors):
     # save reconstruction results
     # ###########################################
     fname_out = imgset.save_imgs(save_dir,
-                                # format="tiff",
-                                format="zarr",
-                                save_raw_data=False,
-                                save_patterns=False,
-                                )
+                                 # format="tiff",
+                                 format="zarr",
+                                 save_raw_data=False,
+                                 save_patterns=False
+                                 )
 
     # ###########################################
     # save diagnostic plots
