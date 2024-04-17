@@ -146,9 +146,8 @@ class TestSIM(unittest.TestCase):
                                                   [phi],
                                                   [1],
                                                   n_oversampled=nbin
-                                                  )
+                                                  )[0]
             gt = bin(pattern, (nbin, nbin))
-            gt = gt[0, 0, 0]
             gt_ft = fftshift(fft2(ifftshift(gt)))
 
             # test phase
