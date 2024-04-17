@@ -28,11 +28,13 @@ from collections.abc import Sequence
 import json
 from pathlib import Path
 import numpy as np
-import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from matplotlib.colors import PowerNorm
-from localize_psf import affine, rois, fit
+from localize_psf.fit import gauss2d
+from localize_psf.rois import get_centered_rois
+from localize_psf.affine import xform2params, xform_points, xform_mat, fit_xform_points
 
 
 def get_affine_fit_pattern(dmd_size: Sequence[int, int],
@@ -175,13 +177,13 @@ def fit_pattern_peaks(img: np.ndarray,
     # fit initial centers
     # #############################
     for ii in range(len(centers_init)):
-        roi = rois.get_centered_rois(centers_init[ii], [roi_size, roi_size])[0]
+        roi = get_centered_rois(centers_init[ii], [roi_size, roi_size])[0]
 
         cell = img[roi[0]:roi[1], roi[2]:roi[3]]
         cell_sd = img_sd[roi[0]:roi[1], roi[2]:roi[3]]
         xx, yy = np.meshgrid(range(roi[2], roi[3]), range(roi[0], roi[1]))
 
-        gauss_model = fit.gauss2d()
+        gauss_model = gauss2d()
         result = gauss_model.fit(cell, (yy, xx), init_params=None, sd=cell_sd)
         def fit_fn(x, y): return gauss_model.model((y, x), result["fit_params"])
         pfit = result['fit_params']
@@ -296,7 +298,7 @@ def fit_pattern_peaks(img: np.ndarray,
         yc = int(center_guess[1])
 
         # get roi
-        roi = rois.get_centered_rois([yc, xc], [roi_size, roi_size])[0]
+        roi = get_centered_rois([yc, xc], [roi_size, roi_size])[0]
 
         xstart = int(roi[2])
         xend = int(roi[3])
@@ -310,11 +312,10 @@ def fit_pattern_peaks(img: np.ndarray,
             cell = img[ystart:yend, xstart:xend]
             cell_sd = img_sd[ystart:yend, xstart:xend]
 
-            gauss_model = fit.gauss2d()
+            gauss_model = gauss2d()
             # init_params = gauss_model.estimate_parameters(cell, (yy, xx))
             result = gauss_model.fit(cell, (yy, xx), init_params=None, sd=cell_sd)
             def fit_fn(x, y): return gauss_model.model((y, x), result["fit_params"])
-            # result, fit_fn = fit.fit_gauss2d(cell, sd=cell_sd, xx=xx, yy=yy)
             pfit = result['fit_params']
             chi_sq = result['chi_squared']
 
@@ -367,7 +368,7 @@ def plot_affine_summary(img: np.ndarray,
                         vmin_percentile: float = 5,
                         vmax_percentile: float = 99.9,
                         gamma: float = 1.,
-                        **kwargs) -> matplotlib.figure.Figure:
+                        **kwargs) -> Figure:
     """
     Plot results of DMD affine transformation fitting using results of fit_pattern_peaks()
 
@@ -417,10 +418,10 @@ def plot_affine_summary(img: np.ndarray,
     expected_mag = options['dmd2cam_mag_expected']
 
     # get affine parematers from xform
-    affine_params = affine.xform2params(affine_xform)
+    affine_params = xform2params(affine_xform)
 
     # transform DMD points and mask to image space
-    dmd_coords_xform = affine.xform_points(dmd_centers[succesful_fits, :], affine_xform)
+    dmd_coords_xform = xform_points(dmd_centers[succesful_fits, :], affine_xform)
     xdmd_xform = dmd_coords_xform[:, 0]
     ydmd_xform = dmd_coords_xform[:, 1]
 
@@ -435,7 +436,7 @@ def plot_affine_summary(img: np.ndarray,
                          [xc_dmd, yc_dmd],
                          [xc_dmd, yc_dmd + nvec]])
 
-    dmd_axes_cam = affine.xform_points(dmd_axes, affine_xform)
+    dmd_axes_cam = xform_points(dmd_axes, affine_xform)
 
     # residual position error
     residual_dist_err = np.zeros((fps.shape[0], fps.shape[1])) * np.nan
@@ -443,7 +444,7 @@ def plot_affine_summary(img: np.ndarray,
 
     # get mask transformed to image space
     img_coords = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
-    mask_xformed = affine.xform_mat(mask, affine_xform, img_coords, mode='nearest')
+    mask_xformed = xform_mat(mask, affine_xform, img_coords, mode='nearest')
 
     # #####################################
     # plot results
@@ -562,8 +563,10 @@ def plot_affine_summary(img: np.ndarray,
     fig.suptitle('theta_x=%.2fdeg, mx=%0.3f, cx=%0.1f, pixel corrected mx=%.3f\n'
                  'theta_y=%.2fdeg, my=%0.3f, cy=%0.1f, pixel corrected my=%0.3f\n'
                  'expected mag=%0.3f'
-                 % (affine_params[1] * 180 / np.pi, affine_params[0], affine_params[2], affine_params[0] * pixel_correction_factor,
-                    affine_params[4] * 180 / np.pi, affine_params[3], affine_params[5], affine_params[3] * pixel_correction_factor,
+                 % (affine_params[1] * 180 / np.pi, affine_params[0], affine_params[2],
+                    affine_params[0] * pixel_correction_factor,
+                    affine_params[4] * 180 / np.pi, affine_params[3], affine_params[5],
+                    affine_params[3] * pixel_correction_factor,
                     expected_mag))
 
     return fig
@@ -585,7 +588,7 @@ def estimate_xform(img: np.ndarray,
                    vmax_percentile: float = 99.,
                    gamma: float = 1.,
                    figsize: Sequence[float, float] = (16., 12.),
-                   **kwargs) -> (dict, matplotlib.figure.Figure):
+                   **kwargs) -> (dict, Figure):
     """
     Estimate affine transformation from DMD space to camera image space from an image.
 
@@ -625,7 +628,7 @@ def estimate_xform(img: np.ndarray,
     # using pixels as coordinates, instead of real distance
     out_pts = fps[succesful_fits, 1:3]
     in_pts = pattern_centers[succesful_fits, 0:2]
-    affine_xform, _ = affine.fit_xform_points(in_pts, out_pts)
+    affine_xform, _ = fit_xform_points(in_pts, out_pts)
 
     # export data
     data = {'affine_xform': affine_xform.tolist(),
