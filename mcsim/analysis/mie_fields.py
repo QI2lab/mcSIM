@@ -2,10 +2,11 @@
 Compute electric field for a plane wave incident on a dielectric sphere.
 """
 from typing import Union
+from collections.abc import Sequence
 import numpy as np
 from miepython.miepython import _mie_An_Bn
 from scipy.special import spherical_jn, spherical_yn, lpmv
-from localize_psf.affine import euler_mat, euler_mat_inv
+from localize_psf.rotation import euler_mat, euler_mat_inv
 
 
 try:
@@ -122,7 +123,7 @@ def mie_efield(wavelength: float,
                radius: float,
                n_sphere: float,
                dxy: float,
-               esize: tuple,
+               esize: Sequence[int, int],
                dz: float,
                beam_theta: float = 0.,
                beam_phi: float = 0.,
@@ -136,19 +137,18 @@ def mie_efield(wavelength: float,
     https://doi.org/10.1364/AO.39.005117. Bohren uses the phase convention exp(ikx - iwt),
     as described in the start of ch 3.
 
-    :param wavelength:
-    :param no:
-    :param radius:
-    :param n_sphere:
-    :param dxy:
-    :param esize: (ny, nx)
+    :param wavelength: wavelength of light
+    :param no: refractive index of background medium
+    :param radius: radius of sphere
+    :param n_sphere: refractive index of sphere
+    :param dxy: pixel size
+    :param esize: (ny, nx) size of grid to calculate electric field on
     :param dz: distance away from sphere to calculate field
-    :param beam_theta:
-    :param beam_phi:
-    :param beam_psi:
-    :param use_gpu:
-    :return exyz:
-    :return exyz_o, exyz_in, exyz_in_o:
+    :param beam_theta: euler angles describing beam incident direction
+    :param beam_phi: euler angles describing beam incident direction
+    :param beam_psi: euler angles describing beam incident direction
+    :param use_gpu: whether to compute electric field arrays on the GPU
+    :return exyz, exyz_o, exyz_in, exyz_in_o:
     """
 
     if cp and use_gpu:
