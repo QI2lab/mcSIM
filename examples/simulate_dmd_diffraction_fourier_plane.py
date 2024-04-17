@@ -16,18 +16,17 @@ from matplotlib.patches import Circle
 import mcsim.analysis.simulate_dmd as sdmd
 from localize_psf.fit_psf import blur_img_psf
 
-_cupy_available = True
 try:
     import cupy as cp
 except ImportError:
-    _cupy_available = False
+    cp = None
 
 # ############################
 # user settings
 # ############################
 use_gpu = True
 
-if use_gpu and _cupy_available:
+if use_gpu and cp:
     xp = cp
 else:
     xp = np
@@ -252,7 +251,7 @@ efield_broad = blur_img_psf(efields * xp.exp(-1j * (2 * np.pi) ** 2 * (ff_fourie
 # ############################
 # move results off GPU that want to plot
 # ############################
-if use_gpu and _cupy_available:
+if use_gpu and cp:
     efields_dft = efields_dft.get()
     sinc_on_dft = sinc_on_dft.get()
     sinc_off_dft = sinc_off_dft.get()
@@ -278,7 +277,9 @@ figh.suptitle(f"Simulation of DMD pattern imaged by lens of f={fl * 1e-3:.1f}mm\
               f" $(\\theta_-, \\theta_+)$ = ({tm * 180 / np.pi:.2f}, {tp * 180 / np.pi:.2f})deg\n"
               f"optical axis = ({optical_axis[0]:.3f}, {optical_axis[1]:.3f}, {optical_axis[2]:.3f});"
               f" $(\\theta_-, \\theta_+)$ = ({tm_oa * 180 / np.pi:.2f}, {tp_oa * 180 / np.pi:.2f})deg\n"
-              f" blaze direction = ({uvec_blaze_off[0, 0]:.3f}, {uvec_blaze_off[0, 1]:.3f}, {uvec_blaze_off[0, 2]:.3f});"
+              f" blaze direction = ({uvec_blaze_off[0, 0]:.3f}, "
+              f"{uvec_blaze_off[0, 1]:.3f}, "
+              f"{uvec_blaze_off[0, 2]:.3f});"
               f" $(\\theta_-, \\theta_+)$ = ({tm_blaze * 180 / np.pi:.2f}, {tp_blaze * 180 / np.pi:.2f})deg\n"
               f"phase error = {phase_err_size / np.pi:.3f}*pi")
 
@@ -299,8 +300,12 @@ ax.set_title("Electric field versus output angle\n"
              "$|E(b(f) - a)|^2$ from DFT")
 
 ax = figh.add_subplot(grid[1, 0])
-ax.imshow(np.angle(efields_dft), origin="lower", extent=extent_fxy_dmd,
-           vmin=-np.pi, vmax=np.pi, cmap="RdBu")
+ax.imshow(np.angle(efields_dft),
+          origin="lower",
+          extent=extent_fxy_dmd,
+          vmin=-np.pi,
+          vmax=np.pi,
+          cmap="RdBu")
 ax.add_artist(Circle(frqs[0], radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frqs[0], radius=0.01, fill=False, color="m"))
 ax.set_xlabel("$f_x$ (1/mirrors)")
@@ -351,7 +356,6 @@ ax.imshow(np.abs(efields) ** 2,
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
 ax.add_artist(Circle((xc_carrier, yc_carrier), radius=3*dxyf, fill=False, color="r"))
-#ax.plot(xf_dft.ravel(), yf_dft.ravel(), 'gx')
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 ax.set_xlabel("x-position, BFP (um)")
@@ -363,7 +367,6 @@ ax.imshow(np.angle(efields), origin="lower", extent=extent_xyf, vmin=-np.pi, vma
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
 ax.add_artist(Circle((xc_carrier, yc_carrier), radius=3*dxyf, fill=False, color="r"))
-#ax.plot(xf_dft.ravel(), yf_dft.ravel(), 'gx')
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 ax.set_xlabel("x-position, BFP (um)")
@@ -379,7 +382,6 @@ im = ax.imshow(np.abs(efield_broad) ** 2,
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
 ax.add_artist(Circle((xc_carrier, yc_carrier), radius=3*dxyf, fill=False, color="r"))
-#ax.plot(xf_dft.ravel(), yf_dft.ravel(), 'gx')
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 ax.set_xlabel("x-position, BFP (um)")
@@ -387,11 +389,18 @@ ax.set_ylabel("y-position, BFP (um)")
 ax.set_title("|E(r)|^2")
 
 ax = figh.add_subplot(grid[1, 5])
-im_ph = ax.imshow(np.angle(efield_broad), origin="lower", extent=extent_xyf, vmin=-np.pi, vmax=np.pi, cmap="RdBu")
+im_ph = ax.imshow(np.angle(efield_broad),
+                  origin="lower",
+                  extent=extent_xyf,
+                  vmin=-np.pi,
+                  vmax=np.pi,
+                  cmap="RdBu")
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
-ax.add_artist(Circle((xc_carrier, yc_carrier), radius=3*dxyf, fill=False, color="r"))
-#ax.plot(xf_dft.ravel(), yf_dft.ravel(), 'gx')
+ax.add_artist(Circle((xc_carrier, yc_carrier),
+                     radius=3*dxyf,
+                     fill=False,
+                     color="r"))
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 ax.set_xlabel("x-position, BFP (um)")
@@ -414,7 +423,10 @@ ax.set_title(f"DMD pattern, frq = ({frqs[0][0]:.3f}, {frqs[0][1]:.3f}) 1/mirrors
 ax.imshow(pattern, origin="lower", cmap="bone")
 ax.set_xlabel("x-position (mirrors)")
 ax.set_ylabel("y-position (mirrors)")
-ax.add_artist(Circle((nx // 2, ny // 2), radius=2, fill=False, color="r"))
+ax.add_artist(Circle((nx // 2, ny // 2),
+                     radius=2,
+                     fill=False,
+                     color="r"))
 
 xsize = np.min([3 * rad, nx // 2])
 ysize = np.min([3 * rad, ny // 2])
