@@ -1,21 +1,22 @@
 """
 Functions for calibrating noise and gain map of sCMOS camera
 """
-import time
-from typing import Optional
-import matplotlib.figure
+from time import perf_counter
+from collections.abc import Sequence
+from typing import Optional, Union
 import numpy as np
-import dask
+from dask import compute
 import dask.array as da
 from dask.diagnostics import ProgressBar
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 
 
 # camera calibration
-def get_pixel_statistics(imgs,
+def get_pixel_statistics(imgs: Union[np.ndarray, da.core.Array],
                          description: str = "",
-                         moments: tuple[int] = (1, 2),
-                         corr_dists: Optional[tuple[int]] = None) -> dict:
+                         moments: Sequence[int] = (1, 2),
+                         corr_dists: Optional[Sequence[int]] = None) -> dict:
     """
     Estimate camera readout noise from a set of images taken in zero light conditions
 
@@ -33,7 +34,7 @@ def get_pixel_statistics(imgs,
     if corr_dists is not None and np.any([not isinstance(cd, int) for cd in corr_dists]):
         raise ValueError(f"All corr_dists values must be integers, but were {corr_dists}")
 
-    tstart = time.process_time()
+    tstart = perf_counter()
 
     nimgs, ny, nx = imgs.shape
 
@@ -71,12 +72,12 @@ def get_pixel_statistics(imgs,
     if not isinstance(imgs, np.ndarray):
         print(f"computing {len(moments):d} moments and {3*ncorrs:d} correlators")
         with ProgressBar():
-            results_arrays = dask.compute(*results_arrays)
+            results_arrays = compute(*results_arrays)
 
     # store results in dictionary object
     data = {"nimgs": nimgs,
             "description": description,
-            "processing_time_s": time.perf_counter() - tstart}
+            "processing_time_s": perf_counter() - tstart}
 
     for mn, ma in zip(results_names, results_arrays):
         data.update({mn: ma})
@@ -131,7 +132,8 @@ def get_gain_map(dark_means: np.ndarray,
 
 def plot_noise_stats(noise_data: dict,
                      nbins: int = 600,
-                     figsize: tuple[float] = (20, 10)) -> (list[matplotlib.figure.Figure], list[str]):
+                     figsize: Sequence[float, float] = (20., 10.)) \
+        -> (list[Figure], list[str]):
     """
     Display gain curve for single pixel vs. illumination data
 
@@ -286,7 +288,8 @@ def plot_camera_noise_results(offsets: np.ndarray,
                               light_means_err: Optional[np.ndarray] = None,
                               light_vars_err: Optional[np.ndarray] = None,
                               nbins: int = 600,
-                              figsize: tuple[float] = (20, 10)) -> (list[matplotlib.figure.Figure], list[str]):
+                              figsize: Sequence[float, float] = (20., 10.)) \
+        -> (list[Figure], list[str]):
     """
     Display gain curve for single pixel vs. illumination data
 

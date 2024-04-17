@@ -35,7 +35,6 @@ def frqs2angles(frqs: array,
       while for angular frequency (in "radians") this is 2*np.pi * no / wavelength
     :return: theta, phi
     """
-    # todo: replace no and wavelength and magnitude argument
 
     if cp and isinstance(frqs, cp.ndarray):
         xp = cp
@@ -293,7 +292,7 @@ def field_deriv_proj(wavelength: float,
 
 
 def propagate_homogeneous(efield_start: array,
-                          zs: array,
+                          zs: Union[float, array],
                           no: float,
                           drs: Sequence[float, float],
                           wavelength: float,

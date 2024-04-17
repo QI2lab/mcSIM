@@ -2,9 +2,9 @@
 Tools for solving inverse problems using accelerated proximal gradient methods
 """
 
-import warnings
+from warnings import catch_warnings, simplefilter
 import numpy as np
-import time
+from time import perf_counter
 from random import sample
 from typing import Union
 from skimage.restoration import denoise_tv_chambolle
@@ -27,9 +27,10 @@ else:
     array = np.ndarray
 
 
-def to_cpu(m):
+def to_cpu(m: array) -> np.ndarray:
     """
     Ensure array is CPU/NumPy
+
     :param m:
     :return m_cpu:
     """
@@ -228,7 +229,7 @@ class Optimizer:
                   "cost":  np.zeros(0),
                   }
 
-        tstart = time.perf_counter()
+        tstart = perf_counter()
         costs = np.zeros((max_iterations + 1, self.n_samples)) * np.nan
         steps = np.ones(max_iterations) * step
         xdiffs = np.ones(max_iterations) * np.nan
@@ -254,7 +255,7 @@ class Optimizer:
                 # ###################################
                 # compute cost
                 # ###################################
-                tstart_err = time.perf_counter()
+                tstart_err = perf_counter()
 
                 if compute_cost:
                     if compute_all_costs:
@@ -262,12 +263,12 @@ class Optimizer:
                     else:
                         costs[ii, inds] = to_cpu(self.cost(x, inds=inds))
 
-                timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
+                timing["cost"] = np.concatenate((timing["cost"], np.array([perf_counter() - tstart_err])))
 
                 # ###################################
                 # compute gradient
                 # ###################################
-                tstart_grad = time.perf_counter()
+                tstart_grad = perf_counter()
 
                 if compute_batch_grad_parallel:
                     x -= steps[ii] * xp.mean(self.gradient(x, inds=inds), axis=0)
@@ -278,20 +279,20 @@ class Optimizer:
 
                     x -= steps[ii] * grad_mean
 
-                timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
+                timing["grad"] = np.concatenate((timing["grad"], np.array([perf_counter() - tstart_grad])))
 
                 # ###################################
                 # prox operator
                 # ###################################
-                tstart_prox = time.perf_counter()
+                tstart_prox = perf_counter()
                 y = self.prox(x, steps[ii])
 
-                timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
+                timing["prox"] = np.concatenate((timing["prox"], np.array([perf_counter() - tstart_prox])))
 
             else:
                 # cost at current point
                 # always grab costs, since computing for line-search
-                tstart_err = time.perf_counter()
+                tstart_err = perf_counter()
 
                 if compute_all_costs:
                     c_all = self.cost(x)
@@ -302,10 +303,10 @@ class Optimizer:
                     costs[ii, inds] = to_cpu(c_now)
                     cx = xp.mean(c_now, axis=0)
 
-                timing["cost"] = np.concatenate((timing["cost"], np.array([time.perf_counter() - tstart_err])))
+                timing["cost"] = np.concatenate((timing["cost"], np.array([perf_counter() - tstart_err])))
 
                 # gradient at current point
-                tstart_grad = time.perf_counter()
+                tstart_grad = perf_counter()
                 if compute_batch_grad_parallel:
                     gx = xp.mean(self.gradient(x, inds=inds), axis=0)
                 else:
@@ -313,10 +314,10 @@ class Optimizer:
                     for inow in inds:
                         gx += self.gradient(x, inds=[inow])[0] / n_batch
 
-                timing["grad"] = np.concatenate((timing["grad"], np.array([time.perf_counter() - tstart_grad])))
+                timing["grad"] = np.concatenate((timing["grad"], np.array([perf_counter() - tstart_grad])))
 
                 # line-search
-                tstart_prox = time.perf_counter()
+                tstart_prox = perf_counter()
 
                 # initialize line-search
                 ls_iters += 1
@@ -341,7 +342,7 @@ class Optimizer:
                     ls_iters += 1
 
                 # not exclusively prox
-                timing["prox"] = np.concatenate((timing["prox"], np.array([time.perf_counter() - tstart_prox])))
+                timing["prox"] = np.concatenate((timing["prox"], np.array([perf_counter() - tstart_prox])))
 
             line_search_iters[ii] = ls_iters
 
@@ -364,7 +365,7 @@ class Optimizer:
             # ###################################
             # update step
             # ###################################
-            tstart_update = time.perf_counter()
+            tstart_update = perf_counter()
 
             q = 0.5 * (1 + np.sqrt(1 + 4 * q_last ** 2))
             if ii == 0 or not use_fista or stop:
@@ -377,13 +378,13 @@ class Optimizer:
             q_last = q
             y_last = y
 
-            timing["update"] = np.concatenate((timing["update"], np.array([time.perf_counter() - tstart_update])))
-            timing["iteration"] = np.concatenate((timing["iteration"], np.array([time.perf_counter() - tstart_err])))
+            timing["update"] = np.concatenate((timing["update"], np.array([perf_counter() - tstart_update])))
+            timing["iteration"] = np.concatenate((timing["iteration"], np.array([perf_counter() - tstart_err])))
 
             # print information
             if verbose:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                with catch_warnings():
+                    simplefilter("ignore", category=RuntimeWarning)
 
                     status = f"{label:s}iteration {ii + 1:d}/{max_iterations:d}," \
                              f" cost={np.nanmean(costs[ii]):.3g}," \
@@ -394,7 +395,7 @@ class Optimizer:
                              f" prox={timing['prox'][ii]:.3f}s," \
                              f" cost={timing['cost'][ii]:.3f}s," \
                              f" iter={timing['iteration'][ii]:.3f}s," \
-                             f" total={time.perf_counter() - tstart:.3f}s"
+                             f" total={perf_counter() - tstart:.3f}s"
 
                 if use_gpu:
                     status += f", GPU={mempool.used_bytes()/1e9:.3}GB"

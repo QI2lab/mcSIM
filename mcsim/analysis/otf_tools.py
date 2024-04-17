@@ -10,20 +10,27 @@ of the imaging system on the coherent light.
 """
 
 from typing import Optional
-import time
+from collections.abc import Sequence
+from time import perf_counter
 import numpy as np
-from scipy import fft
+from scipy.fft import fftshift, ifftshift, fftfreq, fft2
 from scipy.signal import fftconvolve
 from scipy.signal.windows import hann
-import matplotlib
+from matplotlib.figure import Figure
 from matplotlib.colors import PowerNorm, Normalize
 from matplotlib.patches import Circle
 import matplotlib.pyplot as plt
-import mcsim.analysis.dmd_patterns as pdmd
 from mcsim.analysis.simulate_dmd import xy2uvector, blaze_envelope
 from mcsim.analysis.sim_reconstruction import get_noise_power, fit_modulation_frq, plot_correlation_fit
 from mcsim.analysis.analysis_tools import get_peak_value
-from localize_psf import affine, fit_psf
+from localize_psf.affine import xform_sinusoid_params_roi, xform_shift_center, xform_mat
+from localize_psf.fit_psf import circ_aperture_otf
+from mcsim.analysis.dmd_patterns import (get_sim_unit_cell,
+                                         get_efield_fourier_components,
+                                         get_int_fc,
+                                         get_sim_pattern,
+                                         get_sim_period,
+                                         get_sim_angle)
 
 
 def interfere_polarized(theta1: float,
@@ -182,9 +189,9 @@ def get_all_fourier_exp(imgs: np.ndarray,
     window = hann(nx_roi)[None, :] * hann(ny_roi)[:, None]
 
     # generate frequency data for image FT's
-    fxs = fft.fftshift(fft.fftfreq(nx_roi, pixel_size_um))
+    fxs = fftshift(fftfreq(nx_roi, pixel_size_um))
     dfx = fxs[1] - fxs[0]
-    fys = fft.fftshift(fft.fftfreq(ny_roi, pixel_size_um))
+    fys = fftshift(fftfreq(ny_roi, pixel_size_um))
     dfy = fys[1] - fys[0]
 
     if imgs.shape[0] == nimgs:
@@ -196,15 +203,15 @@ def get_all_fourier_exp(imgs: np.ndarray,
         img = icrop - bg
         img[img < 0] = 1e-6
 
-        img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img * window)))
+        img_ft = fftshift(fft2(ifftshift(img * window)))
         noise_power = get_noise_power(img_ft, fxs, fys, fmax_img)
     else:
         raise Exception()
 
     frq_vects_expt = np.zeros(frq_vects_theory.shape)
-    tstart = time.process_time()
+    tstart = perf_counter()
     for ii in range(nimgs):
-        tnow = time.process_time()
+        tnow = perf_counter()
         print("%d/%d, %d peaks, elapsed time = %0.2fs" % (ii + 1, nimgs, np.sum(to_use[ii]), tnow - tstart))
 
         if multiple_images:
@@ -216,7 +223,7 @@ def get_all_fourier_exp(imgs: np.ndarray,
             img[img < 0] = 1e-6
 
             # fft
-            img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img * window)))
+            img_ft = fftshift(fft2(ifftshift(img * window)))
             # get noise
             noise_power = get_noise_power(img_ft, fxs, fys, fmax_img)
 
@@ -306,25 +313,25 @@ def get_all_fourier_thry(vas,
     efield_theory = np.zeros((npatterns, norders, norders), dtype=complex) * np.nan
     frq_vects_dmd = np.zeros((npatterns, norders, norders, 2))
 
-    tstart = time.process_time()
+    tstart = perf_counter()
     for ii in range(npatterns):
-        tnow = time.process_time()
+        tnow = perf_counter()
         print("%d/%d, elapsed time = %0.2fs" % (ii + 1, npatterns, tnow - tstart))
 
         va = vas[ii]
         vb = vbs[ii]
-        unit_cell, xcell, ycell = pdmd.get_sim_unit_cell(va, vb, nphases)
+        unit_cell, xcell, ycell = get_sim_unit_cell(va, vb, nphases)
 
         # get expected values
-        efield_theory[ii], ns, ms, frq_vects_dmd[ii] = pdmd.get_efield_fourier_components(unit_cell,
-                                                                                          xcell,
-                                                                                          ycell,
-                                                                                          va,
-                                                                                          vb,
-                                                                                          nphases,
-                                                                                          phase_index,
-                                                                                          dmd_size=dmd_size,
-                                                                                          nmax=nmax)
+        efield_theory[ii], ns, ms, frq_vects_dmd[ii] = get_efield_fourier_components(unit_cell,
+                                                                                     xcell,
+                                                                                     ycell,
+                                                                                     va,
+                                                                                     vb,
+                                                                                     nphases,
+                                                                                     phase_index,
+                                                                                     dmd_size=dmd_size,
+                                                                                     nmax=nmax)
 
         # change normalization from 1 being maximum possible fourier component to 1 being DC component
         efield_theory[ii] = efield_theory[ii] / np.nansum(unit_cell) * np.nansum(unit_cell >= 0)
@@ -396,14 +403,14 @@ def get_intensity_fourier_thry(efields,
 
     # compute frequency vectors in camera space (1/pixels)
     frq_vects_cam = np.zeros(frq_vects_dmd.shape)
-    frq_vects_cam[..., 0], frq_vects_cam[..., 1], _ = affine.xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
-                                                                                       frq_vects_dmd[..., 1],
-                                                                                       0,
-                                                                                       dmd_shape,
-                                                                                       roi,
-                                                                                       affine_xform,
-                                                                                       input_origin="fft",
-                                                                                       output_origin="fft")
+    frq_vects_cam[..., 0], frq_vects_cam[..., 1], _ = xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
+                                                                                frq_vects_dmd[..., 1],
+                                                                                0,
+                                                                                dmd_shape,
+                                                                                roi,
+                                                                                affine_xform,
+                                                                                input_origin="fft",
+                                                                                output_origin="fft")
 
     # correct frequency vectors in camera space to be in real units (1/um)
     frq_vects_um = frq_vects_cam / pixel_size_um
@@ -417,44 +424,44 @@ def get_intensity_fourier_thry(efields,
                                                   wavelength_ex,
                                                   index_of_refraction)
         else:
-            intensity_theory[ii] = pdmd.get_int_fc(efields[ii] * pupil[ii])
+            intensity_theory[ii] = get_int_fc(efields[ii] * pupil[ii])
 
     # normalize to DC values
     intensity_theory = intensity_theory / np.max(np.abs(intensity_theory), axis=(1, 2))[:, None, None]
 
     # compute phase in new coordinates
-    _, _, intensity_phases = affine.xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
-                                                              frq_vects_dmd[..., 1],
-                                                              np.angle(intensity_theory),
-                                                              dmd_shape,
-                                                              roi,
-                                                              affine_xform,
-                                                              input_origin="fft",
-                                                              output_origin="fft")
+    _, _, intensity_phases = xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
+                                                       frq_vects_dmd[..., 1],
+                                                       np.angle(intensity_theory),
+                                                       dmd_shape,
+                                                       roi,
+                                                       affine_xform,
+                                                       input_origin="fft",
+                                                       output_origin="fft")
     intensity_theory_xformed = np.abs(intensity_theory) * np.exp(1j * intensity_phases)
 
     return intensity_theory, intensity_theory_xformed, frq_vects_cam, frq_vects_um
 
 
 def plot_pattern(img: np.ndarray,
-                 va: list[int],
-                 vb: list[int],
+                 va: Sequence[int],
+                 vb: Sequence[int],
                  frq_vects,
                  fmax_img: float,
                  pixel_size_um: float,
-                 dmd_size: tuple[int],
+                 dmd_size: Sequence[int, int],
                  affine_xform,
-                 roi: list[int],
+                 roi: Sequence[int, int, int, int],
                  nphases: int,
                  phase_index: int,
-                 fmax_in: Optional = None,
+                 fmax_in: Optional[float] = None,
                  peak_int_exp=None,
                  peak_int_exp_unc=None,
                  peak_int_theory=None,
                  otf=None,
                  otf_unc=None,
                  to_use=None,
-                 figsize=(20, 10)) -> matplotlib.figure.Figure:
+                 figsize: Sequence[float, float] = (20., 10.)) -> Figure:
     """
     plot image and affine xformed pattern it corresponds to
 
@@ -469,7 +476,14 @@ def plot_pattern(img: np.ndarray,
     :param roi: [ystart, yend, xstart, xend] region of interest in image
     :param nphases: number of phaseshifts used to generate the DMD pattern. Needed in addition to va/vb to
       specify pattern
-    :param phase_index:  index of phaseshift. Needed in addition to va, vb, nphases to specify pattern
+    :param phase_index: index of phaseshift. Needed in addition to va, vb, nphases to specify pattern
+    :param fmax_in:
+    :param peak_int_exp:
+    :param peak_int_exp_unc:
+    :param peak_int_theory:
+    :param otf:
+    :param otf_unc:
+    :param to_use:
     :return fig_handle:
     """
 
@@ -481,35 +495,34 @@ def plot_pattern(img: np.ndarray,
     n2max = int(np.round(0.5 * (fmags.shape[1] - 1)))
 
     # generate DMD pattern
-    pattern, _ = pdmd.get_sim_pattern(dmd_size, va, vb, nphases, phase_index)
+    pattern, _ = get_sim_pattern(dmd_size, va, vb, nphases, phase_index)
 
     # crop image
     img_roi = img[roi[0]:roi[1], roi[2]:roi[3]]
     ny, nx = img_roi.shape
 
     # transform pattern using affine transformation
-    xform_roi = affine.xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
+    xform_roi = xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
     img_coords = np.meshgrid(range(nx), range(ny))
-    pattern_xformed = affine.xform_mat(pattern, xform_roi, img_coords, mode="interp")
-    # pattern_xformed_ft = fft.fftshift(fft.fft2(fft.ifftshift(pattern_xformed)))
+    pattern_xformed = xform_mat(pattern, xform_roi, img_coords, mode="interp")
 
     # get fourier transform of image
-    fxs = fft.fftshift(fft.fftfreq(nx, pixel_size_um))
+    fxs = fftshift(fftfreq(nx, pixel_size_um))
     dfx = fxs[1] - fxs[0]
-    fys = fft.fftshift(fft.fftfreq(ny, pixel_size_um))
+    fys = fftshift(fftfreq(ny, pixel_size_um))
     dfy = fys[1] - fys[0]
 
     extent = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx, fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]
 
     window = hann(nx)[None, :] * hann(ny)[:, None]
-    img_ft = fft.fftshift(fft.fft2(fft.ifftshift(img_roi * window)))
+    img_ft = fftshift(fft2(ifftshift(img_roi * window)))
 
     # plot results
     figh = plt.figure(figsize=figsize)
     grid = plt.GridSpec(2, 6)
 
-    period = pdmd.get_sim_period(va, vb)
-    angle = pdmd.get_sim_angle(va, vb)
+    period = get_sim_period(va, vb)
+    angle = get_sim_angle(va, vb)
     frq_main_um = frq_vects[n1max, n2max + 1]
 
     plt.suptitle("DMD period=%0.3f mirrors, angle=%0.2fdeg\n"
@@ -638,7 +651,7 @@ def plot_otf(frq_vects,
              otf_unc=None,
              to_use=None,
              wf_corrected=None,
-             figsize: tuple[float] = (20, 10)) -> matplotlib.figure.Figure:
+             figsize: Sequence[float, float] = (20., 10.)) -> Figure:
     """
     Plot complete OTF
 
@@ -666,7 +679,7 @@ def plot_otf(frq_vects,
     # only care about fmax value, so create na/wavelength that give us this
     na = 1
     wavelength = 2 * na / fmax_img
-    otf_ideal = fit_psf.circ_aperture_otf(fmag_interp, 0, na, wavelength)
+    otf_ideal = circ_aperture_otf(fmag_interp, 0, na, wavelength)
 
     figh = plt.figure(figsize=figsize)
     grid = plt.GridSpec(2, 6)

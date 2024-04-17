@@ -76,13 +76,13 @@ not be perfectly centered on the optical axis.
 """
 from typing import Union, Optional
 from collections.abc import Sequence, Callable
-import warnings
+from warnings import warn
 from pathlib import Path
 import numpy as np
-import dask
+from dask import delayed, compute
 from dask.diagnostics import ProgressBar
-import matplotlib.figure
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
 
@@ -237,8 +237,8 @@ class DMD:
 
         # simulate
         with ProgressBar():
-            r = [dask.delayed(calc_output_angle)(bvec) for bvec in bvecs_to_iterate]
-            results = dask.compute(*r)
+            r = [delayed(calc_output_angle)(bvec) for bvec in bvecs_to_iterate]
+            results = compute(*r)
 
         # unpack results for all output directions
         efields, sinc_efield_on, sinc_efield_off = zip(*results)
@@ -415,8 +415,7 @@ class DMD:
             return val
 
         with ProgressBar():
-            r = [dask.delayed(calc)(ii) for ii in range(nvecs)]
-            results = dask.compute(*r)
+            results = compute(*[delayed(calc)(ii) for ii in range(nvecs)])
 
         efields = xp.array(results).reshape(output_shape)
 
@@ -498,8 +497,8 @@ class DMD:
         orders_y = ns[allowed_any, 1]
 
         with ProgressBar():
-            r = [dask.delayed(calc_power_order)((orders_x[ii], orders_y[ii])) for ii in range(len(orders_x))]
-            results = dask.compute(*r)
+            r = [delayed(calc_power_order)((orders_x[ii], orders_y[ii])) for ii in range(len(orders_x))]
+            results = compute(*r)
 
         power_out_orders, on_sum_orders, off_sum_orders = zip(*results)
         power_out = np.sum(power_out_orders)
@@ -650,7 +649,7 @@ def sinc_fn(x: array) -> array:
     return y
 
 
-def get_rot_mat(rot_axis: Sequence[float],
+def get_rot_mat(rot_axis: Sequence[float, float, float],
                 gamma: float) -> np.ndarray:
     """
     Get matrix which rotates points about the specified axis by the given angle. Think of this rotation matrix
@@ -738,7 +737,7 @@ def xyz2mirror(vx: array,
                vy: array,
                vz: array,
                gamma: float,
-               rot_axis: Sequence[float]) -> (array, array, array):
+               rot_axis: Sequence[float, float, float]) -> (array, array, array):
     """
     Convert vector with components vx, vy, vz to v1, v2, v3.
 
@@ -772,7 +771,7 @@ def mirror2xyz(v1: Union[array, float],
                v2: Union[array, float],
                v3: Union[array, float],
                gamma: float,
-               rot_axis: Sequence[float]) -> (array, array, array):
+               rot_axis: Sequence[float, float, float]) -> (array, array, array):
     """
     Inverse function for xyz2mirror()
 
@@ -1004,7 +1003,7 @@ def uvec2dmd_frq(uvec_out_dc: Sequence[float],
 # ###########################################
 # mapping from DMD coordinates to optical axis coordinates
 # ###########################################
-def get_fourier_plane_basis(optical_axis: Sequence[float]) -> (np.ndarray, np.ndarray):
+def get_fourier_plane_basis(optical_axis: Sequence[float, float, float]) -> (np.ndarray, np.ndarray):
     """
     Get basis vectors which are orthogonal to a given optical axis. This is useful when
     we suppose that a lens has been placed one focal length after the DMD and we are interested
@@ -1024,7 +1023,7 @@ def get_fourier_plane_basis(optical_axis: Sequence[float]) -> (np.ndarray, np.nd
 
 
 def dmd_uvec2opt_axis_uvec(dmd_uvecs: array,
-                           optical_axis: Sequence[float]) -> (array, array, array):
+                           optical_axis: Sequence[float, float, float]) -> (array, array, array):
     """
     Convert unit vectors expressed relative to the dmd coordinate system (ex, ey, ez)
     dmd_uvecs = bx * ex + by * ey + bz * ez
@@ -1088,7 +1087,7 @@ def blaze_envelope(wavelength: float,
                    wx: float,
                    wy: float,
                    b_minus_a: array,
-                   rot_axis: Sequence[float]) -> array:
+                   rot_axis: Sequence[float, float, float]) -> array:
     """
     Compute normalized blaze envelope function. Envelope function has value 1 where the blaze condition is satisfied.
     This is the result of doing the integral
@@ -1111,7 +1110,7 @@ def blaze_envelope(wavelength: float,
     :param wx: mirror width in x-direction. Same units as wavelength.
     :param wy: mirror width in y-direction. Same units as wavelength.
     :param b_minus_a: array of size no x ... x nk x 3 difference between output (b) and input (a) unit vectors.
-    :param rot_axis: unit vector about which the mirror swivels. Typically (1, 1, 0) / np.sqrt(2)
+    :param rot_axis: unit vector about which the mirror swivels. Typically, (1, 1, 0) / np.sqrt(2)
     :return envelope: same length as b_minus_a
     """
 
@@ -1123,7 +1122,7 @@ def blaze_envelope(wavelength: float,
 
 def blaze_condition_fn(gamma: float,
                        b_minus_a: array,
-                       rot_axis: Sequence[float]) -> (array, array):
+                       rot_axis: Sequence[float, float, float]) -> (array, array):
     """
     Return the dimensionless part of the sinc function argument which determines the blaze condition.
     We refer to these functions as A_+(b-a, gamma) and A_-(b-a, gamma).
@@ -1132,7 +1131,7 @@ def blaze_condition_fn(gamma: float,
 
     :param gamma: angle micro-mirror normal makes with device normal
     :param b_minus_a: outgoing unit vector - incoming unit vector. array of shape n0 x n1 x ... x 3
-    :param rot_axis: unit vector about which the mirror swivels. Typically use (1, 1, 0) / np.sqrt(2)
+    :param rot_axis: unit vector about which the mirror swivels. Typically, use (1, 1, 0) / np.sqrt(2)
     :return val: A_+ or A_-, depending on the mode
     """
 
@@ -1153,7 +1152,7 @@ def blaze_condition_fn(gamma: float,
 
 def solve_blaze_output(uvecs_in: array,
                        gamma: float,
-                       rot_axis: Sequence[float]) -> array:
+                       rot_axis: Sequence[float, float, float]) -> array:
     """
     Find the output angle which satisfies the blaze condition for arbitrary input angle
 
@@ -1178,7 +1177,7 @@ def solve_blaze_output(uvecs_in: array,
 
 def solve_blaze_input(uvecs_out: array,
                       gamma: float,
-                      rot_axis: Sequence[float]) -> array:
+                      rot_axis: Sequence[float, float, float]) -> array:
     """
     Find the input angle which satisfies the blaze condition for arbitrary output angle.
 
@@ -1286,7 +1285,7 @@ def solve_diffraction_output(uvecs_in: array,
 def get_diffraction_order_limits(wavelength: float,
                                  d: float,
                                  gamma: float,
-                                 rot_axis: Sequence[float] = _dlp_1stgen_axis):
+                                 rot_axis: Sequence[float, float, float] = _dlp_1stgen_axis):
     """
     Find the maximum and minimum diffraction orders consistent with given parameters and the blaze condition.
     Note that only diffraction orders of the form (n, -n) can satisfy the Blaze condition, hence only the value
@@ -1435,9 +1434,9 @@ def solve_2color_on_off(d: float,
 
 def solve_combined_condition(d: float,
                              gamma: float,
-                             rot_axis: Sequence[float],
+                             rot_axis: Sequence[float, float, float],
                              wavelength: float,
-                             order: Sequence[int]) -> (Callable, Callable, np.ndarray):
+                             order: Sequence[int, int]) -> (Callable, Callable, np.ndarray):
     """
     Solve the combined diffraction/blaze condition. Since in general the system of equation is overdetermined,
     return the vectors which solve the diffraction condition and minimize the blaze condition cost, defined by
@@ -1538,9 +1537,9 @@ def solve_combined_condition(d: float,
 def solve_blazed_pattern_frequency(dx: float,
                                    dy: float,
                                    gamma: float,
-                                   rot_axis: Sequence[float],
+                                   rot_axis: Sequence[float, float, float],
                                    wavelength: float,
-                                   bf: Sequence[float],
+                                   bf: Sequence[float, float, float],
                                    nx: int,
                                    ny: int):
     """
@@ -1609,8 +1608,8 @@ def simulate_1d(pattern: array,
     n_wavelens = len(wavelengths)
 
     if np.any(wavelengths < 0.1):
-        warnings.warn("on or more wavelengths had values less than 0.1. "
-                      "Please ensure wavelengths are supplied in um")
+        warn("on or more wavelengths had values less than 0.1. "
+             "Please ensure wavelengths are supplied in um")
 
     # input angles
     tx_ins, ty_ins = angle2xy(0., tm_ins)
@@ -1691,10 +1690,11 @@ def simulate_1d(pattern: array,
 
 
 def plot_1d_sim(data: dict,
-                colors: Optional[list] = None,
+                colors: Optional[Sequence[str]] = None,
                 plot_log: bool = False,
-                save_dir: Optional[str] = None,
-                figsize: Sequence[float] = (18., 14.)) -> (list[matplotlib.figure.Figure], list[str]):
+                save_dir: Optional[Union[str, Path]] = None,
+                figsize: Sequence[float, float] = (18., 14.)) \
+        -> (list[Figure], list[str]):
     """
     Plot and optionally save results of simulate_1d()
 
@@ -1827,21 +1827,29 @@ def plot_1d_sim(data: dict,
                     scale_fn(np.abs(sinc_efield_on[kk, :, ii] / wx / wy)**2),
                     color=colors[ii],
                     ls=':',
-                    label=f"{wavelengths[ii] * 1e9:.0f}")
+                    label=f"{wavelengths[ii] * 1e3:.0f}")
             ax.plot(tms_out * 180 / np.pi,
                     scale_fn(np.abs(sinc_efield_off[kk, :, ii] / wx / wy)**2),
                     color=colors[ii],
                     ls='--')
 
         # plot expected blaze conditions
-        ax.axvline(tms_blaze_on * 180 / np.pi, color="k", ls=":", label="blaze on")
-        ax.axvline(tms_blaze_off * 180 / np.pi, color="k", ls=":", label="blaze off")
+        ax.axvline(tms_blaze_on * 180 / np.pi,
+                   color="k",
+                   ls=":",
+                   label="blaze on")
+        ax.axvline(tms_blaze_off * 180 / np.pi,
+                   color="k",
+                   ls=":",
+                   label="blaze off")
 
         # plot expected diffraction conditions
         for ii in range(n_wavelens):
             ax.vlines(diff_tms[ii] * 180 / np.pi, 0, 1, color=colors[ii], ls='-')
 
-        ax.axvline(diff_tms[0, iz] * 180 / np.pi, color='m', label="0th diffraction order")
+        ax.axvline(diff_tms[0, iz] * 180 / np.pi,
+                   color='m',
+                   label="0th diffraction order")
 
         ax.legend()
         ax.set_xlabel(r'$\theta_m$ (deg)')
@@ -1999,9 +2007,9 @@ def simulate_2d(pattern: array,
 
 
 def plot_2d_sim(data: dict,
-                save_dir: Optional[str] = None,
-                figsize: Sequence[float] = (18., 14.),
-                gamma: float = 0.1) -> (list[matplotlib.figure.Figure], list[str]):
+                save_dir: Optional[Union[str, Path]] = None,
+                figsize: Sequence[float, float] = (18., 14.),
+                gamma: float = 0.1) -> (list[Figure], list[str]):
     """
     Plot results from simulate_2d(). For print out values to be correct, distance
     units should be um
@@ -2184,11 +2192,19 @@ def plot_2d_sim(data: dict,
             ylim = ax.get_ylim()
 
             # blaze condition
-            ax.add_artist(Circle((tx_blaze_on * 180 / np.pi, ty_blaze_on * 180 / np.pi),
-                                 radius=1, color='r', fill=0, ls='-'))
+            ax.add_artist(Circle((tx_blaze_on * 180 / np.pi,
+                                  ty_blaze_on * 180 / np.pi),
+                                 radius=1,
+                                 color='r',
+                                 fill=0,
+                                 ls='-'))
 
-            ax.add_artist(Circle((tx_blaze_off * 180 / np.pi, ty_blaze_off * 180 / np.pi),
-                                 radius=1, color='g', fill=0, ls='-'))
+            ax.add_artist(Circle((tx_blaze_off * 180 / np.pi,
+                                  ty_blaze_off * 180 / np.pi),
+                                 radius=1,
+                                 color='g',
+                                 fill=0,
+                                 ls='-'))
 
             # diffraction peaks
             ax.scatter(diff_tx_out * 180 / np.pi,
@@ -2223,9 +2239,17 @@ def plot_2d_sim(data: dict,
             ylim = ax.get_ylim()
 
             # blaze condition
-            ax.add_artist(Circle((xf_blaze_on, yf_blaze_on), radius=0.02, color='r', fill=0, ls='-'))
+            ax.add_artist(Circle((xf_blaze_on, yf_blaze_on),
+                                 radius=0.02,
+                                 color='r',
+                                 fill=0,
+                                 ls='-'))
 
-            ax.add_artist(Circle((xf_blaze_off, yf_blaze_off), radius=0.02, color='g', fill=0, ls='-'))
+            ax.add_artist(Circle((xf_blaze_off, yf_blaze_off),
+                                 radius=0.02,
+                                 color='g',
+                                 fill=0,
+                                 ls='-'))
 
             # diffraction peaks
             ax.scatter(xf_diff, yf_diff, edgecolor='y', facecolor='none')

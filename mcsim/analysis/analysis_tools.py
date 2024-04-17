@@ -6,7 +6,7 @@ passed to them are NumPy or CuPy arrays
 import numpy as np
 from typing import Union, Optional
 from collections.abc import Sequence
-import localize_psf.rois as rois
+from localize_psf.rois import get_centered_rois, cut_roi
 
 try:
     import cupy as cp
@@ -55,11 +55,11 @@ def get_peak_value(img: array,
     iy = int(np.argmin(np.abs(py - y)))
 
     # get ROI around pixel for weighted averaging
-    roi = rois.get_centered_rois([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])[0]
-    img_roi = rois.cut_roi(roi, img)[0]
+    roi = get_centered_rois([iy, ix], [3 * peak_pixel_size, 3 * peak_pixel_size])[0]
+    img_roi = cut_roi(roi, img)[0]
 
-    xx_roi = xp.expand_dims(rois.cut_roi(roi, xx)[0], axis=tuple(range(img_roi.ndim - 2)))
-    yy_roi = xp.expand_dims(rois.cut_roi(roi, yy)[0], axis=tuple(range(img_roi.ndim - 2)))
+    xx_roi = xp.expand_dims(cut_roi(roi, xx)[0], axis=tuple(range(img_roi.ndim - 2)))
+    yy_roi = xp.expand_dims(cut_roi(roi, yy)[0], axis=tuple(range(img_roi.ndim - 2)))
 
     weights = pixel_overlap(xp.array([[py, px]]),
                             xp.stack((yy_roi.ravel(), xx_roi.ravel()), axis=1),
