@@ -8,7 +8,7 @@ import datetime
 from warnings import catch_warnings, simplefilter
 from copy import deepcopy
 from typing import Union, Optional
-from collections.abc import Sequence
+from collections.abc import Sequence, Callable
 from functools import partial
 # numerical tools
 import numpy as np
@@ -1890,7 +1890,7 @@ class tomography:
         return figh
 
 
-def _ft_abs(m): return ft2(abs(ift2(m)))
+def _ft_abs(m: array) -> array: return ft2(abs(ift2(m)))
 
 
 def cut_mask(img: array,
@@ -2035,7 +2035,7 @@ def fit_ref_frq(img_ft: np.ndarray,
                 npercentiles: int = 50,
                 filter_size: float = 0.,
                 dilate_erode_footprint_size: int = 10,
-                show_figure: bool = False):
+                show_figure: bool = False) -> (dict, Callable, Figure):
     """
     Determine the hologram reference frequency from a single image, based on the regions in the hologram beyond the
     maximum imaging frequency that have information. These are expected to be circles centered around the reference
@@ -3753,7 +3753,9 @@ class RIOptimizer(Optimizer):
                                 "max_imaginary_part": float(max_imaginary_part)
                                 }
 
-    def prox(self, x, step):
+    def prox(self,
+             x: array,
+             step: float) -> array:
 
         # todo: is one order better than another for L1 and TV?
         x_real = x.real
@@ -3792,7 +3794,9 @@ class RIOptimizer(Optimizer):
 
         return x_real + 1j * x_imag
 
-    def cost(self, x, inds=None):
+    def cost(self,
+             x: array,
+             inds: Optional[Sequence[int]] = None) -> array:
         if inds is None:
             inds = list(range(self.n_samples))
 
@@ -3865,7 +3869,9 @@ class LinearScatt(RIOptimizer):
         else:
             self.model = model
 
-    def fwd_model(self, x, inds=None):
+    def fwd_model(self,
+                  x: array,
+                  inds: Optional[Sequence[int]] = None) -> array:
         if inds is None:
             inds = list(range(self.n_samples))
 
@@ -3887,7 +3893,9 @@ class LinearScatt(RIOptimizer):
 
         return efwd
 
-    def gradient(self, x, inds=None):
+    def gradient(self,
+                 x: array,
+                 inds: Optional[Sequence[int]] = None) -> array:
 
         if inds is None:
             inds = list(range(self.n_samples))
@@ -3914,7 +3922,9 @@ class LinearScatt(RIOptimizer):
 
         return dc_dv
 
-    def cost(self, x, inds=None):
+    def cost(self,
+             x: array,
+             inds: Optional[Sequence[int]] = None) -> array:
 
         if isinstance(self.model, sp_gpu.csr_matrix):
             spnow = sp_gpu
@@ -3933,7 +3943,8 @@ class LinearScatt(RIOptimizer):
 
         return 0.5 * (abs(efwd - self.e_measured[inds]) ** 2).mean(axis=(-1, -2)) / (nx * ny)
 
-    def guess_step(self, x=None):
+    def guess_step(self,
+                   x: Optional[array] = None) -> float:
         ny, nx = self.e_measured.shape[-2:]
 
         if sp_gpu and isinstance(self.model, sp_gpu.csr_matrix):
@@ -3944,7 +3955,9 @@ class LinearScatt(RIOptimizer):
         lipschitz_estimate = s ** 2 / (self.n_samples * ny * nx) / (ny * nx)
         return float(1 / lipschitz_estimate)
 
-    def prox(self, x, step):
+    def prox(self,
+             x: array,
+             step: float) -> array:
         # convert from V to n
         n = get_n(ift3(x), self.no, self.wavelength)
         # apply proximal operator on n
@@ -3952,7 +3965,9 @@ class LinearScatt(RIOptimizer):
 
         return ft3(get_v(n_prox, self.no, self.wavelength))
 
-    def run(self, x_start, **kwargs):
+    def run(self,
+            x_start: array,
+            **kwargs) -> dict:
         return super(LinearScatt, self).run(x_start, **kwargs)
 
 
@@ -4020,7 +4035,9 @@ class BPM(RIOptimizer):
         # backpropagation distance to compute starting field
         self.dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
 
-    def fwd_model(self, x, inds=None):
+    def fwd_model(self,
+                  x: array,
+                  inds: Optional[Sequence[int]] = None) -> array:
         if inds is None:
             inds = list(range(self.n_samples))
 
@@ -4039,7 +4056,9 @@ class BPM(RIOptimizer):
 
         return e_fwd
 
-    def gradient(self, x, inds=None):
+    def gradient(self,
+                 x: array,
+                 inds: Optional[Sequence[int]] = None) -> array:
         if inds is None:
             inds = list(range(self.n_samples))
 
@@ -4093,7 +4112,8 @@ class BPM(RIOptimizer):
 
         return dc_dn
 
-    def get_estart(self, inds=None):
+    def get_estart(self,
+                   inds: Optional[Sequence[int]] = None) -> array:
         if inds is None:
             inds = list(range(self.n_samples))
 
@@ -4147,15 +4167,16 @@ class SSNP(RIOptimizer):
         dz, dy, dx = self.drs_n
         ny, nx = self.e_measured.shape[-2:]
 
-        fx = np.fft.fftfreq(nx, dx)
-        fy = np.fft.fftfreq(ny, dy)
-        fxfx, fyfy = np.meshgrid(fx, fy)
-
-        kz = xp.asarray(2 * np.pi * get_fzs(fxfx, fyfy, self.no, self.wavelength))
+        kz = xp.asarray(2 * np.pi * get_fzs(xp.fft.fftfreq(nx, dx)[None, :],
+                                            xp.fft.fftfreq(ny, dy)[:, None],
+                                            self.no,
+                                            self.wavelength))
         kz[xp.isnan(kz)] = 0
         self.kz = kz
 
-    def phi_fwd(self, x, inds=None):
+    def phi_fwd(self,
+                x: array,
+                inds: Optional[Sequence[int]] = None) -> array:
         """
         Return the forward model field and the forward model derivative. Since we do not measure the derivative,
         we do not consider it part of our forward models
@@ -4167,7 +4188,7 @@ class SSNP(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-            # initial field
+        # initial field
         e_start, de_dz_start = self.get_estart(inds=inds)
 
         # forward propagation
@@ -4182,10 +4203,14 @@ class SSNP(RIOptimizer):
                                  apodization=self.apodization)
         return phi_fwd
 
-    def fwd_model(self, x, inds=None):
+    def fwd_model(self,
+                  x: array,
+                  inds: Optional[Sequence[int]] = None) -> array:
         return self.phi_fwd(x, inds=inds)[..., 0]
 
-    def gradient(self, x, inds=None):
+    def gradient(self,
+                 x: array,
+                 inds: Optional[Sequence[int]] = None) -> array:
         if cp and isinstance(x, cp.ndarray):
             xp = cp
         else:
@@ -4241,7 +4266,8 @@ class SSNP(RIOptimizer):
 
         return dc_dn
 
-    def get_estart(self, inds=None):
+    def get_estart(self,
+                   inds: Optional[Sequence[int]] = None) -> (array, array):
         if inds is None:
             inds = list(range(self.n_samples))
 

@@ -6,7 +6,8 @@ from warnings import catch_warnings, simplefilter
 import numpy as np
 from time import perf_counter
 from random import sample
-from typing import Union
+from typing import Union, Optional
+from collections.abc import Sequence
 from skimage.restoration import denoise_tv_chambolle
 
 
@@ -86,19 +87,31 @@ class Optimizer:
         self.n_samples = None
         self.prox_parameters = {}
 
-    def fwd_model(self, x, inds=None):
+    def fwd_model(self,
+                  x: array,
+                  inds: Optional[Sequence[int]] = None) -> array:
         pass
 
-    def fwd_model_adjoint(self, y, inds=None):
+    def fwd_model_adjoint(self,
+                          y: array,
+                          inds: Optional[Sequence[int]] = None) -> array:
         pass
 
-    def cost(self, x, inds=None):
+    def cost(self,
+             x: array,
+             inds: Optional[Sequence[int]] = None) -> array:
         pass
 
-    def gradient(self, x, inds=None):
+    def gradient(self,
+                 x: array,
+                 inds: Optional[Sequence[int]] = None) -> array:
         pass
 
-    def test_gradient(self, x, jind=0, inds=None, dx=1e-5):
+    def test_gradient(self,
+                      x: array,
+                      jind: int = 0,
+                      inds: Optional[Sequence[int]] = None,
+                      dx: float = 1e-5) -> (array, array):
         """
 
         :param x: point to compute gradient at
@@ -146,10 +159,13 @@ class Optimizer:
 
         return g, gn
 
-    def prox(self, x, step):
+    def prox(self,
+             x: array,
+             step: float) -> array:
         pass
 
-    def guess_step(self, x):
+    def guess_step(self,
+                   x: Optional[array] = None) -> float:
         pass
 
     def run(self,
