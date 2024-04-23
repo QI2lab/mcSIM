@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-A weighed phase unwrap algorithm implemented in pure Python
+A weighted phase unwrap algorithm implemented in pure Python
 
 author: Tobias A. de Jong
 Based on:
@@ -34,22 +34,34 @@ and an existing MATLAB implementation:
 https://nl.mathworks.com/matlabcentral/fileexchange/60345-2d-weighted-phase-unwrapping
 Should maybe use a scipy conjugate descent.
 """
-
+from typing import Union, Optional
 import numpy as np
 import scipy.fft as fft_cpu
 
-_gpu_available = True
 try:
     import cupy as cp
     import cupyx.scipy.fft as fft_gpu
 except ImportError:
-    _gpu_available = False
-    fft_gpu = fft_cpu
+    cp = None
+    fft_gpu = None
 
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
-def phase_unwrap_ref(psi, weight, kmax=100):
+def phase_unwrap_ref(psi: array,
+                     weight: array,
+                     kmax: int = 100) -> array:
+    """
 
-    if isinstance(psi, cp.ndarray):
+    :param psi:
+    :param weight:
+    :param kmax:
+    :return phi:
+    """
+
+    if cp and isinstance(psi, cp.ndarray):
         xp = cp
         fft = fft_gpu
     else:
@@ -111,10 +123,14 @@ def phase_unwrap_ref(psi, weight, kmax=100):
     return phi
 
 
-def solvePoisson(rho):
-    """Solve the poisson equation "P phi = rho" using DCT
+def solvePoisson(rho: array) -> array:
     """
-    if isinstance(rho, cp.ndarray):
+    Solve the poisson equation "P phi = rho" using DCT
+
+    :param rho:
+    :return phi:
+    """
+    if cp and isinstance(rho, cp.ndarray):
         xp = cp
         fft = fft_gpu
     else:
@@ -132,12 +148,16 @@ def solvePoisson(rho):
     return phi
 
 
-def solvePoisson_precomped(rho, scale):
-    """Solve the poisson equation "P phi = rho" using DCT
-
-    Uses precomputed scaling factors `scale`
+def solvePoisson_precomped(rho: array,
+                           scale: float) -> array:
     """
-    if isinstance(rho, cp.ndarray):
+    Solve the poisson equation "P phi = rho" using DCT
+
+    :param rho:
+    :param scale: precomputed scaling factors
+    :return phi:
+    """
+    if cp and isinstance(rho, cp.ndarray):
         xp = cp
         fft = fft_gpu
     else:
@@ -150,8 +170,13 @@ def solvePoisson_precomped(rho, scale):
     return phi
 
 
-def precomp_Poissonscaling(rho):
-    if isinstance(rho, cp.ndarray):
+def precomp_Poissonscaling(rho: array):
+    """
+
+    :param rho:
+    :return:
+    """
+    if cp and isinstance(rho, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -167,9 +192,18 @@ def precomp_Poissonscaling(rho):
     return scale
 
 
-def applyQ(p, WWx, WWy):
-    """Apply the weighted transformation (A^T)(W^T)(W)(A) to 2D matrix p"""
-    if isinstance(p, cp.ndarray):
+def applyQ(p: array,
+           WWx,
+           WWy):
+    """
+    Apply the weighted transformation (A^T)(W^T)(W)(A) to 2D matrix p
+
+    :param p:
+    :param WWx:
+    :param WWy:
+    :return Qp:
+    """
+    if cp and isinstance(p, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -193,7 +227,12 @@ def applyQ(p, WWx, WWy):
 
 
 def _wrapToPi(x):
-    if isinstance(x, cp.ndarray):
+    """
+
+    :param x:
+    :return:
+    """
+    if cp and isinstance(x, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -202,19 +241,25 @@ def _wrapToPi(x):
     return r
 
 
-def phase_unwrap(psi, weight=None, kmax=100):
+def phase_unwrap(psi: array,
+                 weight: Optional[array] = None,
+                 kmax: int = 100):
     """
     Unwrap the phase of an image psi given weights weight
-
     This function uses an algorithm described by Ghiglia and Romero
     and can either be used with or without weight array.
     It is especially suited to recover a unwrapped phase image
-    from a (noisy) complex type image, where psi would be 
+    from a (noisy) complex type image, where psi would be
     the angle of the complex values and weight the absolute values
     of the complex image.
+
+    :param psi:
+    :param weight:
+    :param kmax:
+    :return phi:
     """
 
-    if isinstance(psi, cp.ndarray):
+    if cp and isinstance(psi, cp.ndarray):
         xp = cp
         fft = fft_gpu
     else:

@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcsim"
+dynamic = ["version"]
+authors = [
+    {name = "Peter T. Brown", email="ptbrown1729@gmail.com"}
+]
+license = {file = "LICENSE"}
+keywords = ["microscopy", "SIM", "structured illumination", "DMD"]
+description = "A package for simulating and controlling a multicolor structured illumination microscopy (SIM) experiment using a DLP6500 digital micromirror device (DMD) and performing SIM reconstruction."
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+requires-python = ">=3.9"
+dependencies = ['numpy',
+                'scipy',
+                'matplotlib',
+                'pandas',
+                'scikit-image',
+                'joblib',
+                'psutil',
+                'tifffile',
+                'zarr',
+                'numcodecs',
+                'h5py',
+                'dask',
+                'dask-image',
+                'localize_psf @ git+https://git@github.com/qi2lab/localize-psf@master#egg=localize_psf'
+                ]
+
+[tool.setuptools]
+packages = ["mcsim", "mcsim.analysis", "mcsim.expt_ctrl"]
+
+[tool.setuptools.dynamic]
+version = {attr = "mcsim.__version__"}
+
+[project.optional-dependencies]
+expt_ctrl = ['PyDAQmx', 'pywinusb>=0.4.2']
+gpu = ['cupy-cuda11x',  # assuming 11.2 <= CUDA version < 12. Otherwise, manually install
+       'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim',
+      ]
+dev = ['sphinx']

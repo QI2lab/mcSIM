@@ -1,5 +1,9 @@
-import time
+"""
+Generate DMD patterns for FS-ODT patterns
+"""
+from time import perf_counter
 from typing import Optional
+from collections.abc import Sequence
 import numpy as np
 
 
@@ -167,12 +171,12 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
         return np.sum(d) + line_penalty
 
     # swap frequencies between patterns to achieve better cost
-    tstart_swap = time.perf_counter()
+    tstart_swap = perf_counter()
     if n_multiplex > 1:
         for aa in range(n_swap_cycles):
             if verbose:
                 print(f"swap {aa + 1:d}/{n_swap_cycles:d}, "
-                      f"elapsed time = {time.perf_counter() - tstart_swap:.2f}", end="\r")
+                      f"elapsed time = {perf_counter() - tstart_swap:.2f}", end="\r")
 
             for ii in range(npatterns):
                 for jj in range(npatterns):
@@ -207,14 +211,15 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
     return center_sets
 
 
-def _nearest_pt_line(pt, slope, pt_line):
+def _nearest_pt_line(pt,
+                     slope,
+                     pt_line):
     """
-    Get shortest distance between a point and a line.
+    Get the shortest distance between a point and a line.
 
     :param pt: (xo, yo), point of itnerest
     :param slope: slope of line
     :param pt_line: (xl, yl), point the line passes through
-
     :return pt: (x_near, y_near), nearest point on line
     :return d: shortest distance from point to line
     """
@@ -233,7 +238,8 @@ def _nearest_pt_line(pt, slope, pt_line):
 
 def _nearest_line_pts(pts):
     """
-    Get closest line fitting a set of points
+    Get the closest line fitting a set of points
+
     :param pts:
     :return:
     """
@@ -250,8 +256,8 @@ def _nearest_line_pts(pts):
     return slope, pt_line
 
 
-def get_odt_patterns(center_set: list[np.ndarray],
-                     dmd_size: tuple[int],
+def get_odt_patterns(center_set: Sequence[np.ndarray],
+                     dmd_size: Sequence[int, int],
                      rad: float,
                      mag_dmd2bfp: float,
                      fl_detection: float,
@@ -260,7 +266,7 @@ def get_odt_patterns(center_set: list[np.ndarray],
                      dm: float,
                      fc: np.ndarray,
                      phase: float = 0.,
-                     drs: Optional[list[np.ndarray]] = None,
+                     drs: Optional[Sequence[np.ndarray]] = None,
                      use_off_mirrors: bool = True) -> (np.ndarray, list[dict]):
     """
     Generate DMD patterns from a list of center positions

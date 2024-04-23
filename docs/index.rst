@@ -11,9 +11,12 @@ Welcome to mcSIM's documentation!
    :caption: Contents:
 
    sim
-   odt
+   tomography
    field_prop
+   fft
+   mie_fields
    tools
+   phase_unwrap
    dmd_patterns
    dmd_simulation
    dmd_affine

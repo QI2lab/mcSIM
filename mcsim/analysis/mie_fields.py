@@ -2,12 +2,13 @@
 Compute electric field for a plane wave incident on a dielectric sphere.
 """
 from typing import Union
+from collections.abc import Sequence
 import numpy as np
 from miepython.miepython import _mie_An_Bn
 from scipy.special import spherical_jn, spherical_yn, lpmv
-from localize_psf.affine import euler_mat, euler_mat_inv
+from localize_psf.rotation import euler_mat, euler_mat_inv
 
-_gpu_available = False
+
 try:
     import cupy as cp
     from cupyx.scipy.special import lpmv as lpmv_gpu
@@ -97,13 +98,17 @@ try:
 
         return out[:, :n], derivative[:, :n]
 
-
-    _gpu_available = True
 except ImportError:
-    cp = np
+    cp = None
+    lpmv_gpu = None
+    yn = None
+    jn = None
 
 
-array = Union[np.ndarray, cp.ndarray]
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 
 # helper function
@@ -118,35 +123,35 @@ def mie_efield(wavelength: float,
                radius: float,
                n_sphere: float,
                dxy: float,
-               esize: tuple,
+               esize: Sequence[int, int],
                dz: float,
                beam_theta: float = 0.,
                beam_phi: float = 0.,
                beam_psi: float = 0.,
                use_gpu: bool = False) -> (array, array, array, array):
     """
-    Use miepython to compute multipolar coefficients, and use scipy special functions to
-    calculate fields
+    Use miepython to compute multipolar coefficients, and use either scipy special functions
+    or GPU accelerated custom CuPy kernels to calculate fields. There are many good references
+    for computing scattered electric fields from spherical particles using Mie theory.
+    This code follows "Absorption and scattering of light by small particles" Bohren, 1983,
+    https://doi.org/10.1364/AO.39.005117. Bohren uses the phase convention exp(ikx - iwt),
+    as described in the start of ch 3.
 
-    Several good references for this.
-    "Absorption and scattering of light by small particles" Bohren (1983).
-    Bohren phasors are exp(ikx - iwt) (start of ch 3)
-    https://doi.org/10.1364/AO.39.005117
-    :param wavelength:
-    :param no:
-    :param radius:
-    :param n_sphere:
-    :param dxy:
-    :param esize: (ny, nx)
+    :param wavelength: wavelength of light
+    :param no: refractive index of background medium
+    :param radius: radius of sphere
+    :param n_sphere: refractive index of sphere
+    :param dxy: pixel size
+    :param esize: (ny, nx) size of grid to calculate electric field on
     :param dz: distance away from sphere to calculate field
-    :param beam_theta:
-    :param beam_phi:
-    :param beam_psi:
-    :param use_gpu:
+    :param beam_theta: euler angles describing beam incident direction
+    :param beam_phi: euler angles describing beam incident direction
+    :param beam_psi: euler angles describing beam incident direction
+    :param use_gpu: whether to compute electric field arrays on the GPU
     :return exyz, exyz_o, exyz_in, exyz_in_o:
     """
 
-    if use_gpu and _gpu_available:
+    if cp and use_gpu:
         xp = cp
     else:
         xp = np

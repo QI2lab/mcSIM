@@ -9,25 +9,24 @@ Simulate DMD peak broadening including
 3. PSF from first lens
 """
 import numpy as np
-from numpy import fft
+from numpy.fft import fftshift, fftfreq
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
 import mcsim.analysis.simulate_dmd as sdmd
-from localize_psf import fit_psf
+from localize_psf.fit_psf import blur_img_psf
 
-_cupy_available = True
 try:
     import cupy as cp
 except ImportError:
-    _cupy_available = False
+    cp = None
 
 # ############################
 # user settings
 # ############################
 use_gpu = True
 
-if use_gpu and _cupy_available:
+if use_gpu and cp:
     xp = cp
 else:
     xp = np
@@ -47,9 +46,9 @@ ny, nx = dmd.size
 xx, yy = xp.meshgrid(xp.arange(nx) - nx // 2,
                      xp.arange(ny) - ny // 2)
 
-fxs_dmd = fft.fftshift(fft.fftfreq(nx))
+fxs_dmd = fftshift(fftfreq(nx))
 dfx_dmd = fxs_dmd[1] - fxs_dmd[0]
-fys_dmd = fft.fftshift(fft.fftfreq(ny))
+fys_dmd = fftshift(fftfreq(ny))
 dfy_dmd = fys_dmd[1] - fys_dmd[0]
 extent_fxy_dmd = [fxs_dmd[0] - 0.5 * dfx_dmd, fxs_dmd[-1] + 0.5 * dfx_dmd,
                   fys_dmd[0] - 0.5 * dfy_dmd, fys_dmd[-1] + 0.5 * dfy_dmd]
@@ -69,11 +68,8 @@ offsets = np.array([[0, 0], [0, 30]])
 phase = 0
 rad = 10
 ang = -45 * np.pi/180
-# ang = -43 * np.pi/180
-# ang = 0 * np.pi / 180
+
 f1 = np.array([np.sin(-45 * np.pi / 180), np.cos(-45 * np.pi / 180)]) * 1/4 * np.sqrt(2)
-# f2 = np.array([np.sin(-40 * np.pi / 180), np.cos(-40 * np.pi / 180)]) * 1/4 * np.sqrt(2) * 0.7
-# frqs = np.stack((f1, f2), axis=0)
 frqs = np.expand_dims(f1, axis=0)
 
 frqs, offsets = np.broadcast_arrays(frqs, offsets)
@@ -84,7 +80,6 @@ square_spot = False
 pattern = xp.ones((ny, nx), dtype=bool)
 
 for offset, frq in zip(offsets, frqs):
-
     # generate base pattern
     pattern_base = xp.round(np.cos(2 * np.pi * (xx * frq[0] + yy * frq[1]) + phase), 12)
     pattern_base[pattern_base <= 0] = 0
@@ -134,18 +129,6 @@ main_ir_order_out = sdmd.solve_diffraction_output(uvec_in_ir,
                                                   order_ir[0],
                                                   order_ir[1])
 
-# bx_out = optical_axis[0] - wavelength / dmd.dx * frqs[0][0]
-# by_out = optical_axis[1] - wavelength / dmd.dy * frqs[0][1]
-# bz_out = np.sqrt(1 - bx_out**2 - by_out**2)
-# main_ir_order_out = np.stack((bx_out, by_out, bz_out))
-#
-# # uvec_in = sdmd.solve_diffraction_input(uvec_out, dm, dm, wavelength, order_ir)
-# uvec_in_ir = sdmd.solve_diffraction_input(main_ir_order_out,
-#                                           dmd.dx,
-#                                           dmd.dy,
-#                                           wavelength,
-#                                           order_ir[0],
-#                                           order_ir[1])
 tp, tm = sdmd.uvector2tmtp(*uvec_in_ir.ravel())
 print("%.0fnm input angles:" % (wavelength * 1e3))
 print("theta_p = %0.2fdeg" % (tp * 180/np.pi))
@@ -169,14 +152,6 @@ tp_blaze, tm_blaze = sdmd.uvector2tmtp(*uvec_blaze_off.squeeze())
 # ############################
 # get positions of carrier frequency spot
 # ############################
-# uvec_opt_axis_carrier = np.array(sdmd.dmd_frq2opt_axis_uvec(frqs[0][0],
-#                                                             frqs[0][1],
-#                                                             main_ir_order_out,
-#                                                             optical_axis,
-#                                                             dmd.dx,
-#                                                             dmd.dy,
-#                                                             wavelength)).ravel()
-
 bf_x, bf_y, bf_z = sdmd.dmd_frq2uvec(main_ir_order_out,
                                      frqs[0][0],
                                      frqs[0][1],
@@ -270,13 +245,13 @@ psf_amp = psf_amp / xp.sqrt(xp.sum(xp.abs(psf_amp)**2))
 fx_fourier_plane = xf / fl * wavelength
 fy_fourier_plane = yf / fl * wavelength
 ff_fourier_plane = xp.sqrt(fx_fourier_plane**2 + fy_fourier_plane**2)
-efield_broad = fit_psf.blur_img_psf(efields * xp.exp(-1j * (2 * np.pi) ** 2 * (ff_fourier_plane ** 2) / (2 * k) * fl),
-                                    psf_amp) * xp.exp(1j * k * (xf ** 2 + yf ** 2) / (2 * fl))
+efield_broad = blur_img_psf(efields * xp.exp(-1j * (2 * np.pi) ** 2 * (ff_fourier_plane ** 2) / (2 * k) * fl),
+                            psf_amp) * xp.exp(1j * k * (xf ** 2 + yf ** 2) / (2 * fl))
 
 # ############################
 # move results off GPU that want to plot
 # ############################
-if use_gpu and _cupy_available:
+if use_gpu and cp:
     efields_dft = efields_dft.get()
     sinc_on_dft = sinc_on_dft.get()
     sinc_off_dft = sinc_off_dft.get()
@@ -302,7 +277,9 @@ figh.suptitle(f"Simulation of DMD pattern imaged by lens of f={fl * 1e-3:.1f}mm\
               f" $(\\theta_-, \\theta_+)$ = ({tm * 180 / np.pi:.2f}, {tp * 180 / np.pi:.2f})deg\n"
               f"optical axis = ({optical_axis[0]:.3f}, {optical_axis[1]:.3f}, {optical_axis[2]:.3f});"
               f" $(\\theta_-, \\theta_+)$ = ({tm_oa * 180 / np.pi:.2f}, {tp_oa * 180 / np.pi:.2f})deg\n"
-              f" blaze direction = ({uvec_blaze_off[0, 0]:.3f}, {uvec_blaze_off[0, 1]:.3f}, {uvec_blaze_off[0, 2]:.3f});"
+              f" blaze direction = ({uvec_blaze_off[0, 0]:.3f}, "
+              f"{uvec_blaze_off[0, 1]:.3f}, "
+              f"{uvec_blaze_off[0, 2]:.3f});"
               f" $(\\theta_-, \\theta_+)$ = ({tm_blaze * 180 / np.pi:.2f}, {tp_blaze * 180 / np.pi:.2f})deg\n"
               f"phase error = {phase_err_size / np.pi:.3f}*pi")
 
@@ -323,8 +300,12 @@ ax.set_title("Electric field versus output angle\n"
              "$|E(b(f) - a)|^2$ from DFT")
 
 ax = figh.add_subplot(grid[1, 0])
-ax.imshow(np.angle(efields_dft), origin="lower", extent=extent_fxy_dmd,
-           vmin=-np.pi, vmax=np.pi, cmap="RdBu")
+ax.imshow(np.angle(efields_dft),
+          origin="lower",
+          extent=extent_fxy_dmd,
+          vmin=-np.pi,
+          vmax=np.pi,
+          cmap="RdBu")
 ax.add_artist(Circle(frqs[0], radius=0.01, fill=False, color="r"))
 ax.add_artist(Circle(-frqs[0], radius=0.01, fill=False, color="m"))
 ax.set_xlabel("$f_x$ (1/mirrors)")
@@ -375,7 +356,6 @@ ax.imshow(np.abs(efields) ** 2,
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
 ax.add_artist(Circle((xc_carrier, yc_carrier), radius=3*dxyf, fill=False, color="r"))
-#ax.plot(xf_dft.ravel(), yf_dft.ravel(), 'gx')
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 ax.set_xlabel("x-position, BFP (um)")
@@ -387,7 +367,6 @@ ax.imshow(np.angle(efields), origin="lower", extent=extent_xyf, vmin=-np.pi, vma
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
 ax.add_artist(Circle((xc_carrier, yc_carrier), radius=3*dxyf, fill=False, color="r"))
-#ax.plot(xf_dft.ravel(), yf_dft.ravel(), 'gx')
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 ax.set_xlabel("x-position, BFP (um)")
@@ -403,7 +382,6 @@ im = ax.imshow(np.abs(efield_broad) ** 2,
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
 ax.add_artist(Circle((xc_carrier, yc_carrier), radius=3*dxyf, fill=False, color="r"))
-#ax.plot(xf_dft.ravel(), yf_dft.ravel(), 'gx')
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 ax.set_xlabel("x-position, BFP (um)")
@@ -411,11 +389,18 @@ ax.set_ylabel("y-position, BFP (um)")
 ax.set_title("|E(r)|^2")
 
 ax = figh.add_subplot(grid[1, 5])
-im_ph = ax.imshow(np.angle(efield_broad), origin="lower", extent=extent_xyf, vmin=-np.pi, vmax=np.pi, cmap="RdBu")
+im_ph = ax.imshow(np.angle(efield_broad),
+                  origin="lower",
+                  extent=extent_xyf,
+                  vmin=-np.pi,
+                  vmax=np.pi,
+                  cmap="RdBu")
 xlim = ax.get_xlim()
 ylim = ax.get_ylim()
-ax.add_artist(Circle((xc_carrier, yc_carrier), radius=3*dxyf, fill=False, color="r"))
-#ax.plot(xf_dft.ravel(), yf_dft.ravel(), 'gx')
+ax.add_artist(Circle((xc_carrier, yc_carrier),
+                     radius=3*dxyf,
+                     fill=False,
+                     color="r"))
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 ax.set_xlabel("x-position, BFP (um)")
@@ -438,7 +423,10 @@ ax.set_title(f"DMD pattern, frq = ({frqs[0][0]:.3f}, {frqs[0][1]:.3f}) 1/mirrors
 ax.imshow(pattern, origin="lower", cmap="bone")
 ax.set_xlabel("x-position (mirrors)")
 ax.set_ylabel("y-position (mirrors)")
-ax.add_artist(Circle((nx // 2, ny // 2), radius=2, fill=False, color="r"))
+ax.add_artist(Circle((nx // 2, ny // 2),
+                     radius=2,
+                     fill=False,
+                     color="r"))
 
 xsize = np.min([3 * rad, nx // 2])
 ysize = np.min([3 * rad, ny // 2])

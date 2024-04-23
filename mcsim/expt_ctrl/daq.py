@@ -5,20 +5,22 @@ Different models of DAQ card should inherit from the class daq (think of this li
 """
 from typing import Optional
 import datetime
-import re
+from re import match
 import json
 import ctypes as ct
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib
-import warnings
+from matplotlib.figure import Figure
+from warnings import warn
+
 try:
     import PyDAQmx as daqmx
 except ImportError:
-    warnings.warn("PyDAQmx could not be imported")
+    daqmx = None
+    warn("PyDAQmx could not be imported")
 
 
-class daq():
+class daq:
     def __init__(self):
         pass
 
@@ -41,7 +43,8 @@ class daq():
 class nidaq(daq):
     """
     Class for controlling National Instruments DAQ
-    # todo: want better way to deal with digital line addresses. Maybe should store these for each line in self.digital_lines
+    # todo: want better way to deal with digital line addresses.
+    # todo: Maybe should store these for each line in self.digital_lines
     # todo: and separately store the block indices somehow...
 
     # todo: right now stores addresses and etc. in lists and use the index of the list as the index of the lines
@@ -75,7 +78,9 @@ class nidaq(daq):
         """
         super().__init__()
 
-        if config_file is not None and (digital_line_names is not None or analog_line_names is not None or presets is not None):
+        if config_file is not None and (digital_line_names is not None or
+                                        analog_line_names is not None or
+                                        presets is not None):
             raise ValueError("config_file and either digital_line_names, analog_line_names, or presets"
                              " were both provided. If config_file is provided, do not also provide this other info")
 
@@ -87,8 +92,8 @@ class nidaq(daq):
         # todo: can I read lines from device like this? daqmx.GetDevTerminals()
 
         # digital output lines
-        self.digital_lines = f"/{dev_name}/{digital_lines}" # todo: get rid of in favor of digital_lines_addresses
-        self.n_digital_lines = 16 # todo: want to detect not hard code
+        self.digital_lines = f"/{dev_name}/{digital_lines}"  # todo: get rid of in favor of digital_lines_addresses
+        self.n_digital_lines = 16  # todo: want to detect not hard code
         self.digital_lines_addresses = [f"/{dev_name:s}/port0/line{ii:d}" for ii in range(self.n_digital_lines)]
         self.digital_line_names = digital_line_names
         self.last_known_digital_val = np.zeros(self.n_digital_lines, dtype=np.uint8)
@@ -155,7 +160,7 @@ class nidaq(daq):
         :return:
         """
         # todo: remove if not useful
-        m = re.match(self.do_re, address)
+        m = match(self.do_re, address)
 
         if m is None:
             raise ValueError("")
@@ -548,10 +553,9 @@ class nidaq(daq):
             self._task_ct.CfgDigEdgeStartTrig(start_trigger, daqmx.DAQmx_Val_Rising)
             self._task_ct.SetCOPulseTerm("", pause_trigger_line)
 
-
         # ######################
         # set up analog trigger line
-        # if analog trigger source is not internal, then need to setup a digital input task that perform edge detection
+        # if analog trigger source is not internal, then need to set up a digital input task that perform edge detection
         # on the digital_input_source port. Then, the edge detections must be routed to the analog trigger source port
         #
         # currently I manually route one of the digital out lines to the digital_input_source using a wire
@@ -602,7 +606,8 @@ class nidaq(daq):
             self._task_ao.CfgDigEdgeStartTrig(start_trigger,
                                               daqmx.DAQmx_Val_Rising)
 
-            # if analog task has only one step, then we need to add a second step, otherwise WriteAnalogF64 will complain
+            # if analog task has only one step, then we need to add a second step,
+            # otherwise WriteAnalogF64 will complain
             # This can happen if we are using a digital line to trigger the analog lines that only rarely change,
             if analog_array.shape[0] == 1:
                 analog_array = np.concatenate((analog_array, analog_array), axis=0)
@@ -734,7 +739,7 @@ class nidaq(daq):
                                     daqmx.DAQmx_Val_GroupByChannel,  # fillMode
                                     data,  # readArray[]
                                     arr_size,  # arraySizeInSamps
-                                    ct.byref(read), # sampsPerchanRead
+                                    ct.byref(read),  # sampsPerchanRead
                                     None  # reserved
                                     )
 
@@ -749,9 +754,9 @@ class nidaq(daq):
 
 
 def plot_daq_program(arr: np.ndarray,
-                     line_map: dict = None,
+                     line_map: Optional[dict] = None,
                      title: str = "",
-                     **kwargs) -> matplotlib.figure.Figure:
+                     **kwargs) -> Figure:
     """
     Plot DAQ program as an array
 
@@ -838,8 +843,8 @@ def preset_to_array(preset: dict,
       for the preset
     :param do_map: digital output map dictionary, where do_map["line_name"] = line index
     :param ao_map:
-    :param n_digital_channels: size used to generate array. If not specified use largest value in do_map
-    :param n_analog_channels: size used to generate array. If not specific use largest value in ao_map
+    :param n_digital_channels: size used to generate array. If not specified use the largest value in do_map
+    :param n_analog_channels: size used to generate array. If not specific use the largest value in ao_map
     :return digital_array, analog_array:
     """
 
@@ -879,7 +884,12 @@ def save_config_file(fname: str,
     tstamp = f"{now.year:04d}_{now.month:02d}_{now.day:02d}_{now.hour:02d};{now.minute:02d};{now.second:02d}"
 
     with open(fname, "w") as f:
-        json.dump({"timestamp": tstamp, "analog_map": analog_map, "digital_map": digital_map, "presets": presets}, f, indent="\t")
+        json.dump({"timestamp": tstamp,
+                   "analog_map": analog_map,
+                   "digital_map": digital_map,
+                   "presets": presets},
+                  f,
+                  indent="\t")
 
 
 def load_config_file(fname: str) -> (dict, dict, dict, str):

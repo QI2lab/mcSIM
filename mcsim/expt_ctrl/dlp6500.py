@@ -14,29 +14,34 @@ which cannot be used with e.g. python and the ctypes library as a dll could be.
 This DMD control code was originally based on refactoring https://github.com/mazurenko/Lightcrafter6500DMDControl.
 The combine_patterns() function was inspired by https://github.com/csi-dcsc/Pycrafter6500.
 """
+from collections.abc import Sequence
+from typing import Union, Optional
 import sys
 import time
 from struct import pack, unpack
 import numpy as np
 from copy import deepcopy
 import datetime
-import argparse
+from argparse import ArgumentParser
 # for dealing with configuration files
 import json
 import zarr
-import warnings
+from warnings import warn
 from pathlib import Path
 from numcodecs import packbits
+
 try:
     import pywinusb.hid as pyhid
 except ImportError:
-    warnings.warn("pywinusb could not be imported")
+    pyhid = None
+    warn("pywinusb could not be imported")
 
 
 ##############################################
 # compress DMD pattern data
 ##############################################
-def combine_patterns(patterns: np.ndarray, bit_depth: int = 1):
+def combine_patterns(patterns: np.ndarray,
+                     bit_depth: int = 1):
     """
     Given a series of binary patterns, combine these into 24 bit RGB images to send to DMD. For binary patterns,
     the DMD supports sending a group of up to 24 patterns as an RGB image, with each bit of the 24 bit
@@ -80,7 +85,7 @@ def split_combined_patterns(combined_patterns) -> np.ndarray:
 
     :param combined_patterns: 3 x Ny x Nx uint8 array representing up to 24 combined patterns. Actually
       will accept input of arbitrary dimensions as long as first dimension has size 3.
-    :return: 24 x Ny x Nx array. This will always have first dimension of 24 because the number of
+    :return: 24 x Ny x Nx array. This will always have a first dimension of size 24 because the number of
       zero patterns at the end is ambiguous.
     """
     patterns = np.zeros((24,) + combined_patterns.shape[1:], dtype=np.uint8)
@@ -158,8 +163,8 @@ def encode_erle(pattern: np.ndarray) -> list:
                                        np.array([nx - inds_change[-1]])))
 
             # now build compressed list
-            for ii, rlen in zip(inds_change, run_lens):
-                v = row_rgb[:, ii]
+            for jj, rlen in zip(inds_change, run_lens):
+                v = row_rgb[:, jj]
                 length_bytes = erle_len2bytes(rlen)
                 pattern_compressed += length_bytes + [v[0], v[1], v[2]]
 
@@ -175,7 +180,7 @@ def encode_rle(pattern: np.ndarray) -> list:
     row_rgb length encoding (RLE). Information is encoded as number of repeats
     of a given value and values. In RLE the number of repeats is given by a single byte.
     e.g. AAABBCCCCD = 3A2B4C1D
-    The DMD uses a `24bit RGB' encoding scheme, meaning four bits represent each piece of information. The first byte
+    The DMD uses a '24bit RGB' encoding scheme, meaning four bits represent each piece of information. The first byte
     (i.e. the control byte) gives the length, and the next three give the values for RGB.
     The only exceptions occur when the control byte is 0x00, in this case there are several options. If the next byte
     is 0x00 this indicates 'end of line', if it is 0x01 this indicates 'end of image', and if it is any other number n,
@@ -231,8 +236,8 @@ def encode_rle(pattern: np.ndarray) -> list:
                                        np.array([nx - inds_change[-1]])))
 
             # now build compressed list
-            for ii, rlen in zip(inds_change, run_lens):
-                v = row_rgb[:, ii]
+            for jj, rlen in zip(inds_change, run_lens):
+                v = row_rgb[:, jj]
                 if rlen <= 255:
                     pattern_compressed += [rlen, v[0], v[1], v[2]]
                 else:  # if run is longer than one byte, need to break it up
@@ -253,7 +258,8 @@ def encode_rle(pattern: np.ndarray) -> list:
     return pattern_compressed
 
 
-def decode_erle(dmd_size, pattern_bytes: list):
+def decode_erle(dmd_size,
+                pattern_bytes: list):
     """
     Decode pattern from ERLE or RLE.
 
@@ -406,7 +412,7 @@ def erle_bytes2len(byte_list: list) -> int:
 ##############################################
 # firmware indexing helper functions
 ##############################################
-def firmware_index_2pic_bit(firmware_indices):
+def firmware_index_2pic_bit(firmware_indices: Sequence[int]) -> (np.ndarray, np.ndarray):
     """
     convert from single firmware pattern index to picture and bit indices
 
@@ -419,7 +425,8 @@ def firmware_index_2pic_bit(firmware_indices):
     return pic_inds, bit_inds
 
 
-def pic_bit_ind_2firmware_ind(pic_inds, bit_inds):
+def pic_bit_ind_2firmware_ind(pic_inds: Sequence[int],
+                              bit_inds: Sequence[int]) -> np.ndarray:
     """
     Convert from picture and bit indices to single firmware pattern index
 
@@ -427,7 +434,7 @@ def pic_bit_ind_2firmware_ind(pic_inds, bit_inds):
     :param bit_inds:
     :return firmware_inds:
     """
-    firmware_inds = pic_inds * 24 + bit_inds
+    firmware_inds = np.asarray(pic_inds) * 24 + np.asarray(bit_inds)
     return firmware_inds
 
 
@@ -475,9 +482,9 @@ def validate_channel_map(cm: dict) -> (bool, str):
 
 
 def save_config_file(fname: str,
-                     pattern_data: list[dict],
-                     channel_map: dict = None,
-                     firmware_patterns: np.ndarray = None,
+                     pattern_data: Sequence[dict],
+                     channel_map: Optional[dict] = None,
+                     firmware_patterns: Optional[np.ndarray] = None,
                      use_zarr: bool = True):
     """
     Save DMD firmware configuration data to zarr or json file
@@ -545,7 +552,7 @@ def save_config_file(fname: str,
 
     else:
         if firmware_patterns is not None:
-            warnings.warn("firmware_patterns were provided but json configuration file was selected."
+            warn("firmware_patterns were provided but json configuration file was selected."
                           " Use zarr instead to save firmware patterns")
 
         with open(fname, "w") as f:
@@ -554,11 +561,11 @@ def save_config_file(fname: str,
                        "channel_map": channel_map_list}, f, indent="\t")
 
 
-def load_config_file(fname: str):
+def load_config_file(fname: Union[str, Path]):
     """
     Load DMD firmware data from json configuration file
 
-    :param fname:
+    :param fname: configuration file path
     :return pattern_data, channel_map, firmware_patterns, tstamp:
     """
 
@@ -610,7 +617,7 @@ def load_config_file(fname: str):
 
 
 def get_preset_info(preset: dict,
-                    pattern_data):
+                    pattern_data: Sequence):
     """
     Get useful data from preset
 
@@ -750,13 +757,13 @@ class dlpc900_dmd:
                  vendor_id: int = 0x0451,
                  product_id: int = 0xc900,
                  debug: bool = True,
-                 firmware_pattern_info: list = None,
-                 presets: dict = None,
-                 config_file: str = None,
-                 firmware_patterns: np.ndarray = None,
+                 firmware_pattern_info: Optional[list] = None,
+                 presets: Optional[dict] = None,
+                 config_file: Optional[Union[str, Path]] = None,
+                 firmware_patterns: Optional[np.ndarray] = None,
                  initialize: bool = True,
                  dmd_index: int = 0,
-                 platform: str = None):
+                 platform: Optional[str] = None):
         """
         Get instance of DLP LightCrafter evaluation module (DLP6500 or DLP9000). This is the base class which os
         dependent classes should inherit from. The derived classes only need to implement _get_device and
@@ -774,7 +781,7 @@ class dlpc900_dmd:
         :param firmware_patterns: npatterns x ny x nx array of patterns stored in DMD firmware. NOTE, this class
           does not deal with loading or reading patterns from the firmware. Do this with the TI GUI
         :param initialize: whether to connect to the DMD. In certain cases it is convenient to create this object
-          before connecting to the DMD, if e.g. we want to pass the DMD to another class but we don't know what
+          before connecting to the DMD, if e.g. we want to pass the DMD to another class, but we don't know what
           DMD index we want yet
         :param dmd_index: If multiple DMD's are attached, choose this one. Indexing starts at zero
         """
@@ -1039,35 +1046,30 @@ class dlpc900_dmd:
         return self.send_raw_command(buffer, reply)
 
     @staticmethod
-    def decode_command(self,
-                       buffer,
-                       mode: str = 'first-packet'):
+    def decode_command(buffer,
+                       is_first_packet: bool = True):
         """
         Decode DMD command into constituent pieces
 
         :param buffer:
-        :param mode: 'first-packet' or 'nth-packet'
+        :param is_first_packet:
         :return flag_byte, sequence_byte, data_len, cmd, data:
         """
 
-        if mode == 'first-packet':
+        if is_first_packet:
             flag_byte = bin(buffer[1])
             sequence_byte = hex(buffer[2])
-
             len_bytes = pack('B', buffer[4]) + pack('B', buffer[3])
             data_len = unpack('H', len_bytes)[0]
-
             cmd = pack('B', buffer[6]) + pack('B', buffer[5])
             data = buffer[7:]
-        elif mode == 'nth-packet':
+        else:
             flag_byte = None
             sequence_byte = None
             len_bytes = None
             data_len = None
             cmd = None
             data = buffer[1:]
-        else:
-            raise ValueError("mode must be 'first-packet' or 'nth-packet', but was '%s'" % mode)
 
         return flag_byte, sequence_byte, data_len, cmd, data
 
@@ -1354,7 +1356,7 @@ class dlpc900_dmd:
         if delay_us < 104:
             raise ValueError(f'delay time must be {self.min_time_us:.0f}us or longer.')
 
-        # todo: is this supposed to be a signed or unsigned integer.
+        # todo: is this supposed to be a signed or unsigned integer?
         delay_byte = list(unpack('BB', pack('<H', delay_us)))
 
         if edge_to_advance == 'rising':
@@ -1469,7 +1471,7 @@ class dlpc900_dmd:
         return self.send_command('w', True, self.command_dict["Execute_Firmware_Batch_File"], [batch_index])
 
     def set_fwbatch_delay(self,
-                          delay_ms):
+                          delay_ms: int):
         """
         Set delay between batch file commands
 
@@ -1510,7 +1512,7 @@ class dlpc900_dmd:
                                  data=num_patterns_bytes + num_repeats_bytes)
 
     def pattern_display_lut_definition(self,
-                                       sequence_position_index,
+                                       sequence_position_index: int,
                                        exposure_time_us: int = 105,
                                        dark_time_us: int = 0,
                                        wait_for_trigger: bool = True,
@@ -1528,8 +1530,8 @@ class dlpc900_dmd:
         display data input source is set to streaming the image indices do not need to be set.
 
         When uploading 1 bit image, each set of 24 images are first combined to a single 24 bit RGB image. pattern_index
-        refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to which bit of that image (i.e.
-        in the RGB bytes, it is stored in.
+        refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to which bit of that image
+        it is stored in.
 
         :param sequence_position_index:
         :param exposure_time_us:
@@ -1596,9 +1598,9 @@ class dlpc900_dmd:
         return self.send_command('w', True, self.command_dict["MBOX_DATA"], data)
 
     def _init_pattern_bmp_load(self,
-                              pattern_length: int,
-                              pattern_index: int,
-                              primary_controller: bool = True):
+                               pattern_length: int,
+                               pattern_index: int,
+                               primary_controller: bool = True):
         """
         Initialize pattern BMP load command.
 
@@ -1650,10 +1652,15 @@ class dlpc900_dmd:
         :return:
         """
 
+        if self.dual_controller:
+            width = self.width // 2
+        else:
+            width = self.width
+
         # get the header, 48 bytes long
         # Note: taken directly from sniffer of the TI GUI
         signature_bytes = [0x53, 0x70, 0x6C, 0x64]
-        width_byte = list(unpack('BB', pack('<H', self.width)))
+        width_byte = list(unpack('BB', pack('<H', width)))
         height_byte = list(unpack('BB', pack('<H', self.height)))
         # Number of bytes in encoded image_data
         num_encoded_bytes = list(unpack('BBBB', pack('<I', len(compressed_pattern))))
@@ -1674,8 +1681,8 @@ class dlpc900_dmd:
         # call init before loading pattern
         # todo: check len(data) = len(compressed_pattern) + 48 and replace in command
         buffer = self._init_pattern_bmp_load(len(compressed_pattern) + 48,
-                                            pattern_index=pattern_index,
-                                            primary_controller=primary_controller)
+                                             pattern_index=pattern_index,
+                                             primary_controller=primary_controller)
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
@@ -1705,35 +1712,31 @@ class dlpc900_dmd:
 
     def upload_pattern_sequence(self,
                                 patterns: np.ndarray,
-                                exp_times: list[int],
-                                dark_times: list[int],
+                                exp_times: Union[Sequence[int], int],
+                                dark_times: Union[Sequence[int], int],
                                 triggered: bool = False,
                                 clear_pattern_after_trigger: bool = True,
                                 bit_depth: int = 1,
                                 num_repeats: int = 0,
-                                compression_mode: str = 'erle',
-                                combine_images: bool = True):
+                                compression_mode: str = 'erle') -> (np.ndarray, np.ndarray):
         """
-        Upload on-the-fly pattern sequence to DMD. This command is based on Table 5-3 in the DLP programming manual
-        # todo: seems I need to call set_pattern_sequence() after this command to actually get sequence running. Why?
-
-        The DMD behaves differently depending on the state of the trigger in signals when this command is issued.
-        If the trigger in signals are high, then the patterns will be displayed when the trigger is high. If the
-        trigger in signals are low, then the patterns will be displayed when the trigger is low.
+        Upload on-the-fly pattern sequence to DMD. This command is based on Table 5-3 in the DLP programming manual.
+        After loading patterns, the pattern sequence can be configured with set_pattern_sequence().
+        Note that after programming you may need to issue a start command, using start_stop_sequence(), to start the
+        sequence. Note also that the DMD behaves differently depending on the state of the trigger input lines when
+        this command is issued. If the trigger in signals are high, then the patterns will be displayed when the
+        trigger is high. If the trigger in signals are low, then the patterns will be displayed when the trigger is low.
 
         :param patterns: N x Ny x Nx NumPy array of uint8
-        :param exp_times: exposure times in us. Either a single uint8 number, or a list the same
+        :param exp_times: exposure times in us. Either a uint8, or a sequence the same
           length as the number of patterns. Must be >= self.minimum_time_us
-        :param dark_times: dark times in us. Either a single uint8 number or a list the same length
-          as the number of patterns
-        :param triggered: Whether or not DMD should wait to be triggered to display the next pattern
-        :param clear_pattern_after_trigger: Whether or not to keep displaying the pattern at the
-          end of exposure time,
-          i.e. during time while DMD is waiting for the next trigger.
-        :param bit_depth: Bit depth of patterns
+        :param dark_times: dark times in us. Either a uint8, or a sequence the same length as the number of patterns
+        :param triggered: Whether the DMD should wait for any advance frame trigger to display the next pattern
+        :param clear_pattern_after_trigger: Whether to keep displaying the pattern at the end of the exposure time,
+          while DMD is waiting for the next trigger.
+        :param bit_depth: bit depth of patterns
         :param num_repeats: Number of repeats. 0 means infinite.
         :param compression_mode: 'erle', 'rle', or 'none'
-        :param combine_images:
         :return stored_image_indices, stored_bit_indices: image and bit indices where each image was stored
         """
         # #########################
@@ -1825,12 +1828,11 @@ class dlpc900_dmd:
             print(self.read_error_description())
 
         # can combine images if bit depth = 1
-        if combine_images:
-            if bit_depth == 1:
-                patterns = combine_patterns(patterns)
-            else:
-                raise NotImplementedError("Combining multiple images into a 24-bit RGB image is only"
-                                          " implemented for bit depth 1.")
+        if bit_depth == 1:
+            patterns = combine_patterns(patterns)
+        else:
+            raise NotImplementedError("Combining multiple images into a 24-bit RGB image is only"
+                                      " implemented for bit depth 1.")
 
         # compress and load images in backwards order
         for ii, dmd_pattern in reversed(list(enumerate(patterns))):
@@ -1840,7 +1842,7 @@ class dlpc900_dmd:
             if self.dual_controller:
                 p0, p1 = np.array_split(dmd_pattern, 2, axis=-1)
                 cp0 = compression_fn(p0)
-                cp1 = compression_mode(p1)
+                cp1 = compression_fn(p1)
                 self._pattern_bmp_load(cp0,
                                        compression_mode,
                                        pattern_index=ii,
@@ -1870,10 +1872,10 @@ class dlpc900_dmd:
         return stored_image_indices, stored_bit_indices
 
     def set_pattern_sequence(self,
-                             image_indices: list[int],
-                             bit_indices: list[int],
-                             exp_times: int,
-                             dark_times: int,
+                             image_indices: Sequence[int],
+                             bit_indices: Sequence[int],
+                             exp_times: Union[Sequence[int], int],
+                             dark_times: Union[Sequence[int], int],
                              triggered: bool = False,
                              clear_pattern_after_trigger: bool = True,
                              bit_depth: int = 1,
@@ -1881,9 +1883,8 @@ class dlpc900_dmd:
                              mode: str = 'pre-stored'):
         """
         Setup pattern sequence from patterns previously stored in DMD memory, either in on-the-fly pattern mode,
-        or in pre-stored pattern mode
-
-        In most cases, use program_dmd_seq() instead of calling this function directly
+        or in pre-stored pattern mode. If you have uploaded patterns into the firmware and defined modes and channels,
+        then, use program_dmd_seq() instead of calling this function directly.
 
         :param image_indices:
         :param bit_indices:
@@ -1991,13 +1992,13 @@ class dlpc900_dmd:
     # supplied at instantiation using the "presets" argument
     #######################################
     def get_dmd_sequence(self,
-                         modes: list[str],
-                         channels: list[str],
-                         nrepeats: list[int] = 1,
-                         noff_before: list[int] = 0,
-                         noff_after: list[int] = 0,
-                         blank: list[bool] = False,
-                         mode_pattern_indices: list[list[int]] = None):
+                         modes: Sequence[str],
+                         channels: Sequence[str],
+                         nrepeats: Sequence[int] = 1,
+                         noff_before: Sequence[int] = 0,
+                         noff_after: Sequence[int] = 0,
+                         blank: Sequence[bool] = False,
+                         mode_pattern_indices: Sequence[Sequence[int]] = None):
         """
         Generate DMD patterns from a list of modes and channels
 
@@ -2141,8 +2142,10 @@ class dlpc900_dmd:
                 ibit_off_before = self.presets[channels[ii]]["off"]["bit_indices"] * \
                                   np.ones(noff_before[ii], dtype=int)
 
-                ipic_off_after = self.presets[channels[ii]]["off"]["picture_indices"] * np.ones(noff_after[ii], dtype=int)
-                ibit_off_after = self.presets[channels[ii]]["off"]["bit_indices"] * np.ones(noff_after[ii], dtype=int)
+                ipic_off_after = (self.presets[channels[ii]]["off"]["picture_indices"] *
+                                  np.ones(noff_after[ii], dtype=int))
+                ibit_off_after = (self.presets[channels[ii]]["off"]["bit_indices"] *
+                                  np.ones(noff_after[ii], dtype=int))
 
                 pic_inds[ii] = np.concatenate((ipic_off_before, pic_inds[ii], ipic_off_after), axis=0).astype(int)
                 bit_inds[ii] = np.concatenate((ibit_off_before, bit_inds[ii], ibit_off_after), axis=0).astype(int)
@@ -2171,17 +2174,17 @@ class dlpc900_dmd:
         return pic_inds, bit_inds
 
     def program_dmd_seq(self,
-                        modes: list[str],
-                        channels: list[str],
-                        nrepeats: list[int] = 1,
-                        noff_before: list[int] = 0,
-                        noff_after: list[int] = 0,
-                        blank: list[bool] = False,
-                        mode_pattern_indices: list[list[int]] = None,
+                        modes: Sequence[str],
+                        channels: Sequence[str],
+                        nrepeats: Sequence[int] = 1,
+                        noff_before: Sequence[int] = 0,
+                        noff_after: Sequence[int] = 0,
+                        blank: Sequence[bool] = False,
+                        mode_pattern_indices: Sequence[Sequence[int]] = None,
                         triggered: bool = False,
                         exp_time_us: int = 105,
                         clear_pattern_after_trigger: bool = False,
-                        verbose: bool = False):
+                        verbose: bool = False) -> (np.ndarray, np.ndarray):
         """
         convenience function for generating DMD pattern and programming DMD
 
@@ -2288,7 +2291,7 @@ if __name__ == "__main__":
     # define arguments
     # #######################
 
-    parser = argparse.ArgumentParser(description="Set DMD pattern sequence from the command line.")
+    parser = ArgumentParser(description="Set DMD pattern sequence from the command line.")
 
     # allowed channels
     all_channels = list(presets.keys())

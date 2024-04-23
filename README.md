@@ -12,16 +12,23 @@ determining the affine transformation between the DMD coordinates and the imagin
 files are described in more detail below.
  
 # Published work using this code
-* This DMD simulation tools and SIM reconstruction code were originally created for our Biomedical Optics Express paper 
-[Multicolor structured illumination microscopy and quantitative control of polychromatic light with a digital micromirror device](https://doi.org/10.1364/BOE.422703)
-([bioRxiv](https://doi.org/10.1101/2020.07.27.223941)). The repository state at the time of publication is archived [here](https://doi.org/10.5281/zenodo.4773865), or available as [release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0) on GitHub.
-* For a tutorial on SIM reconstruction, see our [I2K 2022 talks](https://github.com/QI2lab/I2K2022-SIM).
-* [Resolution doubling in light-sheet microscopy via oblique plane structured illumination ](https://doi.org/10.1038/s41592-022-01635-8) 
-([bioRxiv](https://doi.org/10.1101/2022.05.19.492671)). This version is archived [here](https://doi.org/10.5281/zenodo.6419901) or available as a [release](https://github.com/QI2lab/mcSIM/releases/tag/v0.2.0)
-* [Spatial wavefront shaping with a multipolar-resonant metasurface for structured illumination microscopy]() ([arXiv](https://doi.org/10.48550/arXiv.2309.14456)).
-* [A Structured Illumination Microscopy Framework with Spatial-Domain Noise Propagation]() ([bioRxiv](https://doi.org/10.1101/2023.12.07.570701)).
-This version is archived [here](https://doi.org/10.5281/zenodo.10037896) or available as [release v1.5.0](https://github.com/QI2lab/mcSIM/releases/tag/v1.5.0).
-* [Fourier synthesis optical diffraction tomography for kilohertz rate volumetric imaging]() ([arXiv](https://arxiv.org/abs/2309.16912)).
+* "Multicolor structured illumination microscopy and quantitative control of polychromatic light with a digital micromirror device"
+([BOE](https://doi.org/10.1364/BOE.422703), 
+[bioRxiv](https://doi.org/10.1101/2020.07.27.223941), 
+[Zenodo](https://doi.org/10.5281/zenodo.4773865), 
+[release](https://github.com/QI2lab/mcSIM/releases/tag/v1.0.0)).
+* "Resolution doubling in light-sheet microscopy via oblique plane structured illumination" 
+([Nat. Methods](https://doi.org/10.1038/s41592-022-01635-8), 
+[bioRxiv](https://doi.org/10.1101/2022.05.19.492671), 
+[Zenodo](https://doi.org/10.5281/zenodo.6419901), 
+[release](https://github.com/QI2lab/mcSIM/releases/tag/v0.2.0)).
+* "Spatial wavefront shaping with a multipolar-resonant metasurface for structured illumination microscopy" 
+([Opt. Mat. Exp.](https://doi.org/10.1364/OME.520736), [arXiv](https://doi.org/10.48550/arXiv.2309.14456)).
+* "A Structured Illumination Microscopy Framework with Spatial-Domain Noise Propagation" 
+([bioRxiv](https://doi.org/10.1101/2023.12.07.570701), 
+[Zenodo](https://doi.org/10.5281/zenodo.10037896), 
+[v1.5.0](https://github.com/QI2lab/mcSIM/releases/tag/v1.5.0)).
+* "Fourier synthesis optical diffraction tomography for kilohertz rate volumetric imaging" ([arXiv](https://arxiv.org/abs/2309.16912)).
 
 # Installation
 The best way to use this python package is to install it with pip
@@ -30,21 +37,26 @@ git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .
 ```
-If you would like to edit the code, then install using the `-e` option,
+If you would like to edit the code, then install using the `-e` option
 ```
 git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install -e .
 ```
+
+### Optional hardware control
 The dependencies for the experimental control code are not installed by default because
-the DMD control code relies on the Windows specific [pywinusb](https://pypi.org/project/pywinusb/). To install these dependencies run
+the DMD control code relies on the Windows specific [pywinusb](https://pypi.org/project/pywinusb/). 
+To install these dependencies run
 ```
 git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .[expt_ctrl]
 ```
+
+### Optional GPU support
 Some functions can be optionally run on a GPU. This functionality has been tested with CUDA 11.2 and 11.8.  If GPU support is desired,
-first install [CuPy](https://cupy.dev/) manually, and then install mcSIM with pip. For example, if you are using a conda environment and
+first install the CUDA toolkit manually, and then install mcSIM with pip. For example, if you are using a conda environment and
 CUDA toolkit 11.8
 ```
 conda install -c conda-forge cudatoolkit=11.8
@@ -52,23 +64,27 @@ git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .[gpu]
 ```
-This will install the appropriate version of the scikit-image portion of [cuCIM](https://pypi.org/project/cucim/).
-Note that the entire package cannot be installed on Windows, but the scikit-image portion can. 
-This portion of cuCIM can be installed manually using
+This will install the appropriate version of [CuPy](https://cupy.dev/) and the scikit-image portion of [cuCIM](https://pypi.org/project/cucim/).
+Note that the entire RAPIDS/cuCIM package cannot be installed on Windows, but the scikit-image portion can. 
+Alternatively, to isntall the scikit-image portion of cuCIM manually run
 ```
 pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
 ```
-or the tag v22.12.00 can be replaced with the most recent version
+or the tag v22.12.00 can be replaced with the most recent version.
 
 # SIM reconstruction code
 ### [sim_reconstruction.py](mcsim/analysis/sim_reconstruction.py)
 Code for reconstructing SIM images from raw data using a Gustafsson/Heintzmann Wiener filter style reconstruction. Several
 reconstruction options are available, largely following either the approach of
 [openSIM](https://doi.org/10.1109/JSTQE.2016.2521542) or [fairSIM](https://doi.org/10.1038/ncomms10980).
-To get started with reconstructing SIM data, see the example scripts
+To get started with reconstructing SIM data, 
+download image data from [Zenodo](https://doi.org/10.5281/zenodo.7851110)
+and place it in a directory called `examples/data`.
+Then, see the example scripts
 * [reconstruct_sim_simulated_single.py](examples/reconstruct_sim_simulated_single.py)
 * [reconstruction_sim_simulated_timelapse.py](examples/reconstruct_sim_simulated_timelapse.py)
 * [reconstruct_sim_experiment_multichannel.py](examples/reconstruct_sim_experiment_multichannel.py) 
+* For a tutorial on SIM reconstruction, see our [I2K 2022 repository and talks](https://github.com/QI2lab/I2K2022-SIM).
 
 # DMD simulation code
 ### [simulate_dmd.py](mcsim/analysis/simulate_dmd.py)
@@ -94,14 +110,9 @@ in a compact and computationally efficient form.
 Code to fit the affine transformation between the DMD coordinates and camera coordinates
 using imaging data from a DMD pattern consisting of many small points. These code relies
 on tools for working with affine transformations found 
-[here](https://github.com/QI2lab/localize-psf/blob/master/localize_psf/affine.py). For example usage, see
-* [calibrate_affine_xform.py](examples/calibrate_affine_xform.py)
+[here](https://github.com/QI2lab/localize-psf/blob/master/localize_psf/affine.py). For example usage first download the image data available on [Zenodo](https://doi.org/10.5281/zenodo.7851110),
+and then see the script [calibrate_affine_xform.py](examples/calibrate_affine_xform.py).
 
-### [otf_tools.py](mcsim/analysis/otf_tools.py)
-Code for extracting optical transfer function from measurement of the strength of various Fourier peaks for a given SIM DMD pattern.
-
-### [analysis_tools.py](mcsim/analysis/analysis_tools.py)
-Miscellaneous image processing tools, primarily for working with Fourier transforms
 
 ### [localize-psf](https://github.com/QI2lab/localize-psf/blob/master/localize_psf)
 Useful tools for automatically localizing sparse fluorescent beads and performing both 2D and 3D
@@ -123,7 +134,7 @@ relies on MicroManager device drives to control cameras and stages, and on pytho
 The "device adapters" for the DMD and DAQ are found below
 
 ### [expt_ctrl/dlp6500.py](mcsim/expt_ctrl/dlp6500.py)
-Code for controlling the DLP6500 DMD over USB on Windows. This code was initially based on the approaches 
+Code for controlling a DLP6500 or DLP9000 DMD over USB on Windows. This code was initially based on the approaches 
 of [Lightcrafter6500DMDControl](https://github.com/mazurenko/Lightcrafter6500DMDControl) and
 [Pycrafter6500](https://github.com/csi-dcsc/Pycrafter6500). Extension to other operating systems has not been
 implemented but should be straightforward.
@@ -151,10 +162,10 @@ This file is used to create DAQ sequences for SIM and ODT experiments
 describing the equipment and settings used in the experiment. 
 
 ### useful script files
-Example scripts which are useful for controlling various instruments during testing include
-[load_dmd_pattern.py](mcsim/expt_ctrl/load_dmd_pattern.py),
-[setup_optotune_mre2.py](mcsim/expt_ctrl/setup_optotune_mre2.py), and
-[set_dmd_odt_pattern.py](mcsim/expt_ctrl/set_dmd_odt_pattern.py)
+Example scripts which are useful for controlling various instruments during testing include:
+* [load_dmd_pattern.py](mcsim/expt_ctrl/load_dmd_pattern.py)
+* [setup_optotune_mre2.py](mcsim/expt_ctrl/setup_optotune_mre2.py)
+* [set_dmd_odt_pattern.py](mcsim/expt_ctrl/set_dmd_odt_pattern.py)
 
 # Instrument design
 A [parts list](parts_list.md) is available here. Mechanical drawings and 3D models of custom parts such as the DMD mount 

@@ -4,8 +4,6 @@ diffraction in the tx=-ty plane, and in "2D", i.e. considering the full output s
 
 Unlike simulate_multicolor_sim_patterns_1d.py, this file simulates the same input angles for all wavelength considered
 """
-import matplotlib
-matplotlib.use("TkAgg")
 import numpy as np
 import matplotlib.pyplot as plt
 import mcsim.analysis.simulate_dmd as sdmd

@@ -8,6 +8,7 @@ pip install optoMDC-1.2.4065-py3-none-any.whl
 """
 import optoMDC
 
+
 def initialize_mre2():
     mre2 = optoMDC.connect()
     mre2.reset()
@@ -20,7 +21,7 @@ def initialize_mre2():
     ch0.InputConditioning.SetOffset(0.)
     # ch0.InputConditioning.GetOffset()
     ch0.Analog.SetAsInput()
-    ch0.SetControlMode(optoMDC.Units.XY) # XY = "Closed Loop", Current = "Open Loop"
+    ch0.SetControlMode(optoMDC.Units.XY)  # XY = "Closed Loop", Current = "Open Loop"
     # ch0.GetControlMode()
     # ch0.Manager.CheckSignalFlow()
 
@@ -29,8 +30,9 @@ def initialize_mre2():
     ch1.InputConditioning.SetGain(0.01)
     ch1.InputConditioning.SetOffset(0.)
     ch1.Analog.SetAsInput()
-    ch1.SetControlMode(optoMDC.Units.XY) # XY = "Closed Loop", Current = "Open Loop"
-    #ch1.Manager.CheckSignalFlow()
+    ch1.SetControlMode(optoMDC.Units.XY)  # XY = "Closed Loop", Current = "Open Loop"
+    # ch1.Manager.CheckSignalFlow()
+
 
 if __name__ == "__main__":
     initialize_mre2()
