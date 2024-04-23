@@ -1,13 +1,8 @@
 """
 CPU/GPU agnostic FFT functions using our preferred idioms
-
-Specifically, the ifftshift/fftshift patterns are chosen such that the natural spatial coordinates are
-(range(n) - (n // 2)) * dr along a dimension of size n
-and the frequency coordinates are found from
-fftshift(fftfreq(n, dr))
 """
 
-from typing import Union
+from typing import Union, Optional
 import numpy as np
 import numpy.fft as fft_cpu
 
@@ -17,7 +12,6 @@ try:
 except ImportError:
     cp = None
     fft_gpu = None
-    _gpu_available = False
 
 if cp:
     array = Union[np.ndarray, cp.ndarray]
@@ -25,36 +19,65 @@ else:
     array = np.ndarray
 
 
-# ######################
-# 2D Fourier transform recipes
-# ######################
+def _noshift(arr: array, **kwargs) -> array:
+    return arr
+
+
 def ft2(m: array,
         axes: tuple[int, int] = (-1, -2),
-        plan=None,
-        no_cache: bool = False) -> array:
+        plan: Optional = None,
+        no_cache: bool = False,
+        shift: bool = True,
+        adjoint: bool = False) -> array:
     """
-    2D FFT idiom assuming the center of our coordinate system is near the center of our array. Specifically,
-    the spatial coordinates are range(n) - (n // 2) along a dimension of size n
+    2D FFT which can run on the CPU/GPU and handle fftshifting appropriately
 
     :param m: array to perform Fourier transform on
     :param axes: axes to perform Fourier transform on
     :param plan: CuPy FFT plan. This has no effect if running on the CPU. If a plan is passed through, then
       no plan will be cached
-    :param no_cache:
-    :return:
+    :param no_cache: Avoid caching FFT plans by generating a plan based on the input array
+    :param shift: whether to shift the arrays to move zero index from/to the center.
+      When True, the spatial coordinates are for each pixel are range(n) - (n // 2) along a dimension of size n
+      When False, the spatial coordinates are range(n)
+    :param adjoint: perform the adjoint operation instead, in the sense that <w, op(v)> = <adj(w), v>.
+      Adjoint operations are FT or IFT with exponential conjugated, so would be swapping FT and IFT except for
+      normalization changing normalization to "forward" instead of the default "backwards" is all else we need
+    :return ft2: Fourier transform. Frequencies can be found with fftshift(fftfreq(n, dr)) when if shift is True,
+      or fftfreq(n, dr) otherwise.
     """
+    # todo: replace with ftn
+    kwargs = {}
     if cp and isinstance(m, cp.ndarray):
         if no_cache and plan is None:
             plan = fft_gpu.get_fft_plan(m)
-        return fft_gpu.fftshift(fft_gpu.fft2(fft_gpu.ifftshift(m, axes=axes), axes=axes, plan=plan), axes=axes)
+        kwargs["plan"] = plan
+        fft = fft_gpu
     else:
-        return fft_cpu.fftshift(fft_cpu.fft2(fft_cpu.ifftshift(m, axes=axes), axes=axes), axes=axes)
+        fft = fft_cpu
+
+    if adjoint:
+        kwargs["norm"] = "forward"
+        op = fft.ifft2
+    else:
+        op = fft.fft2
+
+    if shift:
+        fftshift = fft.fftshift
+        ifftshift = fft.ifftshift
+    else:
+        fftshift = _noshift
+        ifftshift = _noshift
+
+    return fftshift(op(ifftshift(m, axes=axes), axes=axes, **kwargs), axes=axes)
 
 
 def ift2(m: array,
          axes: tuple[int, int] = (-1, -2),
-         plan=None,
-         no_cache: bool = False) -> array:
+         plan: Optional = None,
+         no_cache: bool = False,
+         shift: bool = True,
+         adjoint: bool = False) -> array:
     """
     Inverse function for ft2()
 
@@ -62,96 +85,69 @@ def ift2(m: array,
     :param axes:
     :param plan:
     :param no_cache:
-    :return:
+    :param shift:
+    :param adjoint:
+    :return ift2:
     """
+    kwargs = {}
     if cp and isinstance(m, cp.ndarray):
         if no_cache and plan is None:
-            plan = fft_gpu.get_fft_plan(m)
-        return fft_gpu.fftshift(fft_gpu.ifft2(fft_gpu.ifftshift(m, axes=axes), axes=axes, plan=plan), axes=axes)
+            plan = fft_gpu.get_fft_plan(m, axes=axes)
+        kwargs["plan"] = plan
+        fft = fft_gpu
     else:
-        return fft_cpu.fftshift(fft_cpu.ifft2(fft_cpu.ifftshift(m, axes=axes), axes=axes), axes=axes)
+        fft = fft_cpu
 
-
-def ft2_adj(m: array,
-            axes: tuple[int, int] = (-1, -2),
-            plan=None,
-            no_cache: bool = False) -> array:
-    """
-    Adjoint to 2D Fourier transform. This operation is the adjoint in the sense that for any two
-    images w and v the following inner products are equal:
-    <w, ft(v)> = <ft_adj(w), v>
-
-    adjoint operations are FT or IFT with exponential conjugated, so would be swapping FT and IFT except for
-    normalization changing normalization to "forward" instead of the default "backwards" is all else we need
-
-    :param m:
-    :param axes:
-    :param plan:
-    :param no_cache:
-    :return ft2_adj:
-    """
-    if cp and isinstance(m, cp.ndarray):
-        if no_cache and plan is None:
-            plan = fft_gpu.get_fft_plan(m)
-        return fft_gpu.fftshift(fft_gpu.ifft2(fft_gpu.ifftshift(m, axes=axes), norm="forward", axes=axes, plan=plan), axes=axes)
+    if adjoint:
+        kwargs["norm"] = "forward"
+        op = fft.fft2
     else:
-        return fft_cpu.fftshift(fft_cpu.ifft2(fft_cpu.ifftshift(m, axes=axes), norm="forward", axes=axes), axes=axes)
+        op = fft.ifft2
 
-
-def ift2_adj(m: array,
-             axes: tuple[int, int] = (-1, -2),
-             plan=None,
-             no_cache: bool = False) -> array:
-    """
-    Adjoint to ift2()
-
-    :param m:
-    :param axes:
-    :param plan:
-    :param no_cache:
-    :return ift2_adj:
-    """
-    if cp and isinstance(m, cp.ndarray):
-        if no_cache and plan is None:
-            plan = fft_gpu.get_fft_plan(m)
-        return fft_gpu.fftshift(fft_gpu.fft2(fft_gpu.ifftshift(m, axes=axes), norm="forward", axes=axes, plan=plan), axes=axes)
+    if shift:
+        fftshift = fft.fftshift
+        ifftshift = fft.ifftshift
     else:
-        return fft_cpu.fftshift(fft_cpu.fft2(fft_cpu.ifftshift(m, axes=axes), norm="forward", axes=axes), axes=axes)
+        fftshift = _noshift
+        ifftshift = _noshift
+
+    return fftshift(op(ifftshift(m, axes=axes), axes=axes, **kwargs), axes=axes)
 
 
 def irft2(m: array,
-          axes: tuple[int, int] = (-1, -2)) -> array:
+          axes: tuple[int, int] = (-2, -1),
+          plan: Optional = None,
+          no_cache: bool = False) -> array:
     """
     2D inverse real Fourier transform which can use either CPU or GPU
 
     :param m:
     :param axes:
+    :param plan:
+    :param no_cache:
     :return ft:
     """
-    # note: at first had self.use_gpu here, but then next map_blocks fn took ~1 minute to run!
-    # so think I should avoid calls to self
-    # todo: should adhere more closely to ft2
+
     if cp and isinstance(m, cp.ndarray):
-        xp = cp
+        xft = fft_gpu
+        if no_cache and plan is None:
+            plan = fft_gpu.get_fft_plan(m)
     else:
-        xp = np
+        xft = fft_cpu
 
     # irfft2 ~2X faster than ifft2
-    # # Have to keep full -2 axis because need two full quadrants for complete fft info
-    one_sided = xp.fft.ifftshift(m, axes=axes)[..., :m.shape[-1] // 2 + 1]
+    # todo: slice last axis named in axes
+    one_sided = xft.ifftshift(m, axes=axes)[..., :m.shape[-1] // 2 + 1]
 
     # note: for irfft2 must match shape and axes, so order important
-    result = xp.fft.fftshift(xp.fft.irfft2(one_sided, s=m.shape[-2:], axes=(-2, -1)), axes=(-1, -2))
+    result = xft.fftshift(xft.irfft2(one_sided, s=m.shape[-2:], axes=axes), axes=axes)
 
     return result
 
 
-# ######################
-# 3D Fourier transform recipes
-# ######################
 def ft3(m: array,
         axes: tuple[int, int, int] = (-1, -2, -3),
-        plan=None,
+        plan: Optional = None,
         no_cache: bool = False) -> array:
     """
     3D FFT idiom assuming the center of our coordinate system is near the center of our array. Specifically,
@@ -164,6 +160,7 @@ def ft3(m: array,
     :param no_cache:
     :return ft3:
     """
+    # todo: replace with ftn
     if cp and isinstance(m, cp.ndarray):
         if no_cache and plan is None:
             plan = fft_gpu.get_fft_plan(m)
@@ -175,7 +172,7 @@ def ft3(m: array,
 
 def ift3(m: array,
          axes: tuple[int, int, int] = (-1, -2, -3),
-         plan=None,
+         plan: Optional = None,
          no_cache: bool = False) -> array:
     """
     Inverse to ft3()
@@ -186,6 +183,7 @@ def ift3(m: array,
     :param no_cache:
     :return ift3:
     """
+    # todo: replace with iftn
     if cp and isinstance(m, cp.ndarray):
         if no_cache and plan is None:
             plan = fft_gpu.get_fft_plan(m)
@@ -206,6 +204,7 @@ def conj_transpose_fft(img_ft: array,
 
     :param img_ft:
     :param axes: axes on which to perform the transformation
+    :return img_ft_ct:
     """
 
     if cp and isinstance(img_ft, cp.ndarray):

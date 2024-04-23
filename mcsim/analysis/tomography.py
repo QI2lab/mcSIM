@@ -914,11 +914,11 @@ class tomography:
         # numerically refocus
         # #########################
         if dz_refocus != 0.:
-            kernel = get_angular_spectrum_kernel(dz_refocus,
+            kernel = get_angular_spectrum_kernel(self.fxs,
+                                                 self.fys,
+                                                 dz_refocus,
                                                  self.wavelength,
-                                                 self.no,
-                                                 (self.ny, self.nx),
-                                                 (self.dxy, self.dxy))
+                                                 self.no)
 
             self.holograms_ft *= kernel
             self.holograms_ft_bg *= kernel
@@ -1014,11 +1014,12 @@ class tomography:
         # ############################
         # compute information we need for reconstructions e.g. linear models and dz_final
         # ############################
-        # generate ATF ... ultimately want to do this based on pupil function defined in init
-        fx_atf = xp.fft.fftshift(xp.fft.fftfreq(n_size[-1], drs_n[-1]))
-        fy_atf = xp.fft.fftshift(xp.fft.fftfreq(n_size[-2], drs_n[-2]))
-        atf = (xp.sqrt(fx_atf[None, :] ** 2 + fy_atf[:, None] ** 2) <= self.fmax).astype(complex)
-        fxfx, fyfy = xp.meshgrid(fx_atf, fy_atf)
+        # generate ATF
+        # # todo: want this based on pupil function defined in init
+        fx_atf = xp.fft.fftfreq(n_size[-1], drs_n[-1])
+        fy_atf = xp.fft.fftfreq(n_size[-2], drs_n[-2])
+        atf = (xp.sqrt(fx_atf[None, :] ** 2 +
+                       fy_atf[:, None] ** 2) <= self.fmax).astype(complex)
 
         apodization_n = xp.outer(xp.asarray(tukey(n_size[-2], alpha=0.1)),
                                  xp.asarray(tukey(n_size[-1], alpha=0.1)))
@@ -1190,6 +1191,11 @@ class tomography:
                 else:
                     e_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
                     ebg_unmulti = xp.zeros_like(e_unmulti)
+
+                    # shifted frequencies
+                    fx_shift = xp.fft.fftshift(xp.fft.fftfreq(n_size[-1], drs_n[-1]))
+                    fy_shift = xp.fft.fftshift(xp.fft.fftfreq(n_size[-2], drs_n[-2]))
+                    fxfx, fyfy = xp.meshgrid(fx_shift, fy_shift)
 
                     for ii in range(nimgs):
                         for jj in range(nmax_multiplex):
@@ -4108,17 +4114,17 @@ class SSNP(RIOptimizer):
         self.dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
 
         # compute kzs, which need to get starting field derivative
-        dz, dy, dx = self.drs_n
-        ny, nx = self.e_measured.shape[-2:]
-
-        fx = fftshift(np.fft.fftfreq(nx, dx))
-        fy = fftshift(np.fft.fftfreq(ny, dy))
-        fxfx, fyfy = np.meshgrid(fx, fy)
-
         if cp and isinstance(self.e_measured, cp.ndarray):
             xp = cp
         else:
             xp = np
+
+        dz, dy, dx = self.drs_n
+        ny, nx = self.e_measured.shape[-2:]
+
+        fx = np.fft.fftfreq(nx, dx)
+        fy = np.fft.fftfreq(ny, dy)
+        fxfx, fyfy = np.meshgrid(fx, fy)
 
         kz = xp.asarray(2 * np.pi * get_fzs(fxfx, fyfy, self.no, self.wavelength))
         kz[xp.isnan(kz)] = 0
@@ -4221,7 +4227,7 @@ class SSNP(RIOptimizer):
                                         self.drs_n[1:],
                                         self.wavelength)[..., 0, :, :]
         # assume initial field is foward propagating only
-        de_dz_start = ift2(1j * self.kz * ft2(e_start))
+        de_dz_start = ift2(1j * self.kz * ft2(e_start, shift=False), shift=False)
 
         return e_start, de_dz_start
 
