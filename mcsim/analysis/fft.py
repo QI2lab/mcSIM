@@ -117,7 +117,9 @@ def ift2(m: array,
 def irft2(m: array,
           axes: tuple[int, int] = (-2, -1),
           plan: Optional = None,
-          no_cache: bool = False) -> array:
+          no_cache: bool = False,
+          shift: bool = True,
+          adjoint: bool = False) -> array:
     """
     2D inverse real Fourier transform which can use either CPU or GPU
 
@@ -125,22 +127,37 @@ def irft2(m: array,
     :param axes:
     :param plan:
     :param no_cache:
+    :param shift:
+    :param adjoint:
     :return ft:
     """
-
+    kwargs = {}
     if cp and isinstance(m, cp.ndarray):
-        xft = fft_gpu
+        fft = fft_gpu
         if no_cache and plan is None:
+            raise NotImplementedError("fft plan logic not implemented")
             plan = fft_gpu.get_fft_plan(m)
     else:
-        xft = fft_cpu
+        fft = fft_cpu
+
+    if adjoint:
+        raise NotImplementedError("adjoint operation not implemented")
+    else:
+        op = fft.irfft2
+
+    if shift:
+        fftshift = fft.fftshift
+        ifftshift = fft.ifftshift
+    else:
+        fftshift = _noshift
+        ifftshift = _noshift
 
     # irfft2 ~2X faster than ifft2
     # todo: slice last axis named in axes
-    one_sided = xft.ifftshift(m, axes=axes)[..., :m.shape[-1] // 2 + 1]
+    one_sided = ifftshift(m, axes=axes)[..., :m.shape[-1] // 2 + 1]
 
     # note: for irfft2 must match shape and axes, so order important
-    result = xft.fftshift(xft.irfft2(one_sided, s=m.shape[-2:], axes=axes), axes=axes)
+    result = fftshift(op(one_sided, s=m.shape[-2:], axes=axes, **kwargs), axes=axes)
 
     return result
 
