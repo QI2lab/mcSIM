@@ -75,16 +75,16 @@ def get_peak_value(img: array,
 
 def pixel_overlap(centers1: array,
                   centers2: array,
-                  lens1: list[float],
-                  lens2: Optional[list[float]] = None) -> array:
+                  lens1: Sequence[float],
+                  lens2: Optional[Sequence[float]] = None) -> array:
     """
-    Calculate overlap of two nd-square pixels. The pixels go from coordinates
+    Calculate overlap of two nd-rectangular pixels. The pixels go from coordinates
     centers[ii] - 0.5 * lens[ii] to centers[ii] + 0.5 * lens[ii].
 
     :param centers1: Array of size ncenters x ndims. coordinates define centers of first pixel along each dimension.
     :param centers2: Broadcastable to same size as centers1
-    :param lens1: list of pixel 1 sizes along each dimension
-    :param lens2: list of pixel 2 sizes along each dimension
+    :param lens1: pixel 1 sizes along each dimension
+    :param lens2: pixel 2 sizes along each dimension
     :return: overlap area of pixels
     """
 
@@ -105,8 +105,10 @@ def pixel_overlap(centers1: array,
     lens2 = xp.array(lens2)
 
     # compute overlaps
-    lower_edge = xp.max(xp.stack((centers1 - 0.5 * lens1, centers2 - 0.5 * lens2), axis=0), axis=0)
-    upper_edge = xp.min(xp.stack((centers1 + 0.5 * lens1, centers2 + 0.5 * lens2), axis=0), axis=0)
+    lower_edge = xp.max(xp.stack((centers1 - 0.5 * lens1,
+                                  centers2 - 0.5 * lens2), axis=0), axis=0)
+    upper_edge = xp.min(xp.stack((centers1 + 0.5 * lens1,
+                                  centers2 + 0.5 * lens2), axis=0), axis=0)
     overlaps = upper_edge - lower_edge
     overlaps[overlaps < 0] = 0
     volume_overlap = xp.prod(overlaps, axis=-1)
@@ -180,7 +182,6 @@ def translate_im(img: array,
                  drs: Sequence[float] = (1, 1)) -> array:
     """
     Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
-
     e.g. suppose the pixel spacing dx = 0.05 um, and we want to shift the image by 0.0366 um,
     then dx = 0.05 and shift = [0, 0.0366]
 
@@ -201,8 +202,8 @@ def translate_im(img: array,
 
 
 def translate_ft(img_ft: array,
-                 fx: np.ndarray,
-                 fy: np.ndarray,
+                 fx: array,
+                 fy: array,
                  drs: Optional[Sequence[float, float]] = None) -> array:
     """
     Given img_ft(f), return the translated function
@@ -210,9 +211,6 @@ def translate_ft(img_ft: array,
     using the FFT shift relationship, img_ft(f + shift_frq) = F[ exp(-2*pi*i * shift_frq * r) * img(r) ]
     This is an approximation to the Whittaker-Shannon interpolation formula which can be performed using only FFT's.
     In this sense, it is exact for band-limited functions.
-
-    If an array with more than 2 dimensions is passed in, then the shift will be applied to the last two dimensions
-
     The total amount of memory used by this function is roughly set the fft routine, and is about 3x the size of
     the input image
 
@@ -244,7 +242,6 @@ def translate_ft(img_ft: array,
     if fx.shape != fy.shape:
         raise ValueError(f"fx and fy must have same shape, but had shapes {fx.shape} and {fy.shape}")
 
-    # check if shapes are broadcastable
     shapes_broadcastable = True
     try:
         _ = xp.broadcast(fx, img_ft)
@@ -257,38 +254,34 @@ def translate_ft(img_ft: array,
         if fx.shape != img_ft.shape[-2 - ndim_extra_frq:-2]:
             raise ValueError(f"fx and shift_frq have incompatible shapes {fx.shape} and {img_ft.shape}")
 
-        # exponential phase ramp. Should be broadcastable to shape of img_ft
         axis_expand_frq = tuple(list(range(n_extra_dims - fx.ndim)) + [-2, -1])
         fx = xp.expand_dims(fx, axis=axis_expand_frq)
         fy = xp.expand_dims(fy, axis=axis_expand_frq)
 
-    # do translations
     if xp.all(fx == 0) and xp.all(fy == 0):
         return xp.array(img_ft, copy=True)
     else:
-        # 1. shift frequencies in img_ft so zero frequency is in corner using ifftshift
-        # 2. inverse ft
-        # 3. multiply by exponential factor
-        # 4. take fourier transform, then shift frequencies back using fftshift
         if drs is None:
             drs = (1, 1)
         dy, dx = drs
 
-        # must use symmetric frequency representation to do shifting correctly!
-        # we are using the FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
-        # but we get an extra phase if we don't use the symmetric rep. AND only works perfectly if size odd
-        # we do not apply an fftshift, so we don't have to apply an intermediate shift in our FFTs later
-        axis_expand_x = tuple(range(n_extra_dims + 1))
-        x = xp.expand_dims(xp.fft.fftfreq(nx) * nx * dx, axis=axis_expand_x)
+        # must use symmetric frequency representation to do shifting correctly AND only works perfectly is size off
+        x = xp.expand_dims(xp.fft.fftfreq(nx) * nx * dx,
+                           axis=tuple(range(n_extra_dims + 1)))
         # todo: replace with this second option which is more intuitive
         # x = xp.expand_dims(xp.fft.ifftshift(np.arange(nx) - nx // 2) * dx, axis=axis_expand_x)
 
-        axis_expand_y = tuple(range(n_extra_dims)) + (-1,)
-        y = xp.expand_dims(xp.fft.fftfreq(ny) * ny * dy, axis=axis_expand_y)
+        y = xp.expand_dims(xp.fft.fftfreq(ny) * ny * dy,
+                           axis=tuple(range(n_extra_dims)) + (-1,))
         # y = xp.expand_dims(xp.fft.ifftshift(np.arange(ny) - ny // 2) * dy, axis=axis_expand_y)
 
         exp_factor = xp.exp(-1j * 2 * np.pi * (fx * x + fy * y))
 
+        # FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
+        # 1. shift frequencies in img_ft so zero frequency is in corner using ifftshift
+        # 2. inverse ft
+        # 3. multiply by exponential factor
+        # 4. take fourier transform, then shift frequencies back using fftshift
         img_ft_shifted = xp.fft.fftshift(
                          xp.fft.fft2(xp.asarray(exp_factor) *
                          xp.fft.ifft2(xp.fft.ifftshift(img_ft, axes=(-1, -2)),
