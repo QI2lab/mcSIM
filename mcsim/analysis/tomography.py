@@ -9,9 +9,9 @@ from warnings import catch_warnings, simplefilter
 from copy import deepcopy
 from typing import Union, Optional
 from collections.abc import Sequence
-from functools import partial
 # numerical tools
 import numpy as np
+from numpy.linalg import norm, inv
 import scipy.sparse as sp
 from scipy.sparse.linalg import svds
 from numpy.fft import fftshift, fftfreq
@@ -45,7 +45,6 @@ from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, to_cpu
 from mcsim.analysis.fft import ft3, ift3, ft2, ift2
 from mcsim.analysis.field_prop import (frqs2angles,
                                        get_fzs,
-                                       get_angular_spectrum_kernel,
                                        propagate_homogeneous,
                                        propagate_bpm,
                                        backpropagate_bpm,
@@ -77,6 +76,7 @@ else:
 
 
 class tomography:
+    # todo: dictionary with optimizers
     models = ["born", "rytov", "bpm", "ssnp"]
 
     def __init__(self,
@@ -134,7 +134,7 @@ class tomography:
         else:
             self.reference_frq = np.array(reference_frq) + np.zeros(self.imgs_raw.shape[:-3] + (2,))
             self.use_fixed_ref = True
-        self.reference_frq_bg = None
+        self.reference_frq_bg = self.reference_frq
 
         # todo: don't allow different multiplex for different patterns
         # list of length npatterns, with each entry [1 x 1 ... x 1 x nmultiplex x 2]
@@ -533,7 +533,7 @@ class tomography:
         frq_dmd_center = xform_points(np.array([[0, 0]]), xform_dmd2frq)[0]
 
         # also get inverse transform and map frequencies to pupil (DMD positions)
-        xform_frq2dmd = np.linalg.inv(xform_dmd2frq)
+        xform_frq2dmd = inv(xform_dmd2frq)
         centers_pupil_from_frq = xform_points(mean_hologram_frqs, xform_frq2dmd)
         center_pupil_frq_ref = xform_points(mean_hologram_frqs, xform_frq2dmd)[0]
         # center_pupil_frq_ref = affine.xform_points(np.expand_dims(mean_hologram_frqs, axis=0), xform_frq2dmd)[0]
@@ -543,7 +543,7 @@ class tomography:
         frqs_pupil_boundary = self.fmax * np.stack((np.cos(circle_thetas), np.sin(circle_thetas)),
                                                      axis=1) + np.expand_dims(mean_ref_frq, axis=0)
         centers_dmd_fmax = xform_points(frqs_pupil_boundary, xform_frq2dmd)
-        rmax_dmd_mirrors = np.max(np.linalg.norm(centers_dmd_fmax, axis=1))
+        rmax_dmd_mirrors = np.max(norm(centers_dmd_fmax, axis=1))
 
         # DMD boundary
         if dmd_size is not None:
@@ -567,7 +567,7 @@ class tomography:
             dmd_boundary_freq = xform_points(dmd_boundary, xform_dmd2frq)
 
         # check sign of frequency reference is consistent with affine transform
-        assert np.linalg.norm(frq_dmd_center + mean_ref_frq) >= np.linalg.norm(frq_dmd_center - mean_ref_frq)
+        assert norm(frq_dmd_center + mean_ref_frq) >= norm(frq_dmd_center - mean_ref_frq)
 
         # ##############################
         # plot data
@@ -956,7 +956,6 @@ class tomography:
 
         if mode == "born" or mode == "rytov":
             optimizer = mode
-            dz_final = None
             # affine transformation from reconstruction coordinates to pixel indices
             # for reconstruction, using FFT induced coordinates, i.e. zero is at array index (ny // 2, nx // 2)
             # for matrix, using image coordinates (0, 1, ..., N - 1)
@@ -983,8 +982,12 @@ class tomography:
                 print("estimating step size")
 
             mguess = LinearScatt(np.empty((1, self.ny, self.nx)),
-                                 linear_model, self.no, self.wavelength,
-                                 None, None, None)
+                                 linear_model,
+                                 self.no,
+                                 self.wavelength,
+                                 None,
+                                 None,
+                                 None)
             step = mguess.guess_step()
 
             if self.verbose:
@@ -1077,9 +1080,13 @@ class tomography:
 
             nextra_dims = efields_ft.ndim - 3
             dims = tuple(range(nextra_dims))
-            efields_ft = efields_ft.squeeze(axis=dims)
-            efields_bg_ft = efields_bg_ft.squeeze(axis=dims)
-            nimgs, ny, nx = efields_ft.shape
+            nimgs, ny, nx = efields_ft.shape[-3:]
+
+            efields_ft = xp.asarray(efields_ft.squeeze(axis=dims))
+            efields_bg_ft = xp.asarray(efields_bg_ft.squeeze(axis=dims))
+
+            if rmask is not None:
+                rmask = xp.asarray(rmask)
 
             if block_id is None:
                 block_ind = None
@@ -1088,57 +1095,49 @@ class tomography:
                 block_ind = block_id[:nextra_dims]
                 label = f"{block_id} "
 
-            if use_gpu:
-                efields_ft = xp.asarray(efields_ft)
-                efields_bg_ft = xp.asarray(efields_bg_ft)
-
-                if rmask is not None:
-                    rmask = xp.asarray(rmask)
-
             # #######################
             # get initial guess
             # #######################
-            if optimizer == "born":
-                scatt_fn = get_scattered_field
-            else:
-                scatt_fn = partial(get_rytov_phase, use_weighted_unwrap=use_weighted_phase_unwrap)
-
             if n_guess is not None:
                 v_fts_start = ft3(get_v(xp.asarray(n_guess), no, wavelength), no_cache=True)
+                if optimizer == "born" or optimizer == "rytov":
+                    efield_scattered_ft = ft2(get_scattered_field(ift2(efields_ft),
+                                                                  ift2(efields_bg_ft),
+                                                                  scattered_field_regularization,
+                                                                  use_born=optimizer == "born",
+                                                                  use_weighted_unwrap=use_weighted_phase_unwrap))
             else:
+                # todo: can I get rid of this if else statement?
                 tstart_scatt = perf_counter()
                 if nmax_multiplex == 1:
-                    efield_scattered = scatt_fn(ift2(efields_ft),
-                                                ift2(efields_bg_ft),
-                                                scattered_field_regularization)
-                    efield_scattered_ft = ft2(efield_scattered)
+                    efield_scattered = get_scattered_field(ift2(efields_ft),
+                                                           ift2(efields_bg_ft),
+                                                           scattered_field_regularization,
+                                                           use_born=optimizer == "born",
+                                                           use_weighted_unwrap=use_weighted_phase_unwrap)
                 else:
-                    e_unmulti = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
-                    ebg_unmulti = xp.zeros_like(e_unmulti)
-
-                    # shifted frequencies
                     fx_shift = xp.fft.fftshift(xp.fft.fftfreq(n_size[-1], drs_n[-1]))
                     fy_shift = xp.fft.fftshift(xp.fft.fftfreq(n_size[-2], drs_n[-2]))
                     fxfx, fyfy = xp.meshgrid(fx_shift, fy_shift)
 
+                    # demultiplexed fields
+                    efield_scattered = xp.zeros((nimgs * nmax_multiplex, ny, nx), dtype=complex)
                     for ii in range(nimgs):
                         for jj in range(nmax_multiplex):
-                            dists = np.linalg.norm(mean_beam_frqs_arr[:, ii, :2] -
-                                                   mean_beam_frqs_arr[jj, ii, :2], axis=1)
+                            dists = norm(mean_beam_frqs_arr[:, ii, :2] -
+                                         mean_beam_frqs_arr[jj, ii, :2], axis=1)
                             min_dist = 0.5 * np.min(dists[dists > 0.])
 
                             mask = xp.sqrt((fxfx - mean_beam_frqs_arr[jj, ii, 0]) ** 2 +
                                            (fyfy - mean_beam_frqs_arr[jj, ii, 1]) ** 2) > min_dist
-                            e_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_ft[ii], mask))
-                            ebg_unmulti[ii * nmax_multiplex + jj] = ift2(cut_mask(efields_bg_ft[ii], mask))
+                            efield_scattered[ii * nmax_multiplex + jj] = get_scattered_field(ift2(cut_mask(efields_ft[ii], mask)),
+                                                                                             ift2(cut_mask(efields_bg_ft[ii], mask)),
+                                                                                             scattered_field_regularization,
+                                                                                             use_born=optimizer == "born",
+                                                                                             use_weighted_unwrap=use_weighted_phase_unwrap)
 
-                    # compute scattered field
-                    efield_scattered = scatt_fn(e_unmulti,
-                                                ebg_unmulti,
-                                                scattered_field_regularization)
-                    efield_scattered_ft = ft2(efield_scattered)
-                    del e_unmulti
-                    del ebg_unmulti
+                # compute scattered field
+                efield_scattered_ft = ft2(efield_scattered)
 
                 # optionally export scattered field
                 try:
@@ -1316,7 +1315,7 @@ class tomography:
 
         # composing these two transforms gives affine from recon pixel indices to
         # recon pix inds -> recon coords = ROI coordinates -> ROI pix inds
-        xform_recon2raw_roi = np.linalg.inv(xform_raw_roi_pix2coords).dot(xform_recon_pix2coords)
+        xform_recon2raw_roi = inv(xform_raw_roi_pix2coords).dot(xform_recon_pix2coords)
 
         # store all transforms
         xforms = {"xform_recon_pix2coords": xform_recon_pix2coords,
@@ -1448,7 +1447,7 @@ class tomography:
 
         # plot frequency differences
         ax = figh.add_subplot(1, 3, 1)
-        ax.plot(np.linalg.norm(hgram_frq_diffs, axis=-1) / self.dfx, '.-')
+        ax.plot(norm(hgram_frq_diffs, axis=-1) / self.dfx, '.-')
         ax.set_xlabel("time step")
         ax.set_ylabel("(frequency - mean) / dfx")
         ax.set_title("hologram frequency deviation amplitude")
@@ -1465,7 +1464,7 @@ class tomography:
 
         # plot mean frequency differences
         ax = figh.add_subplot(1, 3, 3)
-        ax.plot(np.linalg.norm(ref_frq_diffs, axis=-1) / self.dfx, '.-')
+        ax.plot(norm(ref_frq_diffs, axis=-1) / self.dfx, '.-')
         ax.set_xlabel("time step")
         ax.set_ylabel("(frequency norm - mean) / dfx")
         ax.set_title("reference frequency deviation amplitude")
@@ -1966,13 +1965,16 @@ def get_v(n: array,
     v = - (2 * np.pi / wavelength) ** 2 * (n**2 - no**2)
     return v
 
-
-def get_rytov_phase(eimgs: array,
-                    eimgs_bg: array,
-                    regularization: float = 0.,
-                    use_weighted_unwrap: bool = True) -> array:
+def get_scattered_field(efields: array,
+                        efields_bg: array,
+                        regularization: float = 0.,
+                        use_born: bool = False,
+                        use_weighted_unwrap: bool = True) -> array:
     """
-    Compute rytov phase from field and background field. The Rytov phase, \psi_s(r), is defined by
+    Compute estimate of scattered field in real space with regularization. Depending on the mode, this
+    will either be an actual estimate of the scattered field, or an estimate of the Rytov phase
+
+    The Rytov phase, \psi_s(r), is defined by
 
     .. math::
 
@@ -1986,66 +1988,53 @@ def get_rytov_phase(eimgs: array,
 
       \\psi_s(r) = \\log \\left \\vert \\frac{U_t(r)}{U_o(r)} \\right \\vert + i \\text{unwrap} \\left[\\text{angle}(U_t) - \\text{angle}(U_o) \\right]
 
-    :param eimgs: n0 x n1 ... x nm x ny x nx
-    :param eimgs_bg: broadcastable to same size as eimgs
-    :param regularization: regularization value. Any pixels where the background
-      exceeds this value will be set to zero
-    :param use_weighted_unwrap:
-    :return psi_rytov:
-    """
 
-    if cp and isinstance(eimgs, cp.ndarray):
-        xp = cp
+    :param efields: array of size n0 x ... x nm x ny x nx
+    :param efields_bg: broadcastable to same size as efields
+    :param regularization: limit the influence of any pixels where |efields| < regularization
+    :param use_born: whether to use the Born or Rytov model.
+    :param use_weighted_unwrap: whether to use phase wrap routine where confidence is weighted by the
+      electric field amplitude
+    :return scattered: scattered field or Rytov phase of same size as efields
+    """
+    if use_born:
+        scattered = (efields - efields_bg) / (abs(efields_bg) + regularization)
     else:
-        xp = np
-
-    eimgs = xp.asarray(eimgs)
-    eimgs_bg = xp.asarray(eimgs_bg)
-    eimgs, eimgs_bg = xp.broadcast_arrays(eimgs, eimgs_bg)
-
-    # output values
-    phase_diff = xp.mod(xp.angle(eimgs) - xp.angle(eimgs_bg), 2 * np.pi)
-    # convert phase difference from interval [0, 2*np.pi) to [-np.pi, np.pi)
-    phase_diff[phase_diff >= np.pi] -= 2 * np.pi
-
-    # set real parts
-    psi_rytov = xp.log(abs(eimgs) / (abs(eimgs_bg))) + 1j * 0
-
-    # set imaginary parts
-    # loop over all dimensions except the last two
-    nextra_shape = eimgs.shape[:-2]
-    nextra = np.prod(nextra_shape)
-    for ii in range(nextra):
-        ind = np.unravel_index(ii, nextra_shape)
-
-        if use_weighted_unwrap:
-            weights = xp.abs(eimgs_bg[ind])
+        if cp and isinstance(efields, cp.ndarray):
+            xp = cp
         else:
-            weights = None
+            xp = np
 
-        psi_rytov[ind] += 1j * weighted_phase_unwrap(phase_diff[ind],
-                                                     weight=weights)
+        efields = xp.asarray(efields)
+        efields_bg = xp.asarray(efields_bg)
+        efields, efields_bg = xp.broadcast_arrays(efields, efields_bg)
 
-    psi_rytov[abs(eimgs_bg) < regularization] = 0
+        # output values
+        phase_diff = xp.mod(xp.angle(efields) - xp.angle(efields_bg), 2 * np.pi)
+        # convert phase difference from interval [0, 2*np.pi) to [-np.pi, np.pi)
+        phase_diff[phase_diff >= np.pi] -= 2 * np.pi
 
-    return psi_rytov
+        # set real parts of Rytov phase
+        scattered = xp.log(abs(efields) / (abs(efields_bg))) + 1j * 0
 
+        # set imaginary parts
+        # loop over all dimensions except the last two
+        nextra_shape = efields.shape[:-2]
+        nextra = int(np.prod(nextra_shape))
+        for ii in range(nextra):
+            ind = np.unravel_index(ii, nextra_shape)
 
-def get_scattered_field(holograms: array,
-                        holograms_bg: array,
-                        regularization: float = 0.) -> array:
-    """
-    Compute estimate of scattered electric field in real space with regularization. This function only operates on the
-    last two dimensions of the array
+            if use_weighted_unwrap:
+                weights = xp.abs(efields_bg[ind])
+            else:
+                weights = None
 
-    :param holograms: array of size n0 x ... x nm x ny x nx
-    :param holograms_bg: broadcastable to same size as eimgs_ft
-    :param regularization:
-    :return efield_scattered_ft: scattered field of same size as eimgs_ft
-    """
-    efield_scattered = (holograms - holograms_bg) / (abs(holograms_bg) + regularization)
+            scattered[ind] += 1j * weighted_phase_unwrap(phase_diff[ind],
+                                                         weight=weights)
 
-    return efield_scattered
+        scattered[abs(efields_bg) < regularization] = 0
+
+    return scattered
 
 
 # holograms
@@ -2184,7 +2173,7 @@ def fwd_model_linear(beam_fx: array,
 
     :param beam_fx: beam frequencies. Either of size npatterns or nmultiplex x npatterns. If not all patterns
       use the same degree of multiplexing, then nmultiplex should be the maximum degree of multiplexing for all patterns
-      and the extra frequences associated with patterns with a lower degree of multiplexing can be set to np.inf
+      and the extra frequencies associated with patterns with a lower degree of multiplexing can be set to np.inf
     :param beam_fy:
     :param beam_fz:
     :param no: background index of refraction
@@ -2838,7 +2827,7 @@ def display_tomography_recon(recon_fname: Union[str, Path],
     except KeyError:
         affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
     affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
-    affine_cam2recon = np.linalg.inv(affine_recon2cam)
+    affine_cam2recon = inv(affine_recon2cam)
 
     # ######################
     # prepare n
