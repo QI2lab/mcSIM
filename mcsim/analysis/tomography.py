@@ -3031,14 +3031,12 @@ def display_tomography_recon(recon_fname: Union[str, Path],
         show_efields = False
 
     # raw data sizes
-    # dxy_cam = img_z.attrs["camera_path_attributes"]["dx_um"]
     proc_roi = img_z.attrs["processing roi"]
     ny = proc_roi[1] - proc_roi[0]
     nx = proc_roi[3] - proc_roi[2]
 
     drs_n = img_z.attrs["dr"]
     n_axis_names = img_z.attrs["dimensions"]
-    # wavelength = img_z.attrs["wavelength"]
     no = img_z.attrs["no"]
 
     try:
@@ -3047,7 +3045,8 @@ def display_tomography_recon(recon_fname: Union[str, Path],
         data_slice = None
 
     # load affine xforms
-    # Napari is using convention (y, x) whereas I'm using (x, y), so need to swap these dimensions in affine xforms
+    # Napari uses convention (y, x) whereas I'm using (x, y),
+    # so need to swap these dimensions in affine xforms
     swap_xy = np.array([[0, 1, 0],
                         [1, 0, 0],
                         [0, 0, 1]])
@@ -3209,6 +3208,8 @@ def display_tomography_recon(recon_fname: Union[str, Path],
 
         if show_efields:
             npatt = e_abs.shape[-4]
+        elif not show_efields and show_raw:
+            npatt = imgs.shape[-4]
         else:
             npatt = 1
 
