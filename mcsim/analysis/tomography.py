@@ -3807,15 +3807,21 @@ class RIOptimizer(Optimizer):
         costs = 0
         if self.efield_cost_factor > 0:
             if self.mask is None:
-                costs += self.efield_cost_factor * 0.5 * (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).mean(axis=(-1, -2))
+                costs += (self.efield_cost_factor * 0.5 *
+                          (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).sum(axis=(-1, -2))
+                          )
             else:
-                costs += self.efield_cost_factor * 0.5 * (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).mean(axis=-1)
+                costs += (self.efield_cost_factor * 0.5 *
+                          (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).sum(axis=-1)
+                          )
 
         if (1 - self.efield_cost_factor) > 0:
             if self.mask is None:
-                costs += (1 - self.efield_cost_factor) * 0.5 * (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).mean(axis=(-1, -2))
+                costs += ((1 - self.efield_cost_factor) * 0.5 *
+                          (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).sum(axis=(-1, -2)))
             else:
-                costs += (1 - self.efield_cost_factor) * 0.5 * (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).mean(axis=-1)
+                costs += ((1 - self.efield_cost_factor) * 0.5 *
+                          (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).sum(axis=-1))
 
         return costs
 
@@ -3863,7 +3869,7 @@ class LinearScatt(RIOptimizer):
 
         if self.efield_cost_factor != 1:
             raise NotImplementedError(f"Linear scattering models only support self.efield_cost_factor=1, "
-                                      f"but values was {self.efield_cost_factor:.3f}")
+                                      f"but value was {self.efield_cost_factor:.3f}")
 
         if cp and isinstance(self.e_measured, cp.ndarray):
             self.model = sp_gpu.csr_matrix(model)
@@ -3916,7 +3922,7 @@ class LinearScatt(RIOptimizer):
         # second division converts Fourier space to real-space sum
         # factor of 0.5 in cost function killed by derivative factor of 2
         efwd = spnow.vstack(models).dot(x.ravel()).reshape([nind, ny, nx])
-        dc_dm = (efwd - self.e_measured[inds]) / (ny * nx) / (ny * nx)
+        dc_dm = (efwd - self.e_measured[inds]) / (ny * nx)
 
         dc_dv = xp.stack([((dc_dm[ii].conj()).ravel()[None, :] * m.tocsc()).conj().reshape(x.shape)
                           for ii, m in enumerate(models)], axis=0)
@@ -3942,7 +3948,7 @@ class LinearScatt(RIOptimizer):
 
         efwd = model.dot(x.ravel()).reshape([ninds, ny, nx])
 
-        return 0.5 * (abs(efwd - self.e_measured[inds]) ** 2).mean(axis=(-1, -2)) / (nx * ny)
+        return 0.5 * (abs(efwd - self.e_measured[inds]) ** 2).sum(axis=(-1, -2)) / (nx * ny)
 
     def guess_step(self,
                    x: Optional[array] = None) -> float:
@@ -3953,7 +3959,7 @@ class LinearScatt(RIOptimizer):
         else:
             u, s, vh = svds(self.model, k=1, which='LM')
 
-        lipschitz_estimate = s ** 2 / (self.n_samples * ny * nx) / (ny * nx)
+        lipschitz_estimate = s ** 2 / (self.n_samples * ny * nx)
         return float(1 / lipschitz_estimate)
 
     def prox(self,
@@ -4099,13 +4105,7 @@ class BPM(RIOptimizer):
             thetas = xp.expand_dims(thetas, axis=(-1, -2, -3))
 
         dz = self.drs_n[0]
-        ny, nx = x.shape[-2:]
-        if self.mask is None:
-            denom = ny * nx
-        else:
-            denom = self.mask.sum()
-
-        dc_dn *= -1j * (2 * np.pi / self.wavelength) * dz / xp.cos(thetas) / denom
+        dc_dn *= -1j * (2 * np.pi / self.wavelength) * dz / xp.cos(thetas)
 
         # conjugate in place to avoid using extra GPU memory
         xp.conjugate(e_fwd, out=e_fwd)
@@ -4249,17 +4249,10 @@ class SSNP(RIOptimizer):
         del dtemp
 
         # cost function gradient
-        ny, nx = x.shape[-2:]
         dz = self.drs_n[0]
-        ko = 2 * np.pi / self.wavelength
         # from phi_back, take derivative part
         # from phi_fwd, take the electric field part
-        if self.mask is None:
-            denom = ny * nx
-        else:
-            denom = self.mask.sum()
-
-        dc_dn *= (-2 * ko ** 2 * dz * x.conj()) / denom
+        dc_dn *= -2 * (2 * np.pi / self.wavelength) ** 2 * dz * x.conj()
 
         # conjugate in place to avoid using extra memory
         xp.conjugate(phi_fwd, out=phi_fwd)
