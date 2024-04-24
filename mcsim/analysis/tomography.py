@@ -91,21 +91,21 @@ class tomography:
                  axes_names: Optional[Sequence[str]] = None,
                  verbose: bool = True):
         """
-        Reconstruct optical diffraction tomography data
+        Reconstruct optical diffraction tomography (ODT) data
 
-        :param imgs_raw: n1 x n2 x ... x nm x npatterns x ny x nx. Data intensity images
+        :param imgs_raw: Data intensity images with shape n0 x ... x nm x npatterns x ny x nx
         :param wavelength: wavelength in um
         :param no: background index of refraction
-        :param na_detection:
-        :param na_excitation:
+        :param na_detection: numerical aperture of the detection objective
+        :param na_excitation: numerical aperture for the maximum excitation pattern
         :param dxy: pixel size in um
-        :param reference_frq_guess: [fx, fy] hologram reference frequency
+        :param reference_frq_guess: [fx, fy] hologram reference frequency with shape n0 x ... x nm x 2
         :param hologram_frqs_guess: npatterns x nmulti x 2 array
         :param imgs_raw_bg: background intensity images. If no background images are provided, then a time
           average of imgs_raw will be used as the background
         :param phase_offsets: phase shifts between images and corresponding background images
         :param axes_names: names of first m + 1 axes
-        :param verbose:
+        :param verbose: whether to print progress information
         """
         self.verbose = verbose
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
@@ -146,10 +146,10 @@ class tomography:
 
         # correction parameters
         # self.phase_offsets = phase_offsets
-        self.phase_params = None
-        self.phase_params_bg = None
-        self.translations = None
-        self.translations_bg = None
+        self.translations = np.zeros((1,) * self.nextra_dims + (self.npatterns, 1, 1, 2), dtype=float)
+        self.translations_bg = np.zeros_like(self.translations)
+        self.phase_params = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1), dtype=complex)
+        self.phase_params_bg = np.ones_like(self.phase_params)
 
         # electric fields
         self.holograms_ft = None
@@ -340,7 +340,6 @@ class tomography:
                 cy_bg = centers_bg[..., 1]
 
         else:
-            # todo: maybe detect fits that failed and redo?
             if fit_data_imgs:
                 cx, cy, fit_params, init_params, fit_states = fit_rois_gpu(rois_cut)
 
@@ -439,7 +438,6 @@ class tomography:
         if saving:
             if fit_data_imgs:
                 iraw = self.imgs_raw[slice_start].squeeze(axis=axes_start)
-                # h = self.hologram_frqs[slice_start].squeeze(axis=axes_start)
                 h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs]
 
                 d = []
@@ -453,7 +451,6 @@ class tomography:
 
             if fit_bg_imgs:
                 iraw_bg = self.imgs_raw_bg[slice_start].squeeze(axis=axes_start)
-                # h = self.hologram_frqs[slice_start].squeeze(axis=axes_start)
                 hbg = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs_bg]
 
                 d = []
@@ -478,7 +475,8 @@ class tomography:
         :param frq: set reference frequency to this value
         :return:
         """
-        
+
+        # todo: accept reference freq as argument, and if None compute using average in estimate_hologram_frqs()
         self.reconstruction_settings.update({"reference_frequency_mode": mode})
 
         if mode == "average":
@@ -520,7 +518,7 @@ class tomography:
 
         :param offsets:
         :param save_dir:
-        :param dmd_size:
+        :param dmd_size: (ny, nx)
         :return xform_dmd2frq:
         """
 
@@ -558,7 +556,6 @@ class tomography:
         # also get inverse transform and map frequencies to pupil (DMD positions)
         xform_frq2dmd = np.linalg.inv(xform_dmd2frq)
         centers_pupil_from_frq = xform_points(mean_hologram_frqs, xform_frq2dmd)
-        #
         center_pupil_frq_ref = xform_points(mean_hologram_frqs, xform_frq2dmd)[0]
         # center_pupil_frq_ref = affine.xform_points(np.expand_dims(mean_hologram_frqs, axis=0), xform_frq2dmd)[0]
 
@@ -691,35 +688,24 @@ class tomography:
 
     def unmix_holograms(self,
                         bg_average_axes: Optional[tuple[int]] = None,
-                        fourier_mask: Optional[np.ndarray] = None,
                         fit_phases: bool = False,
                         fit_translations: bool = False,
                         translation_thresh: float = 1/30,
                         apodization: Optional[np.ndarray] = None,
-                        use_gpu: bool = False,
-                        dz_refocus: float = 0.,):
+                        use_gpu: bool = False):
         """
-        Unmix and preprocess holograms
-
-        Note that this only depends on reference frequencies, and not on determined hologram frequencies
+        Unmix and preprocess holograms. Note that this only depends on reference frequencies, and not on
+        determined hologram frequencies
 
         :param bg_average_axes: axes to average along when producing background images
-        :param fourier_mask: regions where this mask is True will be set to 0 during hologram unmixing
         :param fit_phases: whether to fit phase differences between image and background holograms
-        :param fit_translations:
+        :param fit_translations: whether to fit the spatial translation between the data and reference images
         :param translation_thresh:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         :param use_gpu:
-        :param dz_refocus: distance to numerically refocus holograms
         :return holograms_ft, holograms_ft_bg:
         """
         self.reconstruction_settings.update({"fit_translations": fit_translations})
-
-        # default values
-        self.translations = np.zeros((1,) * self.nextra_dims + (self.npatterns, 1, 1, 2), dtype=float)
-        self.translations_bg = np.zeros_like(self.translations)
-        self.phase_params = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1), dtype=complex)
-        self.phase_params_bg = np.ones_like(self.phase_params)
 
         # slice used as reference for computing phase shifts/translations/etc.
         # if we are going to average along a dimension (i.e. if it is in bg_average_axes) then need to use
@@ -749,20 +735,9 @@ class tomography:
         ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
                                    chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
                                    )
-
-        if self.use_average_as_background:
-            ref_frq_bg_da = ref_frq_da
-        else:
-            ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
-                                          chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
-                                          )
-
-        if fourier_mask is None:
-            masks_da = None
-        else:
-            # ensure masks has same dims and chunks as imgs_raw
-            masks_da = da.from_array(xp.array(fourier_mask),
-                                     chunks=(1,) * (fourier_mask.ndim - 2) + (self.ny, self.nx))
+        ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
+                                      chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
+                                      )
 
         holograms_ft = da.map_blocks(unmix_hologram,
                                      self.imgs_raw,
@@ -770,7 +745,6 @@ class tomography:
                                      2*self.fmax,
                                      ref_frq_da[..., 0],
                                      ref_frq_da[..., 1],
-                                     mask=masks_da,
                                      apodization=apodization,
                                      dtype=complex)
 
@@ -786,7 +760,6 @@ class tomography:
                                             2*self.fmax,
                                             ref_frq_bg_da[..., 0],
                                             ref_frq_bg_da[..., 1],
-                                            mask=masks_da,
                                             apodization=apodization,
                                             dtype=complex)
 
@@ -901,19 +874,6 @@ class tomography:
                                                   ).compute()
 
         self.holograms_ft = holograms_ft * self.phase_params
-
-        # #########################
-        # numerically refocus
-        # #########################
-        if dz_refocus != 0.:
-            kernel = get_angular_spectrum_kernel(self.fxs,
-                                                 self.fys,
-                                                 dz_refocus,
-                                                 self.wavelength,
-                                                 self.no)
-
-            self.holograms_ft *= kernel
-            self.holograms_ft_bg *= kernel
 
         return self.holograms_ft, self.holograms_ft_bg
 
@@ -2123,7 +2083,7 @@ def unmix_hologram(img: array,
                    fmax_int: float,
                    fx_ref: np.ndarray,
                    fy_ref: np.ndarray,
-                   apodization: array = 1,
+                   apodization: Optional[array] = None,
                    mask: Optional[array] = None) -> array:
     """
     Given an off-axis hologram image, determine the electric field.
@@ -2133,12 +2093,12 @@ def unmix_hologram(img: array,
 
     :param img: n1 x ... x n_{-3} x n_{-2} x n_{-1} array
     :param dxy: pixel size
-    :param fmax_int: maximum frequency where intensity OTF has support
+    :param fmax_int: maximum frequency where intensity OTF has support = 2*na / wavelength
     :param fx_ref: x-component of hologram reference frequency
     :param fy_ref: y-component of hologram reference frequency
     :param apodization: apodization window applied to real-space image before Fourier transformation
-    :param mask: region of hologram to set to zero.
-    :return efield_ft: hologram electric field
+    :param mask: set regions of hologram where mask is True to zero, even if they are within the bandpass
+    :return efield_ft: hologram electric field in Fourier space
     """
 
     if cp and isinstance(img, cp.ndarray):
@@ -2146,6 +2106,8 @@ def unmix_hologram(img: array,
     else:
         xp = np
 
+    if apodization is None:
+        apodization = 1.
     apodization = xp.asarray(apodization)
 
     # get frequency data
