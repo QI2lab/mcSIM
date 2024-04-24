@@ -39,10 +39,9 @@ from localize_psf.affine import (params2xform,
                                  fit_xform_points,
                                  xform_points,
                                  xform_mat)
-from mcsim.analysis.analysis_tools import translate_ft
 from mcsim.analysis.phase_unwrap import phase_unwrap as weighted_phase_unwrap
 from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, to_cpu
-from mcsim.analysis.fft import ft3, ift3, ft2, ift2
+from mcsim.analysis.fft import ft3, ift3, ft2, ift2, translate_ft
 from mcsim.analysis.field_prop import (frqs2angles,
                                        get_fzs,
                                        propagate_homogeneous,

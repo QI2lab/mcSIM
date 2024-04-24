@@ -47,9 +47,9 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import PowerNorm, LogNorm
 from matplotlib.patches import Circle, Rectangle
 # code from our projects
-from mcsim.analysis.analysis_tools import translate_ft, translate_pix, get_peak_value
+from mcsim.analysis.analysis_tools import translate_pix, get_peak_value
 from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, to_cpu
-from mcsim.analysis.fft import ft2, ift2, irft2, conj_transpose_fft
+from mcsim.analysis.fft import ft2, ift2, irft2, conj_transpose_fft, translate_ft
 from localize_psf.rois import get_centered_rois, cut_roi
 from localize_psf.fit_psf import circ_aperture_otf, blur_img_psf, oversample_voxel
 from localize_psf.camera import bin, bin_adjoint, simulated_img

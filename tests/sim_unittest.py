@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 from scipy.fft import fftshift, ifftshift, fftfreq, fft, ifft, fft2, ifft2
 import mcsim.analysis.sim_reconstruction as sim
-from mcsim.analysis.analysis_tools import translate_ft
+from mcsim.analysis.fft import translate_ft
 from localize_psf.camera import bin
 
 

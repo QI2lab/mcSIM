@@ -17,8 +17,8 @@ import tifffile
 import zarr
 from scipy.ndimage import maximum_filter, minimum_filter
 from pathlib import Path
-import mcsim.analysis.analysis_tools as tools
 import mcsim.analysis.sim_reconstruction as sim
+from mcsim.analysis.fft import translate_ft
 import localize_psf.fit as fit
 
 # fname = r"F:\2021_11_23\23_odt_align\23_odt_align_MMStack_Pos0.ome.tif"
@@ -109,7 +109,7 @@ frq_fit, mask, _ = sim.fit_modulation_frq(img_ft, img_ft, dxy, frq_guess=frq_gue
 sim.plot_correlation_fit(img_ft, img_ft, frq_fit, dxy, frqs_guess=frq_guess)
 
 # shifted field
-efield_ft_shift = tools.translate_ft(img_ft, frq_fit[0], frq_fit[1], drs=(dxy, dxy))
+efield_ft_shift = translate_ft(img_ft, frq_fit[0], frq_fit[1], drs=(dxy, dxy))
 efield_ft_shift[ff_perp > fmax_int / 2] = 0
 
 efield_shift = fft.fftshift(fft.ifft2(fft.ifftshift(efield_ft_shift)))
