@@ -1171,13 +1171,13 @@ class tomography:
                 print(cp.fft.config.get_plan_cache())
 
             if optimizer == "born" or optimizer == "rytov":
-                model = LinearScatt(efield_scattered_ft,
-                                    linear_model,
-                                    no,
+                model = LinearScatt(no,
                                     wavelength,
                                   (dxy, dxy),
                                     drs_n,
                                     v_fts_start.shape,
+                                    efield_scattered_ft,
+                                    linear_model,
                                     **kwargs
                                     )
 
@@ -1205,14 +1205,14 @@ class tomography:
                 efields_bg = bin(ift2(efields_bg_ft), [nbin_y, nbin_x], mode="mean")
                 del efields_bg_ft
 
-                model = optimizer(efields,
-                                  efields_bg,
-                                  beam_frqs[0] if beam_frqs.shape[0] == 1 else None,
-                                  no,
+                model = optimizer(no,
                                   wavelength,
-                                  drs_e=None,
-                                  drs_n=drs_n,
-                                  shape_n=n_start.shape,
+                                  None,
+                                  drs_n,
+                                  n_start.shape,
+                                  efields,
+                                  efields_bg,
+                                  beam_frqs=beam_frqs[0] if beam_frqs.shape[0] == 1 else None,
                                   atf=atf,
                                   apodization=apod,
                                   mask=rmask,

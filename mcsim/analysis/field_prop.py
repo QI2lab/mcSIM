@@ -338,11 +338,7 @@ def propagate_homogeneous(efield_start: array,
 
     for ii in range(len(zs)):
         # construct propagation kernel
-        kernel = get_angular_spectrum_kernel(fx,
-                                             fy,
-                                             zs[ii],
-                                             wavelength,
-                                             no)
+        kernel = get_angular_spectrum_kernel(fx, fy, zs[ii], wavelength, no)
 
         if adjoint:
             xp.conjugate(kernel, out=kernel)
@@ -737,373 +733,17 @@ def inverse_model_linear(efield_fts: array,
     return v_ft
 
 
-def propagate_bpm(efield_start: array,
-                  n: array,
-                  no: float,
-                  drs: Sequence[float, float, float],
-                  wavelength: float,
-                  dz_final: float = 0.,
-                  atf: Optional[array] = None,
-                  apodization: Optional[array] = None,
-                  thetas: Optional[array] = None) -> array:
-    """
-    Propagate electric field through medium with index of refraction n(x, y, z) using the projection approximation,
-    which is paraxial. That is, first propagate through the background medium using the angular spectrum method,
-    and then include the effect of the inhomogeneous refractive index in the projection approximation
-
-    :param efield_start: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
-    :param n: nz x ny x nx array
-    :param no: background index of refraction
-    :param drs: (dz, dy, dx) voxel size in same units as wavelength. efield is assumed to have the same dy, dx
-    :param wavelength: wavelength in same units as drs
-    :param dz_final: the distance to propagate the field after the last plane
-    :param atf: coherent transfer function
-    :param apodization:
-    :param thetas: assuming a plane wave input, this is the angle between the plane wave propagation direction
-      and the optical axis. This provides a better approximation for the phase shift of the beam through a
-      refractive index layer
-    :return efield: n0 x ... x nm x nz x ny x nx electric field. Each slice of the array stores the electric field
-      on each side of pixels, plus the electric field at the imaging plane. So if there are nz pixels,
-      there are nz + 2 planes
-    """
-
-    if cp and isinstance(efield_start, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
-
-    efield_start = xp.asarray(efield_start)
-    n = xp.asarray(n)
-
-    # ensure other arguments of correct type
-    if atf is None:
-        atf = 1.
-    atf = xp.asarray(atf)
-
-    if apodization is None:
-        apodization = 1.
-    apodization = xp.asarray(apodization)
-
-    if thetas is None:
-        thetas = xp.zeros(efield_start.shape[:-2] + (1, 1))
-    thetas = xp.asarray(thetas)
-
-    if thetas.ndim == 1:
-        thetas = xp.expand_dims(thetas, axis=(-1, -2))
-
-    k = 2*np.pi / wavelength
-    dz, dy, dx = drs
-    nz, ny, nx = n.shape
-
-    # frequency grid
-    fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
-    fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
-
-    prop_kernel = xp.asarray(get_angular_spectrum_kernel(fx, fy, dz, wavelength, no))
-
-    # propagate
-    out_shape = efield_start.shape[:-2] + (nz + 2, ny, nx)
-
-    efield = xp.zeros(out_shape, dtype=complex)
-    efield[..., 0, :, :] = efield_start
-    for ii in range(nz):
-        efield[..., ii + 1, :, :] = (ift2(ft2(efield[..., ii, :, :] * apodization, shift=False) *
-                                          prop_kernel, shift=False) *
-                                     xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas)))
-
-    # propagate to imaging plane
-    kernel_img = xp.asarray(get_angular_spectrum_kernel(fx, fy, dz_final, wavelength, no))
-    efield[..., -1, :, :] = ift2(ft2(efield[..., -2, :, :], shift=False) * kernel_img * atf, shift=False)
-
-    return efield
-
-
-def backpropagate_bpm(efield_end: array,
-                      n: array,
-                      no: float,
-                      drs: Sequence[float, float, float],
-                      wavelength: float,
-                      dz_final: float = 0.,
-                      atf: Optional[array] = None,
-                      apodization: Optional[array] = None,
-                      thetas: Optional[array] = None) -> array:
-    """
-    Apply the adjoint operation to propagate_inhomogeneous(). This is adjoint in the sense that for any pair of fields
-    a, b we have
-    np.sum(a.conj() * propagate_inhomogeneous(b)) = np.sum(backpropagate_inhomogeneous(a).conj() * b)
-
-    :param efield_end: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
-    :param n: nz x ny x nx array
-    :param no: background index of refraction
-    :param drs: (dz, dy, dx) voxel size in same units as wavelength. efield is assumed to have the same dy, dx
-    :param wavelength: wavelength in same units as drs
-    :param dz_final:
-    :param atf:
-    :param apodization:
-    :param thetas: assuming a plane wave input, this is the angle between the plane wave propagation direction
-      and the optical axis. This provides a better approximation for the phase shift of the beam through a
-      refractive index layer
-    :return efield: n0 x ... x nm x nz x ny x nx electric field
-    """
-
-    if cp and isinstance(efield_end, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
-
-    efield_end = xp.asarray(efield_end)
-    n = xp.asarray(n)
-
-    # ensure other arguments of correct type
-    if atf is None:
-        atf = 1.
-    atf = xp.asarray(atf)
-
-    if apodization is None:
-        apodization = 1.
-    apodization = xp.asarray(apodization)
-
-    if thetas is None:
-        thetas = xp.zeros(efield_end.shape[:-2] + (1, 1))
-    thetas = xp.asarray(thetas)
-
-    if thetas.ndim == 1:
-        thetas = xp.expand_dims(thetas, axis=(-1, -2))
-
-    k = 2*np.pi / wavelength
-    dz, dy, dx = drs
-    nz, ny, nx = n.shape
-
-    # frequency grid
-    fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
-    fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
-
-    # propagate
-    out_shape = efield_end.shape[:-2] + (nz + 2, ny, nx)
-
-    efield = xp.zeros(out_shape, dtype=complex)
-    efield[..., -1, :, :] = efield_end
-
-    prop_kernel = xp.asarray(get_angular_spectrum_kernel(fx, fy, dz, wavelength, no))
-
-    # propagate from imaging plane back to last plane
-    kernel_img = xp.asarray(get_angular_spectrum_kernel(fx, fy, dz_final, wavelength, no))
-    efield[..., -2, :, :] = ft2(ift2(efield[..., -1, :, :], adjoint=True, shift=False) *
-                                kernel_img.conj() *
-                                xp.conj(atf),
-                                adjoint=True, shift=False)
-
-    for ii in range(nz - 1, -1, -1):
-        efield[..., ii, :, :] = ft2(ift2(efield[..., ii + 1, :, :] *
-                                         xp.exp(1j * k * dz * (n[ii] - no) / xp.cos(thetas)).conj(),
-                                         adjoint=True, shift=False) *
-                                    prop_kernel.conj(),
-                                    adjoint=True, shift=False) * xp.conj(apodization)
-
-    return efield
-
-
-def propagate_ssnp(efield_start: array,
-                   de_dz_start: array,
-                   n: array,
-                   no: float,
-                   drs: Sequence[float, float, float],
-                   wavelength: float,
-                   dz_final: float = 0.,
-                   atf: Optional[array] = None,
-                   apodization: Optional[array] = None) -> array:
-    """
-
-    :param efield_start:
-    :param de_dz_start:
-    :param n:
-    :param no:
-    :param drs: (dz, dy, dx)
-    :param wavelength:
-    :param dz_final:
-    :param atf:
-    :param apodization:
-    :return phi:
-    """
-
-    use_gpu = cp and isinstance(efield_start, cp.ndarray)
-    if use_gpu:
-        xp = cp
-    else:
-        xp = np
-
-    if atf is None:
-        atf = 1.
-
-    if apodization is None:
-        apodization = 1.
-
-    n = xp.asarray(n)
-    # expand over phi dims + extra dim
-    atf = xp.expand_dims(xp.asarray(xp.atleast_2d(atf)), axis=(-1, -2))
-    apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(apodization)), axis=(-1, -2))
-
-    ko = 2 * np.pi / wavelength
-    dz, dy, dx = drs
-    nz, ny, nx = n.shape
-
-    fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
-    fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
-
-    # construct operators we will need
-    p = propagation_kernel(fx, fy, dz, wavelength, no)
-    p_img = propagation_kernel(fx, fy, dz_final, wavelength, no)
-    fb_proj = forward_backward_proj(fx, fy, wavelength, no)[..., slice(0, 1), :]
-
-    # add extra dimension at the end for broadcasting during matmult
-    out_shape = efield_start.shape[:-2] + (nz + 2, ny, nx, 2, 1)
-    yx_axes = (-3, -4)
-    phi = xp.zeros(out_shape, dtype=complex)
-    # initialize
-    phi[..., 0, :, :, 0, 0] = xp.asarray(efield_start)
-    phi[..., 0, :, :, 1, 0] = xp.asarray(de_dz_start)
-    # z-step propagation
-    for ii in range(nz):
-        # refractive index matrix
-        q = xp.ones((n.shape[1:]) + (2, 2), dtype=complex)
-        q[..., 0, 1] = 0
-        q[..., 1, 0] = ko**2 * (no**2 - n[ii]**2) * dz
-
-        phi[..., ii + 1, :, :, :, :] = ift2(xp.matmul(p, ft2(xp.matmul(q, phi[..., ii, :, :, :, :] * apodization),
-                                                             axes=yx_axes, shift=False)
-                                                      ),
-                                            axes=yx_axes, shift=False)
-
-    # propagate to imaging plane and apply coherent transfer function
-    # the last element of phi is fundamentally different than the others because fb_proj changes the basis
-    # so this is (phi_f, phi_b) whereas the others are (phi, dphi / dz)
-    phi[..., -1, :, :, 0, :] = ift2(xp.matmul(fb_proj, atf * xp.matmul(p_img,
-                                                                       ft2(phi[..., -2, :, :, :, :],
-                                                                           axes=yx_axes, shift=False))),
-                                    axes=yx_axes, shift=False)[..., 0, :]
-
-    # strip off extra dim
-    return phi[..., 0]
-
-
-def backpropagate_ssnp(efield_end: array,
-                       n: array,
-                       no: float,
-                       drs: Sequence[float, float, float],
-                       wavelength: float,
-                       dz_final: float = 0.,
-                       atf: Optional[array] = None,
-                       apodization: Optional[array] = None) -> array:
-    """
-    This acts with the adjoint operators required when taking the gradient
-
-    :param efield_end:
-    :param n:
-    :param no:
-    :param drs:
-    :param wavelength:
-    :param dz_final:
-    :param atf:
-    :param apodization:
-    :return efield_back:
-    """
-
-    use_gpu = cp and isinstance(efield_end, cp.ndarray)
-    if use_gpu:
-        xp = cp
-    else:
-        xp = np
-
-    if atf is None:
-        atf = 1.
-
-    if apodization is None:
-        apodization = 1.
-
-    n = xp.asarray(n)
-    # expand over phi dims + extra dim
-    atf = xp.expand_dims(xp.asarray(xp.atleast_2d(atf)), axis=(-1, -2))
-    apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(apodization)), axis=(-1, -2))
-
-    ko = 2 * np.pi / wavelength
-    dz, dy, dx = drs
-    nz, ny, nx = n.shape
-
-    fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
-    fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
-
-    # construct field propagators
-    p = propagation_kernel(fx, fy, dz, wavelength, no)
-    p_img = propagation_kernel(fx, fy, dz_final, wavelength, no)
-
-    p_adj = p.conj().swapaxes(-1, -2)
-    p_img_adj = p_img.conj().swapaxes(-1, -2)
-
-    # add extra dimension at the end for broadcasting during matmult
-    out_shape = efield_end.shape[:-2] + (nz + 2, ny, nx, 2, 1)
-    yx_axes = (-3, -4)
-    phi = xp.zeros(out_shape, dtype=complex)
-    phi[..., -1, :, :, 0, 0] = xp.asarray(efield_end)
-
-    #
-    fb_proj_adj = forward_backward_proj(fx, fy, wavelength, no).conj()[..., slice(0, 1), :].swapaxes(-1, -2)
-
-    # adjoint of imaging/final prop operation
-    fadj = ft2(xp.matmul(p_img_adj,
-                         xp.conj(atf) *
-                         xp.matmul(fb_proj_adj,
-                                   ift2(phi[..., -1, :, :, slice(0, 1), :],
-                                        axes=yx_axes,
-                                        adjoint=True,
-                                        shift=False)
-                                   )
-                         ),
-               axes=yx_axes,
-               adjoint=True,
-               shift=False)
-
-    # last propagation also
-    phi[..., -2, :, :, :, :] = ft2(xp.matmul(p_adj,
-                                             ift2(fadj,
-                                                  axes=yx_axes,
-                                                  adjoint=True,
-                                                  shift=False)
-                                             ),
-                                   axes=yx_axes,
-                                   adjoint=True,
-                                   shift=False)
-    # loop backwards through z-stack
-    for ii in range(nz - 1, -1, -1):
-        q_adj = xp.ones((n.shape[1:]) + (2, 2), dtype=complex)
-        q_adj[..., 0, 1] = ko**2 * (no**2 - n[ii]**2).conj() * dz
-        q_adj[..., 1, 0] = 0
-
-        phi[..., ii, :, :, :, :] = ft2(xp.matmul(p_adj,
-                                                 ift2(xp.matmul(q_adj,
-                                                                phi[..., ii + 1, :, :, :, :]) *
-                                                      xp.conj(apodization),
-                                                      axes=yx_axes,
-                                                      adjoint=True,
-                                                      shift=False)),
-                                       axes=yx_axes,
-                                       adjoint=True,
-                                       shift=False)
-
-    # strip off extra dim
-    return phi[..., 0]
-
-
 class RIOptimizer(Optimizer):
 
     def __init__(self,
-                 e_measured: array,
-                 e_measured_bg: array,
-                 beam_frqs: array,
                  no: float,
                  wavelength: float,
                  drs_e: Sequence[float, float],
                  drs_n: Sequence[float, float, float],
                  shape_n: Sequence[int, int, int],
+                 e_measured: Optional[array] = None,
+                 e_measured_bg: Optional[array] = None,
+                 beam_frqs: Optional[array] = None,
                  dz_refocus: float = 0.,
                  atf: Optional[array] = None,
                  apodization: Optional[array] = None,
@@ -1120,17 +760,18 @@ class RIOptimizer(Optimizer):
                  ):
         """
 
-        :param e_measured:
-        :param e_measured_bg:
-        :param beam_frqs:
-        :param no:
-        :param wavelength:
-        :param drs_e:
-        :param drs_n:
-        :param shape_n:
+        :param no: background index of refraction
+        :param wavelength: wavelength of coherent light. All other spatial quantities should use the same
+          units as wavelength (typically um or nm)
+        :param drs_e: (dy, dx) electric field pixel size
+        :param drs_n: (dz, dy, dx) refractive index voxel size
+        :param shape_n: (nz, ny, nx) refractive index array shape
+        :param e_measured: measured electric field of shape npatterns x ny x nx
+        :param e_measured_bg: measured electric field backgrounds
+        :param beam_frqs: beam frequencies, of shape npatterns x 3
         :param dz_refocus:
         :param atf: amplitude (coherent) transfer function
-        :param apodization:
+        :param apodization: apodization applied during 2D FFT's
         :param tau_tv_real: weight for TV proximal operator applied to real-part
         :param tau_tv_imag: weight for TV proximal operator applied to imaginary-part
         :param tau_l1_real:
@@ -1152,9 +793,15 @@ class RIOptimizer(Optimizer):
         self.drs_e = drs_e
         self.drs_n = drs_n
         self.shape_n = shape_n
-        self.atf = atf
-        self.apodization = apodization
         self.dz_refocus = dz_refocus
+
+        if atf is None:
+            atf = 1.
+        self.atf = atf
+
+        if apodization is None:
+            apodization = 1.
+        self.apodization = apodization
 
         self.efield_cost_factor = float(efield_cost_factor)
         if self.efield_cost_factor > 1 or self.efield_cost_factor < 0:
@@ -1262,43 +909,51 @@ class RIOptimizer(Optimizer):
 
         return costs
 
+    def propagate(self,
+                  efield_start: array,
+                  n: array) -> array:
+        pass
+
+    def backpropagate(self,
+                      efield_start: array,
+                      n: array) -> array:
+        pass
+
 
 class LinearScatt(RIOptimizer):
     def __init__(self,
-                 eft: array,
-                 model: csr_matrix,
                  no: float,
                  wavelength: float,
                  drs_e: Sequence[float, float],
                  drs_n: Sequence[float, float, float],
                  shape_n: Sequence[int, int, int],
+                 eft: array,
+                 model: csr_matrix,
                  **kwargs
                  ):
         """
         Born and Rytov optimizer.
 
-        :param eft: n_angles x ny x nx array Fourier-transform of the electric field.
-          This will be either the scattered field or the Rytov phase depending on the linear model chosen.
-        :param model: The matrix relating the measured field and the scattering potential. This should be generated
-          with fwd_model_linear(). Note that the effect of beam frqs and the atf is incorporated in model
         :param no:
         :param wavelength:
         :param drs_e:
         :param drs_n:
         :param shape_n:
+        :param eft: n_angles x ny x nx array Fourier-transform of the electric field.
+          This will be either the scattered field or the Rytov phase depending on the linear model chosen.
+        :param model: The matrix relating the measured field and the scattering potential. This should be generated
+          with fwd_model_linear(). Note that the effect of beam frqs and the atf is incorporated in model
         :param **kwargs: parameters passed through to RIOptimizer, including parameters for proximal operator
         """
 
         # note that have made different choices for LinearScatt optimizers vs. the multislice
         # but still inheriting from RIOptimizer for convenience in constructing proximal operator
-        super(LinearScatt, self).__init__(eft,
-                                          None,
-                                          None,
-                                          no,
+        super(LinearScatt, self).__init__(no,
                                           wavelength,
                                           drs_e,
                                           drs_n,
                                           shape_n,
+                                          eft,
                                           **kwargs)
 
         if self.dz_refocus != 0.:
@@ -1416,21 +1071,20 @@ class LinearScatt(RIOptimizer):
 
 class BPM(RIOptimizer):
     """
-    Beam propagation method (BPM)
+    Beam propagation method (BPM). Propagate electric field through medium with index of refraction n(x, y, z)
+    using the projection approximation, which is paraxial. That is, first propagate through the background
+    medium using the angular spectrum method, and then include the effect of the inhomogeneous refractive
+    index in the projection approximation
     """
 
     def __init__(self,
-                 e_measured: array,
-                 e_measured_bg: array,
-                 beam_frqs: Optional[array],
                  no: float,
                  wavelength: float,
                  drs_e: Sequence[float, float],
                  drs_n: Sequence[float, float, float],
                  shape_n: Sequence[int, int, int],
-                 atf: Optional[array] = None,
-                 apodization: Optional[array] = None,
-                 mask: Optional[array] = None,
+                 e_measured: Optional[array] = None,
+                 e_measured_bg: Optional[array] = None,
                  **kwargs
                  ):
         """
@@ -1438,10 +1092,6 @@ class BPM(RIOptimizer):
         at the points before and after each voxel, and in an additional plane to account for the imaging. So we have
         nz + 2 electric field planes.
 
-        :param e_measured: measured electric fields
-        :param e_measured_bg: measured background electric fields
-        :param beam_frqs: n_pattern x 3 array. If provided, modiefied BPM with extra cosine obliquity factor.
-          will be used
         :param no: background index of refraction
         :param wavelength: wavelength of light
         :param drs_e: (dy, dx) of the electric field
@@ -1451,26 +1101,27 @@ class BPM(RIOptimizer):
         :param apodization: apodization used during FFTs
         :param mask: 2D array. Where true, these spatial pixels will be included in the cost function. Where false,
           they will not
+        :param e_measured: measured electric fields
+        :param e_measured_bg: measured background electric fields
+        :param beam_frqs: n_pattern x 3 array. If provided, modified BPM with extra cosine obliquity factor.
+          will be used
         """
 
-        super(BPM, self).__init__(e_measured,
-                                  e_measured_bg,
-                                  beam_frqs,
-                                  no,
+        super(BPM, self).__init__(no,
                                   wavelength,
                                   drs_e,
                                   drs_n,
                                   shape_n,
-                                  atf=atf,
-                                  apodization=apodization,
-                                  mask=mask,
+                                  e_measured,
+                                  e_measured_bg,
                                   **kwargs)
 
         # include cosine obliquity factor
         if self.beam_frqs is not None:
-            self.thetas, _ = frqs2angles(self.beam_frqs, self.no / self.wavelength)
+            thetas, _ = frqs2angles(self.beam_frqs, self.no / self.wavelength)
         else:
-            self.thetas = np.zeros((self.n_samples,))
+            thetas = np.zeros(self.n_samples)
+        self.thetas = thetas
 
         # distance to propagate beam after last RI voxel
         # if dz_refocus=0, this is the center of the volume
@@ -1482,6 +1133,135 @@ class BPM(RIOptimizer):
                                  float(self.drs_n[0]) * self.shape_n[0]
                                  ])
 
+    def propagate(self,
+                  efield_start: array,
+                  n: array,
+                  thetas: Optional[array] = None) -> array:
+        """
+        Propagate electric field through medium with index of refraction n(x, y, z) using the projection approximation,
+        which is paraxial. That is, first propagate through the background medium using the angular spectrum method,
+        and then include the effect of the inhomogeneous refractive index in the projection approximation
+
+        :param efield_start: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
+        :param n: nz x ny x nx array
+        :param thetas: assuming a plane wave input, this is the angle between the plane wave propagation direction
+          and the optical axis. This provides a better approximation for the phase shift of the beam through a
+          refractive index layer
+        :return efield: n0 x ... x nm x nz x ny x nx electric field. Each slice of the array stores the electric field
+          on each side of pixels, plus the electric field at the imaging plane. So if there are nz pixels,
+          there are nz + 2 planes
+        """
+
+        if cp and isinstance(efield_start, cp.ndarray):
+            xp = cp
+        else:
+            xp = np
+
+        if thetas is None:
+            thetas = xp.zeros(efield_start.shape[:-2] + (1, 1))
+        thetas = xp.asarray(thetas)
+
+        if thetas.ndim == 1:
+            thetas = xp.expand_dims(thetas, axis=(-1, -2))
+
+        # ensure arrays of correct type
+        efield_start = xp.asarray(efield_start)
+        n = xp.asarray(n)
+        atf = xp.asarray(self.atf)
+        apodization = xp.asarray(self.apodization)
+
+        dz, dy, dx = self.drs_n
+        nz, ny, nx = n.shape
+
+        # Fourier space propagation operators
+        fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
+        fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
+        prop_kernel = xp.asarray(get_angular_spectrum_kernel(fx, fy, dz, self.wavelength, self.no))
+        kernel_img = xp.asarray(get_angular_spectrum_kernel(fx, fy, self.dz_final, self.wavelength, self.no))
+
+        # ##########################
+        # propagate
+        # ##########################
+        efield = xp.zeros(efield_start.shape[:-2] + (nz + 2, ny, nx),
+                          dtype=complex)
+        efield[..., 0, :, :] = efield_start
+        for ii in range(nz):
+            efield[..., ii + 1, :, :] = (ift2(ft2(efield[..., ii, :, :] * apodization, shift=False) *
+                                              prop_kernel, shift=False) *
+                                         xp.exp(1j * (2 * np.pi / self.wavelength) * dz *
+                                                (n[ii] - self.no) / xp.cos(thetas)))
+
+        # propagate to imaging plane
+        efield[..., -1, :, :] = ift2(ft2(efield[..., -2, :, :], shift=False) * kernel_img * atf, shift=False)
+
+        return efield
+
+    def backpropagate(self,
+                      efield_end: array,
+                      n: array,
+                      thetas: Optional[array] = None) -> array:
+        """
+        Apply the adjoint operation to propagate(). This is adjoint in the sense that for any pair of fields
+        a, b we have
+        np.sum(a.conj() * propagate_inhomogeneous(b)) = np.sum(backpropagate_inhomogeneous(a).conj() * b)
+
+        :param efield_end: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
+        :param n: nz x ny x nx array
+        :param thetas: assuming a plane wave input, this is the angle between the plane wave propagation direction
+          and the optical axis. This provides a better approximation for the phase shift of the beam through a
+          refractive index layer
+        :return efield: n0 x ... x nm x nz x ny x nx electric field
+        """
+
+        if cp and isinstance(efield_end, cp.ndarray):
+            xp = cp
+        else:
+            xp = np
+
+        efield_end = xp.asarray(efield_end)
+        n = xp.asarray(n)
+        atf = xp.asarray(self.atf)
+        apodization = xp.asarray(self.apodization)
+
+        if thetas is None:
+            thetas = xp.zeros(efield_end.shape[:-2] + (1, 1))
+        thetas = xp.asarray(thetas)
+
+        if thetas.ndim == 1:
+            thetas = xp.expand_dims(thetas, axis=(-1, -2))
+
+        dz, dy, dx = self.drs_n
+        nz, ny, nx = n.shape
+
+        # frequency grid
+        fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
+        fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
+
+        # propagate
+        out_shape = efield_end.shape[:-2] + (nz + 2, ny, nx)
+
+        efield = xp.zeros(out_shape, dtype=complex)
+        efield[..., -1, :, :] = efield_end
+
+        prop_kernel = xp.asarray(get_angular_spectrum_kernel(fx, fy, dz, self.wavelength, self.no))
+
+        # propagate from imaging plane back to last plane
+        kernel_img = xp.asarray(get_angular_spectrum_kernel(fx, fy, self.dz_final, self.wavelength, self.no))
+        efield[..., -2, :, :] = ft2(ift2(efield[..., -1, :, :], adjoint=True, shift=False) *
+                                    kernel_img.conj() *
+                                    xp.conj(atf),
+                                    adjoint=True, shift=False)
+
+        for ii in range(nz - 1, -1, -1):
+            efield[..., ii, :, :] = ft2(ift2(efield[..., ii + 1, :, :] *
+                                             xp.exp(1j * (2 * np.pi / self.wavelength) * dz *
+                                                    (n[ii] - self.no) / xp.cos(thetas)).conj(),
+                                             adjoint=True, shift=False) *
+                                        prop_kernel.conj(),
+                                        adjoint=True, shift=False) * xp.conj(apodization)
+
+        return efield
+
     def fwd_model(self,
                   x: array,
                   inds: Optional[Sequence[int]] = None) -> array:
@@ -1489,17 +1269,7 @@ class BPM(RIOptimizer):
             inds = list(range(self.n_samples))
 
         e_start = self.get_estart(inds=inds)
-        e_fwd = propagate_bpm(e_start,
-                              x,
-                              self.no,
-                              self.drs_n,
-                              self.wavelength,
-                              self.dz_final,
-                              atf=self.atf,
-                              apodization=self.apodization,
-                              thetas=self.thetas[inds])
-
-        return e_fwd
+        return self.propagate(e_start, x, thetas=self.thetas[inds])
 
     def gradient(self,
                  x: array,
@@ -1523,16 +1293,7 @@ class BPM(RIOptimizer):
         if self.mask is not None:
             dtemp *= self.mask
 
-        dc_dn = backpropagate_bpm(dtemp,
-                                  x,
-                                  self.no,
-                                  self.drs_n,
-                                  self.wavelength,
-                                  self.dz_final,
-                                  atf=self.atf,
-                                  apodization=self.apodization,
-                                  thetas=self.thetas[inds])[:, 1:-1, :, :]
-
+        dc_dn = self.backpropagate(dtemp, x, thetas=self.thetas[inds])[:, 1:-1, :, :]
         del dtemp
 
         # cost function gradient
@@ -1567,33 +1328,26 @@ class BPM(RIOptimizer):
 
 class SSNP(RIOptimizer):
     def __init__(self,
-                 e_measured: array,
-                 e_measured_bg: array,
-                 beam_frqs: Optional[array],
                  no: float,
                  wavelength: float,
                  drs_e: Sequence[float, float],
                  drs_n: Sequence[float, float, float],
                  shape_n: Sequence[int, int, int],
-                 atf: Optional[array] = None,
-                 apodization: Optional[array] = None,
-                 mask: Optional[array] = None,
+                 e_measured: Optional[array] = None,
+                 e_measured_bg: Optional[array] = None,
                  **kwargs
                  ):
 
-        super(SSNP, self).__init__(e_measured,
-                                   e_measured_bg,
-                                   beam_frqs,
-                                   no,
+        super(SSNP, self).__init__(no,
                                    wavelength,
                                    drs_e,
                                    drs_n,
                                    shape_n,
-                                   atf=atf,
-                                   apodization=apodization,
-                                   mask=mask,
+                                   e_measured,
+                                   e_measured_bg,
                                    **kwargs)
 
+        # todo: maybe get rid of dz_final and dz_back and only have dz_refocus?
         # distance to propagate beam after last RI voxel
         # if dz_refocus=0, this is the center of the volume
         self.dz_final = (-float(self.drs_n[0] * ((self.shape_n[0] - 1) - self.shape_n[0] // 2 + 0.5)) -
@@ -1618,6 +1372,161 @@ class SSNP(RIOptimizer):
         kz[xp.isnan(kz)] = 0
         self.kz = kz
 
+    def propagate(self,
+                  efield_start: array,
+                  de_dz_start: array,
+                  n: array) -> array:
+        """
+
+        :param efield_start:
+        :param de_dz_start:
+        :param n:
+        :return phi:
+        """
+
+        if cp and isinstance(efield_start, cp.ndarray):
+            xp = cp
+        else:
+            xp = np
+
+        n = xp.asarray(n)
+        atf = xp.asarray(self.atf)
+        apodization = xp.asarray(self.apodization)
+        # expand over phi dims + extra dim
+        atf = xp.expand_dims(xp.asarray(xp.atleast_2d(atf)), axis=(-1, -2))
+        apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(apodization)), axis=(-1, -2))
+
+        dz, dy, dx = self.drs_n
+        nz, ny, nx = n.shape
+
+        # construct propagation operators we will need
+        fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
+        fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
+        p = propagation_kernel(fx, fy, dz, self.wavelength, self.no)
+        p_img = propagation_kernel(fx, fy, self.dz_final, self.wavelength, self.no)
+        fb_proj = forward_backward_proj(fx, fy, self.wavelength, self.no)[..., slice(0, 1), :]
+
+        # add extra dimension at the end for broadcasting during matmult
+        out_shape = efield_start.shape[:-2] + (nz + 2, ny, nx, 2, 1)
+        yx_axes = (-3, -4)
+        phi = xp.zeros(out_shape, dtype=complex)
+        # initialize
+        phi[..., 0, :, :, 0, 0] = xp.asarray(efield_start)
+        phi[..., 0, :, :, 1, 0] = xp.asarray(de_dz_start)
+        # z-step propagation
+        for ii in range(nz):
+            # refractive index matrix
+            q = xp.ones((n.shape[1:]) + (2, 2), dtype=complex)
+            q[..., 0, 1] = 0
+            q[..., 1, 0] = (2 * np.pi / self.wavelength) ** 2 * (self.no ** 2 - n[ii] ** 2) * dz
+
+            phi[..., ii + 1, :, :, :, :] = ift2(
+                xp.matmul(p, ft2(xp.matmul(q, phi[..., ii, :, :, :, :] * apodization),
+                                 axes=yx_axes, shift=False)
+                          ),
+                axes=yx_axes, shift=False)
+
+        # propagate to imaging plane and apply coherent transfer function
+        # the last element of phi is fundamentally different from the others because fb_proj changes the basis
+        # so this is (phi_f, phi_b) whereas the others are (phi, dphi / dz)
+        phi[..., -1, :, :, 0, :] = ift2(xp.matmul(fb_proj, atf * xp.matmul(p_img,
+                                                                           ft2(phi[..., -2, :, :, :, :],
+                                                                               axes=yx_axes, shift=False))),
+                                        axes=yx_axes, shift=False)[..., 0, :]
+
+        # strip off extra dim
+        return phi[..., 0]
+
+    def backpropagate(self,
+                      efield_end: array,
+                      n: array) -> array:
+        """
+        This acts with the adjoint operators required when taking the gradient
+
+        :param efield_end:
+        :param n:
+        """
+
+        use_gpu = cp and isinstance(efield_end, cp.ndarray)
+        if use_gpu:
+            xp = cp
+        else:
+            xp = np
+
+        n = xp.asarray(n)
+        atf = xp.asarray(self.atf)
+        apodization = xp.asarray(self.apodization)
+        # expand over phi dims + extra dim
+        atf = xp.expand_dims(xp.asarray(xp.atleast_2d(atf)), axis=(-1, -2))
+        apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(apodization)), axis=(-1, -2))
+
+        dz, dy, dx = self.drs_n
+        nz, ny, nx = n.shape
+
+        # construct field propagators
+        fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
+        fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
+        p = propagation_kernel(fx, fy, dz, self.wavelength, self.no)
+        p_img = propagation_kernel(fx, fy, self.dz_final, self.wavelength, self.no)
+
+        p_adj = p.conj().swapaxes(-1, -2)
+        p_img_adj = p_img.conj().swapaxes(-1, -2)
+
+        fb_proj_adj = forward_backward_proj(fx,
+                                            fy,
+                                            self.wavelength,
+                                            self.no).conj()[..., slice(0, 1), :].swapaxes(-1, -2)
+
+        # add extra dimension at the end for broadcasting during matmult
+        out_shape = efield_end.shape[:-2] + (nz + 2, ny, nx, 2, 1)
+        yx_axes = (-3, -4)
+        phi = xp.zeros(out_shape, dtype=complex)
+        phi[..., -1, :, :, 0, 0] = xp.asarray(efield_end)
+
+        # adjoint of imaging/final prop operation
+        fadj = ft2(xp.matmul(p_img_adj,
+                             xp.conj(atf) *
+                             xp.matmul(fb_proj_adj,
+                                       ift2(phi[..., -1, :, :, slice(0, 1), :],
+                                            axes=yx_axes,
+                                            adjoint=True,
+                                            shift=False)
+                                       )
+                             ),
+                   axes=yx_axes,
+                   adjoint=True,
+                   shift=False)
+
+        # last propagation also
+        phi[..., -2, :, :, :, :] = ft2(xp.matmul(p_adj,
+                                                 ift2(fadj,
+                                                      axes=yx_axes,
+                                                      adjoint=True,
+                                                      shift=False)
+                                                 ),
+                                       axes=yx_axes,
+                                       adjoint=True,
+                                       shift=False)
+        # loop backwards through z-stack
+        for ii in range(nz - 1, -1, -1):
+            q_adj = xp.ones((n.shape[1:]) + (2, 2), dtype=complex)
+            q_adj[..., 0, 1] = (2 * np.pi / self.wavelength) ** 2 * (self.no ** 2 - n[ii] ** 2).conj() * dz
+            q_adj[..., 1, 0] = 0
+
+            phi[..., ii, :, :, :, :] = ft2(xp.matmul(p_adj,
+                                                     ift2(xp.matmul(q_adj,
+                                                                    phi[..., ii + 1, :, :, :, :]) *
+                                                          xp.conj(apodization),
+                                                          axes=yx_axes,
+                                                          adjoint=True,
+                                                          shift=False)),
+                                           axes=yx_axes,
+                                           adjoint=True,
+                                           shift=False)
+
+        # strip off extra dim
+        return phi[..., 0]
+
     def phi_fwd(self,
                 x: array,
                 inds: Optional[Sequence[int]] = None) -> array:
@@ -1633,16 +1542,7 @@ class SSNP(RIOptimizer):
             inds = list(range(self.n_samples))
 
         e_start, de_dz_start = self.get_estart(inds=inds)
-        phi_fwd = propagate_ssnp(e_start,
-                                 de_dz_start,
-                                 x,
-                                 self.no,
-                                 self.drs_n,
-                                 self.wavelength,
-                                 self.dz_final,
-                                 atf=self.atf,
-                                 apodization=self.apodization)
-        return phi_fwd
+        return self.propagate(e_start, de_dz_start, x)
 
     def fwd_model(self,
                   x: array,
@@ -1678,17 +1578,8 @@ class SSNP(RIOptimizer):
             dtemp *= self.mask
 
         # from phi_back, take derivative part
-        dc_dn = backpropagate_ssnp(dtemp,
-                                   x,
-                                   self.no,
-                                   self.drs_n,
-                                   self.wavelength,
-                                   self.dz_final,
-                                   atf=self.atf,
-                                   apodization=self.apodization)[:, 1:-1, :, :, 1]
-
+        dc_dn = self.backpropagate(dtemp, x)[:, 1:-1, :, :, 1]
         del dtemp
-
         dc_dn *= -2 * (2 * np.pi / self.wavelength) ** 2 * self.drs_n[0] * x.conj()
 
         # conjugate in place to avoid using extra memory

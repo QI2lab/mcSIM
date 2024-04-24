@@ -14,7 +14,6 @@ from mcsim.analysis.field_prop import (get_v,
                                        BPM,
                                        SSNP)
 
-
 try:
     import cupy as cp
 except ValueError:
@@ -126,13 +125,14 @@ class TestPatterns(unittest.TestCase):
                                  interpolate=True,
                                  use_gpu=True)
 
-        opt = LinearScatt(e,
-                          model,
-                          no,
+        opt = LinearScatt(no,
                           wavelength,
                           (dxy, dxy),
                           (dz, dxy, dxy),
-                          (nz, ny, nx))
+                          (nz, ny, nx),
+                          e,
+                          model,
+                          )
 
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), vft.shape)
         g, gn = opt.test_gradient(vft, jind, inds=[0, 1])
@@ -179,13 +179,14 @@ class TestPatterns(unittest.TestCase):
                                  interpolate=True,
                                  use_gpu=True,)
 
-        opt = LinearScatt(e,
-                          model,
-                          no,
+        opt = LinearScatt(no,
                           wavelength,
                           (dxy, dxy),
                           (dz, dxy, dxy),
-                          (nz, ny, nx))
+                          (nz, ny, nx),
+                          e,
+                          model,
+                          )
 
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), vft.shape)
         g, gn = opt.test_gradient(vft, jind, inds=[0, 1])
@@ -223,14 +224,14 @@ class TestPatterns(unittest.TestCase):
         mask = xp.ones((ny, nx), dtype=bool)
         mask[ny // 2:, :] = False
 
-        opt = BPM(e,
-                  ebg,
-                  None,
-                  no,
+        opt = BPM(no,
                   wavelength,
                   (dxy, dxy),
                   (dz, dxy, dxy),
                   (nz, ny, nx),
+                  e,
+                  ebg,
+                  beam_frqs=None,
                   dz_refocus=0.03,
                   atf=atf,
                   apodization=apo,
@@ -272,14 +273,14 @@ class TestPatterns(unittest.TestCase):
         mask = xp.ones((ny, nx), dtype=bool)
         mask[ny // 2:, :] = False
 
-        opt = SSNP(e,
-                   ebg,
-                   None,
-                   no,
+        opt = SSNP(no,
                    wavelength,
                    (dxy, dxy),
                    (dz, dxy, dxy),
                    (nz, ny, nx),
+                   e,
+                   ebg,
+                   beam_frqs=None,
                    dz_refocus=0.04,
                    atf=atf,
                    apodization=apo,
