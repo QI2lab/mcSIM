@@ -21,8 +21,7 @@ from matplotlib.colors import PowerNorm, Normalize
 from matplotlib.patches import Circle
 import matplotlib.pyplot as plt
 from mcsim.analysis.simulate_dmd import xy2uvector, blaze_envelope
-from mcsim.analysis.sim_reconstruction import get_noise_power, fit_modulation_frq, plot_correlation_fit
-from mcsim.analysis.analysis_tools import get_peak_value
+from mcsim.analysis.sim_reconstruction import get_noise_power, fit_modulation_frq, plot_correlation_fit, get_peak_value
 from localize_psf.affine import xform_sinusoid_params_roi, xform_shift_center, xform_mat
 from localize_psf.fit_psf import circ_aperture_otf
 from mcsim.analysis.dmd_patterns import (get_sim_unit_cell,
