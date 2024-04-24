@@ -615,7 +615,7 @@ class tomography:
             west[:, 1] = np.arange(ny_dmd) - (ny_dmd // 2)
 
             dmd_boundary = np.concatenate((south, north, east, west), axis=0)
-            dmd_boundry_freq = xform_points(dmd_boundary, xform_dmd2frq)
+            dmd_boundary_freq = xform_points(dmd_boundary, xform_dmd2frq)
 
         # check sign of frequency reference is consistent with affine transform
         assert np.linalg.norm(frq_dmd_center + mean_ref_frq) >= np.linalg.norm(frq_dmd_center - mean_ref_frq)
@@ -645,10 +645,19 @@ class tomography:
                 centers_pupil_from_frq[..., 1],
                 'rx',
                 label="fit hologram frequencies")
-        ax.plot(centers_dmd[:, 0], centers_dmd[:, 1], 'b.', label="mirror positions")
+        ax.plot(centers_dmd[:, 0],
+                centers_dmd[:, 1],
+                'b.',
+                label="mirror positions")
         ax.plot(0, 0, 'g+', label="DMD center")
-        ax.plot(center_pupil_frq_ref[0], center_pupil_frq_ref[1], "m3", label="reference freq")
-        ax.plot(centers_dmd_fmax[:, 0], centers_dmd_fmax[:, 1], 'k', label="pupil")
+        ax.plot(center_pupil_frq_ref[0],
+                center_pupil_frq_ref[1],
+                "m3",
+                label="reference freq")
+        ax.plot(centers_dmd_fmax[:, 0],
+                centers_dmd_fmax[:, 1],
+                'k',
+                label="pupil")
         ax.set_xlim([-rmax_dmd_mirrors, rmax_dmd_mirrors])
         ax.set_ylim([-rmax_dmd_mirrors, rmax_dmd_mirrors])
         ax.legend(bbox_to_anchor=(0.2, 1.1))
@@ -660,13 +669,16 @@ class tomography:
         ax.set_title("Raw frequencies")
 
         if dmd_size is not None:
-            ax.plot(dmd_boundry_freq[:, 0], dmd_boundry_freq[:, 1], 'k.')
+            ax.plot(dmd_boundary_freq[:, 0], dmd_boundary_freq[:, 1], 'k.')
 
         ax.plot(mean_hologram_frqs[..., 0], mean_hologram_frqs[..., 1], 'rx')
         ax.plot(frqs_from_pupil[..., 0], frqs_from_pupil[..., 1], 'b.')
         ax.plot(frq_dmd_center[0], frq_dmd_center[1], 'g+')
         ax.plot(mean_ref_frq[0], mean_ref_frq[1], "m3")
-        ax.add_artist(Circle(mean_ref_frq, radius=self.fmax, facecolor="none", edgecolor="k"))
+        ax.add_artist(Circle(mean_ref_frq,
+                             radius=self.fmax,
+                             facecolor="none",
+                             edgecolor="k"))
         ax.set_xlim([-self.fmax + mean_ref_frq[0], self.fmax + mean_ref_frq[0]])
         ax.set_ylim([-self.fmax + mean_ref_frq[1], self.fmax + mean_ref_frq[1]])
         ax.set_xlabel("$f_x$ (1/$\mu m$)")
@@ -677,13 +689,22 @@ class tomography:
         ax.set_title("Frequencies - reference frequency")
 
         if dmd_size is not None:
-            ax.plot(dmd_boundry_freq[:, 0] - mean_ref_frq[0], dmd_boundry_freq[:, 1] - mean_ref_frq[1], 'k.')
+            ax.plot(dmd_boundary_freq[:, 0] - mean_ref_frq[0],
+                    dmd_boundary_freq[:, 1] - mean_ref_frq[1],
+                    'k.')
 
         ax.plot(beam_frqs[..., 0], beam_frqs[..., 1], 'rx')
-        ax.plot(frqs_from_pupil[..., 0] - mean_ref_frq[0], frqs_from_pupil[..., 1] - mean_ref_frq[1], 'b.')
-        ax.plot(frq_dmd_center[0] - mean_ref_frq[0], frq_dmd_center[1] - mean_ref_frq[1], 'g+')
+        ax.plot(frqs_from_pupil[..., 0] - mean_ref_frq[0],
+                frqs_from_pupil[..., 1] - mean_ref_frq[1],
+                'b.')
+        ax.plot(frq_dmd_center[0] - mean_ref_frq[0],
+                frq_dmd_center[1] - mean_ref_frq[1],
+                'g+')
         ax.plot(0, 0, 'm3')
-        ax.add_artist(Circle((0, 0), radius=self.fmax, facecolor="none", edgecolor="k"))
+        ax.add_artist(Circle((0, 0),
+                             radius=self.fmax,
+                             facecolor="none",
+                             edgecolor="k"))
         ax.set_xlim([-self.fmax, self.fmax])
         ax.set_ylim([-self.fmax, self.fmax])
         ax.set_xlabel("$f_x$ (1/$\mu m$)")
@@ -1478,8 +1499,8 @@ class tomography:
         """
 
         :param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
-          axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
-          could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
+          axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and
+          the index could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
         :param time_axis:
         :param figsize:
         :param kwargs: passed through to matplotlib.pyplot.figure
@@ -1516,7 +1537,9 @@ class tomography:
         hgram_frq_diffs = np.concatenate(hgram_frq_diffs, axis=1)
 
         # shape = ntimes x 2
-        ref_frq_diffs = (self.reference_frq - np.mean(self.reference_frq, axis=1, keepdims=True))[ref_slices].squeeze(squeeze_axes)
+        ref_frq_diffs = (self.reference_frq - np.mean(self.reference_frq,
+                                                      axis=1,
+                                                      keepdims=True))[ref_slices].squeeze(squeeze_axes)
 
         # plot
         figh = plt.figure(figsize=figsize, **kwargs)
@@ -1558,8 +1581,8 @@ class tomography:
         Additional key word arguments are passed through to plt.figure()
 
         :param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
-          axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and the index
-          could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
+          axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1
+          and the index could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
         :param time_axis:
         :param figsize:
         :return: figh
@@ -1954,15 +1977,15 @@ def get_global_phase_shifts(imgs: array,
         ind = np.unravel_index(ii, loop_shape)
 
         if thresh is None:
-            A = xp.expand_dims(imgs[ind].ravel(), axis=1)
-            B = ref_imgs[ind].ravel()
+            a = xp.expand_dims(imgs[ind].ravel(), axis=1)
+            b = ref_imgs[ind].ravel()
         else:
             mask = xp.logical_and(np.abs(imgs[ind]) > thresh,
                                   xp.abs(ref_imgs[ind]) > thresh)
-            A = xp.expand_dims(imgs[ind][mask], axis=1)
-            B = ref_imgs[ind][mask]
+            a = xp.expand_dims(imgs[ind][mask], axis=1)
+            b = ref_imgs[ind][mask]
 
-        fps, _, _, _ = xp.linalg.lstsq(A, B, rcond=None)
+        fps, _, _, _ = xp.linalg.lstsq(a, b, rcond=None)
         fit_params[ind] = fps
 
     return fit_params
@@ -2674,7 +2697,8 @@ def fwd_model_linear(beam_fx: array,
 
             # since using DFT's instead of FT's have to adjust the normalization
             # FT ~ DFT * dr1 * ... * drn
-            data = interp_weights_to_use / (2 * 1j * (2 * np.pi * xp.tile(fz[to_use], 8))) * dx_v * dy_v * dz_v / (dx * dy)
+            data = (interp_weights_to_use / (2 * 1j * (2 * np.pi * xp.tile(fz[to_use], 8))) *
+                    dx_v * dy_v * dz_v / (dx * dy))
 
             # if atf is not None:
             #     data *= xp.tile(atf[to_use], 8)
@@ -2725,7 +2749,7 @@ def inverse_model_linear(efield_fts: array,
       Any points in efield_fts which are NaN will be ignored. efield_fts can have an arbitrary number of leading
       singleton dimensions, but must have at least three dimensions.
       i.e. it should have shape 1 x ... x 1 x nimgs x ny x nx
-    :param model: forward model matrix. Generated from fwd_model_linear(), which should have interpolate set to False
+    :param model: forward model matrix. Generated from fwd_model_linear(), which should have interpolate=False
     :param v_shape:
     :param regularization: regularization factor
     :param no_data_value: value of any points in v_ft where no data is available
@@ -3802,26 +3826,26 @@ class RIOptimizer(Optimizer):
             inds = list(range(self.n_samples))
 
         # todo: how to unify these?
-        e_fwd = self.fwd_model(x, inds=inds)
+        e_fwd = self.fwd_model(x, inds=inds)[:, -1]
 
         costs = 0
         if self.efield_cost_factor > 0:
             if self.mask is None:
                 costs += (self.efield_cost_factor * 0.5 *
-                          (abs(e_fwd[:, -1, :, :] - self.e_measured[inds]) ** 2).sum(axis=(-1, -2))
+                          (abs(e_fwd - self.e_measured[inds]) ** 2).sum(axis=(-1, -2))
                           )
             else:
                 costs += (self.efield_cost_factor * 0.5 *
-                          (abs(e_fwd[:, -1, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).sum(axis=-1)
+                          (abs(e_fwd[:, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).sum(axis=-1)
                           )
 
         if (1 - self.efield_cost_factor) > 0:
             if self.mask is None:
                 costs += ((1 - self.efield_cost_factor) * 0.5 *
-                          (abs(abs(e_fwd[:, -1]) - abs(self.e_measured[inds])) ** 2).sum(axis=(-1, -2)))
+                          (abs(abs(e_fwd) - abs(self.e_measured[inds])) ** 2).sum(axis=(-1, -2)))
             else:
                 costs += ((1 - self.efield_cost_factor) * 0.5 *
-                          (abs(abs(e_fwd[:, -1, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).sum(axis=-1))
+                          (abs(abs(e_fwd[:, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).sum(axis=-1))
 
         return costs
 
@@ -3918,8 +3942,7 @@ class LinearScatt(RIOptimizer):
         models = [self.model[slice(ny*nx*ii, ny*nx*(ii + 1)), :] for ii in inds]
         nind = len(inds)
 
-        # first division is average
-        # second division converts Fourier space to real-space sum
+        # division by ny*nx converts Fourier space to real-space sum
         # factor of 0.5 in cost function killed by derivative factor of 2
         efwd = spnow.vstack(models).dot(x.ravel()).reshape([nind, ny, nx])
         dc_dm = (efwd - self.e_measured[inds]) / (ny * nx)
@@ -4074,10 +4097,13 @@ class BPM(RIOptimizer):
         # back propagation ... build the gradient from this to save memory
         dtemp = 0
         if self.efield_cost_factor > 0:
-            dtemp += self.efield_cost_factor * (e_fwd[:, -1, :, :] - self.e_measured[inds])
+            dtemp += (self.efield_cost_factor *
+                      (e_fwd[:, -1, :, :] - self.e_measured[inds]))
 
         if (1 - self.efield_cost_factor) > 0:
-            dtemp += (1 - self.efield_cost_factor) * (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) * e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])
+            dtemp += ((1 - self.efield_cost_factor) *
+                      (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) *
+                      e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :]))
 
         if self.mask is not None:
             dtemp *= self.mask
@@ -4104,8 +4130,7 @@ class BPM(RIOptimizer):
         if thetas.ndim == 1:
             thetas = xp.expand_dims(thetas, axis=(-1, -2, -3))
 
-        dz = self.drs_n[0]
-        dc_dn *= -1j * (2 * np.pi / self.wavelength) * dz / xp.cos(thetas)
+        dc_dn *= -1j * (2 * np.pi / self.wavelength) * self.drs_n[0] / xp.cos(thetas)
 
         # conjugate in place to avoid using extra GPU memory
         xp.conjugate(e_fwd, out=e_fwd)
@@ -4229,10 +4254,13 @@ class SSNP(RIOptimizer):
         # back propagation ... build the gradient from this to save memory
         dtemp = 0
         if self.efield_cost_factor > 0:
-            dtemp += self.efield_cost_factor * (phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds])
+            dtemp += (self.efield_cost_factor *
+                      (phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds]))
 
         if (1 - self.efield_cost_factor) > 0:
-            dtemp += (1 - self.efield_cost_factor) * (abs(phi_fwd[:, -1, :, :, 0]) - abs(self.e_measured[inds])) * phi_fwd[:, -1, :, :, 0] / abs(phi_fwd[:, -1, :, :, 0])
+            dtemp += ((1 - self.efield_cost_factor) *
+                      (abs(phi_fwd[:, -1, :, :, 0]) - abs(self.e_measured[inds])) *
+                      phi_fwd[:, -1, :, :, 0] / abs(phi_fwd[:, -1, :, :, 0]))
 
         if self.mask is not None:
             dtemp *= self.mask
@@ -4249,10 +4277,9 @@ class SSNP(RIOptimizer):
         del dtemp
 
         # cost function gradient
-        dz = self.drs_n[0]
         # from phi_back, take derivative part
         # from phi_fwd, take the electric field part
-        dc_dn *= -2 * (2 * np.pi / self.wavelength) ** 2 * dz * x.conj()
+        dc_dn *= -2 * (2 * np.pi / self.wavelength) ** 2 * self.drs_n[0] * x.conj()
 
         # conjugate in place to avoid using extra memory
         xp.conjugate(phi_fwd, out=phi_fwd)
