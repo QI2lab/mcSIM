@@ -1,3 +1,6 @@
+"""
+Test tomography and beam propagation tools
+"""
 import unittest
 import numpy as np
 from scipy.signal.windows import tukey
@@ -199,11 +202,7 @@ class TestPatterns(unittest.TestCase):
         no = 1.333
         wavelength = 0.785
 
-        dz_final = -dz * ((nz - 1) - nz // 2 + 0.5)
-
         fmax = no / wavelength
-        # fx = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))[None, :]
-        # fy = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))[:, None]
         fx = xp.fft.fftfreq(nx, dxy)[None, :]
         fy = xp.fft.fftfreq(ny, dxy)[:, None]
         atf = (xp.sqrt(fx ** 2 + fy ** 2) <= fmax).astype(complex)
@@ -226,7 +225,7 @@ class TestPatterns(unittest.TestCase):
                      (dxy, dxy),
                      (dz, dxy, dxy),
                      (nz, ny, nx),
-                     dz_final=dz_final,
+                     dz_refocus=0.03,
                      atf=atf,
                      apodization=apo,
                      mask=mask,
@@ -252,8 +251,6 @@ class TestPatterns(unittest.TestCase):
         no = 1.333
         wavelength = 0.785
 
-        dz_final = -dz * ((nz - 1) - nz // 2 + 0.5)
-
         fmax = no / wavelength
         fx = xp.fft.fftfreq(nx, dxy)[None, :]
         fy = xp.fft.fftfreq(ny, dxy)[:, None]
@@ -277,7 +274,7 @@ class TestPatterns(unittest.TestCase):
                       (dxy, dxy),
                       (dz, dxy, dxy),
                       (nz, ny, nx),
-                      dz_final=dz_final,
+                      dz_refocus=0.04,
                       atf=atf,
                       apodization=apo,
                       mask=mask,

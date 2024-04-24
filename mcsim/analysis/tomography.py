@@ -77,6 +77,8 @@ else:
 
 
 class tomography:
+    models = ["born", "rytov", "bpm", "ssnp"]
+
     def __init__(self,
                  imgs_raw: da.array,
                  wavelength: float,
@@ -1028,10 +1030,6 @@ class tomography:
             if drs_n[1] != self.dxy * nbin_x or drs_n[2] != self.dxy * nbin_y:
                 raise ValueError()
 
-            # position z=0 in the middle of the volume, accounting for the fact
-            # the efields and n are shifted by dz/2
-            dz_final = -drs_n[0] * ((n_size[0] - 1) - n_size[0] // 2 + 0.5)
-
             # affine transformation from reconstruction coordinates to pixel indices
             # coordinates in finer coordinates
             xb = bin((xp.arange(self.nx) - (self.nx // 2)) * self.dxy,
@@ -1043,7 +1041,7 @@ class tomography:
                                                    drs_n[-2], 0, float(yb[0])])
 
         else:
-            raise ValueError(f"mode must be ..., but was {mode:s}")
+            raise ValueError(f"mode must be one of {self.models}, but was {mode:s}")
 
         if self.verbose:
             print(f"computing index of refraction for {int(np.prod(self.imgs_raw.shape[:-3])):d} images "
@@ -1088,7 +1086,6 @@ class tomography:
                   no,
                   wavelength,
                   na_detection,
-                  dz_final,
                   atf,
                   apod,
                   step,
@@ -1245,7 +1242,6 @@ class tomography:
                                   drs_e=None,
                                   drs_n=drs_n,
                                   shape_n=n_start.shape,
-                                  dz_final=dz_final,
                                   atf=atf,
                                   apodization=apod,
                                   mask=rmask,
@@ -1311,7 +1307,6 @@ class tomography:
                           self.no,
                           self.wavelength,
                           self.na_detection,
-                          dz_final,
                           atf,
                           apodization_n,
                           step,
@@ -1328,7 +1323,6 @@ class tomography:
 
         self.reconstruction_settings.update({"mode": mode,
                                              "scattered_field_regularization": scattered_field_regularization,
-                                             "dz_final": dz_final,
                                              "step": step,
                                              "use_gpu": use_gpu,
                                              }
@@ -3292,6 +3286,10 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
         affine_now = swap_xy.dot(np.array(znow.attrs["affine_xform_recon_2_raw_camera_roi"]).dot(swap_xy))
         no = znow.attrs["no"]
         dz_now = znow.attrs["dr"][0]
+        try:
+            dz_refocus_now = znow.attrs["reconstruction_settings"]["dz_refocus"]
+        except KeyError:
+            dz_refocus_now = 0.
 
         if znow.n.shape[-3] == 2:
             if compute:
@@ -3304,9 +3302,8 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
             else:
                 n_now = da.from_zarr(znow.n).real - no
 
-        # todo: should correct for numerical refocusing
         nz = znow.n.shape[-3]
-        zs = (np.arange(nz) - nz // 2) * dz_now
+        zs = (np.arange(nz) - nz // 2) * dz_now + dz_refocus_now
 
         v.add_image(n_now,
                     scale=(dz_now, 1, 1),
@@ -3480,14 +3477,14 @@ class RIOptimizer(Optimizer):
                  drs_e: Sequence[float, float],
                  drs_n: Sequence[float, float, float],
                  shape_n: Sequence[int, int, int],
-                 dz_final: Optional[float] = 0.,
+                 dz_refocus: float = 0.,
                  atf: Optional[array] = None,
                  apodization: Optional[array] = None,
                  mask: Optional[array] = None,
-                 tau_tv_real: float = 0,
-                 tau_tv_imag: float = 0,
-                 tau_l1_real: float = 0,
-                 tau_l1_imag: float = 0,
+                 tau_tv_real: float = 0.,
+                 tau_tv_imag: float = 0.,
+                 tau_l1_real: float = 0.,
+                 tau_l1_imag: float = 0.,
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
                  max_imaginary_part: float = np.inf,
@@ -3504,7 +3501,7 @@ class RIOptimizer(Optimizer):
         :param drs_e:
         :param drs_n:
         :param shape_n:
-        :param dz_final:
+        :param dz_refocus:
         :param atf: amplitude (coherent) transfer function
         :param apodization:
         :param tau_tv_real: weight for TV proximal operator applied to real-part
@@ -3513,6 +3510,8 @@ class RIOptimizer(Optimizer):
         :param tau_l1_imag:
         :param use_imaginary_constraint: enforce im(n) > 0
         :param use_real_constraint: enforce re(n) > no
+        :param max_imaginary_part:
+        :param efield_cost_factor:
         """
 
         super(RIOptimizer, self).__init__()
@@ -3526,9 +3525,9 @@ class RIOptimizer(Optimizer):
         self.drs_e = drs_e
         self.drs_n = drs_n
         self.shape_n = shape_n
-        self.dz_final = dz_final
         self.atf = atf
         self.apodization = apodization
+        self.dz_refocus = dz_refocus
 
         self.efield_cost_factor = float(efield_cost_factor)
         if self.efield_cost_factor > 1 or self.efield_cost_factor < 0:
@@ -3548,10 +3547,10 @@ class RIOptimizer(Optimizer):
                       max_imaginary_part)
 
     def set_prox(self,
-                 tau_tv_real: float = 0,
-                 tau_tv_imag: float = 0,
-                 tau_l1_real: float = 0,
-                 tau_l1_imag: float = 0,
+                 tau_tv_real: float = 0.,
+                 tau_tv_imag: float = 0.,
+                 tau_l1_real: float = 0.,
+                 tau_l1_imag: float = 0.,
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
                  max_imaginary_part: float = np.inf
@@ -3673,10 +3672,10 @@ class LinearScatt(RIOptimizer):
                                           drs_e,
                                           drs_n,
                                           shape_n,
-                                          None,
-                                          None,
-                                          None,
                                           **kwargs)
+
+        if self.dz_refocus != 0.:
+            raise NotImplementedError(f"LinearScatt models do not yet support dz_refocus != 0")
 
         if self.efield_cost_factor != 1:
             raise NotImplementedError(f"Linear scattering models only support self.efield_cost_factor=1, "
@@ -3802,7 +3801,6 @@ class BPM(RIOptimizer):
                  drs_e: Sequence[float, float],
                  drs_n: Sequence[float, float, float],
                  shape_n: Sequence[int, int, int],
-                 dz_final: float = 0.,
                  atf: Optional[array] = None,
                  apodization: Optional[array] = None,
                  mask: Optional[array] = None,
@@ -3822,7 +3820,6 @@ class BPM(RIOptimizer):
         :param drs_e: (dy, dx) of the electric field
         :param drs_n: (dz, dy, dx) of the refractive index
         :param shape_n: (nz, ny, nx)
-        :param dz_final: distance to propagate field after last surface
         :param atf: coherent transfer function
         :param apodization: apodization used during FFTs
         :param mask: 2D array. Where true, these spatial pixels will be included in the cost function. Where false,
@@ -3837,7 +3834,6 @@ class BPM(RIOptimizer):
                                   drs_e,
                                   drs_n,
                                   shape_n,
-                                  dz_final,
                                   atf=atf,
                                   apodization=apodization,
                                   mask=mask,
@@ -3849,8 +3845,15 @@ class BPM(RIOptimizer):
         else:
             self.thetas = np.zeros((self.n_samples,))
 
+        # distance to propagate beam after last RI voxel
+        # if dz_refocus=0, this is the center of the volume
+        self.dz_final = (-float(self.drs_n[0] * ((self.shape_n[0] - 1) - self.shape_n[0] // 2 + 0.5)) -
+                         self.dz_refocus)
+
         # backpropagation distance to compute starting field
-        self.dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
+        self.dz_back = np.array([-float(self.dz_final) -
+                                 float(self.drs_n[0]) * self.shape_n[0]
+                                 ])
 
     def fwd_model(self,
                   x: array,
@@ -3945,7 +3948,6 @@ class SSNP(RIOptimizer):
                  drs_e: Sequence[float, float],
                  drs_n: Sequence[float, float, float],
                  shape_n: Sequence[int, int, int],
-                 dz_final: float,
                  atf: Optional[array] = None,
                  apodization: Optional[array] = None,
                  mask: Optional[array] = None,
@@ -3960,14 +3962,19 @@ class SSNP(RIOptimizer):
                                    drs_e,
                                    drs_n,
                                    shape_n,
-                                   dz_final=dz_final,
                                    atf=atf,
                                    apodization=apodization,
                                    mask=mask,
                                    **kwargs)
 
+        # distance to propagate beam after last RI voxel
+        # if dz_refocus=0, this is the center of the volume
+        self.dz_final = (-float(self.drs_n[0] * ((self.shape_n[0] - 1) - self.shape_n[0] // 2 + 0.5)) -
+                         self.dz_refocus)
+
         # distance to backpropagate to get starting field
-        self.dz_back = -np.array([float(self.dz_final) + float(self.drs_n[0]) * self.shape_n[0]])
+        self.dz_back = np.array([-float(self.dz_final) -
+                                 float(self.drs_n[0]) * self.shape_n[0]])
 
         # compute kzs, which need to get starting field derivative
         if cp and isinstance(self.e_measured, cp.ndarray):
@@ -3977,7 +3984,6 @@ class SSNP(RIOptimizer):
 
         dz, dy, dx = self.drs_n
         ny, nx = self.e_measured.shape[-2:]
-
         kz = xp.asarray(2 * np.pi * get_fzs(xp.fft.fftfreq(nx, dx)[None, :],
                                             xp.fft.fftfreq(ny, dy)[:, None],
                                             self.no,
