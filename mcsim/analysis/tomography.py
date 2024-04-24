@@ -86,8 +86,8 @@ class tomography:
                  na_detection: float,
                  na_excitation: float,
                  dxy: float,
-                 reference_frq_guess: np.ndarray,
                  hologram_frqs_guess: Sequence[np.ndarray],
+                 reference_frq: Optional[np.ndarray] = None,
                  imgs_raw_bg: Optional[da.array] = None,
                  phase_offsets: Optional[np.ndarray] = None,
                  axes_names: Optional[Sequence[str]] = None,
@@ -101,8 +101,8 @@ class tomography:
         :param na_detection: numerical aperture of the detection objective
         :param na_excitation: numerical aperture for the maximum excitation pattern
         :param dxy: pixel size in um
-        :param reference_frq_guess: [fx, fy] hologram reference frequency with shape n0 x ... x nm x 2
         :param hologram_frqs_guess: npatterns x nmulti x 2 array
+        :param reference_frq: [fx, fy] hologram reference frequency with shape n0 x ... x nm x 2
         :param imgs_raw_bg: background intensity images. If no background images are provided, then a time
           average of imgs_raw will be used as the background
         :param phase_offsets: phase shifts between images and corresponding background images
@@ -128,8 +128,12 @@ class tomography:
 
         # reference frequency
         # shape = n0 x ... x nm x 2 where
-        # imgs have shape n0 x ... x nm x npatterns x ny x nx
-        self.reference_frq = np.array(reference_frq_guess) + np.zeros(self.imgs_raw.shape[:-3] + (2,))
+        if reference_frq is None:
+            self.reference_frq = None
+            self.use_fixed_ref = False
+        else:
+            self.reference_frq = np.array(reference_frq) + np.zeros(self.imgs_raw.shape[:-3] + (2,))
+            self.use_fixed_ref = True
         self.reference_frq_bg = None
 
         # todo: don't allow different multiplex for different patterns
@@ -182,6 +186,7 @@ class tomography:
         Estimate hologram frequencies from raw images.
         Guess values need to be within a few pixels for this to succeed. Can easily achieve this accuracy by
         looking at FFT
+
         :param roi_size_pix: ROI size (in pixels) to use for frequency fitting
         :param save_dir:
         :param use_fixed_frequencies: determine single set of frequencies for all data/background images
@@ -369,6 +374,9 @@ class tomography:
 
         self.hologram_frqs = [frqs_hologram[..., ii, :, :] for ii in range(self.npatterns)]
         self.hologram_frqs_bg = [frqs_hologram_bg[..., ii, :, :] for ii in range(self.npatterns)]
+        if not self.use_fixed_ref:
+            self.reference_frq = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
+            self.reference_frq_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
 
         # optionally plot
         def plot(img,
@@ -463,37 +471,6 @@ class tomography:
                                            prefix=f"{ii:d}",
                                            rois_all=rois_all[ii]))
                 dcompute(*d)
-
-    def estimate_reference_frq(self,
-                               mode: str = "average",
-                               frq: Optional[array] = None,
-                               ):
-        """
-        Estimate hologram reference frequency
-
-        :param mode: if "fit" fit the residual speckle pattern to try and estimate the reference frequency.
-          If "average" take the average of self.hologram_frqs as the reference frequency.
-          If "set" use the frequency argument to set the value
-        :param frq: set reference frequency to this value
-        :return:
-        """
-
-        # todo: accept reference freq as argument, and if None compute using average in estimate_hologram_frqs()
-        self.reconstruction_settings.update({"reference_frequency_mode": mode})
-
-        if mode == "average":
-            frq_ref = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
-            frq_ref_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
-        elif mode == "set":
-            if frq is None:
-                raise ValueError("mode was 'set' so a reference frequency must be supplied")
-            frq_ref = frq
-            frq_ref_bg = frq
-        else:
-            raise ValueError(f"'mode' must be '{mode:s}' but must be 'set' or 'average'")
-
-        self.reference_frq = frq_ref
-        self.reference_frq_bg = frq_ref_bg
 
     def get_beam_frqs(self) -> list[array]:
         """
