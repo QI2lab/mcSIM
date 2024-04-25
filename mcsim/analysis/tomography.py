@@ -15,18 +15,22 @@ from numpy.linalg import norm, inv
 from numpy.fft import fftshift, fftfreq
 from scipy.signal.windows import tukey, hann
 # parallelization
+from dask.config import set as dask_cfg_set
 from dask import delayed
 from dask import compute as dcompute
 import dask.array as da
 from dask.diagnostics import ProgressBar
+from dask.distributed import Client, LocalCluster
 # plotting
 import matplotlib.pyplot as plt
+from matplotlib import rc_context
 from matplotlib.figure import Figure
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle, Arc, Rectangle
 # saving/loading
 from pathlib import Path
 import zarr
+from numcodecs import Zlib, packbits
 # custom tools
 from localize_psf.camera import bin
 from localize_psf.fit import fit_model, gauss2d_symm
@@ -86,7 +90,12 @@ class tomography:
                  imgs_raw_bg: Optional[da.array] = None,
                  phase_offsets: Optional[np.ndarray] = None,
                  axes_names: Optional[Sequence[str]] = None,
-                 verbose: bool = True):
+                 verbose: bool = True,
+                 save_dir: Optional[Union[Path, str]] = None,
+                 realspace_mask: Optional[array] = None,
+                 cam_roi: Optional[Sequence[int, int, int, int]] = None,
+                 data_roi: Optional[Sequence[int, int, int, int]] = None,
+                 ):
         """
         Reconstruct optical diffraction tomography (ODT) data
 
@@ -103,15 +112,43 @@ class tomography:
         :param phase_offsets: phase shifts between images and corresponding background images
         :param axes_names: names of first m + 1 axes
         :param verbose: whether to print progress information
+        :param save_dir:
+        :param realspace_mask: indicate which parts of image to exclude/keep
+        :param cam_roi: ROI camera chip has been cropped to wrt to the entire camera chip
+        :param data_roi: ROI the data has been cropped to after camera acquistion
         """
         self.verbose = verbose
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
+
+        # save directory and zarr backing
+        if save_dir is not None:
+            self.save_dir = Path(save_dir)
+            self.save_dir.mkdir(exist_ok=True)
+
+            self.store_fname = self.save_dir / "refractive_index.zarr"
+            self.store = zarr.open(self.store_fname, "a")
+        else:
+            self.save_dir = None
+            self.store_fname = None
+            self.store = None
+
+        # physical parameters
+        self.wavelength = wavelength
+        self.no = no
+        self.na_detection = na_detection
+        self.na_excitation = na_excitation
+        self.fmax = self.na_detection / self.wavelength
+        self.xform_dict = None
 
         # image dimensions
         # todo: ensure that are dask arrays?
         self.imgs_raw = imgs_raw
         self.imgs_raw_bg = imgs_raw_bg
         self.use_average_as_background = self.imgs_raw_bg is None
+
+        # ROI information
+        self.data_roi = data_roi
+        self.cam_roi = cam_roi
 
         self.npatterns, self.ny, self.nx = imgs_raw.shape[-3:]
         self.nextra_dims = imgs_raw.ndim - 3
@@ -138,13 +175,6 @@ class tomography:
         self.hologram_frqs_bg = None
         self.nmax_multiplex = np.max([f.shape[0] for f in self.hologram_frqs])
 
-        # physical parameters
-        self.wavelength = wavelength
-        self.no = no
-        self.na_detection = na_detection
-        self.na_excitation = na_excitation
-        self.fmax = self.na_detection / self.wavelength
-
         # correction parameters
         # self.phase_offsets = phase_offsets
         self.translations = np.zeros((1,) * self.nextra_dims + (self.npatterns, 1, 1, 2), dtype=float)
@@ -155,6 +185,8 @@ class tomography:
         # electric fields
         self.holograms_ft = None
         self.holograms_ft_bg = None
+
+        self.realspace_mask = realspace_mask
 
         # coordinates of ground truth image
         self.dxy = dxy
@@ -172,6 +204,55 @@ class tomography:
         # settings
         self.reconstruction_settings = {}
 
+    def save(self,
+             attributes: Optional[dict] = None,
+             compressor=Zlib()):
+
+        if attributes is None:
+            attributes = {}
+
+        # self.store.array("pattern_offsets_mirrors", np.array([o for o in offs]), compressor=compressor, dtype=float)
+        for dictionary in [self.__dict__, attributes]:
+            for k, v in dictionary.items():
+                try:
+                    if isinstance(v, array):
+                        if v.size > 10:
+                            if v.dtype == bool:
+                                c = packbits.PackBits()
+                            else:
+                                c = compressor
+
+                            # todo: ensure reasonable chunk size
+                            self.store.array(k,
+                                             to_cpu(v),
+                                             compressor=c,
+                                             dtype=v.dtype)
+                        else:
+                            self.store.attrs[k] = to_cpu(v).tolist()
+
+                    elif isinstance(v, (int, float, str, bool, dict, tuple)):
+                        self.store.attrs[k] = v
+                    elif isinstance(v, list):
+                        if len(v) > 30:  # don't store long lists
+                            raise TypeError()
+                        self.store.attrs[k] = v
+
+                except TypeError as e:
+                    print(f"{k:s} {e}")
+
+        self.store.array("hologram_frqs",
+                         np.stack(self.hologram_frqs, axis=-3),
+                         compressor=compressor,
+                         dtype=float)
+        self.store.array("beam_frqs",
+                         np.stack(self.get_beam_frqs(), axis=-3),
+                         compressor=compressor,
+                         dtype=float)
+        self.store.array("hologram_frqs_bg",
+                         np.stack(self.hologram_frqs_bg, axis=-3),
+                         compressor=compressor,
+                         dtype=float)
+
     def estimate_hologram_frqs(self,
                                roi_size_pix: int = 11,
                                save_dir: Optional[Union[str, Path]] = None,
@@ -188,8 +269,17 @@ class tomography:
         :param fit_on_gpu: do fitting on GPU with gpufit. Otherwise, use CPU.
         :return:
         """
+
         self.reconstruction_settings.update({"roi_size_pix": roi_size_pix})
         self.reconstruction_settings.update({"use_fixed_frequencies": use_fixed_frequencies})
+
+
+        # https://distributed.dask.org/en/latest/scheduling-policies.html#adjusting-or-disabling-queuing
+        dask_cfg_set({"distributed.scheduler.worker-saturation": 1.0})
+        cluster = LocalCluster(processes=True, n_workers=3, threads_per_worker=1)
+        client = Client(cluster)
+        if self.verbose:
+            print(cluster.dashboard_link)
 
         # fitting logic
         # todo: re-implement!
@@ -441,31 +531,41 @@ class tomography:
         axes_start = tuple(range(self.nextra_dims))
 
         if saving:
-            if fit_data_imgs:
-                iraw = self.imgs_raw[slice_start].squeeze(axis=axes_start)
-                h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs]
+            with rc_context({'interactive': False,
+                             'backend': "agg"}):
 
-                d = []
-                for ii in range(self.npatterns):
-                    d.append(delayed(plot)(iraw[ii],
-                                           h[ii],
-                                           frqs_guess=hologram_frqs_guess[ii],
-                                           prefix=f"{ii:d}",
-                                           rois_all=rois_all[ii]))
-                dcompute(*d)
+                if fit_data_imgs:
+                    iraw = self.imgs_raw[slice_start].squeeze(axis=axes_start)
+                    h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs]
 
-            if fit_bg_imgs:
-                iraw_bg = self.imgs_raw_bg[slice_start].squeeze(axis=axes_start)
-                hbg = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs_bg]
+                    d = []
+                    for ii in range(self.npatterns):
+                        d.append(delayed(plot)(iraw[ii],
+                                               h[ii],
+                                               frqs_guess=hologram_frqs_guess[ii],
+                                               prefix=f"{ii:d}",
+                                               rois_all=rois_all[ii]))
+                    dcompute(*d)
 
-                d = []
-                for ii in range(self.npatterns):
-                    d.append(delayed(plot)(iraw_bg[ii],
-                                           hbg[ii],
-                                           frqs_guess=hologram_frqs_guess[ii],
-                                           prefix=f"{ii:d}",
-                                           rois_all=rois_all[ii]))
-                dcompute(*d)
+                if fit_bg_imgs:
+                    iraw_bg = self.imgs_raw_bg[slice_start].squeeze(axis=axes_start)
+                    hbg = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs_bg]
+
+                    d = []
+                    for ii in range(self.npatterns):
+                        d.append(delayed(plot)(iraw_bg[ii],
+                                               hbg[ii],
+                                               frqs_guess=hologram_frqs_guess[ii],
+                                               prefix=f"{ii:d}",
+                                               rois_all=rois_all[ii]))
+                    dcompute(*d)
+
+        if save_dir is not None:
+            client.profile(filename=save_dir / f"frequency_fitting_dask_profile.html")
+
+        client.close()
+        cluster.close()
+        del cluster, client
 
     def get_beam_frqs(self) -> list[array]:
         """
@@ -681,6 +781,11 @@ class tomography:
         """
         self.reconstruction_settings.update({"fit_translations": fit_translations})
 
+        cluster = LocalCluster(processes=False)
+        client = Client(cluster)
+        if self.verbose:
+            print(cluster.dashboard_link)
+
         # slice used as reference for computing phase shifts/translations/etc.
         # if we are going to average along a dimension (i.e. if it is in bg_average_axes) then need to use
         # single slice as background for that dimension.
@@ -829,8 +934,8 @@ class tomography:
                                        axis=bg_average_axes,
                                        keepdims=True)
 
-        self.holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(),
-                                             chunks=holograms_ft_bg.chunksize)
+        holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(),
+                                        chunks=holograms_ft_bg.chunksize)
 
         # #########################
         # determine phase offsets between electric field and background
@@ -842,35 +947,53 @@ class tomography:
             if fit_phases:
                 self.phase_params = da.map_blocks(get_global_phase_shifts,
                                                   holograms_ft,
-                                                  self.holograms_ft_bg,
+                                                  holograms_ft_bg,
                                                   dtype=complex,
                                                   chunks=holograms_ft.chunksize[:-2] + (1, 1),
                                                   ).compute()
 
-        self.holograms_ft = holograms_ft * self.phase_params
+        holograms_ft = holograms_ft * self.phase_params
 
-        return self.holograms_ft, self.holograms_ft_bg
+        # #########################
+        # compute
+        # #########################
+        future = [da.map_blocks(to_cpu,
+                          holograms_ft,
+                                dtype=complex).to_zarr(self.store.store.path,
+                                                       component="efields_ft",
+                                                       compute=False,
+                                                       compressor=Zlib()),
+                  da.map_blocks(to_cpu,
+                          holograms_ft_bg,
+                                dtype=complex).to_zarr(self.store.store.path,
+                                                       component="efield_bg_ft",
+                                                       compute=False,
+                                                       compressor=Zlib())]
+        dcompute(*future)
+
+        self.holograms_ft = da.from_zarr(self.store["efields_ft"])
+        self.holograms_ft_bg = da.from_zarr(self.store["efield_bg_ft"])
+
+        if self.save_dir is not None:
+            client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
+
+        client.close()
+        cluster.close()
+        del cluster
+        del client
 
     def reconstruct_n(self,
-                      efields_ft: array,
-                      efields_bg_ft: array,
                       drs_n: Sequence[float, float, float],
                       n_size: Sequence[int, int, int],
                       mode: str = "rytov",
                       scattered_field_regularization: float = 50.,
-                      realspace_mask: Optional[array] = None,
                       step: float = 1e-5,
                       use_gpu: bool = False,
                       n_guess: Optional[array] = None,
-                      cam_roi: Optional[Sequence[int, int, int, int]] = None,
-                      data_roi: Optional[Sequence[int, int, int, int]] = None,
                       use_weighted_phase_unwrap: bool = False,
-                      e_fwd_out: Optional[zarr.Array] = None,
-                      e_scatt_out: Optional[zarr.Array] = None,
-                      n_start_out: Optional[zarr.Array] = None,
-                      costs_out: Optional[zarr.Array] = None,
-                      steps_out: Optional[zarr.Array] = None,
                       print_fft_cache: bool = False,
+                      save_auxiliary_fields: bool = False,
+                      n_gpu_workers: int = 1,
                       **kwargs) -> (array, tuple, dict):
 
         """
@@ -880,29 +1003,71 @@ class tomography:
         the optimizer. These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
         See Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details.
 
-        :param efields_ft: typically derived from unmix_holograms()
-        :param efields_bg_ft: typically derived from unmix_holograms()
         :param drs_n: (dz, dy, dx) voxel size of reconstructed refractive index
         :param n_size: (nz, ny, nx) shape of reconstructed refractive index # todo: make n_shape
         :param mode: "born", "rytov", "bpm", or "ssnp"
         :param scattered_field_regularization: regularization used in computing scattered field
-          or Rytov phase. Regions where background electric field is smaller than this value will be suppressed                
-        :param realspace_mask: indicate which parts of image to exclude/keep
+          or Rytov phase. Regions where background electric field is smaller than this value will be suppressed
         :param step: ignored if mode is "born" or "rytov"
         :param use_gpu:
         :param n_guess:
-        :param cam_roi:
-        :param data_roi:
         :param use_weighted_phase_unwrap:
-        :param e_fwd_out: Zarr array. If provided, compute and write the predicted forward electric field
-          from the inferred refractive index. chunk-size should be (1, ..., 1, ny, nx) for fastest saving
-        :param e_scatt_out:
-        :param n_start_out:
-        :param costs_out:
-        :param steps_out:
         :param print_fft_cache: optionally print memory usage of GPU FFT cache at each iteration
-        :return n, drs_n, xforms:
+        :param save_auxiliary_fields:
+        :param n_gpu_workers:
         """
+
+        if save_auxiliary_fields:
+            chunk_shape = (1,) * (self.holograms_ft.ndim - 2) + self.holograms_ft.shape[-2:]
+            e_fwd_out = self.store.create("efwd",
+                                          shape=self.holograms_ft.shape,
+                                          chunks=chunk_shape,
+                                          compressor=Zlib(),
+                                          dtype=complex)
+
+            e_scatt_out_shape = list(self.holograms_ft.shape)
+            e_scatt_out_shape[-3] *= self.nmax_multiplex
+            e_scatt_out = self.store.create("escatt",
+                                            shape=e_scatt_out_shape,
+                                            chunks=chunk_shape,
+                                            compressor=Zlib(),
+                                            dtype=complex)
+
+            cost_shape = self.holograms_ft.shape[:-3] + (kwargs["max_iterations"] + 1, self.npatterns)
+            cost_chunk = (1,) * (self.holograms_ft.ndim - 3) + cost_shape[-2:]
+            costs_out = self.store.create("costs",
+                                            shape=cost_shape,
+                                            chunks=cost_chunk,
+                                            compressor=Zlib(),
+                                            dtype=float)
+
+            step_shape = self.holograms_ft.shape[:-3] + (kwargs["max_iterations"],)
+            step_chunk = (1,) * (self.holograms_ft.ndim - 3) + step_shape[-1:]
+            steps_out = self.store.create("steps",
+                                          shape=step_shape,
+                                          chunks=step_chunk,
+                                          compressor=Zlib(),
+                                          dtype=float)
+
+            if n_guess is None:
+                n_start_out = self.store.create("n_start",
+                                                shape=self.holograms_ft.shape[:-3] + n_size,
+                                                compressor=Zlib(),
+                                                dtype=complex)
+            else:
+                n_start_out = None
+                self.store.array("n_start",
+                                 np.expand_dims(n_guess, axis=list(range(self.nextra_dims))),
+                                 compressor=Zlib(),
+                                 dtype=complex)
+
+        else:
+            e_fwd_out = None
+            e_scatt_out = None
+            costs_out = None
+            steps_out = None
+            n_start_out = None
+
 
         if use_gpu and cp:
             xp = cp
@@ -1270,10 +1435,10 @@ class tomography:
         # get refractive index
         # #######################
         n = da.map_blocks(recon,
-                          efields_ft,  # data
-                          efields_bg_ft,  # background
+                          self.holograms_ft,  # data
+                          self.holograms_ft_bg,  # background
                           mean_beam_frqs_arr,
-                          realspace_mask,  # masks
+                          self.realspace_mask,  # masks
                           self.dxy,
                           self.no,
                           self.wavelength,
@@ -1291,6 +1456,20 @@ class tomography:
                           chunks=(1,) * self.nextra_dims + n_size,
                           dtype=complex,
                           )
+
+        cluster = LocalCluster(processes=False,
+                               n_workers=n_gpu_workers,
+                               threads_per_worker=1)
+        client = Client(cluster)
+        print(cluster.dashboard_link)
+
+        dcompute([n.to_zarr(self.store.store.path,
+                            component="n",
+                            compute=False,
+                            compressor=Zlib())])  # compute
+
+        # save profile to see what takes the most time
+        client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
 
         self.reconstruction_settings.update({"mode": mode,
                                              "scattered_field_regularization": scattered_field_regularization,
@@ -1316,26 +1495,26 @@ class tomography:
         xforms = {"xform_recon_pix2coords": xform_recon_pix2coords,
                   "affine_xform_recon_2_raw_process_roi": xform_recon2raw_roi}
 
-        if data_roi is not None:
-            xforms["processing roi"] = np.asarray(data_roi)
+        if self.data_roi is not None:
+            xforms["processing roi"] = np.asarray(self.data_roi)
             # transform from reconstruction processing roi to camera roi
-            odt_recon_roi = deepcopy(data_roi)
+            odt_recon_roi = deepcopy(self.data_roi)
             xform_process_roi_to_cam_roi = params2xform([1, 0, odt_recon_roi[2],
                                                          1, 0, odt_recon_roi[0]])
             xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
 
             xforms.update({"affine_xform_recon_2_raw_camera_roi": xform_odt_recon_to_cam_roi})
-            if cam_roi is not None:
-                xforms["camera roi"] = np.asarray(cam_roi)
+            if self.cam_roi is not None:
+                xforms["camera roi"] = np.asarray(self.cam_roi)
 
                 # todo: is there a problem with this transform?
                 # transform from camera roi to uncropped chip
-                xform_cam_roi_to_full = params2xform([1, 0, cam_roi[2],
-                                                      1, 0, cam_roi[0]])
+                xform_cam_roi_to_full = params2xform([1, 0, self.cam_roi[2],
+                                                      1, 0, self.cam_roi[0]])
                 xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
                 xforms.update({"affine_xform_recon_2_raw_camera": xform_odt_recon_to_full})
 
-        return n, xforms, atf
+        self.xform_dict = xforms
 
     def plot_translations(self,
                           index: tuple[int],
@@ -1588,6 +1767,94 @@ class tomography:
         ax.set_ylim([0, None])
 
         return figh2, epowers, epowers_bg
+
+    def plot_costs(self,
+                   index: tuple[int] = None,
+                   **kwargs) -> Figure:
+
+        # todo: implement index
+        figh_cost = plt.figure(**kwargs)
+        ax = figh_cost.add_subplot(1, 1, 1)
+
+        if hasattr(self.store, "costs"):
+            carr = np.array(self.store.costs)[0, 0, 0, 0].transpose()
+
+            ax.plot(carr, '.')
+            ax.set_xlabel("iteration")
+            ax.set_ylabel("cost")
+
+        return figh_cost
+
+    def plot_steps(self,
+                   index: tuple[int] = None,
+                   **kwargs):
+        # todo: implement index
+        figh_step = plt.figure()
+        ax = figh_step.add_subplot(1, 1, 1)
+
+        if hasattr(self.store, "steps"):
+            # plot steps
+            sarr = np.array(self.store.steps)[0, 0, 0, 0]
+
+            ax.plot(sarr, '.')
+            ax.set_xlabel("iteration")
+            ax.set_ylabel("step-size")
+
+        return figh_step
+
+    def plot_diagnostics(self,
+                         index: tuple[int],
+                         time_axis: int,
+                         interactive: bool = False,
+                         save: bool = True,
+                         **kwargs):
+
+        context = {}
+        if not interactive:
+            context['interactive'] = False
+            context['backend'] = "agg"
+
+        with rc_context(context):
+            # frequencies
+            figh_frq = self.plot_frqs(index,
+                                      time_axis=time_axis,
+                                      **kwargs)
+
+            # plot phases
+            figh_ph = self.plot_phases(index,
+                                       time_axis=time_axis,
+                                       **kwargs)
+
+            # plot translations
+            figh_xl = self.plot_translations(index,
+                                             time_axis=time_axis,
+                                             **kwargs)
+
+            # plot sampling
+            figh_sampling = self.plot_odt_sampling(figsize=(15, 5),
+                                                   **kwargs)
+
+            # costs
+            figh_costs = self.plot_costs(index)
+
+            # step
+            figh_steps = self.plot_steps(index)
+
+        if save:
+            figh_frq.savefig(self.save_dir / "hologram_frequency_stability.png")
+            figh_ph.savefig(self.save_dir / "phase_stability.png")
+            figh_xl.savefig(self.save_dir / "registration.png")
+            figh_sampling.savefig(self.save_dir / "fourier_sampling.png")
+            figh_costs.savefig(self.save_dir / "costs.png")
+            figh_steps.savefig(self.save_dir / "steps.png")
+
+        if not interactive:
+            plt.close(figh_frq)
+            plt.close(figh_ph)
+            plt.close(figh_xl)
+            plt.close(figh_sampling)
+            plt.close(figh_costs)
+            plt.close(figh_costs)
 
     def plot_odt_sampling(self,
                           index: Optional[tuple[int]] = None,
@@ -2325,7 +2592,7 @@ def get_reconstruction_nyquist_sampling(no: float,
     return tuple(drs), tuple(n_size)
 
 
-def display_tomography_recon(recon_fname: Union[str, Path],
+def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              raw_data_fname: Optional[Union[str, Path]] = None,
                              raw_data_component: str = "cam2/odt",
                              show_raw: bool = True,
@@ -2345,7 +2612,7 @@ def display_tomography_recon(recon_fname: Union[str, Path],
     """
     Display reconstruction results and (optionally) raw data in Napari
 
-    :param recon_fname: refractive index reconstruction stored in zarr file
+    :param location: refractive index reconstruction stored in zarr file
     :param raw_data_fname: raw data stored in zar file
     :param raw_data_component:
     :param show_raw:
@@ -2373,14 +2640,13 @@ def display_tomography_recon(recon_fname: Union[str, Path],
         show_raw = False
 
     # load data
-    img_z = zarr.open(recon_fname, "r")
+    if isinstance(location, (Path, str)):
+        img_z = zarr.open(location, "r")
+    else:
+        img_z = location
+
     if not hasattr(img_z, "efield_bg_ft") or not hasattr(img_z, "efields_ft"):
         show_efields = False
-
-    # raw data sizes
-    proc_roi = img_z.attrs["processing roi"]
-    ny = proc_roi[1] - proc_roi[0]
-    nx = proc_roi[3] - proc_roi[2]
 
     drs_n = img_z.attrs["dr"]
     n_axis_names = img_z.attrs["dimensions"]
@@ -2445,6 +2711,8 @@ def display_tomography_recon(recon_fname: Union[str, Path],
     n_imag = n.imag
     n_start_real = n_start.real - no
     n_start_imag = n_start.imag
+
+    ny, nx = n_real.shape[-2:]
 
     # ######################
     # prepare raw images
@@ -2596,7 +2864,7 @@ def display_tomography_recon(recon_fname: Union[str, Path],
     # ######################
     # create viewer
     # ######################
-    viewer = napari.Viewer(title=str(recon_fname))
+    viewer = napari.Viewer(title=str(img_z.store.path))
 
     if scale_z:
         scale = (drs_n[0] / drs_n[1], 1, 1)
@@ -2614,6 +2882,10 @@ def display_tomography_recon(recon_fname: Union[str, Path],
                          affine=affine_cam2recon,
                          contrast_limits=[0, 4096])
 
+    # ######################
+    # reconstructed index of refraction
+    # ######################
+    if show_n:
         # processed ROI
         proc_roi_rect = np.array([[[0 - 1, 0 - 1],
                                    [0 - 1, nx],
@@ -2628,11 +2900,6 @@ def display_tomography_recon(recon_fname: Union[str, Path],
                           edge_color=[1, 0, 0, 1],
                           face_color=[0, 0, 0, 0])
 
-    # ######################
-    # reconstructed index of refraction
-    # ######################
-
-    if show_n:
         # for convenience of affine xforms, keep xy in pixels
         viewer.add_image(n_start_imag,
                          scale=scale,
