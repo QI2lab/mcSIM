@@ -1,10 +1,18 @@
+"""
+Test tomography and beam propagation tools
+"""
 import unittest
 import numpy as np
 from scipy.signal.windows import tukey
-import mcsim.analysis.tomography as tm
-from mcsim.analysis.field_prop import angles2frqs, propagate_homogeneous
 from mcsim.analysis.fft import ft3, ft2, ift2
 from mcsim.analysis.optimize import to_cpu
+from mcsim.analysis.field_prop import (get_v,
+                                       angles2frqs,
+                                       propagate_homogeneous,
+                                       fwd_model_linear,
+                                       LinearScatt,
+                                       BPM,
+                                       SSNP)
 
 try:
     import cupy as cp
@@ -96,34 +104,35 @@ class TestPatterns(unittest.TestCase):
 
         e = xp.random.rand(npattern, ny, nx) + 1j * xp.random.rand(npattern, ny, nx)
         n = no + 0.1 * xp.random.rand(nz, ny, nx) + 1j * xp.random.rand(nz, ny, nx) * 1e-3
-        v = tm.get_v(n, no, wavelength)
+        v = get_v(n, no, wavelength)
         vft = ft3(v)
 
         theta = 25 * np.pi / 180 * np.ones(npattern)
         phis = np.arange(npattern) / npattern * 2*np.pi
         beam_frqs = angles2frqs(theta, phis, no / wavelength)
 
-        model = tm.fwd_model_linear(beam_frqs[..., 0],
-                                    beam_frqs[..., 1],
-                                    beam_frqs[..., 2],
-                                    no,
-                                    na_det,
-                                    wavelength,
-                                    (ny, nx),
-                                    (dxy, dxy),
-                                    (nz, ny, nx),
-                                    (dz, dxy, dxy),
-                                    mode="born",
-                                    interpolate=True,
-                                    use_gpu=True)
+        model = fwd_model_linear(beam_frqs[..., 0],
+                                 beam_frqs[..., 1],
+                                 beam_frqs[..., 2],
+                                 no,
+                                 na_det,
+                                 wavelength,
+                                 (ny, nx),
+                                 (dxy, dxy),
+                                 (nz, ny, nx),
+                                 (dz, dxy, dxy),
+                                 mode="born",
+                                 interpolate=True,
+                                 use_gpu=True)
 
-        opt = tm.LinearScatt(e,
-                             model,
-                             no,
-                             wavelength,
-                             (dxy, dxy),
-                             (dz, dxy, dxy),
-                             (nz, ny, nx))
+        opt = LinearScatt(no,
+                          wavelength,
+                          (dxy, dxy),
+                          (dz, dxy, dxy),
+                          (nz, ny, nx),
+                          e,
+                          model,
+                          )
 
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), vft.shape)
         g, gn = opt.test_gradient(vft, jind, inds=[0, 1])
@@ -149,34 +158,35 @@ class TestPatterns(unittest.TestCase):
 
         e = xp.random.rand(npattern, ny, nx) + 1j * xp.random.rand(npattern, ny, nx)
         n = no + 0.1 * xp.random.rand(nz, ny, nx) + 1j * xp.random.rand(nz, ny, nx) * 1e-3
-        v = tm.get_v(n, no, wavelength)
+        v = get_v(n, no, wavelength)
         vft = ft3(v)
 
         theta = 25 * np.pi / 180 * np.ones(npattern)
         phis = np.arange(npattern) / npattern * 2*np.pi
         beam_frqs = angles2frqs(theta, phis, no / wavelength)
 
-        model = tm.fwd_model_linear(beam_frqs[..., 0],
-                                    beam_frqs[..., 1],
-                                    beam_frqs[..., 2],
-                                    no,
-                                    na_det,
-                                    wavelength,
-                                    (ny, nx),
-                                    (dxy, dxy),
-                                    (nz, ny, nx),
-                                    (dz, dxy, dxy),
-                                    mode="rytov",
-                                    interpolate=True,
-                                    use_gpu=True,)
+        model = fwd_model_linear(beam_frqs[..., 0],
+                                 beam_frqs[..., 1],
+                                 beam_frqs[..., 2],
+                                 no,
+                                 na_det,
+                                 wavelength,
+                                 (ny, nx),
+                                 (dxy, dxy),
+                                 (nz, ny, nx),
+                                 (dz, dxy, dxy),
+                                 mode="rytov",
+                                 interpolate=True,
+                                 use_gpu=True,)
 
-        opt = tm.LinearScatt(e,
-                             model,
-                             no,
-                             wavelength,
-                             (dxy, dxy),
-                             (dz, dxy, dxy),
-                             (nz, ny, nx))
+        opt = LinearScatt(no,
+                          wavelength,
+                          (dxy, dxy),
+                          (dz, dxy, dxy),
+                          (nz, ny, nx),
+                          e,
+                          model,
+                          )
 
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), vft.shape)
         g, gn = opt.test_gradient(vft, jind, inds=[0, 1])
@@ -199,11 +209,7 @@ class TestPatterns(unittest.TestCase):
         no = 1.333
         wavelength = 0.785
 
-        dz_final = -dz * ((nz - 1) - nz // 2 + 0.5)
-
         fmax = no / wavelength
-        # fx = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))[None, :]
-        # fy = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))[:, None]
         fx = xp.fft.fftfreq(nx, dxy)[None, :]
         fy = xp.fft.fftfreq(ny, dxy)[:, None]
         atf = (xp.sqrt(fx ** 2 + fy ** 2) <= fmax).astype(complex)
@@ -218,19 +224,21 @@ class TestPatterns(unittest.TestCase):
         mask = xp.ones((ny, nx), dtype=bool)
         mask[ny // 2:, :] = False
 
-        opt = tm.BPM(e,
-                     ebg,
-                     None,
-                     no,
-                     wavelength,
-                     (dxy, dxy),
-                     (dz, dxy, dxy),
-                     (nz, ny, nx),
-                     dz_final=dz_final,
-                     atf=atf,
-                     apodization=apo,
-                     mask=mask,
-                     efield_cost_factor=0.5)
+        opt = BPM(no,
+                  wavelength,
+                  (dxy, dxy),
+                  (dz, dxy, dxy),
+                  (nz, ny, nx),
+                  e,
+                  ebg,
+                  beam_frqs=None,
+                  dz_refocus=0.03,
+                  atf=atf,
+                  apodization=apo,
+                  mask=mask,
+                  efield_cost_factor=0.5,
+                  scale_cost_to_field=True
+                  )
 
         jind = np.ravel_multi_index((nz//2, ny//2, nx//2), n.shape)
         g, gn = opt.test_gradient(n, jind, inds=[0, 1])
@@ -252,8 +260,6 @@ class TestPatterns(unittest.TestCase):
         no = 1.333
         wavelength = 0.785
 
-        dz_final = -dz * ((nz - 1) - nz // 2 + 0.5)
-
         fmax = no / wavelength
         fx = xp.fft.fftfreq(nx, dxy)[None, :]
         fy = xp.fft.fftfreq(ny, dxy)[:, None]
@@ -269,19 +275,21 @@ class TestPatterns(unittest.TestCase):
         mask = xp.ones((ny, nx), dtype=bool)
         mask[ny // 2:, :] = False
 
-        opt = tm.SSNP(e,
-                      ebg,
-                      None,
-                      no,
-                      wavelength,
-                      (dxy, dxy),
-                      (dz, dxy, dxy),
-                      (nz, ny, nx),
-                      dz_final=dz_final,
-                      atf=atf,
-                      apodization=apo,
-                      mask=mask,
-                      efield_cost_factor=0.5)
+        opt = SSNP(no,
+                   wavelength,
+                   (dxy, dxy),
+                   (dz, dxy, dxy),
+                   (nz, ny, nx),
+                   e,
+                   ebg,
+                   beam_frqs=None,
+                   dz_refocus=0.04,
+                   atf=atf,
+                   apodization=apo,
+                   mask=mask,
+                   efield_cost_factor=0.5,
+                   scale_cost_to_field=True
+                   )
 
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), n.shape)
         g, gn = opt.test_gradient(n, jind, inds=[0, 1])

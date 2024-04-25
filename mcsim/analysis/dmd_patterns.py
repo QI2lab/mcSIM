@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
-from mcsim.analysis.analysis_tools import get_peak_value
+from mcsim.analysis.sim_reconstruction import get_peak_value
 from mcsim.analysis.fft import conj_transpose_fft, ft2
 from mcsim.analysis.simulate_dmd import xy2uvector, blaze_envelope, _dlp_1stgen_axis
 from localize_psf.affine import xform_sinusoid_params, xform_shift_center, xform_mat

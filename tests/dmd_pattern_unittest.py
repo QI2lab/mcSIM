@@ -5,7 +5,7 @@ from scipy.signal.windows import hann
 from scipy.fft import fftshift, fftfreq
 from localize_psf.affine import xform_shift_center, xform_sinusoid_params_roi, xform_mat
 from localize_psf.rois import get_centered_rois
-from mcsim.analysis.analysis_tools import get_peak_value
+from mcsim.analysis.sim_reconstruction import get_peak_value
 from mcsim.analysis.fft import ft2
 import mcsim.analysis.dmd_patterns as dmd
 

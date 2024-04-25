@@ -6,7 +6,8 @@ from warnings import catch_warnings, simplefilter
 import numpy as np
 from time import perf_counter
 from random import sample
-from typing import Union
+from typing import Union, Optional
+from collections.abc import Sequence
 from skimage.restoration import denoise_tv_chambolle
 
 
@@ -86,19 +87,31 @@ class Optimizer:
         self.n_samples = None
         self.prox_parameters = {}
 
-    def fwd_model(self, x, inds=None):
+    def fwd_model(self,
+                  x: array,
+                  inds: Optional[Sequence[int]] = None) -> array:
         pass
 
-    def fwd_model_adjoint(self, y, inds=None):
+    def fwd_model_adjoint(self,
+                          y: array,
+                          inds: Optional[Sequence[int]] = None) -> array:
         pass
 
-    def cost(self, x, inds=None):
+    def cost(self,
+             x: array,
+             inds: Optional[Sequence[int]] = None) -> array:
         pass
 
-    def gradient(self, x, inds=None):
+    def gradient(self,
+                 x: array,
+                 inds: Optional[Sequence[int]] = None) -> array:
         pass
 
-    def test_gradient(self, x, jind=0, inds=None, dx=1e-5):
+    def test_gradient(self,
+                      x: array,
+                      jind: int = 0,
+                      inds: Optional[Sequence[int]] = None,
+                      dx: float = 1e-5) -> (array, array):
         """
 
         :param x: point to compute gradient at
@@ -146,10 +159,13 @@ class Optimizer:
 
         return g, gn
 
-    def prox(self, x, step):
+    def prox(self,
+             x: array,
+             step: float) -> array:
         pass
 
-    def guess_step(self, x):
+    def guess_step(self,
+                   x: Optional[array] = None) -> float:
         pass
 
     def run(self,
@@ -165,6 +181,7 @@ class Optimizer:
             line_search: bool = False,
             line_search_factor: float = 0.5,
             restart_line_search: bool = False,
+            line_search_once: bool = False,
             stop_on_nan: bool = True,
             xtol: float = 0.0,
             ftol: float = 0.0,
@@ -190,6 +207,8 @@ class Optimizer:
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
         :param restart_line_search: if true, restart line search from initial value at each iteration. If false,
           restart line search from step-size determined at previous iteration
+        :param line_search_once: if line_search=True, this determines whether a line search is run only at the first
+          iteration, or at every iteration.
         :param stop_on_nan: stop if there are NaN's in x
         :param xtol: When norm(x[t] - x[t-1]) / norm(x[0]) < xtol, stop iteration
         :param ftol: stop iterating when cost function relative change < ftol. Not yet implemented
@@ -251,7 +270,7 @@ class Optimizer:
             # ###################################
 
             ls_iters = 0
-            if not line_search:
+            if not line_search or (line_search_once and ii != 0):
                 # ###################################
                 # compute cost
                 # ###################################
@@ -341,6 +360,10 @@ class Optimizer:
                     y = self.prox(x - steps[ii] * gx, steps[ii])
                     ls_iters += 1
 
+                # if this is the only line search, set subsequent step-sizes
+                if line_search_once:
+                    steps[ii:] = steps[ii]
+
                 # not exclusively prox
                 timing["prox"] = np.concatenate((timing["prox"], np.array([perf_counter() - tstart_prox])))
 
@@ -390,7 +413,7 @@ class Optimizer:
                              f" cost={np.nanmean(costs[ii]):.3g}," \
                              f" diff={xdiffs[ii]:.3g}," \
                              f" step={steps[ii]:.3g}," \
-                             f" line search iters={line_search_iters[ii]:d}," \
+                             f" lsearch #={line_search_iters[ii]:d}," \
                              f" grad={timing['grad'][ii]:.3f}s," \
                              f" prox={timing['prox'][ii]:.3f}s," \
                              f" cost={timing['cost'][ii]:.3f}s," \

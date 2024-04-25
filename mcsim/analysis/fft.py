@@ -3,6 +3,7 @@ CPU/GPU agnostic FFT functions using our preferred idioms
 """
 
 from typing import Union, Optional
+from collections.abc import Sequence
 import numpy as np
 import numpy.fft as fft_cpu
 
@@ -281,3 +282,117 @@ def conj_transpose_fft(img_ft: array,
                         axis=tuple(to_roll))
 
     return img_ft_ct
+
+
+def translate_ft(img_ft: array,
+                 fx: array,
+                 fy: array,
+                 drs: Optional[Sequence[float, float]] = None) -> array:
+    """
+    Given img_ft(f), return the translated function
+    img_ft_shifted(f) = img_ft(f + shift_frq)
+    using the FFT shift relationship, img_ft(f + shift_frq) = F[ exp(-2*pi*i * shift_frq * r) * img(r) ]
+    This is an approximation to the Whittaker-Shannon interpolation formula which can be performed using only FFT's.
+    In this sense, it is exact for band-limited functions.
+    The total amount of memory used by this function is roughly set the fft routine, and is about 3x the size of
+    the input image
+
+    :param img_ft: NumPy or CuPy array representing the fourier transform of an image with
+      frequency origin centered as if using fftshift. Shape n1 x n2 x ... x n_{-3} x ny x nx
+      Shifting is done along the last two axes. If this is a CuPy array, routine will be run on the GPU
+    :param fx: array of x-shift frequencies
+      fx and fy should either be broadcastable to the same size as img_ft, or they should be of size
+      n_{-m} x ... x n_{-3} where images along dimensions -m, ..., -3 are shifted in parallel
+    :param fy: array of y-shift frequencies
+    :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
+    :return: shifted images, same size as img_ft
+    """
+
+    if cp and isinstance(img_ft, cp.ndarray):
+        xp = cp
+    else:
+        xp = np
+
+    if img_ft.ndim < 2:
+        raise ValueError("img_ft must be at least 2D")
+
+    n_extra_dims = img_ft.ndim - 2
+    ny, nx = img_ft.shape[-2:]
+
+    fx = xp.asarray(fx)
+    fy = xp.asarray(fy)
+
+    if fx.shape != fy.shape:
+        raise ValueError(f"fx and fy must have same shape, but had shapes {fx.shape} and {fy.shape}")
+
+    shapes_broadcastable = True
+    try:
+        _ = xp.broadcast(fx, img_ft)
+    except ValueError:
+        shapes_broadcastable = False
+
+    # otherwise make shapes broadcastable if possible
+    if not shapes_broadcastable:
+        ndim_extra_frq = fx.ndim
+        if fx.shape != img_ft.shape[-2 - ndim_extra_frq:-2]:
+            raise ValueError(f"fx and shift_frq have incompatible shapes {fx.shape} and {img_ft.shape}")
+
+        axis_expand_frq = tuple(list(range(n_extra_dims - fx.ndim)) + [-2, -1])
+        fx = xp.expand_dims(fx, axis=axis_expand_frq)
+        fy = xp.expand_dims(fy, axis=axis_expand_frq)
+
+    if xp.all(fx == 0) and xp.all(fy == 0):
+        return xp.array(img_ft, copy=True)
+    else:
+        if drs is None:
+            drs = (1, 1)
+        dy, dx = drs
+
+        # must use symmetric frequency representation to do shifting correctly AND only works perfectly is size off
+        x = xp.expand_dims(xp.fft.fftfreq(nx) * nx * dx,
+                           axis=tuple(range(n_extra_dims + 1)))
+        # todo: replace with this second option which is more intuitive
+        # x = xp.expand_dims(xp.fft.ifftshift(np.arange(nx) - nx // 2) * dx, axis=axis_expand_x)
+
+        y = xp.expand_dims(xp.fft.fftfreq(ny) * ny * dy,
+                           axis=tuple(range(n_extra_dims)) + (-1,))
+        # y = xp.expand_dims(xp.fft.ifftshift(np.arange(ny) - ny // 2) * dy, axis=axis_expand_y)
+
+        exp_factor = xp.exp(-1j * 2 * np.pi * (fx * x + fy * y))
+
+        # FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
+        # 1. shift frequencies in img_ft so zero frequency is in corner using ifftshift
+        # 2. inverse ft
+        # 3. multiply by exponential factor
+        # 4. take fourier transform, then shift frequencies back using fftshift
+        img_ft_shifted = xp.fft.fftshift(
+                         xp.fft.fft2(xp.asarray(exp_factor) *
+                         xp.fft.ifft2(xp.fft.ifftshift(img_ft, axes=(-1, -2)),
+                                      axes=(-1, -2)), axes=(-1, -2)), axes=(-1, -2))
+
+        return img_ft_shifted
+
+
+def translate_im(img: array,
+                 xshift: np.ndarray,
+                 yshift: np.ndarray,
+                 drs: Sequence[float] = (1, 1)) -> array:
+    """
+    Translate img(y,x) to img(y+yo, x+xo) using FFT. This approach is exact for band-limited functions.
+    e.g. suppose the pixel spacing dx = 0.05 um, and we want to shift the image by 0.0366 um,
+    then dx = 0.05 and shift = [0, 0.0366]
+
+    :param img: NumPy or CuPy array, size ny x nx. If CuPy array will run on GPU
+    :param xshift: in same units as drs
+    :param yshift:
+    :param drs: (dy, dx) pixel size of image along y- and x-directions
+    :return img_shifted:
+    """
+
+    ny, nx = img.shape[-2:]
+    dy, dx = drs
+
+    xshift_mod = xshift / dx / nx
+    yshift_mod = yshift / dy / ny
+
+    return translate_ft(img, xshift_mod, yshift_mod, drs=(1., 1.))
