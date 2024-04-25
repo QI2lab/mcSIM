@@ -756,6 +756,8 @@ class RIOptimizer(Optimizer):
                  use_real_constraint: bool = False,
                  max_imaginary_part: float = np.inf,
                  efield_cost_factor: float = 1.,
+                 cost_regularization: float = 1.,
+                 scale_cost_to_field: bool = False,
                  **kwargs
                  ):
         """
@@ -794,6 +796,8 @@ class RIOptimizer(Optimizer):
         self.drs_n = drs_n
         self.shape_n = shape_n
         self.dz_refocus = dz_refocus
+        self.cost_regularization = cost_regularization
+        self.scale_cost_to_field = scale_cost_to_field
 
         if atf is None:
             atf = 1.
@@ -888,24 +892,32 @@ class RIOptimizer(Optimizer):
         # todo: how to unify these?
         e_fwd = self.fwd_model(x, inds=inds)[:, -1]
 
+        if self.scale_cost_to_field:
+            denom = abs(self.e_measured[inds])**2 + self.cost_regularization**2
+        else:
+            denom = 1.
+
         costs = 0
         if self.efield_cost_factor > 0:
             if self.mask is None:
                 costs += (self.efield_cost_factor * 0.5 *
-                          (abs(e_fwd - self.e_measured[inds]) ** 2).sum(axis=(-1, -2))
-                          )
+                          (abs(e_fwd - self.e_measured[inds]) ** 2) / denom
+                          ).sum(axis=(-1, -2))
             else:
                 costs += (self.efield_cost_factor * 0.5 *
-                          (abs(e_fwd[:, self.mask] - self.e_measured[inds][:, self.mask]) ** 2).sum(axis=-1)
-                          )
+                          (abs(e_fwd[:, self.mask] - self.e_measured[inds][:, self.mask]) ** 2) / denom[:, self.mask]
+                          ).sum(axis=-1)
 
         if (1 - self.efield_cost_factor) > 0:
             if self.mask is None:
                 costs += ((1 - self.efield_cost_factor) * 0.5 *
-                          (abs(abs(e_fwd) - abs(self.e_measured[inds])) ** 2).sum(axis=(-1, -2)))
+                          (abs(abs(e_fwd) - abs(self.e_measured[inds])) ** 2) / denom
+                          ).sum(axis=(-1, -2))
             else:
                 costs += ((1 - self.efield_cost_factor) * 0.5 *
-                          (abs(abs(e_fwd[:, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2).sum(axis=-1))
+                          (abs(abs(e_fwd[:, self.mask]) - abs(self.e_measured[inds][:, self.mask])) ** 2) /
+                          denom[:, self.mask]
+                          ).sum(axis=-1)
 
         return costs
 
@@ -962,6 +974,9 @@ class LinearScatt(RIOptimizer):
         if self.efield_cost_factor != 1:
             raise NotImplementedError(f"Linear scattering models only support self.efield_cost_factor=1, "
                                       f"but value was {self.efield_cost_factor:.3f}")
+
+        if self.scale_cost_to_field:
+            raise NotImplementedError("LinearScatt models do not support scale_cost_to_field=True")
 
         if cp and isinstance(self.e_measured, cp.ndarray):
             self.model = sp_gpu.csr_matrix(model)
@@ -1279,16 +1294,22 @@ class BPM(RIOptimizer):
 
         e_fwd = self.fwd_model(x, inds=inds)
 
+        # denom
+        if self.scale_cost_to_field:
+            denom = abs(self.e_measured[inds]) ** 2 + self.cost_regularization ** 2
+        else:
+            denom = 1.
+
         # back propagation ... build the gradient from this to save memory
         dtemp = 0
         if self.efield_cost_factor > 0:
             dtemp += (self.efield_cost_factor *
-                      (e_fwd[:, -1, :, :] - self.e_measured[inds]))
+                      (e_fwd[:, -1, :, :] - self.e_measured[inds])) / denom
 
         if (1 - self.efield_cost_factor) > 0:
             dtemp += ((1 - self.efield_cost_factor) *
                       (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) *
-                      e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :]))
+                      e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])) / denom
 
         if self.mask is not None:
             dtemp *= self.mask
@@ -1562,17 +1583,22 @@ class SSNP(RIOptimizer):
 
         phi_fwd = self.phi_fwd(x, inds=inds)
 
+        if self.scale_cost_to_field:
+            denom = abs(self.e_measured[inds]) ** 2 + self.cost_regularization ** 2
+        else:
+            denom = 1.
+
         # this is the backpropagated field, but we will eventually transform it into the gradient
         # do things this way to reduce memory overhead
         dtemp = 0
         if self.efield_cost_factor > 0:
             dtemp += (self.efield_cost_factor *
-                      (phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds]))
+                      (phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds])) / denom
 
         if (1 - self.efield_cost_factor) > 0:
             dtemp += ((1 - self.efield_cost_factor) *
                       (abs(phi_fwd[:, -1, :, :, 0]) - abs(self.e_measured[inds])) *
-                      phi_fwd[:, -1, :, :, 0] / abs(phi_fwd[:, -1, :, :, 0]))
+                      phi_fwd[:, -1, :, :, 0] / abs(phi_fwd[:, -1, :, :, 0])) / denom
 
         if self.mask is not None:
             dtemp *= self.mask

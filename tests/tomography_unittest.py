@@ -236,7 +236,9 @@ class TestPatterns(unittest.TestCase):
                   atf=atf,
                   apodization=apo,
                   mask=mask,
-                  efield_cost_factor=0.5)
+                  efield_cost_factor=0.5,
+                  scale_cost_to_field=True
+                  )
 
         jind = np.ravel_multi_index((nz//2, ny//2, nx//2), n.shape)
         g, gn = opt.test_gradient(n, jind, inds=[0, 1])
@@ -285,7 +287,9 @@ class TestPatterns(unittest.TestCase):
                    atf=atf,
                    apodization=apo,
                    mask=mask,
-                   efield_cost_factor=0.5)
+                   efield_cost_factor=0.5,
+                   scale_cost_to_field=True
+                   )
 
         jind = np.ravel_multi_index((nz // 2, ny // 2, nx // 2), n.shape)
         g, gn = opt.test_gradient(n, jind, inds=[0, 1])
