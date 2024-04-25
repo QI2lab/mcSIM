@@ -1589,17 +1589,229 @@ class tomography:
 
         return figh2, epowers, epowers_bg
 
+    def plot_odt_sampling(self,
+                          index: Optional[tuple[int]] = None,
+                          **kwargs) -> Figure:
+        """
+        Illustrate the region of frequency space which is obtained using the plane waves described by frqs
+
+        :param kwargs: passed through to figure
+        :return figh:
+        """
+        # todo: take slice argument
+        # nfrqs x 2 array of [[fx0, fy0], [fx1, fy1], ...]
+        frqs = np.stack(self.get_beam_frqs(), axis=-3)[0, 0, 0, 0, :, 0][:, (0, 1)]
+
+        frq_norm = self.no / self.wavelength
+        alpha_det = np.arcsin(self.na_detection / self.no)
+
+        if self.na_excitation / self.no < 1:
+            alpha_exc = np.arcsin(self.na_excitation / self.no)
+        else:
+            # if na_excite is immersion objective and beam undergoes TIR at interface for full NA
+            alpha_exc = np.pi / 2
+
+        fzs = get_fzs(frqs[:, 0], frqs[:, 1], self.no, self.wavelength)
+        frqs_3d = np.concatenate((frqs, np.expand_dims(fzs, axis=1)), axis=1)
+
+        figh = plt.figure(**kwargs)
+        figh.suptitle("Frequency support diagnostic")
+        grid = figh.add_gridspec(nrows=1, ncols=4)
+
+        # ########################
+        # kx-kz plane
+        # ########################
+        ax = figh.add_subplot(grid[0, 0])
+        ax.set_title("$k_x-k_z$ projection")
+        ax.axis("equal")
+
+        # plot centers
+        ax.plot(-frqs_3d[:, 0], -frqs_3d[:, 2], 'k.', label="beam frqs")
+
+        # plot arcs
+        for ii in range(len(frqs_3d)):
+            if ii == 0:
+                kwargs = {"label": "frq support"}
+            else:
+                kwargs = {}
+            ax.add_artist(Arc((-frqs_3d[ii, 0], -frqs_3d[ii, 2]),
+                              2 * frq_norm,
+                              2 * frq_norm,
+                              angle=90,
+                              theta1=-alpha_det * 180 / np.pi,
+                              theta2=alpha_det * 180 / np.pi,
+                              edgecolor="k",
+                              **kwargs))
+
+        # draw arcs for the extremal angles
+        fx_edge = self.na_excitation / self.wavelength
+        fz_edge = np.sqrt((self.no / self.wavelength) ** 2 - fx_edge ** 2)
+
+        ax.plot(-fx_edge, -fz_edge, 'r.')
+        ax.plot(fx_edge, -fz_edge, 'r.')
+
+        ax.add_artist(Arc((-fx_edge, -fz_edge),
+                          2 * frq_norm,
+                          2 * frq_norm,
+                          angle=90,
+                          theta1=-alpha_det * 180 / np.pi,
+                          theta2=alpha_det * 180 / np.pi,
+                          edgecolor="r",
+                          label="extremal frequency data"))
+        ax.add_artist(Arc((fx_edge, -fz_edge),
+                          2 * frq_norm,
+                          2 * frq_norm,
+                          angle=90,
+                          theta1=-alpha_det * 180 / np.pi,
+                          theta2=alpha_det * 180 / np.pi,
+                          edgecolor="r"))
+
+        # draw arc showing possibly positions of centers
+        ax.add_artist(Arc((0, 0),
+                          2 * frq_norm,
+                          2 * frq_norm,
+                          angle=-90,
+                          theta1=-alpha_exc * 180 / np.pi,
+                          theta2=alpha_exc * 180 / np.pi,
+                          edgecolor="b",
+                          label="allowed beam frqs"))
+
+        ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
+        ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
+        ax.set_xlabel("$f_x$ (1/$\mu m$)")
+        ax.set_ylabel("$f_z$ (1/$\mu m$)")
+
+        plt.legend()
+
+        # ########################
+        # ky-kz plane
+        # ########################
+        ax = figh.add_subplot(grid[0, 1])
+        ax.set_title("$k_y-k_z$ projection")
+        ax.axis("equal")
+
+        # plot centers
+        ax.plot(-frqs_3d[:, 1], -frqs_3d[:, 2], 'k.')
+
+        # plot arcs
+        for ii in range(len(frqs_3d)):
+            ax.add_artist(Arc((-frqs_3d[ii, 1], -frqs_3d[ii, 2]),
+                              2 * frq_norm,
+                              2 * frq_norm,
+                              angle=90,
+                              theta1=-alpha_det * 180 / np.pi,
+                              theta2=alpha_det * 180 / np.pi,
+                              edgecolor="k"))
+
+        # draw arcs for the extremal angles
+        fy_edge = self.na_excitation / self.wavelength
+        fz_edge = np.sqrt((self.no / self.wavelength) ** 2 - fy_edge ** 2)
+
+        ax.plot(-fy_edge, -fz_edge, 'r.')
+        ax.plot(fy_edge, -fz_edge, 'r.')
+
+        ax.add_artist(Arc((-fy_edge, -fz_edge),
+                          2 * frq_norm,
+                          2 * frq_norm,
+                          angle=90,
+                          theta1=-alpha_det * 180 / np.pi,
+                          theta2=alpha_det * 180 / np.pi,
+                          edgecolor="r"))
+        ax.add_artist(Arc((fy_edge, -fz_edge),
+                          2 * frq_norm,
+                          2 * frq_norm,
+                          angle=90,
+                          theta1=-alpha_det * 180 / np.pi,
+                          theta2=alpha_det * 180 / np.pi,
+                          edgecolor="r"))
+
+        # draw arc showing possibly positions of centers
+        ax.add_artist(Arc((0, 0),
+                          2 * frq_norm,
+                          2 * frq_norm,
+                          angle=-90,
+                          theta1=-alpha_exc * 180 / np.pi,
+                          theta2=alpha_exc * 180 / np.pi,
+                          edgecolor="b"))
+
+        ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
+        ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
+        ax.set_xlabel("$f_y$ (1/$\mu m$)")
+        ax.set_ylabel("$f_z$ (1/$\mu m$)")
+
+        # ########################
+        # kx-ky plane
+        # ########################
+        ax = figh.add_subplot(grid[0, 2])
+        ax.set_title("$k_x-k_y$ projection")
+        ax.axis("equal")
+
+        ax.plot(-frqs_3d[:, 0], -frqs_3d[:, 1], 'k.')
+        for ii in range(len(frqs_3d)):
+            ax.add_artist(Circle((-frqs_3d[ii, 0], -frqs_3d[ii, 1]),
+                                 self.na_detection / self.wavelength,
+                                 fill=False,
+                                 color="k"))
+
+        ax.add_artist(Circle((0, 0),
+                             self.na_excitation / self.wavelength,
+                             fill=False,
+                             color="b"))
+        ax.add_artist(Circle((0, 0),
+                             (self.na_excitation + self.na_detection) / self.wavelength,
+                             fill=False,
+                             color="r"))
+
+        ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
+        ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
+        ax.set_xlabel("$f_x$ (1/$\mu m$)")
+        ax.set_ylabel("$f_y$ (1/$\mu m$)")
+
+        # ########################
+        # 3D
+        # ########################
+        ax = figh.add_subplot(grid[0, 3], projection="3d")
+        ax.set_title("3D projection")
+
+        fx = fy = np.linspace(-self.na_detection / self.wavelength,
+                              self.na_detection / self.wavelength, 100)
+        fxfx, fyfy = np.meshgrid(fx, fy)
+        ff = np.sqrt(fxfx ** 2 + fyfy ** 2)
+        fmax = self.na_detection / self.wavelength
+
+        fxfx[ff > fmax] = np.nan
+        fyfy[ff > fmax] = np.nan
+        fzfz = get_fzs(fxfx, fyfy, self.no, self.wavelength)
+
+        # kx0, ky0, kz0
+        fxyz0 = np.stack((fxfx, fyfy, fzfz), axis=-1)
+        for ii in range(len(frqs_3d)):
+            ax.plot_surface(fxyz0[..., 0] - frqs_3d[ii, 0],
+                            fxyz0[..., 1] - frqs_3d[ii, 1],
+                            fxyz0[..., 2] - frqs_3d[ii, 2],
+                            alpha=0.3)
+
+        ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
+        ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
+        ax.set_zlim([-1, 1])  # todo: set based on na's
+
+        ax.set_xlabel("$f_x$ (1/$\mu m$)")
+        ax.set_ylabel("$f_y$ (1/$\mu m$)")
+        ax.set_zlabel("$f_z$ (1/$\mu m$)")
+
+        return figh
+
     def show_image(self,
                    index: Optional[tuple[int]] = None,
-                   figsize: tuple[float, float] = (35., 15.),
                    gamma: float = 0.1,
+                   figsize: tuple[float, float] = (35., 15.),
                    **kwargs) -> Figure:
         """
         display raw image and holograms
 
         :param index: index of image to display. Should be of length self.nextra_dims + 1
-        :param figsize:
         :param gamma: gamma to be used when display fourier transforms
+        :param figsize:
         :return figh: figure handle
         """
 
@@ -2111,223 +2323,6 @@ def get_reconstruction_nyquist_sampling(no: float,
     n_size += 1 - np.mod(n_size, 2)
 
     return tuple(drs), tuple(n_size)
-
-
-# plotting functions
-def plot_odt_sampling(frqs: np.ndarray,
-                      na_detect: float,
-                      na_excite: float,
-                      no: float,
-                      wavelength: float,
-                      **kwargs) -> Figure:
-    """
-    Illustrate the region of frequency space which is obtained using the plane waves described by frqs
-
-    :param frqs: nfrqs x 2 array of [[fx0, fy0], [fx1, fy1], ...]
-    :param na_detect: detection NA
-    :param na_excite: excitation NA
-    :param no: index of refraction of medium that sample is immersed in.
-    :param wavelength:
-    :param kwargs: passed through to figure
-    :return figh:
-    """
-    frq_norm = no / wavelength
-    alpha_det = np.arcsin(na_detect / no)
-
-    if na_excite / no < 1:
-        alpha_exc = np.arcsin(na_excite / no)
-    else:
-        # if na_excite is immersion objective and beam undergoes TIR at interface for full NA
-        alpha_exc = np.pi/2
-
-    fzs = get_fzs(frqs[:, 0], frqs[:, 1], no, wavelength)
-    frqs_3d = np.concatenate((frqs, np.expand_dims(fzs, axis=1)), axis=1)
-
-    figh = plt.figure(**kwargs)
-    figh.suptitle("Frequency support diagnostic")
-    grid = figh.add_gridspec(nrows=1, ncols=4)
-
-    # ########################
-    # kx-kz plane
-    # ########################
-    ax = figh.add_subplot(grid[0, 0])
-    ax.set_title("$k_x-k_z$ projection")
-    ax.axis("equal")
-
-    # plot centers
-    ax.plot(-frqs_3d[:, 0], -frqs_3d[:, 2], 'k.', label="beam frqs")
-
-    # plot arcs
-    for ii in range(len(frqs_3d)):
-        if ii == 0:
-            kwargs = {"label": "frq support"}
-        else:
-            kwargs = {}
-        ax.add_artist(Arc((-frqs_3d[ii, 0], -frqs_3d[ii, 2]),
-                          2 * frq_norm,
-                          2 * frq_norm,
-                          angle=90,
-                          theta1=-alpha_det * 180 / np.pi,
-                          theta2=alpha_det * 180 / np.pi,
-                          edgecolor="k",
-                          **kwargs))
-
-    # draw arcs for the extremal angles
-    fx_edge = na_excite / wavelength
-    fz_edge = np.sqrt((no / wavelength)**2 - fx_edge**2)
-
-    ax.plot(-fx_edge, -fz_edge, 'r.')
-    ax.plot(fx_edge, -fz_edge, 'r.')
-
-    ax.add_artist(Arc((-fx_edge, -fz_edge),
-                      2 * frq_norm,
-                      2 * frq_norm,
-                      angle=90,
-                      theta1=-alpha_det * 180 / np.pi,
-                      theta2=alpha_det * 180 / np.pi,
-                      edgecolor="r",
-                      label="extremal frequency data"))
-    ax.add_artist(Arc((fx_edge, -fz_edge),
-                      2 * frq_norm,
-                      2 * frq_norm,
-                      angle=90,
-                      theta1=-alpha_det * 180 / np.pi,
-                      theta2=alpha_det * 180 / np.pi,
-                      edgecolor="r"))
-
-    # draw arc showing possibly positions of centers
-    ax.add_artist(Arc((0, 0),
-                      2 * frq_norm,
-                      2 * frq_norm,
-                      angle=-90,
-                      theta1=-alpha_exc * 180 / np.pi,
-                      theta2=alpha_exc * 180 / np.pi,
-                      edgecolor="b",
-                      label="allowed beam frqs"))
-
-    ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_xlabel("$f_x$ (1/$\mu m$)")
-    ax.set_ylabel("$f_z$ (1/$\mu m$)")
-
-    plt.legend()
-
-    # ########################
-    # ky-kz plane
-    # ########################
-    ax = figh.add_subplot(grid[0, 1])
-    ax.set_title("$k_y-k_z$ projection")
-    ax.axis("equal")
-
-    # plot centers
-    ax.plot(-frqs_3d[:, 1], -frqs_3d[:, 2], 'k.')
-
-    # plot arcs
-    for ii in range(len(frqs_3d)):
-        ax.add_artist(Arc((-frqs_3d[ii, 1], -frqs_3d[ii, 2]),
-                          2 * frq_norm,
-                          2 * frq_norm,
-                          angle=90,
-                          theta1=-alpha_det * 180 / np.pi,
-                          theta2=alpha_det * 180 / np.pi,
-                          edgecolor="k"))
-
-    # draw arcs for the extremal angles
-    fy_edge = na_excite / wavelength
-    fz_edge = np.sqrt((no / wavelength)**2 - fy_edge**2)
-
-    ax.plot(-fy_edge, -fz_edge, 'r.')
-    ax.plot(fy_edge, -fz_edge, 'r.')
-
-    ax.add_artist(Arc((-fy_edge, -fz_edge),
-                      2 * frq_norm,
-                      2 * frq_norm,
-                      angle=90,
-                      theta1=-alpha_det * 180 / np.pi,
-                      theta2=alpha_det * 180 / np.pi,
-                      edgecolor="r"))
-    ax.add_artist(Arc((fy_edge, -fz_edge),
-                      2 * frq_norm,
-                      2 * frq_norm,
-                      angle=90,
-                      theta1=-alpha_det * 180 / np.pi,
-                      theta2=alpha_det * 180 / np.pi,
-                      edgecolor="r"))
-
-    # draw arc showing possibly positions of centers
-    ax.add_artist(Arc((0, 0),
-                      2 * frq_norm,
-                      2 * frq_norm,
-                      angle=-90,
-                      theta1=-alpha_exc * 180 / np.pi,
-                      theta2=alpha_exc * 180 / np.pi,
-                      edgecolor="b"))
-
-    ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_xlabel("$f_y$ (1/$\mu m$)")
-    ax.set_ylabel("$f_z$ (1/$\mu m$)")
-
-    # ########################
-    # kx-ky plane
-    # ########################
-    ax = figh.add_subplot(grid[0, 2])
-    ax.set_title("$k_x-k_y$ projection")
-    ax.axis("equal")
-
-    ax.plot(-frqs_3d[:, 0], -frqs_3d[:, 1], 'k.')
-    for ii in range(len(frqs_3d)):
-        ax.add_artist(Circle((-frqs_3d[ii, 0], -frqs_3d[ii, 1]),
-                             na_detect / wavelength,
-                             fill=False,
-                             color="k"))
-
-    ax.add_artist(Circle((0, 0),
-                         na_excite / wavelength,
-                         fill=False,
-                         color="b"))
-    ax.add_artist(Circle((0, 0),
-                         (na_excite + na_detect) / wavelength,
-                         fill=False,
-                         color="r"))
-
-    ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_xlabel("$f_x$ (1/$\mu m$)")
-    ax.set_ylabel("$f_y$ (1/$\mu m$)")
-
-    # ########################
-    # 3D
-    # ########################
-    ax = figh.add_subplot(grid[0, 3], projection="3d")
-    ax.set_title("3D projection")
-
-    fx = fy = np.linspace(-na_detect / wavelength, na_detect / wavelength, 100)
-    fxfx, fyfy = np.meshgrid(fx, fy)
-    ff = np.sqrt(fxfx**2 + fyfy**2)
-    fmax = na_detect / wavelength
-
-    fxfx[ff > fmax] = np.nan
-    fyfy[ff > fmax] = np.nan
-    fzfz = get_fzs(fxfx, fyfy, no, wavelength)
-
-    # kx0, ky0, kz0
-    fxyz0 = np.stack((fxfx, fyfy, fzfz), axis=-1)
-    for ii in range(len(frqs_3d)):
-        ax.plot_surface(fxyz0[..., 0] - frqs_3d[ii, 0],
-                        fxyz0[..., 1] - frqs_3d[ii, 1],
-                        fxyz0[..., 2] - frqs_3d[ii, 2],
-                        alpha=0.3)
-
-    ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
-    ax.set_zlim([-1, 1])  # todo: set based on na's
-
-    ax.set_xlabel("$f_x$ (1/$\mu m$)")
-    ax.set_ylabel("$f_y$ (1/$\mu m$)")
-    ax.set_zlabel("$f_z$ (1/$\mu m$)")
-
-    return figh
 
 
 def display_tomography_recon(recon_fname: Union[str, Path],
