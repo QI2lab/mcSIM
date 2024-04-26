@@ -9,6 +9,7 @@ from warnings import catch_warnings, simplefilter
 from copy import deepcopy
 from typing import Union, Optional
 from collections.abc import Sequence
+from inspect import getfullargspec
 # numerical tools
 import numpy as np
 from numpy.linalg import norm, inv
@@ -268,8 +269,8 @@ class Tomography:
         self.save_auxiliary_fields = save_auxiliary_fields
 
         # electric fields
-        self.holograms_ft = None
-        self.holograms_ft_bg = None
+        self.efields_ft = None
+        self.efield_bg_ft = None
 
         # scattered field settings
         self.scattered_field_regularization = scattered_field_regularization
@@ -298,6 +299,52 @@ class Tomography:
         self.ctf = np.expand_dims(np.sqrt(self.fxs[None, :]**2 +
                                           self.fys[:, None]**2) <= self.fmax,
                                   axis=tuple(range(self.nextra_dims)) + (-3,))
+
+    @classmethod
+    def load_file(cls,
+                  location: Union[str, Path, zarr.hierarchy.Group]):
+        """
+        Instantiated class from zarr store
+
+        :param location:
+        :return:
+        """
+
+        if isinstance(location, (Path, str)):
+            z = zarr.open(location, "r")
+        else:
+            z = location
+
+        spec = getfullargspec(cls.__init__)
+
+        # get any kwargs from zarr attributes
+        kwargs = {a: z.attrs[a] if a in z.attrs.keys() else None
+                  for a in spec.args[1:]}
+
+        # get any other kwargs from arrays
+        for k, v in kwargs.items():
+            if v is None and k in z.array_keys():
+                kwargs[k] = np.array(z[k])
+
+        # correct any attributes that were not saved
+        kwargs["imgs_raw"] = da.from_array(np.zeros((1,) * z.attrs["nextra_dims"] +
+                                                    (z.attrs["ny"], z.attrs["nx"]))
+                                           )
+
+        inst = cls(**kwargs)
+
+        # load arrays as other attributes which are not set during __init__()
+        dask_fields = ["efields_ft", "efield_bg_ft"]
+        for name, arr in z.arrays():
+            if hasattr(inst, name) and getattr(inst, name) is None:
+                if name in dask_fields:
+                    load_arr = da.from_zarr(arr)
+                else:
+                    load_arr = np.array(arr)
+
+                setattr(inst, name, load_arr)
+
+        return inst
 
     @staticmethod
     def prepare_img_data(data_dir: Union[Path, str],
@@ -419,6 +466,8 @@ class Tomography:
 
                     elif isinstance(v, (int, float, str, bool, dict, tuple)):
                         self.store.attrs[k] = v
+                    elif isinstance(v, Path):
+                        self.store.attrs[k] = str(v)
                     elif isinstance(v, list):
                         if len(v) > 30:  # don't store long lists
                             raise TypeError()
@@ -1170,8 +1219,8 @@ class Tomography:
                                                        compressor=compressor)]
         dcompute(*future)
 
-        self.holograms_ft = da.from_zarr(self.store["efields_ft"])
-        self.holograms_ft_bg = da.from_zarr(self.store["efield_bg_ft"])
+        self.efields_ft = da.from_zarr(self.store["efields_ft"])
+        self.efield_bg_ft = da.from_zarr(self.store["efield_bg_ft"])
 
         if self.save_dir is not None:
             client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
@@ -1210,14 +1259,14 @@ class Tomography:
             xp = np
 
         if self.save_auxiliary_fields:
-            chunk_shape = (1,) * (self.holograms_ft.ndim - 2) + self.holograms_ft.shape[-2:]
+            chunk_shape = (1,) * (self.efields_ft.ndim - 2) + self.efields_ft.shape[-2:]
             e_fwd_out = self.store.create("efwd",
-                                          shape=self.holograms_ft.shape,
+                                          shape=self.efields_ft.shape,
                                           chunks=chunk_shape,
                                           compressor=compressor,
                                           dtype=complex)
 
-            e_scatt_out_shape = list(self.holograms_ft.shape)
+            e_scatt_out_shape = list(self.efields_ft.shape)
             e_scatt_out_shape[-3] *= self.nmax_multiplex
             e_scatt_out = self.store.create("escatt",
                                             shape=e_scatt_out_shape,
@@ -1225,16 +1274,16 @@ class Tomography:
                                             compressor=compressor,
                                             dtype=complex)
 
-            cost_shape = self.holograms_ft.shape[:-3] + (kwargs["max_iterations"] + 1, self.npatterns)
-            cost_chunk = (1,) * (self.holograms_ft.ndim - 3) + cost_shape[-2:]
+            cost_shape = self.efields_ft.shape[:-3] + (kwargs["max_iterations"] + 1, self.npatterns)
+            cost_chunk = (1,) * (self.efields_ft.ndim - 3) + cost_shape[-2:]
             costs_out = self.store.create("costs",
                                             shape=cost_shape,
                                             chunks=cost_chunk,
                                             compressor=compressor,
                                             dtype=float)
 
-            step_shape = self.holograms_ft.shape[:-3] + (kwargs["max_iterations"],)
-            step_chunk = (1,) * (self.holograms_ft.ndim - 3) + step_shape[-1:]
+            step_shape = self.efields_ft.shape[:-3] + (kwargs["max_iterations"],)
+            step_chunk = (1,) * (self.efields_ft.ndim - 3) + step_shape[-1:]
             steps_out = self.store.create("steps",
                                           shape=step_shape,
                                           chunks=step_chunk,
@@ -1243,7 +1292,7 @@ class Tomography:
 
             if self.n_guess is None:
                 n_start_out = self.store.create("n_start",
-                                                shape=self.holograms_ft.shape[:-3] + self.n_shape,
+                                                shape=self.efields_ft.shape[:-3] + self.n_shape,
                                                 compressor=compressor,
                                                 dtype=complex)
             else:
@@ -1282,10 +1331,10 @@ class Tomography:
         # check arrays are chunked by volume
         # ############################
         # todo: rechunk here if necessary ...
-        if self.holograms_ft.chunksize[-3] != self.npatterns:
+        if self.efields_ft.chunksize[-3] != self.npatterns:
             raise ValueError("")
 
-        if self.holograms_ft_bg.chunksize[-3] != self.npatterns:
+        if self.efield_bg_ft.chunksize[-3] != self.npatterns:
             raise ValueError("")
 
         # ############################
@@ -1624,8 +1673,8 @@ class Tomography:
         # get refractive index
         # #######################
         n = da.map_blocks(recon,
-                          self.holograms_ft,  # data
-                          self.holograms_ft_bg,  # background
+                          self.efields_ft,  # data
+                          self.efield_bg_ft,  # background
                           mean_beam_frqs_arr,
                           self.realspace_mask,  # masks
                           self.dxy,
@@ -1913,10 +1962,10 @@ class Tomography:
         slices = tuple(slices + [slice(None)])
         squeeze_axes = tuple([ii for ii in range(self.nextra_dims) if ii != time_axis])
 
-        e_powers_rms = (da.sqrt(da.mean(da.abs(self.holograms_ft) ** 2, axis=(-1, -2))) /
-                        np.prod(self.holograms_ft.shape[-2:]))
-        e_powers_rms_bg = (da.sqrt(da.mean(da.abs(self.holograms_ft_bg) ** 2, axis=(-1, -2))) /
-                           np.prod(self.holograms_ft_bg.shape[-2:]))
+        e_powers_rms = (da.sqrt(da.mean(da.abs(self.efields_ft) ** 2, axis=(-1, -2))) /
+                        np.prod(self.efields_ft.shape[-2:]))
+        e_powers_rms_bg = (da.sqrt(da.mean(da.abs(self.efield_bg_ft) ** 2, axis=(-1, -2))) /
+                           np.prod(self.efield_bg_ft.shape[-2:]))
 
         # get slice of phases
         with ProgressBar():
@@ -2317,7 +2366,7 @@ class Tomography:
         # hologram
         # ######################
         try:
-            holo_ft = to_cpu(self.holograms_ft[index].compute())
+            holo_ft = to_cpu(self.efields_ft[index].compute())
             holo = ift2(holo_ft)
 
             ax = figh.add_subplot(grid[0, 1])
@@ -2359,9 +2408,9 @@ class Tomography:
         # hologram background
         # ######################
         try:
-            index_bg = tuple([v if self.holograms_ft.shape[ii] != 0 else 0 for ii, v in enumerate(index)])
+            index_bg = tuple([v if self.efields_ft.shape[ii] != 0 else 0 for ii, v in enumerate(index)])
 
-            holo_ft_bg = to_cpu(self.holograms_ft_bg[index_bg].compute())
+            holo_ft_bg = to_cpu(self.efield_bg_ft[index_bg].compute())
             holo_bg = ift2(holo_ft_bg)
 
             ax = figh.add_subplot(grid[2, 1])
