@@ -27,6 +27,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                          shutter_delay_time: float = 50e-3,
                          stage_delay_time: float = 0.,
                          n_xy_positions: int = 1,
+                         n_times_fast: int = 1,
                          z_voltages: Sequence[float] = None,
                          use_dmd_as_odt_shutter: bool = False,
                          n_digital_ch: int = 16,
@@ -35,7 +36,8 @@ def get_sim_odt_sequence(daq_do_map: dict,
                          turn_lasers_off_interval: bool = False):
     """
     Create DAQ program for SIM/ODT experiment. Support looping in order (from fastest to slowest)
-    pattern, channel, z-position, analog parameter, position.
+    pattern, channel, z-position, analog parameter, times (fast), position, times (slow)
+    This program does not know anything about the times (slow) axis
 
     # todo: maybe should pass around dictionaries with all settings for SIM/ODT separately?
 
@@ -59,6 +61,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
     :param shutter_delay_time:
     :param stage_delay_time: Delay between xy position loops. This will be placed at the start of the loop
     :param n_xy_positions: number of xy-position loops. Actually these are simply duplicates of
+    :param n_times_fast: number of time repeats inside position loop.
     :param z_voltages:
     :param bool use_dmd_as_odt_shutter:
     :param n_digital_ch:
@@ -198,23 +201,19 @@ def get_sim_odt_sequence(daq_do_map: dict,
         nparams = 1
 
     # #######################
-    # xy-position logic
+    # logic for each xy-position
     # #######################
-    digital_pgm_xy = np.concatenate([digital_pgm_one_z] * nz * nparams, axis=0)
+    digital_pgm_xy = np.concatenate([digital_pgm_one_z] * nz * nparams * n_times_fast, axis=0)
 
     n_wait = int(np.ceil(stage_delay_time / dt))
     # duplicate last time-step for wait
     wait_pgm = np.tile(digital_pgm_xy[0][np.newaxis, :], [n_wait, 1])
 
     # #######################
-    # full digital program
+    # digital program for all xy-positions
     # #######################
-    # digital_pgm_full = np.concatenate([digital_pgm_one_z] * nz * nparams, axis=0) # old logic
-
     digital_pgm_xy_with_wait = np.concatenate((wait_pgm, digital_pgm_xy), axis=0)
     digital_pgm_full = np.concatenate([digital_pgm_xy_with_wait] * n_xy_positions, axis=0)
-
-    # todo: do I need to duplicate analog program here ... I shouldn't right?
 
     if turn_lasers_off_interval:
         digital_pgm_full[-1, daq_do_map["red_laser"]] = 0
@@ -625,8 +624,8 @@ def get_sim_sequence(daq_do_map: dict,
 
     info += f"sim channel stabilize time = {n_stabilize * dt * 1e3:.3f}ms = {n_stabilize:d} clock cycles\n"
     info += f"sim exposure time = {n_cam_exposure * dt * 1e3:.3f}ms = {n_cam_exposure:d} clock cycles\n"
-    info += f"sim one frame = {n_frame * dt * 1e3:.3f}fms = {n_frame:d} clock cycles\n"
-    info += f"sim one channel= {n_active * dt * 1e3:.3f}fms = {n_active:d} clock cycles\n"
+    info += f"sim one frame = {n_frame * dt * 1e3:.3f}ms = {n_frame:d} clock cycles\n"
+    info += f"sim one channel= {n_active * dt * 1e3:.3f}ms = {n_active:d} clock cycles\n"
 
     return do, ao, info
 
