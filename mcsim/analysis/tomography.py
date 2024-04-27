@@ -1074,10 +1074,6 @@ class Tomography:
         ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
                                    chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
                                    )
-        ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
-                                      chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
-                                      )
-
         holograms_ft = da.map_blocks(unmix_hologram,
                                      self.imgs_raw,
                                      self.dxy,
@@ -1093,6 +1089,9 @@ class Tomography:
         if self.use_average_as_background:
             holograms_ft_bg = holograms_ft
         else:
+            ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
+                                          chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
+                                          )
             holograms_ft_bg = da.map_blocks(unmix_hologram,
                                             self.imgs_raw_bg,
                                             self.dxy,
