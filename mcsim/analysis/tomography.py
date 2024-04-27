@@ -188,6 +188,7 @@ class Tomography:
         self.drs_n = drs_n
         self.n_shape = n_shape
         self.n_guess = n_guess
+        self.reconstruction_settings = None
 
         if model not in self.models.keys():
             raise ValueError(f"model must be one of {self.models.keys()}, but was {model:s}")
@@ -317,6 +318,9 @@ class Tomography:
 
         spec = getfullargspec(cls.__init__)
 
+        # ###########################
+        # get arguments for construction
+        # ###########################
         # get any kwargs from zarr attributes
         kwargs = {a: z.attrs[a] if a in z.attrs.keys() else None
                   for a in spec.args[1:]}
@@ -327,13 +331,18 @@ class Tomography:
                 kwargs[k] = np.array(z[k])
 
         # correct any attributes that were not saved
-        kwargs["imgs_raw"] = da.from_array(np.zeros((1,) * z.attrs["nextra_dims"] +
-                                                    (z.attrs["ny"], z.attrs["nx"]))
-                                           )
+        kwargs["imgs_raw"] = da.zeros((1,) * z.attrs["nextra_dims"] +
+                                      (z.attrs["npatterns"], z.attrs["ny"], z.attrs["nx"]))
 
+
+        # ###########################
+        # instantiate
+        # ###########################
         inst = cls(**kwargs)
 
-        # load arrays as other attributes which are not set during __init__()
+        # ###########################
+        # load other attributes which are not set during __init__()
+        # ###########################
         dask_fields = ["efields_ft", "efield_bg_ft"]
         for name, arr in z.arrays():
             if hasattr(inst, name) and getattr(inst, name) is None:
@@ -341,8 +350,11 @@ class Tomography:
                     load_arr = da.from_zarr(arr)
                 else:
                     load_arr = np.array(arr)
-
                 setattr(inst, name, load_arr)
+
+        for k, v in z.attrs.items():
+            if hasattr(inst, k) and getattr(inst, k) is None:
+                setattr(inst, k, v)
 
         return inst
 
@@ -464,7 +476,7 @@ class Tomography:
                         else:
                             self.store.attrs[k] = to_cpu(v).tolist()
 
-                    elif isinstance(v, (int, float, str, bool, dict, tuple)):
+                    elif isinstance(v, (int, float, str, bool, dict, tuple)) or v is None:
                         self.store.attrs[k] = v
                     elif isinstance(v, Path):
                         self.store.attrs[k] = str(v)
@@ -1232,21 +1244,23 @@ class Tomography:
 
     def reconstruct_n(self,
                       step: float = 1e-5,
+                      max_iterations: int = 30,
                       use_gpu: bool = False,
                       print_fft_cache: bool = False,
                       compressor: Codec = Zlib(),
                       processes: bool = False,
                       n_workers: int = 1,
-                      **kwargs) -> (array, tuple, dict):
+                      **reconstruction_kwargs) -> (array, tuple, dict):
 
         """
         Reconstruct refractive index using one of a several different models
 
-        Additional keyword arguments can be passed through to both the constructor and the run() method of
+        Additional keyword arguments are passed through to both the constructor and the run() method of
         the optimizer. These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
         See Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details.
 
         :param step: ignored if mode is "born" or "rytov"
+        :param max_iterations:
         :param use_gpu:
         :param print_fft_cache: optionally print memory usage of GPU FFT cache at each iteration
         :param compressor:
@@ -1257,6 +1271,10 @@ class Tomography:
             xp = cp
         else:
             xp = np
+
+        self.reconstruction_settings = deepcopy(reconstruction_kwargs)
+        self.reconstruction_settings.update({"step": step,
+                                             "max_iterations": max_iterations})
 
         if self.save_auxiliary_fields:
             chunk_shape = (1,) * (self.efields_ft.ndim - 2) + self.efields_ft.shape[-2:]
@@ -1274,7 +1292,7 @@ class Tomography:
                                             compressor=compressor,
                                             dtype=complex)
 
-            cost_shape = self.efields_ft.shape[:-3] + (kwargs["max_iterations"] + 1, self.npatterns)
+            cost_shape = self.efields_ft.shape[:-3] + (max_iterations + 1, self.npatterns)
             cost_chunk = (1,) * (self.efields_ft.ndim - 3) + cost_shape[-2:]
             costs_out = self.store.create("costs",
                                             shape=cost_shape,
@@ -1282,7 +1300,7 @@ class Tomography:
                                             compressor=compressor,
                                             dtype=float)
 
-            step_shape = self.efields_ft.shape[:-3] + (kwargs["max_iterations"],)
+            step_shape = self.efields_ft.shape[:-3] + (max_iterations,)
             step_chunk = (1,) * (self.efields_ft.ndim - 3) + step_shape[-1:]
             steps_out = self.store.create("steps",
                                           shape=step_shape,
@@ -1581,14 +1599,15 @@ class Tomography:
                                     v_fts_start.shape,
                                     efield_scattered_ft,
                                     linear_model,
-                                    **kwargs
+                                    **reconstruction_kwargs
                                     )
 
                 results = model.run(v_fts_start,
                                     step=step,
                                     verbose=verbose,
                                     label=label,
-                                    **kwargs
+                                    max_iterations=max_iterations,
+                                    **reconstruction_kwargs
                                     )
                 n = get_n(ift3(results["x"]), no, wavelength)
 
@@ -1619,13 +1638,15 @@ class Tomography:
                                   atf=atf,
                                   apodization=apod,
                                   mask=rmask,
-                                  **kwargs)
+                                  **reconstruction_kwargs
+                                  )
 
                 results = model.run(n_start,
                                     step=step,
                                     verbose=verbose,
                                     label=label,
-                                    **kwargs
+                                    max_iterations=max_iterations,
+                                    **reconstruction_kwargs
                                     )
                 n = results["x"]
 
