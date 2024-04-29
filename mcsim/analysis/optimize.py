@@ -181,7 +181,7 @@ class Optimizer:
             line_search: bool = False,
             line_search_factor: float = 0.5,
             restart_line_search: bool = False,
-            line_search_once: bool = False,
+            line_search_iter_limit: Optional[int] = None,
             stop_on_nan: bool = True,
             xtol: float = 0.0,
             ftol: float = 0.0,
@@ -207,8 +207,8 @@ class Optimizer:
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
         :param restart_line_search: if true, restart line search from initial value at each iteration. If false,
           restart line search from step-size determined at previous iteration
-        :param line_search_once: if line_search=True, this determines whether a line search is run only at the first
-          iteration, or at every iteration.
+        :param line_search_iter_limit: if line_search=True, only run line search if loop iteration number is less
+          than this number.
         :param stop_on_nan: stop if there are NaN's in x
         :param xtol: When norm(x[t] - x[t-1]) / norm(x[0]) < xtol, stop iteration
         :param ftol: stop iterating when cost function relative change < ftol. Not yet implemented
@@ -270,7 +270,7 @@ class Optimizer:
             # ###################################
 
             ls_iters = 0
-            if not line_search or (line_search_once and ii != 0):
+            if not line_search or (line_search_iter_limit is not None and ii > line_search_iter_limit):
                 # ###################################
                 # compute cost
                 # ###################################
@@ -361,7 +361,7 @@ class Optimizer:
                     ls_iters += 1
 
                 # if this is the only line search, set subsequent step-sizes
-                if line_search_once:
+                if ii == line_search_iter_limit:
                     steps[ii:] = steps[ii]
 
                 # not exclusively prox
