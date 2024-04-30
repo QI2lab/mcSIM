@@ -1768,10 +1768,13 @@ class Tomography:
                            }
 
     def plot_translations(self,
-                          index: tuple[int],
                           time_axis: int = 1,
+                          index: Optional[tuple[int]] = None,
                           figsize: Sequence[float, float] = (30., 8.),
                           **kwargs) -> Figure:
+
+        if index is None:
+            index = (0,) * (self.nextra_dims - 1)
 
         if len(index) != (self.nextra_dims - 1):
             raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
@@ -1817,8 +1820,8 @@ class Tomography:
         return figh
 
     def plot_frqs(self,
-                  index: Sequence[int],
                   time_axis: int = 1,
+                  index: Optional[Sequence[int]] = None,
                   figsize: Sequence[float, float] = (30., 8.),
                   **kwargs) -> Figure:
         """
@@ -1831,6 +1834,9 @@ class Tomography:
         :param kwargs: passed through to matplotlib.pyplot.figure
         :return:
         """
+
+        if index is None:
+            index = (0,) * (self.nextra_dims - 1)
 
         if len(index) != (self.nextra_dims - 1):
             raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
@@ -1897,8 +1903,8 @@ class Tomography:
         return figh
 
     def plot_phases(self,
-                    index: tuple[int],
                     time_axis: int = 1,
+                    index: Optional[tuple[int]] = None,
                     figsize: Sequence[float, float] = (30., 8.),
                     **kwargs) -> Figure:
         """
@@ -1912,6 +1918,9 @@ class Tomography:
         :param figsize:
         :return: figh
         """
+
+        if index is None:
+            index = (0,) * (self.nextra_dims - 1)
 
         if len(index) != (self.nextra_dims - 1):
             raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
@@ -1952,8 +1961,8 @@ class Tomography:
         return figh2
 
     def plot_powers(self,
-                    index: tuple[int],
                     time_axis: int = 1,
+                    index: Optional[tuple[int]] = None,
                     figsize: Sequence[float, float] = (30., 8.),
                     **kwargs
                     ) -> (Figure, np.ndarray, np.ndarray):
@@ -1965,6 +1974,9 @@ class Tomography:
         :param figsize:
         :return figh, epower, epower_bg:
         """
+
+        if index is None:
+            index = (0,) * (self.nextra_dims - 1)
 
         if len(index) != (self.nextra_dims - 1):
             raise ValueError(f"index={index} should have length self.nextra_dims - 1={self.nextra_dims - 1}")
@@ -2020,15 +2032,21 @@ class Tomography:
         return figh2, epowers, epowers_bg
 
     def plot_costs(self,
-                   index: tuple[int] = None,
+                   index: Optional[tuple[int]] = None,
                    **kwargs) -> Figure:
+
+        if index is None:
+            index = (0,) * self.nextra_dims
+
+        if len(index) != self.nextra_dims:
+            raise ValueError(f"len(index) was {len(index):d} != {self.nextra_dims:d}")
 
         # todo: implement index
         figh_cost = plt.figure(**kwargs)
         ax = figh_cost.add_subplot(1, 1, 1)
 
         if hasattr(self.store, "costs"):
-            carr = np.array(self.store.costs)[0, 0, 0, 0].transpose()
+            carr = np.array(self.store.costs)[index].transpose()
 
             ax.plot(carr, '.')
             ax.set_xlabel("iteration")
@@ -2037,15 +2055,22 @@ class Tomography:
         return figh_cost
 
     def plot_steps(self,
-                   index: tuple[int] = None,
+                   index: Optional[tuple[int]] = None,
                    **kwargs):
+
+        if index is None:
+            index = (0,) * self.nextra_dims
+
+        if len(index) != self.nextra_dims:
+            raise ValueError(f"len(index) was {len(index):d} != {self.nextra_dims:d}")
+
         # todo: implement index
         figh_step = plt.figure(**kwargs)
         ax = figh_step.add_subplot(1, 1, 1)
 
         if hasattr(self.store, "steps"):
             # plot steps
-            sarr = np.array(self.store.steps)[0, 0, 0, 0]
+            sarr = np.array(self.store.steps)[index]
 
             ax.plot(sarr, '.')
             ax.set_xlabel("iteration")
@@ -2054,8 +2079,8 @@ class Tomography:
         return figh_step
 
     def plot_diagnostics(self,
-                         index: tuple[int],
                          time_axis: int,
+                         index: Optional[tuple[int]] = None,
                          interactive: bool = False,
                          save: bool = True,
                          **kwargs):
@@ -2113,13 +2138,20 @@ class Tomography:
         """
         Illustrate the region of frequency space which is obtained using the plane waves described by frqs
 
-        :param index:
+        :param index: same length as nextra_dims
         :param kwargs: passed through to figure
         :return figh:
         """
+
+        if index is None:
+            index = (0,) * self.nextra_dims
+
+        if len(index) != self.nextra_dims:
+            raise ValueError(f"len(index) was {len(index):d} != {self.nextra_dims:d}")
+
         # todo: take slice argument
         # nfrqs x 2 array of [[fx0, fy0], [fx1, fy1], ...]
-        frqs = np.stack(self.get_beam_frqs(), axis=-3)[0, 0, 0, 0, :, 0][:, (0, 1)]
+        frqs = np.stack(self.get_beam_frqs(), axis=-3)[index][:, 0, (0, 1)]
 
         frq_norm = self.no / self.wavelength
         alpha_det = np.arcsin(self.na_detection / self.no)
@@ -2328,7 +2360,8 @@ class Tomography:
         """
         display raw image and holograms
 
-        :param index: index of image to display. Should be of length self.nextra_dims + 1
+        :param index: index of image to display. Should be of length self.nextra_dims + 1, where the last index
+          indicates the pattern to display
         :param gamma: gamma to be used when display fourier transforms
         :param figsize:
         :return figh: figure handle
@@ -2336,6 +2369,13 @@ class Tomography:
 
         if index is None:
             index = (0,) * (self.nextra_dims + 1)
+
+        # if didn't give a pattern index, add it
+        if len(index) == self.nextra_dims:
+            index += (0, )
+
+        if len(index) != (self.nextra_dims + 1):
+            raise ValueError(f"len(index) was {len(index):d} != {self.nextra_dims + 1:d}")
 
         extent = [self.x[0] - 0.5 * self.dxy,
                   self.x[-1] + 0.5 * self.dxy,
@@ -3316,7 +3356,8 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                                 "color": "red"},
                           )
 
-    viewer.dims.axis_labels = n_axis_names[:n_extra_dims + 1] + ["pattern", "z", "y", "x"]
+    # correct labels for broadcasting
+    viewer.dims.axis_labels = n_axis_names[:-3] + ["pattern", "z", "y", "x"]
 
     # set to first position
     viewer.dims.set_current_step(axis=0, value=0)
