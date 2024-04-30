@@ -3360,9 +3360,19 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
             print(f"loading {str(f):s}, elapsed time = {perf_counter() - tstart:.2f}s")
 
         znow = zarr.open(f, "r")
-        affine_now = swap_xy.dot(np.array(znow.attrs["affine_xform_recon_2_raw_camera_roi"]).dot(swap_xy))
+        try:
+            xform_now = znow.attrs["affine_xform_recon_2_raw_camera_roi"]
+        except KeyError:
+            xform_now = znow.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"]
+
+        affine_now = swap_xy.dot(np.array(xform_now).dot(swap_xy))
         no = znow.attrs["no"]
-        dz_now = znow.attrs["dr"][0]
+
+        try:
+            dz_now = znow.attrs["dr"][0]
+        except KeyError:
+            dz_now = znow.attrs["drs_n"][0]
+
         try:
             dz_refocus_now = znow.attrs["reconstruction_settings"]["dz_refocus"]
         except KeyError:

@@ -752,6 +752,7 @@ class RIOptimizer(Optimizer):
                  tau_tv_imag: float = 0.,
                  tau_l1_real: float = 0.,
                  tau_l1_imag: float = 0.,
+                 apply_tv_first: bool = False,
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
                  max_imaginary_part: float = np.inf,
@@ -798,6 +799,7 @@ class RIOptimizer(Optimizer):
         self.dz_refocus = dz_refocus
         self.cost_regularization = cost_regularization
         self.scale_cost_to_field = scale_cost_to_field
+        self.apply_tv_first = apply_tv_first
 
         if atf is None:
             atf = 1.
@@ -853,21 +855,37 @@ class RIOptimizer(Optimizer):
         # ###########################
         # L1 proximal operators (softmax)
         # ###########################
-        if self.prox_parameters["tau_l1_real"] != 0:
-            x_real = soft_threshold(self.prox_parameters["tau_l1_real"] * step, x_real - self.no) + self.no
+        def apply_l1(x_real, x_imag):
+            if self.prox_parameters["tau_l1_real"] != 0:
+                x_real = soft_threshold(self.prox_parameters["tau_l1_real"] * step, x_real - self.no) + self.no
 
-        if self.prox_parameters["tau_l1_imag"] != 0:
-            x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"] * step, x_imag)
+            if self.prox_parameters["tau_l1_imag"] != 0:
+                x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"] * step, x_imag)
+
+            return x_real, x_imag
 
         # ###########################
         # TV proximal operators
         # ###########################
-        # note cucim TV implementation requires ~10x memory as array does
-        if self.prox_parameters["tau_tv_real"] != 0:
-            x_real = tv_prox(x_real, self.prox_parameters["tau_tv_real"] * step)
+        def apply_tv(x_real, x_imag):
+            # note cucim TV implementation requires ~10x memory as array does
+            if self.prox_parameters["tau_tv_real"] != 0:
+                x_real = tv_prox(x_real, self.prox_parameters["tau_tv_real"] * step)
 
-        if self.prox_parameters["tau_tv_imag"] != 0:
-            x_imag = tv_prox(x_imag, self.prox_parameters["tau_tv_imag"] * step)
+            if self.prox_parameters["tau_tv_imag"] != 0:
+                x_imag = tv_prox(x_imag, self.prox_parameters["tau_tv_imag"] * step)
+
+            return x_real, x_imag
+
+        # ###########################
+        # apply TV/L1
+        # ###########################
+        if self.apply_tv_first:
+            x_real, x_imag = apply_tv(x_real, x_imag)
+            x_real, x_imag = apply_l1(x_real, x_imag)
+        else:
+            x_real, x_imag = apply_l1(x_real, x_imag)
+            x_real, x_imag = apply_tv(x_real, x_imag)
 
         # ###########################
         # projection constraints
