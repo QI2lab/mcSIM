@@ -2092,29 +2092,30 @@ class Tomography:
 
         with rc_context(context):
             # frequencies
-            figh_frq = self.plot_frqs(index,
-                                      time_axis=time_axis,
+            figh_frq = self.plot_frqs(time_axis=time_axis,
+                                      index=index,
                                       **kwargs)
 
             # plot phases
-            figh_ph = self.plot_phases(index,
-                                       time_axis=time_axis,
+            figh_ph = self.plot_phases(time_axis=time_axis,
+                                       index=index,
                                        **kwargs)
 
             # plot translations
-            figh_xl = self.plot_translations(index,
-                                             time_axis=time_axis,
+            figh_xl = self.plot_translations(time_axis=time_axis,
+                                             index=index,
                                              **kwargs)
 
             # plot sampling
-            figh_sampling = self.plot_odt_sampling(figsize=(15, 5),
+            figh_sampling = self.plot_odt_sampling(index=index,
+                                                   figsize=(15, 5),
                                                    **kwargs)
 
             # costs
-            figh_costs = self.plot_costs(index)
+            figh_costs = self.plot_costs(index=index)
 
             # step
-            figh_steps = self.plot_steps(index)
+            figh_steps = self.plot_steps(index=index)
 
         if save:
             figh_frq.savefig(self.save_dir / "hologram_frequency_stability.png")
@@ -3448,6 +3449,97 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
 
     return v
 
+
+def display_mips(location: Union[str, Path, zarr.hierarchy.Group],
+                 clims: tuple[float, float] = (0., 0.05),
+                 cmap="bone",
+                 block_while_display: bool = False,
+                 separation_pix: int = 0,
+                 **kwargs
+                 ):
+    """
+    Display maximum intensity projections from saved RI reconstruction data
+
+    :param location:
+    :param clims:
+    :param cmap:
+    :param block_while_display:
+    :param separation_pix:
+    :param kwargs:
+    :return:
+    """
+
+    import napari
+
+    # load data
+    if isinstance(location, (Path, str)):
+        img_z = zarr.open(location, "r")
+    else:
+        img_z = location
+
+    if "dr" in img_z.attrs.keys():
+        dz, dxy, _ = img_z.attrs["dr"]
+    elif "drs_n" in img_z.attrs.keys():
+        dz, dxy, _ = img_z.attrs["drs_n"]
+    else:
+        raise ValueError()
+
+    n_axis_names = img_z.attrs["dimensions"]
+    no = img_z.attrs["no"]
+    nz, ny, nx = img_z.n.shape[-3:]
+    nextra_dim = img_z.n.ndim - 3
+
+    if (not hasattr(img_z, "n_maxz") or
+        not hasattr(img_z, "n_maxy") or
+        not hasattr(img_z, "n_maxx")):
+
+        raise ValueError()
+
+    n_maxz = np.array(img_z.n_maxz)
+    n_maxy = np.array(img_z.n_maxy)
+    n_maxx = np.array(img_z.n_maxx)
+
+    yoff = (ny + separation_pix) * dxy
+    xoff = (nx + separation_pix) * dxy
+
+    # display
+    v = napari.Viewer(**kwargs)
+
+    v.add_image(n_maxz - no,
+                scale=(dxy, dxy),
+                contrast_limits=clims,
+                colormap=cmap,
+                name="n max z"
+                )
+
+    # xz
+    v.add_image(n_maxy - no,
+                scale=(dz, dxy),
+                contrast_limits=clims,
+                colormap=cmap,
+                translate=(yoff, 0),
+                name="n max y"
+                )
+
+    # yz
+    v.add_image(np.swapaxes(n_maxx, -1, -2) - no,
+                scale=(dxy, dz),
+                contrast_limits=clims,
+                colormap=cmap,
+                translate=(0, xoff),
+                name="n max x"
+                )
+
+    # correct labels for broadcasting
+    v.dims.axis_labels = n_axis_names[:-3] + ["y", "x"]
+
+    for ii in range(nextra_dim):
+        v.dims.set_current_step(axis=ii, value=0)
+
+    # block until closed by user
+    v.show(block=block_while_display)
+
+    return v
 
 def parse_time(dt: float) -> (tuple, str):
     """
