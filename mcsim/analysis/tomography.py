@@ -489,13 +489,16 @@ class Tomography:
                     print(f"{k:s} {e}")
 
     def save_projections(self,
-                         compressor: Codec = Zlib()):
+                         compressor: Codec = Zlib(),
+                         ):
         """
         Store orthogonal projections of the refractive index
 
         :param compressor:
         :return:
         """
+
+        client = Client(LocalCluster())
 
         future = []
         for axis, label in zip([-3, -2, -1],
@@ -505,8 +508,8 @@ class Tomography:
                                                                                          compute=False,
                                                                                          compressor=compressor)
                           )
-        with ProgressBar():
-            dcompute(*future)
+        dcompute(*future)
+        del client
 
     def estimate_hologram_frqs(self,
                                save: bool = False,
