@@ -2092,29 +2092,30 @@ class Tomography:
 
         with rc_context(context):
             # frequencies
-            figh_frq = self.plot_frqs(index,
-                                      time_axis=time_axis,
+            figh_frq = self.plot_frqs(time_axis=time_axis,
+                                      index=index,
                                       **kwargs)
 
             # plot phases
-            figh_ph = self.plot_phases(index,
-                                       time_axis=time_axis,
+            figh_ph = self.plot_phases(time_axis=time_axis,
+                                       index=index,
                                        **kwargs)
 
             # plot translations
-            figh_xl = self.plot_translations(index,
-                                             time_axis=time_axis,
+            figh_xl = self.plot_translations(time_axis=time_axis,
+                                             index=index,
                                              **kwargs)
 
             # plot sampling
-            figh_sampling = self.plot_odt_sampling(figsize=(15, 5),
+            figh_sampling = self.plot_odt_sampling(index=index,
+                                                   figsize=(15, 5),
                                                    **kwargs)
 
             # costs
-            figh_costs = self.plot_costs(index)
+            figh_costs = self.plot_costs(index=index)
 
             # step
-            figh_steps = self.plot_steps(index)
+            figh_steps = self.plot_steps(index=index)
 
         if save:
             figh_frq.savefig(self.save_dir / "hologram_frequency_stability.png")
