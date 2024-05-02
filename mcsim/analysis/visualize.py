@@ -2,8 +2,14 @@
 Tools for visualizing 3D volumes
 """
 from typing import Union, Optional
+from collections.abc import Sequence, Callable
 import numpy as np
+from functools import partial
+from pathlib import Path
+import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from matplotlib.animation import FuncAnimation, writers
 from localize_psf.affine import params2xform, xform_mat
 
 try:
@@ -160,3 +166,249 @@ def get_color_projection(n: np.ndarray,
     n_proj[is_bg, :] = background_color
 
     return n_proj, colors
+
+
+def export_mips_movie(out_fname,
+                      mips: Sequence[np.ndarray],
+                      dz: float,
+                      dxy: float,
+                      dt: float = 1.,
+                      roi: Optional[Sequence[int, int, int, int, int, int]] = None,
+                      video_length_s: float = 20.,
+                      boundary_pix: int = 20,
+                      lw: int = 5,
+                      scale_bar_um: Optional[int] = None,
+                      clims: Sequence[float, float] = (0.08, 0.019),
+                      zlims: Sequence[float, float] = (0.0, 20.),
+                      linked_centers: Optional = None,
+                      trajectory_memory_frames: int = 100,
+                      draw_calibration_bar: bool = True,
+                      **kwargs
+                      ) -> Callable:
+    """
+    Export movie
+
+    :param out_fname: full path ending in .mp4
+    :param mips: (maxz, maxy, maxx)
+    :param dz:
+    :param dxy:
+    :param dt:
+    :param roi:
+    :param video_length_s:
+    :param boundary_pix:
+    :param lw:
+    :param scale_bar_um:
+    :param clims:
+    :param zlims:
+    :param linked_centers:
+    :param trajectory_memory_frames:
+    :param kwargs: passed through to writer
+    :return animate_fn:
+    """
+
+    # settings
+    plot_options = {"marker": 'o',
+                    "s": np.pi * 7 ** 2,
+                    "lw": 1.5,
+                    "facecolors": "none"
+                    }
+
+    (n_maxz, n_maxy, n_maxx) = mips
+    nt, ny_all, nx_all = n_maxz.shape
+    _, nz_all, _ = n_maxy.shape
+
+    if roi is not None:
+        n_maxz = n_maxz[:, roi[2]:roi[3], roi[4]:roi[5]]
+        n_maxy = n_maxy[:, roi[0]:roi[1], roi[4]:roi[5]]
+        n_maxx = n_maxx[:, roi[0]:roi[1], roi[2]:roi[3]]
+
+    # linked_centers = np.stack((linked['cz'].unstack().to_numpy(),
+    #                            linked['cy'].unstack().to_numpy(),
+    #                            linked['cx'].unstack().to_numpy()),
+    #                           axis=-1)
+
+    # ##################################
+    # animate
+    # ##################################
+    def animate(frame,
+                fig,
+                ax,
+                show_locs=False,
+                show_tracks=False,
+                set_text=True):
+        print(f"animating frame = {frame + 1:.0f} / {nt:d}", end="\r")
+
+        ax.clear()
+
+        ax.set_xticks([])
+        ax.set_yticks([])
+        if set_text:
+            time_text = ax.text(0.4,
+                                0.95,
+                                f"{frame * dt:.3f}s",
+                                transform=ax.transAxes)
+
+        projs = assemble_2d_projections(n_maxz[frame],
+                                        n_maxy[frame],
+                                        n_maxx[frame],
+                                        dz / dxy,
+                                        n_pix_sep=boundary_pix,
+                                        boundary_value=np.nan)
+
+        ny, nx = n_maxz.shape[1:]
+        nz = n_maxy.shape[1]
+        ny_proj, nx_proj = projs.shape
+
+        im = ax.imshow(projs,
+                       vmin=clims[0],
+                       vmax=clims[1],
+                       cmap="bone_r")
+
+        # rectangles
+        ax.add_artist(Rectangle((lw, lw),
+                                width=nx,
+                                height=ny,
+                                facecolor="none",
+                                edgecolor="gold",
+                                lw=lw,
+                                aa=True
+                                ))
+        ax.add_artist(Rectangle((lw, ny + boundary_pix),
+                                width=nx,
+                                height=ny_proj - ny - boundary_pix - lw,
+                                facecolor="none",
+                                edgecolor="purple",
+                                lw=lw,
+                                aa=True
+                                ))
+        ax.add_artist(Rectangle((nx + boundary_pix, lw),
+                                width=nx_proj - nx - boundary_pix - lw,
+                                height=ny,
+                                facecolor="none",
+                                edgecolor="deepskyblue",
+                                lw=lw,
+                                aa=True
+                                ))
+
+        # calibration bar
+        if draw_calibration_bar:
+            ax_cb = fig.add_axes(plt.axes([0.05, 0.65, 0.025, 0.3]))
+            plt.colorbar(im, cax=ax_cb)
+            ax_cb.set_yticklabels([])
+            ax_cb.set_yticks([])
+
+        # scale bar line
+        if scale_bar_um is not None:
+            line_middle = nx + (nx_proj - nx) / 2
+            line_y = ny_proj - (ny_proj - ny) / 5
+            ax.plot([line_middle - scale_bar_um / dxy / 2, line_middle + scale_bar_um / dxy / 2],
+                    [line_y, line_y],
+                    'k',
+                    lw=10)
+
+        if linked_centers is not None:
+            fstart = max(0, frame - trajectory_memory_frames)
+            cnow = linked_centers[fstart:frame + 1]
+
+            to_plot = np.logical_and.reduce((cnow[..., 0] > roi[0] * dz,
+                                             cnow[..., 0] < (roi[1] % nz_all) * dz,
+                                             cnow[..., 1] > roi[2] * dxy,
+                                             cnow[..., 1] < (roi[3] % ny_all) * dxy,
+                                             cnow[..., 2] > roi[4] * dxy,
+                                             cnow[..., 2] < (roi[5] % nx_all) * dxy
+                                             )
+                                            )
+
+            cnow[np.logical_not(to_plot)] = np.nan
+
+            z_cs = (plt.get_cmap("turbo")((cnow[..., 0] - zlims[0]) / (zlims[1] - zlims[0]))[..., :3])
+
+            # tracks
+            if show_tracks:
+                tcolor = "mediumblue"
+                talpha = 0.5
+
+                # xy
+                ax.plot((cnow[..., 2] - roi[4] * dxy) / dxy,
+                        (cnow[..., 1] - roi[2] * dxy) / dxy,
+                        ls="-",
+                        color=tcolor,
+                        alpha=talpha)
+                # xz
+                ax.plot((cnow[..., 2] - roi[4] * dxy) / dxy,
+                        (cnow[..., 0] - roi[0] * dz) / dxy + ny + boundary_pix,
+                        ls="-",
+                        color=tcolor,
+                        alpha=talpha)
+                # yz
+                ax.plot((cnow[..., 0] - roi[0] * dz) / dxy + nx + boundary_pix,
+                        (cnow[..., 1] - roi[2] * dxy) / dxy,
+                        ls="-",
+                        color=tcolor,
+                        alpha=talpha)
+
+            if show_locs:
+                ax.scatter((cnow[-1, ..., 2] - roi[4] * dxy) / dxy,
+                           (cnow[-1, ..., 1] - roi[2] * dxy) / dxy,
+                           edgecolors=z_cs[-1],
+                           **plot_options)
+
+                ax.scatter((cnow[-1, ..., 2] - roi[4] * dxy) / dxy,
+                           (cnow[-1, ..., 0] - roi[0] * dz) / dxy + ny + boundary_pix,
+                           edgecolors=z_cs[-1],
+                           **plot_options)
+
+                ax.scatter((cnow[-1, ..., 0] - roi[0] * dz) / dxy + nx + boundary_pix,
+                           (cnow[-1, ..., 1] - roi[2] * dxy) / dxy,
+                           edgecolors=z_cs[-1],
+                           **plot_options)
+
+        ax.axis('off')
+
+    font = {'family': 'sans-serif',
+            'size': 22}
+    matplotlib.rc('font', **font)
+
+    grid_settings = {"nrows": 1,
+                     "ncols": 1,
+                     "left": 0.01,
+                     "right": 0.99,
+                     "bottom": 0.01,
+                     "top": 0.99
+                     }
+
+    proj_sample = assemble_2d_projections(n_maxz[0],
+                                          n_maxy[0],
+                                          n_maxx[0],
+                                          dz / dxy,
+                                          n_pix_sep=boundary_pix,
+                                          boundary_value=np.nan)
+
+    # ############################
+    # movie
+    # ############################
+    fig = plt.figure(figsize=(9, 9 * proj_sample.shape[0] / proj_sample.shape[1]))
+    grid = fig.add_gridspec(**grid_settings)
+    ax = fig.add_subplot(grid[0, 0])
+
+    animation = FuncAnimation(fig,
+                              partial(animate,
+                                      ax=ax,
+                                      fig=fig,
+                                      show_locs=True,
+                                      show_tracks=True),
+                              frames=range(nt))
+
+    # save video results
+    Writer = writers['ffmpeg']
+    animation.save(out_fname,
+                   writer=Writer(fps=nt / video_length_s,
+                                 metadata=dict(artist='qi2lab'),
+                                 **kwargs
+                                 )
+                   )
+
+    plt.close(fig)
+
+    return animate
+
