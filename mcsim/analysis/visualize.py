@@ -182,6 +182,7 @@ def export_mips_movie(out_fname,
                       zlims: Sequence[float, float] = (0.0, 20.),
                       linked_centers: Optional = None,
                       trajectory_memory_frames: int = 100,
+                      draw_calibration_bar: bool = True,
                       **kwargs
                       ) -> Callable:
     """
@@ -242,7 +243,7 @@ def export_mips_movie(out_fname,
         ax.set_xticks([])
         ax.set_yticks([])
         if set_text:
-            time_text = ax.text(0.6,
+            time_text = ax.text(0.4,
                                 0.95,
                                 f"{frame * dt:.3f}s",
                                 transform=ax.transAxes)
@@ -290,10 +291,11 @@ def export_mips_movie(out_fname,
                                 ))
 
         # calibration bar
-        ax_cb = fig.add_axes(plt.axes([0.05, 0.65, 0.025, 0.3]))
-        plt.colorbar(im, cax=ax_cb)
-        ax_cb.set_yticklabels([])
-        ax_cb.set_yticks([])
+        if draw_calibration_bar:
+            ax_cb = fig.add_axes(plt.axes([0.05, 0.65, 0.025, 0.3]))
+            plt.colorbar(im, cax=ax_cb)
+            ax_cb.set_yticklabels([])
+            ax_cb.set_yticks([])
 
         # scale bar line
         if scale_bar_um is not None:
@@ -405,6 +407,8 @@ def export_mips_movie(out_fname,
                                  **kwargs
                                  )
                    )
+
+    plt.close(fig)
 
     return animate
 
