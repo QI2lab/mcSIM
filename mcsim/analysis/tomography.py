@@ -2040,6 +2040,13 @@ class Tomography:
     def plot_costs(self,
                    index: Optional[tuple[int]] = None,
                    **kwargs) -> Figure:
+        """
+        Plot value of cost function during optimization
+
+        :param index:
+        :param kwargs: passed through to figure
+        :return figh_cost:
+        """
 
         if index is None:
             index = (0,) * self.nextra_dims
@@ -2063,6 +2070,13 @@ class Tomography:
     def plot_steps(self,
                    index: Optional[tuple[int]] = None,
                    **kwargs):
+        """
+        Plot step sizes used during inference
+
+        :param index:
+        :param kwargs: passed through to figure
+        :return figh_step:
+        """
 
         if index is None:
             index = (0,) * self.nextra_dims
@@ -2090,6 +2104,16 @@ class Tomography:
                          interactive: bool = False,
                          save: bool = True,
                          **kwargs):
+        """
+        Plot all diagnostics
+
+        :param time_axis:
+        :param index:
+        :param interactive:
+        :param save:
+        :param kwargs:
+        :return:
+        """
 
         context = {}
         if not interactive:
