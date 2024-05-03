@@ -413,6 +413,9 @@ class Tomography:
         kwargs["imgs_raw"] = da.zeros((1,) * z.attrs["nextra_dims"] +
                                       (z.attrs["npatterns"], z.attrs["ny"], z.attrs["nx"]))
 
+        # load kwargs passed through to other functions
+        kwargs.update(z.attrs["reconstruction_settings"])
+
 
         # ###########################
         # instantiate
@@ -434,6 +437,13 @@ class Tomography:
         for k, v in z.attrs.items():
             if hasattr(inst, k) and getattr(inst, k) is None:
                 setattr(inst, k, v)
+
+        # ###########################
+        # convert some types as needed
+        # ###########################
+        inst.hologram_frqs = [inst.hologram_frqs[..., ii, :, :] for ii in range(inst.hologram_frqs.shape[-3])]
+        inst.hologram_frqs_bg = [inst.hologram_frqs_bg[..., ii, :, :] for ii in range(inst.hologram_frqs_bg.shape[-3])]
+        inst.n_shape = tuple(inst.n_shape)
 
         return inst
 
@@ -524,13 +534,23 @@ class Tomography:
                           "hologram_frqs_bg"
                           ]
         for k in stackable_keys:
+            try:
+                stack = np.stack(getattr(self, k), axis=-3)
+            except TypeError:
+                stack = None
+
             self.store.array(k,
-                             np.stack(getattr(self, k), axis=-3),
+                             stack,
                              compressor=compressor,
                              dtype=float)
 
+        try:
+            stack = np.stack(self.get_beam_frqs(), axis=-3)
+        except np.AxisError:
+            stack = None
+
         self.store.array("beam_frqs",
-                         np.stack(self.get_beam_frqs(), axis=-3),
+                         stack,
                          compressor=compressor,
                          dtype=float)
 
@@ -563,6 +583,8 @@ class Tomography:
                         if len(v) > 30:  # don't store long lists
                             raise TypeError()
                         self.store.attrs[k] = v
+                    else:
+                        pass
 
                 except TypeError as e:
                     print(f"{k:s} {e}")
