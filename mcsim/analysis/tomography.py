@@ -115,6 +115,7 @@ class Tomography:
                  translation_thresh: float = 1 / 30,
                  apodization: Optional[np.ndarray] = None,
                  save_auxiliary_fields: bool = False,
+                 **reconstruction_kwargs,
                  ):
         """
         Reconstruct optical diffraction tomography (ODT) data
@@ -188,7 +189,6 @@ class Tomography:
         self.drs_n = drs_n
         self.n_shape = n_shape
         self.n_guess = n_guess
-        self.reconstruction_settings = None
 
         if model not in self.models.keys():
             raise ValueError(f"model must be one of {self.models.keys()}, but was {model:s}")
@@ -297,9 +297,82 @@ class Tomography:
                                    tukey(self.nx, alpha=0.1))
         self.apodization = apodization
 
-        self.ctf = np.expand_dims(np.sqrt(self.fxs[None, :]**2 +
-                                          self.fys[:, None]**2) <= self.fmax,
+        self.ctf = np.expand_dims(np.sqrt(self.fxs[None, :] ** 2 +
+                                          self.fys[:, None] ** 2) <= self.fmax,
                                   axis=tuple(range(self.nextra_dims)) + (-3,))
+
+        # ########################
+        # values passed through to RI reconstruction
+        # ########################
+        self.reconstruction_settings = reconstruction_kwargs
+
+        # ########################
+        # affine transformation from reconstruction coordinates to pixel indices
+        # ########################
+        # for reconstruction, using FFT induced coordinates, i.e. zero is at array index (ny // 2, nx // 2)
+        # for matrix, using image coordinates (0, 1, ..., N - 1)
+        # note, due to order of operations -n//2 =/= - (n//2) when nx is odd
+        if self.model in ["born", "rytov"]:
+            xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1],
+                                                   self.drs_n[-2], 0, -(self.n_shape[-2] // 2) * self.drs_n[-2]])
+        else:
+            # if not (self.ny / self.n_shape[1]).is_integer():
+            #     raise ValueError()
+            # if not (self.nx / self.n_shape[2]).is_integer():
+            #     raise ValueError()
+            #
+            # nbin_y = int(self.ny // self.n_shape[1])
+            # nbin_x = int(self.nx // self.n_shape[2])
+            nbin_y = 1
+            nbin_x = 1
+
+            if (self.drs_n[1] != self.dxy * nbin_x or
+                self.drs_n[2] != self.dxy * nbin_y):
+                raise ValueError()
+
+            # affine transformation from reconstruction coordinates to pixel indices
+            # coordinates in finer coordinates
+            xb = bin(self.x,[nbin_x], mode="mean")
+            yb = bin(self.y, [nbin_y], mode="mean")
+
+            xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, float(xb[0]),
+                                                   self.drs_n[-2], 0, float(yb[0])])
+
+        # ############################
+        # construct affine tranforms between reconstructed data and camera pixels
+        # ############################
+        # affine transformation from camera ROI coordinates to pixel indices
+        xform_raw_roi_pix2coords = params2xform([self.dxy, 0, -(self.n_shape[-1] // 2) * self.dxy,
+                                                 self.dxy, 0, -(self.n_shape[-2] // 2) * self.dxy])
+
+        # composing these two transforms gives affine from recon pixel indices to
+        # recon pix inds -> recon coords = ROI coordinates -> ROI pix inds
+        xform_recon2raw_roi = inv(xform_raw_roi_pix2coords).dot(xform_recon_pix2coords)
+
+        xform_odt_recon_to_cam_roi = None
+        xform_odt_recon_to_full = None
+        if self.data_roi is not None:
+            # transform from reconstruction processing roi to camera roi
+            odt_recon_roi = deepcopy(self.data_roi)
+            xform_process_roi_to_cam_roi = params2xform([1, 0, odt_recon_roi[2],
+                                                         1, 0, odt_recon_roi[0]])
+            xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
+
+            if self.cam_roi is not None:
+                # todo: is there a problem with this transform?
+                # transform from camera roi to uncropped chip
+                xform_cam_roi_to_full = params2xform([1, 0, self.cam_roi[2],
+                                                      1, 0, self.cam_roi[0]])
+                xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
+
+        # store all transforms in JSON serializable form
+        self.xform_dict = {"xform_recon_pix2coords": np.asarray(xform_recon_pix2coords).tolist(),
+                           "affine_xform_recon_2_raw_process_roi": np.asarray(xform_recon2raw_roi).tolist(),
+                           "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_odt_recon_to_cam_roi).tolist(),
+                           "affine_xform_recon_2_raw_camera": np.asarray(xform_odt_recon_to_full).tolist(),
+                           "processing roi": np.asarray(self.data_roi).tolist(),
+                           "camera roi": np.asarray(self.cam_roi).tolist()
+                           }
 
     @classmethod
     def load_file(cls,
@@ -1252,8 +1325,7 @@ class Tomography:
                       compressor: Codec = Zlib(),
                       processes: bool = False,
                       n_workers: int = 1,
-                      threads_per_worker: int = 1,
-                      **reconstruction_kwargs) -> (array, tuple, dict):
+                      threads_per_worker: int = 1) -> (array, tuple, dict):
 
         """
         Reconstruct refractive index using one of a several different models
@@ -1275,9 +1347,9 @@ class Tomography:
         else:
             xp = np
 
-        self.reconstruction_settings = deepcopy(reconstruction_kwargs)
-        self.reconstruction_settings.update({"step": step,
-                                             "max_iterations": max_iterations})
+        # self.reconstruction_settings = deepcopy(reconstruction_kwargs)
+        # self.reconstruction_settings.update({"step": step,
+        #                                      "max_iterations": max_iterations})
 
         if self.save_auxiliary_fields:
             chunk_shape = (1,) * (self.efields_ft.ndim - 2) + self.efields_ft.shape[-2:]
@@ -1372,13 +1444,6 @@ class Tomography:
 
         if self.model == "born" or self.model == "rytov":
             optimizer = self.model
-            # affine transformation from reconstruction coordinates to pixel indices
-            # for reconstruction, using FFT induced coordinates, i.e. zero is at array index (ny // 2, nx // 2)
-            # for matrix, using image coordinates (0, 1, ..., N - 1)
-            # note, due to order of operations -n//2 =/= - (n//2) when nx is odd
-            xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1],
-                                                   self.drs_n[-2], 0, -(self.n_shape[-2] // 2) * self.drs_n[-2]])
-
             linear_model = fwd_model_linear(mean_beam_frqs_arr[..., 0],
                                             mean_beam_frqs_arr[..., 1],
                                             mean_beam_frqs_arr[..., 2],
@@ -1409,32 +1474,8 @@ class Tomography:
             if self.verbose:
                 print(f"estimated in {perf_counter() - tstart_step:.2f}s")
 
-        elif self.model == "bpm" or self.model == "ssnp":
-            if self.model == "bpm":
-                optimizer = BPM
-            elif self.model == "ssnp":
-                optimizer = SSNP
-
-            if not (self.ny / self.n_shape[1]).is_integer():
-                raise ValueError()
-            if not (self.nx / self.n_shape[2]).is_integer():
-                raise ValueError()
-
-            nbin_y = int(self.ny // self.n_shape[1])
-            nbin_x = int(self.nx // self.n_shape[2])
-
-            if self.drs_n[1] != self.dxy * nbin_x or self.drs_n[2] != self.dxy * nbin_y:
-                raise ValueError()
-
-            # affine transformation from reconstruction coordinates to pixel indices
-            # coordinates in finer coordinates
-            xb = bin((xp.arange(self.nx) - (self.nx // 2)) * self.dxy,
-                     [nbin_x], mode="mean")
-            yb = bin((xp.arange(self.ny) - (self.ny // 2)) * self.dxy,
-                     [nbin_y], mode="mean")
-
-            xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, float(xb[0]),
-                                                   self.drs_n[-2], 0, float(yb[0])])
+        else:
+            optimizer = self.models[self.model]
 
         if self.verbose:
             print(f"computing index of refraction for {int(np.prod(self.imgs_raw.shape[:-3])):d} images "
@@ -1475,6 +1516,7 @@ class Tomography:
         drs_n = self.drs_n
         scattered_field_regularization = self.scattered_field_regularization
         use_weighted_phase_unwrap = self.use_weighted_phase_unwrap
+        reconstruction_kwargs = self.reconstruction_settings
 
         def recon(efields_ft,
                   efields_bg_ft,
@@ -1624,10 +1666,10 @@ class Tomography:
                 n_start = get_n(ift3(v_fts_start, no_cache=True), no, wavelength)
                 del v_fts_start
 
-                efields = bin(ift2(efields_ft), [nbin_y, nbin_x], mode="mean")
+                efields = bin(ift2(efields_ft), [1, 1], mode="mean")
                 del efields_ft
 
-                efields_bg = bin(ift2(efields_bg_ft), [nbin_y, nbin_x], mode="mean")
+                efields_bg = bin(ift2(efields_bg_ft), [1, 1], mode="mean")
                 del efields_bg_ft
 
                 model = optimizer(no,
@@ -1735,43 +1777,6 @@ class Tomography:
 
         del client
         del cluster
-
-        # ############################
-        # construct affine tranforms between reconstructed data and camera pixels
-        # todo: this could go in __init__() except for the fact xform_recon_pix2coords comes from reconstruct_n()
-        # ############################
-        # affine transformation from camera ROI coordinates to pixel indices
-        xform_raw_roi_pix2coords = params2xform([self.dxy, 0, -(self.n_shape[-1] // 2) * self.dxy,
-                                                 self.dxy, 0, -(self.n_shape[-2] // 2) * self.dxy])
-
-        # composing these two transforms gives affine from recon pixel indices to
-        # recon pix inds -> recon coords = ROI coordinates -> ROI pix inds
-        xform_recon2raw_roi = inv(xform_raw_roi_pix2coords).dot(xform_recon_pix2coords)
-
-        xform_odt_recon_to_cam_roi = None
-        xform_odt_recon_to_full = None
-        if self.data_roi is not None:
-            # transform from reconstruction processing roi to camera roi
-            odt_recon_roi = deepcopy(self.data_roi)
-            xform_process_roi_to_cam_roi = params2xform([1, 0, odt_recon_roi[2],
-                                                         1, 0, odt_recon_roi[0]])
-            xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
-
-            if self.cam_roi is not None:
-                # todo: is there a problem with this transform?
-                # transform from camera roi to uncropped chip
-                xform_cam_roi_to_full = params2xform([1, 0, self.cam_roi[2],
-                                                      1, 0, self.cam_roi[0]])
-                xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
-
-        # store all transforms in JSON serializable form
-        self.xform_dict = {"xform_recon_pix2coords": np.asarray(xform_recon_pix2coords).tolist(),
-                           "affine_xform_recon_2_raw_process_roi": np.asarray(xform_recon2raw_roi).tolist(),
-                           "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_odt_recon_to_cam_roi).tolist(),
-                           "affine_xform_recon_2_raw_camera": np.asarray(xform_odt_recon_to_full).tolist(),
-                           "processing roi": np.asarray(self.data_roi).tolist(),
-                           "camera roi": np.asarray(self.cam_roi).tolist()
-                           }
 
     def plot_translations(self,
                           time_axis: int = 1,
