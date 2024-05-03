@@ -115,6 +115,8 @@ class Tomography:
                  translation_thresh: float = 1 / 30,
                  apodization: Optional[np.ndarray] = None,
                  save_auxiliary_fields: bool = False,
+                 compressor: Codec = Zlib(),
+                 step: float = 1.,
                  **reconstruction_kwargs,
                  ):
         """
@@ -156,6 +158,8 @@ class Tomography:
         :param translation_thresh:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         :param save_auxiliary_fields:
+        :param compressor:
+        :param reconstruction_kwargs: settings passed through to RI reconstructor
         """
         self.verbose = verbose
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
@@ -171,6 +175,7 @@ class Tomography:
         else:
             self.save_dir = None
             self.store = zarr.open()
+        self.compressor = compressor
 
         # ########################
         # physical parameters
@@ -304,6 +309,7 @@ class Tomography:
         # ########################
         # values passed through to RI reconstruction
         # ########################
+        self.step_start = step
         self.reconstruction_settings = reconstruction_kwargs
 
         # ########################
@@ -1318,11 +1324,8 @@ class Tomography:
         del client
 
     def reconstruct_n(self,
-                      step: float = 1e-5,
-                      max_iterations: int = 30,
                       use_gpu: bool = False,
                       print_fft_cache: bool = False,
-                      compressor: Codec = Zlib(),
                       processes: bool = False,
                       n_workers: int = 1,
                       threads_per_worker: int = 1) -> (array, tuple, dict):
@@ -1334,11 +1337,8 @@ class Tomography:
         the optimizer. These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
         See Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details.
 
-        :param step: ignored if mode is "born" or "rytov"
-        :param max_iterations:
         :param use_gpu:
         :param print_fft_cache: optionally print memory usage of GPU FFT cache at each iteration
-        :param compressor:
         :param processes:
         :param n_workers:
         """
@@ -1356,7 +1356,7 @@ class Tomography:
             e_fwd_out = self.store.create("efwd",
                                           shape=self.efields_ft.shape,
                                           chunks=chunk_shape,
-                                          compressor=compressor,
+                                          compressor=self.compressor,
                                           dtype=complex)
 
             e_scatt_out_shape = list(self.efields_ft.shape)
@@ -1364,43 +1364,46 @@ class Tomography:
             e_scatt_out = self.store.create("escatt",
                                             shape=e_scatt_out_shape,
                                             chunks=chunk_shape,
-                                            compressor=compressor,
+                                            compressor=self.compressor,
                                             dtype=complex)
-
-            cost_shape = self.efields_ft.shape[:-3] + (max_iterations + 1, self.npatterns)
-            cost_chunk = (1,) * (self.efields_ft.ndim - 3) + cost_shape[-2:]
-            costs_out = self.store.create("costs",
-                                            shape=cost_shape,
-                                            chunks=cost_chunk,
-                                            compressor=compressor,
-                                            dtype=float)
-
-            step_shape = self.efields_ft.shape[:-3] + (max_iterations,)
-            step_chunk = (1,) * (self.efields_ft.ndim - 3) + step_shape[-1:]
-            steps_out = self.store.create("steps",
-                                          shape=step_shape,
-                                          chunks=step_chunk,
-                                          compressor=compressor,
-                                          dtype=float)
 
             if self.n_guess is None:
                 n_start_out = self.store.create("n_start",
                                                 shape=self.efields_ft.shape[:-3] + self.n_shape,
-                                                compressor=compressor,
+                                                compressor=self.compressor,
                                                 dtype=complex)
             else:
                 n_start_out = None
                 self.store.array("n_start",
                                  np.expand_dims(self.n_guess, axis=list(range(self.nextra_dims))),
-                                 compressor=compressor,
+                                 compressor=self.compressor,
                                  dtype=complex)
 
         else:
             e_fwd_out = None
             e_scatt_out = None
+            n_start_out = None
+
+        if self.save_auxiliary_fields and "max_iterations" in self.reconstruction_settings.keys():
+            cost_shape = (self.efields_ft.shape[:-3] +
+                          (self.reconstruction_settings["max_iterations"] + 1, self.npatterns))
+            cost_chunk = (1,) * (self.efields_ft.ndim - 3) + cost_shape[-2:]
+            costs_out = self.store.create("costs",
+                                          shape=cost_shape,
+                                          chunks=cost_chunk,
+                                          compressor=self.compressor,
+                                          dtype=float)
+
+            step_shape = self.efields_ft.shape[:-3] + (self.reconstruction_settings["max_iterations"],)
+            step_chunk = (1,) * (self.efields_ft.ndim - 3) + step_shape[-1:]
+            steps_out = self.store.create("steps",
+                                          shape=step_shape,
+                                          chunks=step_chunk,
+                                          compressor=self.compressor,
+                                          dtype=float)
+        else:
             costs_out = None
             steps_out = None
-            n_start_out = None
 
         # ############################
         # get beam frequencies
@@ -1462,14 +1465,14 @@ class Tomography:
                 tstart_step = perf_counter()
                 print("estimating step size")
 
-            mguess = LinearScatt(np.empty((1, self.ny, self.nx)),
-                                 linear_model,
-                                 self.no,
-                                 self.wavelength,
-                                 None,
-                                 None,
-                                 None)
-            step = mguess.guess_step()
+            # mguess = LinearScatt(np.empty((1, self.ny, self.nx)),
+            #                      linear_model,
+            #                      self.no,
+            #                      self.wavelength,
+            #                      None,
+            #                      None,
+            #                      None)
+            # step = mguess.guess_step()
 
             if self.verbose:
                 print(f"estimated in {perf_counter() - tstart_step:.2f}s")
@@ -1651,7 +1654,6 @@ class Tomography:
                                     step=step,
                                     verbose=verbose,
                                     label=label,
-                                    max_iterations=max_iterations,
                                     **reconstruction_kwargs
                                     )
                 n = get_n(ift3(results["x"]), no, wavelength)
@@ -1690,7 +1692,6 @@ class Tomography:
                                     step=step,
                                     verbose=verbose,
                                     label=label,
-                                    max_iterations=max_iterations,
                                     **reconstruction_kwargs
                                     )
                 n = results["x"]
@@ -1749,7 +1750,7 @@ class Tomography:
                           self.na_detection,
                           atf,
                           apodization_n,
-                          step,
+                          self.step_start,
                           optimizer,
                           self.verbose,
                           print_fft_cache,
@@ -1770,7 +1771,7 @@ class Tomography:
         dcompute([n.to_zarr(self.store.store.path,
                             component="n",
                             compute=False,
-                            compressor=compressor)])  # compute
+                            compressor=self.compressor)])  # compute
 
         # save profile to see what takes the most time
         client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
