@@ -1252,6 +1252,7 @@ class Tomography:
                       compressor: Codec = Zlib(),
                       processes: bool = False,
                       n_workers: int = 1,
+                      threads_per_worker: int = 1,
                       **reconstruction_kwargs) -> (array, tuple, dict):
 
         """
@@ -1720,7 +1721,7 @@ class Tomography:
 
         cluster = LocalCluster(processes=processes,
                                n_workers=n_workers,
-                               threads_per_worker=1)
+                               threads_per_worker=threads_per_worker)
         client = Client(cluster)
         print(cluster.dashboard_link)
 
@@ -1732,6 +1733,8 @@ class Tomography:
         # save profile to see what takes the most time
         client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
 
+        del client
+        del cluster
 
         # ############################
         # construct affine tranforms between reconstructed data and camera pixels
