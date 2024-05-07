@@ -3542,7 +3542,11 @@ def display_mips(location: Union[str, Path, zarr.hierarchy.Group],
     else:
         raise ValueError()
 
-    n_axis_names = img_z.attrs["dimensions"]
+    try:
+        n_axis_names = img_z.attrs["dimensions"]
+    except KeyError:
+        n_axis_names = None
+
     no = img_z.attrs["no"]
     nz, ny, nx = img_z.n.shape[-3:]
     nextra_dim = img_z.n.ndim - 3
@@ -3589,7 +3593,8 @@ def display_mips(location: Union[str, Path, zarr.hierarchy.Group],
                 )
 
     # correct labels for broadcasting
-    v.dims.axis_labels = n_axis_names[:-3] + ["y", "x"]
+    if n_axis_names is not None:
+        v.dims.axis_labels = n_axis_names[:-3] + ["y", "x"]
 
     for ii in range(nextra_dim):
         v.dims.set_current_step(axis=ii, value=0)
