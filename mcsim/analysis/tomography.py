@@ -2954,9 +2954,10 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              raw_data_fname: Optional[Union[str, Path, zarr.hierarchy.Group]] = None,
                              raw_data_component: str = "cam2/odt",
                              show_n3d: bool = True,
+                             show_n_aux: bool = False,
                              show_mips: bool = False,
                              mip_separation_pix: int = 0,
-                             show_raw: bool = True,
+                             show_raw: bool = False,
                              show_scattered_fields: bool = False,
                              show_efields: bool = False,
                              show_efields_fwd: bool = False,
@@ -2970,32 +2971,39 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              real_cmap="bone",
                              phase_cmap="RdBu",
                              scale_z: bool = True,
-                             shift_imgs: bool = True,
+                             xshift_pix: int = 0,
+                             yshift_pix: int = 0,
                              prefix: str = "",
-                             viewer = None,
+                             viewer=None,
                              block_while_display: bool = True,
                              **kwargs):
     """
     Display reconstruction results and (optionally) raw data in Napari
 
     :param location: refractive index reconstruction stored in zarr file
-    :param raw_data_fname: raw data stored in zar file
+    :param raw_data_fname: raw data stored in zarr file
     :param raw_data_component:
+    :param show_n3d:
+    :param show_mips:
+    :param mip_separation_pix:
     :param show_raw:
     :param show_scattered_fields:
     :param show_efields:
     :param show_efields_fwd:
     :param compute:
     :param slices: slice n others fields using this tuple of slices. Should be of length n.ndim - 3
+    :param data_slice:
     :param phase_lim:
     :param n_lim:
     :param e_lim:
     :param escatt_lim:
-    :param block_while_display:
     :param real_cmap: color map to use for intensity-like images
     :param phase_cmap: color map to use for phase-like images
     :param scale_z: whether to scale the z-direction realistically so 3D displays are not distorted
     :param shift_imgs: whether to shift images laterally to view electric fields and n simultaneously
+    :param prefix:
+    :param viewer: display on this viewer, otherwise create a new one
+    :param block_while_display:
     :return: viewer
     """
 
@@ -3136,10 +3144,12 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         # ######################
         # Re(n) MIPs
         # ######################
-        if (hasattr(img_z, "n_maxz") and
-            hasattr(img_z, "n_maxy") and
-            hasattr(img_z, "n_maxx") and
-            show_mips):
+        if (not hasattr(img_z, "n_maxz") or
+            not hasattr(img_z, "n_maxy") or
+            not hasattr(img_z, "n_maxx")):
+            show_mips = False
+
+        if show_mips:
 
             n_maxz = da.expand_dims(da.from_zarr(img_z.n_maxz)[slices[:-1]] - no, axis=(-3, -4))
             n_maxy = da.expand_dims(da.from_zarr(img_z.n_maxy)[slices[:-1]] - no, axis=(-3, -4))
@@ -3309,38 +3319,161 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              )
 
         # ######################
+        # electric fields
+        # ######################
+        if show_efields:
+
+            # field amplitudes
+            viewer.add_image(ebg_abs,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=[zoffset, 0, xshift_pix],
+                             contrast_limits=e_lim,
+                             colormap=real_cmap,
+                             name=f"{prefix:s}|e bg|",
+                             )
+
+            if show_efields_fwd:
+                viewer.add_image(e_fwd_abs,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, 0, xshift_pix],
+                                 contrast_limits=e_lim,
+                                 colormap=real_cmap,
+                                 name=f"{prefix:s}|E fwd|",
+                                 )
+
+            viewer.add_image(e_abs,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=[zoffset, 0, xshift_pix],
+                             contrast_limits=e_lim,
+                             colormap=real_cmap,
+                             name=f"{prefix:s}|e|",
+                             )
+
+            # field phases
+            viewer.add_image(ebg_angle,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=[zoffset, yshift_pix, xshift_pix],
+                             contrast_limits=[-np.pi, np.pi],
+                             colormap=phase_cmap,
+                             name=f"{prefix:s}angle(e bg)",
+                             )
+
+            if show_efields_fwd:
+                viewer.add_image(e_fwd_angle,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, yshift_pix, xshift_pix],
+                                 contrast_limits=[-np.pi, np.pi],
+                                 colormap=phase_cmap,
+                                 name=f"{prefix:s}angle(E fwd)",
+                                 )
+
+            viewer.add_image(e_angle,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=[zoffset, yshift_pix, xshift_pix],
+                             contrast_limits=[-np.pi, np.pi],
+                             colormap=phase_cmap,
+                             name=f"{prefix:s}angle(e)",
+                             )
+
+            # difference of absolute values
+            if show_efields_fwd:
+                viewer.add_image(efwd_ebg_abs_diff,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, 0, 2 * xshift_pix],
+                                 contrast_limits=[-e_lim[1], e_lim[1]],
+                                 colormap=phase_cmap,
+                                 name=f"{prefix:s}|e fwd| - |e bg|",
+                                 )
+
+            viewer.add_image(e_ebg_abs_diff,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=[zoffset, 0, 2 * xshift_pix],
+                             contrast_limits=[-e_lim[1], e_lim[1]],
+                             colormap=phase_cmap,
+                             name=f"{prefix:s}|e| - |e bg|",
+                             )
+
+            # difference of phases
+            if show_efields_fwd:
+                viewer.add_image(efwd_ebg_phase_diff,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, yshift_pix, 2*xshift_pix],
+                                 contrast_limits=[-phase_lim, phase_lim],
+                                 colormap=phase_cmap,
+                                 name=f"{prefix:s}angle(e fwd) - angle(e bg)",
+                                 )
+
+            viewer.add_image(e_ebg_phase_diff,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=[zoffset, yshift_pix, 2 * xshift_pix],
+                             contrast_limits=[-phase_lim, phase_lim],
+                             colormap=phase_cmap,
+                             name=f"{prefix:s}angle(e) - angle(e bg)",
+                             )
+
+            if show_scattered_fields:
+                viewer.add_image(escatt_real,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, yshift_pix, 0],
+                                 contrast_limits=escatt_lim,
+                                 colormap=phase_cmap,
+                                 name=f"{prefix:s}Re(e scatt)",
+                                 )
+
+                viewer.add_image(escatt_imag,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, yshift_pix, 0],
+                                 contrast_limits=escatt_lim,
+                                 colormap=phase_cmap,
+                                 name=f"{prefix:s}Im(e scatt)",
+                                 )
+
+        # ######################
         # reconstructed index of refraction
         # ######################
         if show_n3d:
-            viewer.add_image(n_start_imag,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=(zoffset, 0, 0),
-                             contrast_limits=n_lim,
-                             colormap=real_cmap,
-                             visible=False,
-                             name=f"{prefix:s}n start.imaginary",
-                             )
+            if show_n_aux:
+                viewer.add_image(n_start_imag,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=(zoffset, 0, 0),
+                                 contrast_limits=n_lim,
+                                 colormap=real_cmap,
+                                 visible=False,
+                                 name=f"{prefix:s}n start.imaginary",
+                                 )
 
-            viewer.add_image(n_start_real,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=(zoffset, 0, 0),
-                             colormap=real_cmap,
-                             contrast_limits=n_lim,
-                             visible=False,
-                             name=f"{prefix:s}n start - no",
-                             )
+                viewer.add_image(n_start_real,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=(zoffset, 0, 0),
+                                 colormap=real_cmap,
+                                 contrast_limits=n_lim,
+                                 visible=False,
+                                 name=f"{prefix:s}n start - no",
+                                 )
 
-            viewer.add_image(n_imag,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=(zoffset, 0, 0),
-                             colormap=real_cmap,
-                             contrast_limits=n_lim,
-                             visible=False,
-                             name=f"{prefix:s}n.imaginary",
-                             )
+                viewer.add_image(n_imag,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=(zoffset, 0, 0),
+                                 colormap=real_cmap,
+                                 contrast_limits=n_lim,
+                                 visible=False,
+                                 name=f"{prefix:s}n.imaginary",
+                                 )
 
             viewer.add_image(n_real,
                              scale=scale,
@@ -3352,155 +3485,34 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              )
 
         if show_mips:
-            viewer.add_image(n_maxz,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=(zoffset, 0, 0),
-                             contrast_limits=n_lim,
-                             colormap=real_cmap,
-                             name=f"{prefix:s}n max z"
-                             )
+                    viewer.add_image(n_maxz,
+                                     scale=scale,
+                                     affine=affine_recon2cam,
+                                     translate=(zoffset, 0, 0),
+                                     contrast_limits=n_lim,
+                                     colormap=real_cmap,
+                                     name=f"{prefix:s}n max z"
+                                     )
 
-            # xz
-            viewer.add_image(n_maxy,
-                             scale=(scale[0], drs_n[0] / drs_n[1], scale[2]),
-                             affine=affine_recon2cam,
-                             translate=(zoffset, ny + mip_separation_pix, 0),
-                             contrast_limits=n_lim,
-                             colormap=real_cmap,
-                             name=f"{prefix:s}n max y"
-                             )
+                    # xz
+                    viewer.add_image(n_maxy,
+                                     scale=(scale[0], drs_n[0] / drs_n[1], scale[2]),
+                                     affine=affine_recon2cam,
+                                     translate=(zoffset, ny + mip_separation_pix, 0),
+                                     contrast_limits=n_lim,
+                                     colormap=real_cmap,
+                                     name=f"{prefix:s}n max y"
+                                     )
 
-            # yz
-            viewer.add_image(n_maxx,
-                             scale=(scale[0], scale[1], drs_n[0] / drs_n[1]),
-                             affine=affine_recon2cam,
-                             translate=(zoffset, 0, -nz * drs_n[0] / drs_n[1] - mip_separation_pix),
-                             contrast_limits=n_lim,
-                             colormap=real_cmap,
-                             name=f"{prefix:s}n max x"
-                             )
-
-        # ######################
-        # electric fields
-        # ######################
-        if show_efields:
-            # field amplitudes
-            viewer.add_image(ebg_abs,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=[zoffset, 0, nx] if shift_imgs else [zoffset, 0, 0],
-                             contrast_limits=e_lim,
-                             colormap=real_cmap,
-                             name=f"{prefix:s}|e bg|",
-                             )
-
-            if show_efields_fwd:
-                viewer.add_image(e_fwd_abs,
-                                 scale=scale,
-                                 affine=affine_recon2cam,
-                                 translate=[zoffset, 0, nx] if shift_imgs else [zoffset, 0, 0],
-                                 contrast_limits=e_lim,
-                                 colormap=real_cmap,
-                                 name=f"{prefix:s}|E fwd|",
-                                 )
-
-            viewer.add_image(e_abs,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=[zoffset, 0, nx] if shift_imgs else [zoffset, 0, 0],
-                             contrast_limits=e_lim,
-                             colormap=real_cmap,
-                             name=f"{prefix:s}|e|",
-                             )
-
-            # field phases
-            viewer.add_image(ebg_angle,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=[zoffset, ny, nx] if shift_imgs else [zoffset, 0, 0],
-                             contrast_limits=[-np.pi, np.pi],
-                             colormap=phase_cmap,
-                             name=f"{prefix:s}angle(e bg)",
-                             )
-
-            if show_efields_fwd:
-                viewer.add_image(e_fwd_angle,
-                                 scale=scale,
-                                 affine=affine_recon2cam,
-                                 translate=[zoffset, ny, nx] if shift_imgs else [zoffset, 0, 0],
-                                 contrast_limits=[-np.pi, np.pi],
-                                 colormap=phase_cmap,
-                                 name=f"{prefix:s}angle(E fwd)",
-                                 )
-
-            viewer.add_image(e_angle,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=[zoffset, ny, nx] if shift_imgs else [zoffset, 0, 0],
-                             contrast_limits=[-np.pi, np.pi],
-                             colormap=phase_cmap,
-                             name=f"{prefix:s}angle(e)",
-                             )
-
-            # difference of absolute values
-            if show_efields_fwd:
-                viewer.add_image(efwd_ebg_abs_diff,
-                                 scale=scale,
-                                 affine=affine_recon2cam,
-                                 translate=[zoffset, 0, 2 * nx] if shift_imgs else [zoffset, 0, 0],
-                                 contrast_limits=[-e_lim[1], e_lim[1]],
-                                 colormap=phase_cmap,
-                                 name=f"{prefix:s}|e fwd| - |e bg|",
-                                 )
-
-            viewer.add_image(e_ebg_abs_diff,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=[zoffset, 0, 2 * nx] if shift_imgs else [zoffset, 0, 0],
-                             contrast_limits=[-e_lim[1], e_lim[1]],
-                             colormap=phase_cmap,
-                             name=f"{prefix:s}|e| - |e bg|",
-                             )
-
-            # difference of phases
-            if show_efields_fwd:
-                viewer.add_image(efwd_ebg_phase_diff,
-                                 scale=scale,
-                                 affine=affine_recon2cam,
-                                 translate=[zoffset, ny, 2 * nx] if shift_imgs else [zoffset, 0, 0],
-                                 contrast_limits=[-phase_lim, phase_lim],
-                                 colormap=phase_cmap,
-                                 name=f"{prefix:s}angle(e fwd) - angle(e bg)",
-                                 )
-
-            viewer.add_image(e_ebg_phase_diff,
-                             scale=scale,
-                             affine=affine_recon2cam,
-                             translate=[zoffset, ny, 2 * nx] if shift_imgs else [zoffset, 0, 0],
-                             contrast_limits=[-phase_lim, phase_lim],
-                             colormap=phase_cmap,
-                             name=f"{prefix:s}angle(e) - angle(e bg)",
-                             )
-
-            if show_scattered_fields:
-                viewer.add_image(escatt_real,
-                                 scale=scale,
-                                 affine=affine_recon2cam,
-                                 translate=[zoffset, ny, 0] if shift_imgs else [zoffset, 0, 0],
-                                 contrast_limits=escatt_lim,
-                                 colormap=phase_cmap,
-                                 name=f"{prefix:s}Re(e scatt)",
-                                 )
-
-                viewer.add_image(escatt_imag,
-                                 scale=scale,
-                                 affine=affine_recon2cam,
-                                 translate=[zoffset, ny, 0] if shift_imgs else [zoffset, 0, 0],
-                                 contrast_limits=escatt_lim,
-                                 colormap=phase_cmap,
-                                 name=f"{prefix:s}Im(e scatt)",
-                                 )
+                    # yz
+                    viewer.add_image(n_maxx,
+                                     scale=(scale[0], scale[1], drs_n[0] / drs_n[1]),
+                                     affine=affine_recon2cam,
+                                     translate=(zoffset, 0, -nz * drs_n[0] / drs_n[1] - mip_separation_pix),
+                                     contrast_limits=n_lim,
+                                     colormap=real_cmap,
+                                     name=f"{prefix:s}n max x"
+                                     )
 
     # processed ROI
     viewer.add_shapes(np.array([[
@@ -3542,8 +3554,9 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
     if isinstance(fnames, (Path, str)):
         fnames = [fnames]
 
-    for ii in range(len(fnames)):
-        display_tomography_recon(fnames[ii],
+    for ii, fn in enumerate(fnames):
+        print(fn)
+        display_tomography_recon(fn,
                                  viewer=v,
                                  prefix=f"{ii:d} ",
                                  block_while_display=ii == (len(fnames) - 1),
