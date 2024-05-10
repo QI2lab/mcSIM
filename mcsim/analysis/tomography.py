@@ -319,7 +319,7 @@ class Tomography:
         # for matrix, using image coordinates (0, 1, ..., N - 1)
         # note, due to order of operations -n//2 =/= - (n//2) when nx is odd
         if self.model in ["born", "rytov"]:
-            xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1],
+            affine_xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1],
                                                    self.drs_n[-2], 0, -(self.n_shape[-2] // 2) * self.drs_n[-2]])
         else:
             # if not (self.ny / self.n_shape[1]).is_integer():
@@ -341,19 +341,19 @@ class Tomography:
             xb = bin(self.x,[nbin_x], mode="mean")
             yb = bin(self.y, [nbin_y], mode="mean")
 
-            xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, float(xb[0]),
+            affine_xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, float(xb[0]),
                                                    self.drs_n[-2], 0, float(yb[0])])
 
         # ############################
         # construct affine tranforms between reconstructed data and camera pixels
         # ############################
-        # affine transformation from camera ROI coordinates to pixel indices
+        # affine transformation from camera ROI coordinates in um to pixel indices
         xform_raw_roi_pix2coords = params2xform([self.dxy, 0, -(self.n_shape[-1] // 2) * self.dxy,
                                                  self.dxy, 0, -(self.n_shape[-2] // 2) * self.dxy])
 
         # composing these two transforms gives affine from recon pixel indices to
         # recon pix inds -> recon coords = ROI coordinates -> ROI pix inds
-        xform_recon2raw_roi = inv(xform_raw_roi_pix2coords).dot(xform_recon_pix2coords)
+        xform_recon2raw_roi = inv(xform_raw_roi_pix2coords).dot(affine_xform_recon_pix2coords)
 
         xform_odt_recon_to_cam_roi = None
         xform_odt_recon_to_full = None
@@ -372,7 +372,7 @@ class Tomography:
                 xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
 
         # store all transforms in JSON serializable form
-        self.xform_dict = {"xform_recon_pix2coords": np.asarray(xform_recon_pix2coords).tolist(),
+        self.xform_dict = {"affine_xform_recon_pix2coords": np.asarray(affine_xform_recon_pix2coords).tolist(),
                            "affine_xform_recon_2_raw_process_roi": np.asarray(xform_recon2raw_roi).tolist(),
                            "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_odt_recon_to_cam_roi).tolist(),
                            "affine_xform_recon_2_raw_camera": np.asarray(xform_odt_recon_to_full).tolist(),
@@ -2953,21 +2953,28 @@ def get_reconstruction_nyquist_sampling(no: float,
 def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              raw_data_fname: Optional[Union[str, Path, zarr.hierarchy.Group]] = None,
                              raw_data_component: str = "cam2/odt",
+                             show_n3d: bool = True,
+                             show_mips: bool = False,
+                             mip_separation_pix: int = 0,
                              show_raw: bool = True,
                              show_scattered_fields: bool = False,
                              show_efields: bool = False,
                              show_efields_fwd: bool = False,
                              compute: bool = True,
                              slices: Optional[tuple] = None,
+                             data_slice: Optional[tuple] = None,
                              phase_lim: float = np.pi,
                              n_lim: tuple[float, float] = (0., 0.05),
                              e_lim: tuple[float, float] = (0., 500.),
                              escatt_lim: tuple[float, float] = (-5., 5.),
-                             block_while_display: bool = True,
                              real_cmap="bone",
                              phase_cmap="RdBu",
                              scale_z: bool = True,
-                             shift_imgs: bool = True):
+                             shift_imgs: bool = True,
+                             prefix: str = "",
+                             viewer = None,
+                             block_while_display: bool = True,
+                             **kwargs):
     """
     Display reconstruction results and (optionally) raw data in Napari
 
@@ -2994,7 +3001,9 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
     import napari
 
+    # ##############################
     # optionally load raw data
+    # ##############################
     if raw_data_fname is not None:
         if isinstance(raw_data_fname, (Path, str)):
             raw_data = zarr.open(raw_data_fname, "r")
@@ -3003,31 +3012,77 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     else:
         show_raw = False
 
+    # ##############################
     # load data
+    # ##############################
     if isinstance(location, (Path, str)):
         img_z = zarr.open(location, "r")
     else:
         img_z = location
-
-    if not hasattr(img_z, "efield_bg_ft") or not hasattr(img_z, "efields_ft"):
-        show_efields = False
 
     if "dr" in img_z.attrs.keys():
         drs_n = img_z.attrs["dr"]
     elif "drs_n" in img_z.attrs.keys():
         drs_n = img_z.attrs["drs_n"]
     else:
-        raise ValueError()
+        raise ValueError("could not identify RI voxel sizes")
 
     n_axis_names = img_z.attrs["dimensions"]
     no = img_z.attrs["no"]
 
-    try:
-        data_slice = tuple([slice(s[0], s[1], s[2]) for s in img_z.attrs["data_slice"]])
-    except KeyError:
-        data_slice = None
+    # ##############################
+    # get size info
+    # ##############################
+    n_extra_dims = img_z.n.ndim - 3
+    nz, ny, nx = img_z.n.shape[-3:]
+    npatterns = img_z.attrs["npatterns"]
 
+    # NOTE: do not operate on these arrays after broadcasting otherwise memory use will explode
+    # broadcasting does not cause memory size expansion, but in-place operations later will
+    bcast_shape = [1,] * n_extra_dims + [npatterns, nz, 1, 1]
+
+    if not show_raw and not show_efields and not show_efields_fwd:
+        bcast_shape[-4] = 1
+
+    if not show_n3d:
+        bcast_shape[-3] = 1
+
+    bcast_shape = tuple(bcast_shape)
+
+    # ##############################
+    # z refocusing
+    # ##############################
+    try:
+        dz_refocus = img_z.attrs["reconstruction_settings"]["dz_refocus"]
+    except KeyError:
+        dz_refocus = 0.
+    zs = (np.arange(nz) - nz // 2) * drs_n[0] + dz_refocus
+
+    if show_n3d:
+        zoffset = zs[0]
+    else:
+        zoffset = 0
+
+    # ##############################
+    # raw data slice corresponding to reconstructed data
+    # ##############################
+    if data_slice is None:
+        try:
+            data_slice = tuple([slice(s[0], s[1], s[2]) for s in img_z.attrs["data_slice"]])
+        except KeyError:
+            data_slice = None
+
+    # ##############################
+    # select slices of reconstruction to display
+    # ##############################
+    if slices is None:
+        slices = tuple([slice(None) for _ in range(n_extra_dims)])
+    # add last 3 dims
+    slices = slices + (slice(None), slice(None), slice(None))
+
+    # ##############################
     # load affine xforms
+    # ##############################
     # Napari uses convention (y, x) whereas I'm using (x, y),
     # so need to swap these dimensions in affine xforms
     swap_xy = np.array([[0, 1, 0],
@@ -3036,151 +3091,134 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     try:
         affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
     except KeyError:
-        affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
-    affine_cam2recon = inv(swap_xy.dot(affine_recon2cam_xy.dot(swap_xy)))
+        try:
+            affine_recon2cam_xy = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
+        except KeyError:
+            affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
 
-    # get size info we will need
-    n_extra_dims = img_z.n.ndim - 3
-    ny, nx = img_z.n.shape[-2:]
-    if slices is None:
-        slices = tuple([slice(None) for _ in range(n_extra_dims)])
+    affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
+    affine_cam2recon = inv(affine_recon2cam)
 
-    with dask_cfg_set(scheduler='threads'):
+    with dask_cfg_set(scheduler='threads',
+                      **{'array.slicing.split_large_chunks': False}):
         # ######################
         # prepare n
         # ######################
-        slices_n = slices + (slice(None), slice(None), slice(None))
-
-        n = da.expand_dims(da.from_zarr(img_z.n)[slices_n], axis=-4)
-        n_real = n.real - no
-        n_imag = n.imag
-        if compute:
+        if show_n3d:
             print("loading n")
-            with ProgressBar():
-                n_real, n_imag = dcompute([n_real, n_imag])[0]
+            n = da.expand_dims(da.from_zarr(img_z.n)[slices], axis=-4)
+            n_real = n.real - no
+            n_imag = n.imag
+        else:
+            n_real = np.zeros((1, 1))
+            n_imag = np.zeros_like(n_real)
 
-        if hasattr(img_z, "n_start"):
-            n_start = da.expand_dims(da.from_zarr(img_z.n_start)[slices_n], axis=-4)
+        if show_n3d and hasattr(img_z, "n_start"):
+            n_start = da.expand_dims(da.from_zarr(img_z.n_start)[slices], axis=-4)
             n_start_real = n_start.real - no
             n_start_imag = n_start.imag
-            if compute:
-                with ProgressBar():
-                    n_start_real, n_start_imag = dcompute([n_start_real, n_start_imag])[0]
         else:
             n_start_real = np.zeros((1, 1))
             n_start_imag = np.zeros_like(n_start_real)
 
-        # ######################
-        # prepare raw images
-        # ######################
-        if show_raw:
-            slices_raw = slices + (slice(None), slice(None), slice(None))
-
-            if data_slice is None:
-                data_slice = tuple([slice(None)] * raw_data[raw_data_component].ndim)
-
-            dc = da.from_zarr(raw_data[raw_data_component])
-            imgs = da.expand_dims(dc[data_slice][slices_raw], axis=-3)
-
-            if compute:
-                print("loading raw images")
-                with ProgressBar():
-                    imgs = imgs.compute()
-        else:
-            imgs = np.ones((1, 1))
-
-        # ######################
-        # prepare electric fields
-        # ######################
-        if show_efields:
-            # measured field
-            e_load_ft = da.expand_dims(da.from_zarr(img_z.efields_ft), axis=-3)
-            e = da.map_blocks(ift2, e_load_ft, dtype=complex)
-
-            # background field
-            ebg_load_ft = da.expand_dims(da.from_zarr(img_z.efield_bg_ft), axis=-3)
-            ebg = da.map_blocks(ift2, ebg_load_ft, dtype=complex)
-            if compute:
-                print("loading electric fields")
-                with ProgressBar():
-                    e, ebg = dcompute([e, ebg])[0]
-        else:
-            e = np.ones((1, 1))
-            ebg = np.ones_like(e)
-
-        e_abs = da.abs(e)
-        e_angle = da.angle(e)
-        ebg_abs = da.abs(ebg)
-        ebg_angle = da.angle(ebg)
-        e_ebg_abs_diff = e_abs - ebg_abs
-
-        pd = da.mod(da.angle(e) - da.angle(ebg), 2 * np.pi)
-        e_ebg_phase_diff = pd - 2 * np.pi * (pd > np.pi)
-
-        # ######################
-        # scattered fields
-        # ######################
-        if show_scattered_fields and hasattr(img_z, "escatt"):
-            escatt = da.expand_dims(da.from_zarr(img_z.escatt), axis=-3)
-            escatt_real = da.real(escatt)
-            escatt_imag = da.imag(escatt)
-            if compute:
-                print('loading escatt')
-                with ProgressBar():
-                    escatt_real, escatt_imag = dcompute([escatt_real, escatt_imag])[0]
-        else:
-            escatt_real = np.ones((1, 1))
-            escatt_imag = np.ones_like(escatt_real)
-
-        # ######################
-        # simulated forward fields
-        # ######################
-        if show_efields_fwd:
-            e_fwd = da.expand_dims(da.from_zarr(img_z.efwd), axis=-3)
-            e_fwd_abs = da.abs(e_fwd)
-            e_fwd_angle = da.angle(e_fwd)
-            if compute:
-                print("loading fwd electric fields")
-                with ProgressBar():
-                    e_fwd_abs, e_fwd_angle = dcompute([e_fwd_abs, e_fwd_angle])[0]
-
-            efwd_ebg_abs_diff = e_fwd_abs - ebg_abs
-            pd = da.mod(e_fwd_angle - ebg_angle, 2 * np.pi)
-            efwd_ebg_phase_diff = pd - 2 * np.pi * (pd > np.pi)
-        else:
-            e_fwd_abs = np.ones((1, 1))
-            e_fwd_angle = np.ones_like(e_fwd_abs)
-            efwd_ebg_abs_diff = np.ones_like(e_fwd_abs)
-            efwd_ebg_phase_diff = np.ones_like(e_fwd_abs)
-
-        # ######################
-        # broadcasting
-        # NOTE: cannot operate on these arrays after broadcasting otherwise memory use will explode
-        # broadcasting does not cause memory size expansion, but in-place operations later will
-        # ######################
         if compute:
-            n_extra_dims = n_real.ndim - 4
-            nz = n_real.shape[-3]
+            with ProgressBar():
+                n_real, n_imag = dcompute([n_real, n_imag])[0]
+                n_start_real, n_start_imag = dcompute([n_start_real, n_start_imag])[0]
 
-            if show_efields:
-                npatt = e_abs.shape[-4]
-            elif not show_efields and show_raw:
-                npatt = imgs.shape[-4]
-            else:
-                npatt = 1
-
-            bcast_shape = (1,) * n_extra_dims + (npatt, nz) + (1, 1)
-
-            # broadcast refractive index arrays
+            # broadcast
             bcast_shape_n = np.broadcast_shapes(n_real.shape, bcast_shape)
             n_real = np.broadcast_to(n_real, bcast_shape_n)
             n_imag = np.broadcast_to(n_imag, bcast_shape_n)
             n_start_real = np.broadcast_to(n_start_real, bcast_shape_n)
             n_start_imag = np.broadcast_to(n_start_imag, bcast_shape_n)
 
+        # ######################
+        # Re(n) MIPs
+        # ######################
+        if (hasattr(img_z, "n_maxz") and
+            hasattr(img_z, "n_maxy") and
+            hasattr(img_z, "n_maxx") and
+            show_mips):
+
+            n_maxz = da.expand_dims(da.from_zarr(img_z.n_maxz)[slices[:-1]] - no, axis=(-3, -4))
+            n_maxy = da.expand_dims(da.from_zarr(img_z.n_maxy)[slices[:-1]] - no, axis=(-3, -4))
+            n_maxx = da.flip(da.swapaxes(da.expand_dims(da.from_zarr(img_z.n_maxx)[slices[:-1]] - no,
+                                                        axis=(-3, -4)),
+                                         -1, -2),
+                             axis=-1)
+        else:
+            n_maxz = np.zeros((1, 1))
+            n_maxy = np.zeros_like(n_maxz)
+            n_maxx = np.zeros_like(n_maxz)
+
+        if compute:
+            with ProgressBar():
+                n_maxz, n_maxy, n_maxx = dcompute([n_maxz, n_maxy, n_maxx])[0]
+
+            n_maxz = np.broadcast_to(n_maxz,
+                                     np.broadcast_shapes(n_maxz.shape, bcast_shape))
+            n_maxy = np.broadcast_to(n_maxy,
+                                     np.broadcast_shapes(n_maxy.shape, bcast_shape))
+            n_maxx = np.broadcast_to(n_maxx,
+                                     np.broadcast_shapes(n_maxx.shape, bcast_shape))
+
+        # ######################
+        # prepare raw images
+        # ######################
+        if show_raw:
+            print("loading raw images")
+            if data_slice is None:
+                data_slice = tuple([slice(None)] * raw_data[raw_data_component].ndim)
+
+            dc = da.from_zarr(raw_data[raw_data_component])
+            imgs = da.expand_dims(dc[data_slice][slices], axis=-3)
+        else:
+            imgs = np.ones((1, 1))
+
+        if compute:
+            with ProgressBar():
+                imgs = dcompute(imgs)[0]
+
             # broadcast raw images
             bcast_shape_raw = np.broadcast_shapes(imgs.shape, bcast_shape)
             imgs = np.broadcast_to(imgs, bcast_shape_raw)
+
+        # ######################
+        # prepare electric fields
+        # ######################
+        if not hasattr(img_z, "efield_bg_ft") or not hasattr(img_z, "efields_ft"):
+            show_efields = False
+
+        if show_efields:
+            print("loading electric fields")
+            # measured field
+            e_load_ft = da.expand_dims(da.from_zarr(img_z.efields_ft)[slices], axis=-3)
+            e = da.map_blocks(ift2, e_load_ft, dtype=complex)
+            e_abs = da.abs(e)
+            e_angle = da.angle(e)
+
+            # background field
+            ebg_load_ft = da.expand_dims(da.from_zarr(img_z.efield_bg_ft)[slices], axis=-3)
+            ebg = da.map_blocks(ift2, ebg_load_ft, dtype=complex)
+            ebg_abs = da.abs(ebg)
+            ebg_angle = da.angle(ebg)
+
+            e_ebg_abs_diff = e_abs - ebg_abs
+            e_ebg_phase_diff = da.mod(e_angle - ebg_angle, 2 * np.pi)
+            e_ebg_phase_diff -= 2 * np.pi * (e_ebg_phase_diff > np.pi)
+        else:
+            e_abs = np.zeros((1, 1))
+            e_angle = np.zeros_like(e_abs)
+            ebg_abs = np.zeros_like(e_abs)
+            ebg_angle = np.zeros_like(e_abs)
+            e_ebg_abs_diff = np.zeros_like(e_abs)
+            e_ebg_phase_diff = np.zeros_like(e_abs)
+
+        if compute:
+            with ProgressBar():
+                e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff = \
+                    dcompute([e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff])[0]
 
             # broadcast electric fields
             bcast_shape_e = np.broadcast_shapes(e_abs.shape, bcast_shape)
@@ -3190,28 +3228,72 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             ebg_angle = np.broadcast_to(ebg_angle, bcast_shape_e)
             e_ebg_abs_diff = np.broadcast_to(e_ebg_abs_diff, bcast_shape_e)
             e_ebg_phase_diff = np.broadcast_to(e_ebg_phase_diff, bcast_shape_e)
-            e_fwd_abs = np.broadcast_to(e_fwd_abs, bcast_shape_e)
-            e_fwd_angle = np.broadcast_to(e_fwd_angle, bcast_shape_e)
-            efwd_ebg_abs_diff = np.broadcast_to(efwd_ebg_abs_diff, bcast_shape_e)
-            efwd_ebg_phase_diff = np.broadcast_to(efwd_ebg_phase_diff, bcast_shape_e)
+
+        # ######################
+        # scattered fields
+        # ######################
+        if show_scattered_fields and hasattr(img_z, "escatt"):
+            print('loading escatt')
+            escatt = da.expand_dims(da.from_zarr(img_z.escatt)[slices], axis=-3)
+            escatt_real = da.real(escatt)
+            escatt_imag = da.imag(escatt)
+        else:
+            escatt_real = np.zeros((1, 1))
+            escatt_imag = np.zeros_like(escatt_real)
+
+        if compute:
+            with ProgressBar():
+                escatt_real, escatt_imag = dcompute([escatt_real, escatt_imag])[0]
 
             # this can be a different size due to multiplexing
             bcast_root_scatt = (1,) * n_extra_dims + (1, nz, 1, 1)
             bcast_shape_scatt = np.broadcast_shapes(escatt_real.shape, bcast_root_scatt)
             escatt_real = np.broadcast_to(escatt_real, bcast_shape_scatt)
             escatt_imag = np.broadcast_to(escatt_imag, bcast_shape_scatt)
-            print('finished broadcasting')
+
+        # ######################
+        # simulated forward fields
+        # ######################
+        if show_efields_fwd:
+            print("loading fwd electric fields")
+            e_fwd = da.expand_dims(da.from_zarr(img_z.efwd)[slices], axis=-3)
+            e_fwd_abs = da.abs(e_fwd)
+            e_fwd_angle = da.angle(e_fwd)
+            efwd_ebg_abs_diff = e_fwd_abs - ebg_abs
+            efwd_ebg_phase_diff = da.mod(e_fwd_angle - ebg_angle, 2 * np.pi)
+            efwd_ebg_phase_diff -= - 2 * np.pi * (efwd_ebg_phase_diff > np.pi)
+        else:
+            e_fwd_abs = np.zeros((1, 1))
+            e_fwd_angle = np.zeros_like(e_fwd_abs)
+            efwd_ebg_abs_diff = np.zeros_like(e_fwd_abs)
+            efwd_ebg_phase_diff = np.zeros_like(e_fwd_abs)
+
+        if compute:
+            with ProgressBar():
+                e_fwd_abs, e_fwd_angle, efwd_ebg_abs_diff, efwd_ebg_phase_diff = \
+                dcompute([e_fwd_abs, e_fwd_angle, efwd_ebg_abs_diff, efwd_ebg_phase_diff])[0]
+
+            # broadcast
+            bcast_shape_efwd = np.broadcast_shapes(e_fwd_abs.shape, bcast_shape)
+            e_fwd_abs = np.broadcast_to(e_fwd_abs, bcast_shape_efwd)
+            e_fwd_angle = np.broadcast_to(e_fwd_angle, bcast_shape_efwd)
+            efwd_ebg_abs_diff = np.broadcast_to(efwd_ebg_abs_diff, bcast_shape_efwd)
+            efwd_ebg_phase_diff = np.broadcast_to(efwd_ebg_phase_diff, bcast_shape_efwd)
 
         # ######################
         # create viewer
         # ######################
-        viewer = napari.Viewer(title=str(img_z.store.path))
+        if viewer is None:
+            viewer = napari.Viewer(title=str(img_z.store.path),
+                                   **kwargs)
 
         # for convenience of affine xforms, keep xy scale in pixels
         if scale_z:
             scale = (drs_n[0] / drs_n[1], 1, 1)
+            zoffset /= drs_n[1]
         else:
             scale = (1, 1, 1)
+            zoffset /= drs_n[0]
 
         # ######################
         # raw data
@@ -3219,53 +3301,85 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         if show_raw:
             viewer.add_image(imgs,
                              scale=scale,
-                             name="raw images",
+                             translate=(zoffset, 0, 0),
                              colormap=real_cmap,
-                             affine=affine_cam2recon,
-                             contrast_limits=[0, 4096])
+                             # affine=affine_cam2recon,
+                             contrast_limits=[0, 4096],
+                             name=f"{prefix:s}raw images",
+                             )
 
         # ######################
         # reconstructed index of refraction
         # ######################
-        # processed ROI
-        viewer.add_shapes(np.array([[
-                                   [0 - 1, 0 - 1],
-                                   [0 - 1, nx],
-                                   [ny, nx],
-                                   [ny, 0 - 1]
-                                   ]]
-                                   ),
-                          shape_type="polygon",
-                          name="processing ROI",
-                          edge_width=1,
-                          edge_color=[1, 0, 0, 1],
-                          face_color=[0, 0, 0, 0])
+        if show_n3d:
+            viewer.add_image(n_start_imag,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=(zoffset, 0, 0),
+                             contrast_limits=n_lim,
+                             colormap=real_cmap,
+                             visible=False,
+                             name=f"{prefix:s}n start.imaginary",
+                             )
 
-        viewer.add_image(n_start_imag,
-                         scale=scale,
-                         name=f"n start.imaginary",
-                         contrast_limits=n_lim,
-                         colormap=real_cmap,
-                         visible=False)
+            viewer.add_image(n_start_real,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=(zoffset, 0, 0),
+                             colormap=real_cmap,
+                             contrast_limits=n_lim,
+                             visible=False,
+                             name=f"{prefix:s}n start - no",
+                             )
 
-        viewer.add_image(n_start_real,
-                         scale=scale,
-                         name=f"n start - no",
-                         colormap=real_cmap,
-                         contrast_limits=n_lim)
+            viewer.add_image(n_imag,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=(zoffset, 0, 0),
+                             colormap=real_cmap,
+                             contrast_limits=n_lim,
+                             visible=False,
+                             name=f"{prefix:s}n.imaginary",
+                             )
 
-        viewer.add_image(n_imag,
-                         scale=scale,
-                         name=f"n.imaginary",
-                         contrast_limits=n_lim,
-                         colormap=real_cmap,
-                         visible=False)
+            viewer.add_image(n_real,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=(zoffset, 0, 0),
+                             colormap=real_cmap,
+                             contrast_limits=n_lim,
+                             name=f"{prefix:s}n-no",
+                             )
 
-        viewer.add_image(n_real,
-                         scale=scale,
-                         name=f"n-no",
-                         colormap=real_cmap,
-                         contrast_limits=n_lim)
+        if show_mips:
+            viewer.add_image(n_maxz,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=(zoffset, 0, 0),
+                             contrast_limits=n_lim,
+                             colormap=real_cmap,
+                             name=f"{prefix:s}n max z"
+                             )
+
+            # xz
+            viewer.add_image(n_maxy,
+                             scale=(scale[0], drs_n[0] / drs_n[1], scale[2]),
+                             affine=affine_recon2cam,
+                             translate=(zoffset, ny + mip_separation_pix, 0),
+                             contrast_limits=n_lim,
+                             colormap=real_cmap,
+                             name=f"{prefix:s}n max y"
+                             )
+
+            # yz
+            viewer.add_image(n_maxx,
+                             scale=(scale[0], scale[1], drs_n[0] / drs_n[1]),
+                             affine=affine_recon2cam,
+                             translate=(zoffset, 0, -nz * drs_n[0] / drs_n[1] - mip_separation_pix),
+                             contrast_limits=n_lim,
+                             colormap=real_cmap,
+                             name=f"{prefix:s}n max x"
+                             )
 
         # ######################
         # electric fields
@@ -3274,118 +3388,134 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             # field amplitudes
             viewer.add_image(ebg_abs,
                              scale=scale,
-                             name="|e bg|",
+                             affine=affine_recon2cam,
+                             translate=[zoffset, 0, nx] if shift_imgs else [zoffset, 0, 0],
                              contrast_limits=e_lim,
                              colormap=real_cmap,
-                             translate=[0, nx] if shift_imgs else None)
+                             name=f"{prefix:s}|e bg|",
+                             )
 
             if show_efields_fwd:
                 viewer.add_image(e_fwd_abs,
                                  scale=scale,
-                                 name="|E fwd|",
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, 0, nx] if shift_imgs else [zoffset, 0, 0],
                                  contrast_limits=e_lim,
                                  colormap=real_cmap,
-                                 translate=[0, nx] if shift_imgs else None)
+                                 name=f"{prefix:s}|E fwd|",
+                                 )
 
             viewer.add_image(e_abs,
                              scale=scale,
-                             name="|e|",
+                             affine=affine_recon2cam,
+                             translate=[zoffset, 0, nx] if shift_imgs else [zoffset, 0, 0],
                              contrast_limits=e_lim,
                              colormap=real_cmap,
-                             translate=[0, nx] if shift_imgs else None)
+                             name=f"{prefix:s}|e|",
+                             )
 
             # field phases
             viewer.add_image(ebg_angle,
                              scale=scale,
-                             name="angle(e bg)",
+                             affine=affine_recon2cam,
+                             translate=[zoffset, ny, nx] if shift_imgs else [zoffset, 0, 0],
                              contrast_limits=[-np.pi, np.pi],
                              colormap=phase_cmap,
-                             translate=[ny, nx] if shift_imgs else None)
+                             name=f"{prefix:s}angle(e bg)",
+                             )
 
             if show_efields_fwd:
                 viewer.add_image(e_fwd_angle,
                                  scale=scale,
-                                 name="ange(E fwd)",
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, ny, nx] if shift_imgs else [zoffset, 0, 0],
                                  contrast_limits=[-np.pi, np.pi],
                                  colormap=phase_cmap,
-                                 translate=[ny, nx] if shift_imgs else None)
+                                 name=f"{prefix:s}angle(E fwd)",
+                                 )
 
             viewer.add_image(e_angle,
                              scale=scale,
-                             name="angle(e)",
+                             affine=affine_recon2cam,
+                             translate=[zoffset, ny, nx] if shift_imgs else [zoffset, 0, 0],
                              contrast_limits=[-np.pi, np.pi],
                              colormap=phase_cmap,
-                             translate=[ny, nx] if shift_imgs else None)
+                             name=f"{prefix:s}angle(e)",
+                             )
 
             # difference of absolute values
             if show_efields_fwd:
                 viewer.add_image(efwd_ebg_abs_diff,
                                  scale=scale,
-                                 name="|e fwd| - |e bg|",
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, 0, 2 * nx] if shift_imgs else [zoffset, 0, 0],
                                  contrast_limits=[-e_lim[1], e_lim[1]],
                                  colormap=phase_cmap,
-                                 translate=[0, 2*nx] if shift_imgs else None)
+                                 name=f"{prefix:s}|e fwd| - |e bg|",
+                                 )
 
             viewer.add_image(e_ebg_abs_diff,
                              scale=scale,
-                             name="|e| - |e bg|",
+                             affine=affine_recon2cam,
+                             translate=[zoffset, 0, 2 * nx] if shift_imgs else [zoffset, 0, 0],
                              contrast_limits=[-e_lim[1], e_lim[1]],
                              colormap=phase_cmap,
-                             translate=[0, 2*nx] if shift_imgs else None)
+                             name=f"{prefix:s}|e| - |e bg|",
+                             )
 
             # difference of phases
             if show_efields_fwd:
                 viewer.add_image(efwd_ebg_phase_diff,
                                  scale=scale,
-                                 name="angle(e fwd) - angle(e bg)",
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, ny, 2 * nx] if shift_imgs else [zoffset, 0, 0],
                                  contrast_limits=[-phase_lim, phase_lim],
                                  colormap=phase_cmap,
-                                 translate=[ny, 2*nx] if shift_imgs else None
+                                 name=f"{prefix:s}angle(e fwd) - angle(e bg)",
                                  )
 
             viewer.add_image(e_ebg_phase_diff,
                              scale=scale,
-                             name="angle(e) - angle(e bg)",
+                             affine=affine_recon2cam,
+                             translate=[zoffset, ny, 2 * nx] if shift_imgs else [zoffset, 0, 0],
                              contrast_limits=[-phase_lim, phase_lim],
                              colormap=phase_cmap,
-                             translate=[ny, 2*nx] if shift_imgs else None
+                             name=f"{prefix:s}angle(e) - angle(e bg)",
                              )
 
-            viewer.add_image(escatt_real,
-                             scale=scale,
-                             name="Re(e scatt)",
-                             contrast_limits=escatt_lim,
-                             colormap=phase_cmap,
-                             translate=[ny, 0] if shift_imgs else None
-                             )
+            if show_scattered_fields:
+                viewer.add_image(escatt_real,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, ny, 0] if shift_imgs else [zoffset, 0, 0],
+                                 contrast_limits=escatt_lim,
+                                 colormap=phase_cmap,
+                                 name=f"{prefix:s}Re(e scatt)",
+                                 )
 
-            viewer.add_image(escatt_imag,
-                             scale=scale,
-                             name="Im(e scatt)",
-                             contrast_limits=escatt_lim,
-                             colormap=phase_cmap,
-                             translate=[ny, 0] if shift_imgs else None
-                             )
+                viewer.add_image(escatt_imag,
+                                 scale=scale,
+                                 affine=affine_recon2cam,
+                                 translate=[zoffset, ny, 0] if shift_imgs else [zoffset, 0, 0],
+                                 contrast_limits=escatt_lim,
+                                 colormap=phase_cmap,
+                                 name=f"{prefix:s}Im(e scatt)",
+                                 )
 
-            # label
-            # translations = np.array([[0, nx],
-            #                          [ny, nx],
-            #                          [0, 2*nx],
-            #                          [ny, 2*nx],
-            #                          [ny, 0]
-            #                          ])
-            # ttls = ["|E|",
-            #         "ang(E)",
-            #         "|E| - |Ebg|",
-            #         "angle(e) - angle(e bg)",
-            #         "E scatt"]
-            #
-            # viewer.add_points(translations + np.array([ny / 10, nx / 2]),
-            #                   features={"names": ttls},
-            #                   text={"string": "{names:s}",
-            #                         "size": 30,
-            #                         "color": "red"},
-            #                   )
+    # processed ROI
+    viewer.add_shapes(np.array([[
+                                [0 - 1, 0 - 1],
+                                [0 - 1, nx],
+                                [ny, nx],
+                                [ny, 0 - 1]
+                                ]]
+                                ),
+                      shape_type="polygon",
+                      affine=affine_recon2cam,
+                      name=f"{prefix:s}processing ROI",
+                      edge_width=3,
+                      edge_color=[1, 0, 0, 1],
+                      face_color=[0, 0, 0, 0])
 
     # correct labels for broadcasting
     viewer.dims.axis_labels = n_axis_names[:-3] + ["pattern", "z", "y", "x"]
@@ -3400,179 +3530,42 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
 
 def compare_recons(fnames: Sequence[Union[str, Path]],
-                   vmax: float = 0.05,
-                   compute: bool = True,
-                   block_while_display: bool = True,
-                   verbose: bool = False):
+                   **kwargs):
     """
 
     :param fnames:
-    :param vmax:
-    :param compute:
-    :param block_while_display:
-    :param verbose:
     :return viewer:
     """
-
     import napari
+    v = napari.Viewer()
 
     if isinstance(fnames, (Path, str)):
         fnames = [fnames]
 
-    swap_xy = np.array([[0, 1, 0],
-                        [1, 0, 0],
-                        [0, 0, 1]])
-
-    v = napari.Viewer()
-    tstart = perf_counter()
-    for f in fnames:
-        if verbose:
-            print(f"loading {str(f):s}, elapsed time = {perf_counter() - tstart:.2f}s")
-
-        znow = zarr.open(f, "r")
-        try:
-            xform_now = znow.attrs["affine_xform_recon_2_raw_camera_roi"]
-        except KeyError:
-            xform_now = znow.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"]
-
-        affine_now = swap_xy.dot(np.array(xform_now).dot(swap_xy))
-        no = znow.attrs["no"]
-
-        try:
-            dz_now = znow.attrs["dr"][0]
-        except KeyError:
-            dz_now = znow.attrs["drs_n"][0]
-
-        try:
-            dz_refocus_now = znow.attrs["reconstruction_settings"]["dz_refocus"]
-        except KeyError:
-            dz_refocus_now = 0.
-
-        if znow.n.shape[-3] == 2:
-            if compute:
-                n_now = np.array(znow.n[..., 0, :, :]) - no
-            else:
-                n_now = da.from_zarr(znow.n[..., 0, :, :]) - no
-        else:
-            if compute:
-                n_now = np.array(znow.n).real - no
-            else:
-                n_now = da.from_zarr(znow.n).real - no
-
-        nz = znow.n.shape[-3]
-        zs = (np.arange(nz) - nz // 2) * dz_now + dz_refocus_now
-
-        v.add_image(n_now,
-                    scale=(dz_now, 1, 1),
-                    translate=(zs[0], 0, 0),
-                    affine=affine_now,
-                    name=f"{f.parent.name:s} n real",
-                    contrast_limits=[0, vmax],
-                    colormap="bone"
-                    )
-
-    v.dims.set_current_step(axis=0, value=0)
-    v.dims.set_current_step(axis=1, value=0)
-    v.show(block=block_while_display)
+    for ii in range(len(fnames)):
+        display_tomography_recon(fnames[ii],
+                                 viewer=v,
+                                 prefix=f"{ii:d} ",
+                                 block_while_display=ii == (len(fnames) - 1),
+                                 **kwargs)
 
     return v
 
 
 def display_mips(location: Union[str, Path, zarr.hierarchy.Group],
-                 clims: tuple[float, float] = (0., 0.05),
-                 cmap="bone",
-                 block_while_display: bool = False,
-                 separation_pix: int = 0,
                  **kwargs
                  ):
     """
     Display maximum intensity projections from saved RI reconstruction data
 
     :param location:
-    :param clims:
-    :param cmap:
-    :param block_while_display:
-    :param separation_pix:
     :param kwargs:
-    :return:
+    :return viewer:
     """
-
-    import napari
-
-    # load data
-    if isinstance(location, (Path, str)):
-        img_z = zarr.open(location, "r")
-    else:
-        img_z = location
-
-    if "dr" in img_z.attrs.keys():
-        dz, dxy, _ = img_z.attrs["dr"]
-    elif "drs_n" in img_z.attrs.keys():
-        dz, dxy, _ = img_z.attrs["drs_n"]
-    else:
-        raise ValueError()
-
-    try:
-        n_axis_names = img_z.attrs["dimensions"]
-    except KeyError:
-        n_axis_names = None
-
-    no = img_z.attrs["no"]
-    nz, ny, nx = img_z.n.shape[-3:]
-    nextra_dim = img_z.n.ndim - 3
-
-    if (not hasattr(img_z, "n_maxz") or
-        not hasattr(img_z, "n_maxy") or
-        not hasattr(img_z, "n_maxx")):
-
-        raise ValueError()
-
-    n_maxz = np.array(img_z.n_maxz)
-    n_maxy = np.array(img_z.n_maxy)
-    n_maxx = np.array(img_z.n_maxx)
-
-    yoff = (ny + separation_pix) * dxy
-    xoff = (nx + separation_pix) * dxy
-
-    # display
-    v = napari.Viewer(**kwargs)
-
-    v.add_image(n_maxz - no,
-                scale=(dxy, dxy),
-                contrast_limits=clims,
-                colormap=cmap,
-                name="n max z"
-                )
-
-    # xz
-    v.add_image(n_maxy - no,
-                scale=(dz, dxy),
-                contrast_limits=clims,
-                colormap=cmap,
-                translate=(yoff, 0),
-                name="n max y"
-                )
-
-    # yz
-    v.add_image(np.swapaxes(n_maxx, -1, -2) - no,
-                scale=(dxy, dz),
-                contrast_limits=clims,
-                colormap=cmap,
-                translate=(0, xoff),
-                name="n max x"
-                )
-
-    # correct labels for broadcasting
-    if n_axis_names is not None:
-        v.dims.axis_labels = n_axis_names[:-3] + ["y", "x"]
-
-    for ii in range(nextra_dim):
-        v.dims.set_current_step(axis=ii, value=0)
-
-    # block until closed by user
-    v.show(block=block_while_display)
-
-    return v
+    return display_tomography_recon(location,
+                                    show_n3d=False,
+                                    show_mips=True,
+                                    **kwargs)
 
 
 def parse_time(dt: float) -> (tuple, str):
