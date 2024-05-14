@@ -42,25 +42,35 @@ try:
     """, "my_yn")
 
     # spherical bessel functions of the first kind using downward recursion and Miller's algorithm
+    # todo: prefer to estimate number of terms for given value x and deal with
     jn_kernel = cp.RawKernel(r"""
     extern "C" __global__
     void my_jn(const int n, const double* x, const int xsize, double* out, double* deriv) {
        int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
        if (tid < xsize) {
-          double j_0 = sin(x[tid]) / x[tid];
+          double j_0 = sin(x[tid]) / x[tid];          
           double j_1 = (sin(x[tid]) / x[tid] - cos(x[tid])) / x[tid];
+          int ref_seq_pos = n - 3;
 
           out[tid * n + n - 1] = 0.0;
           out[tid * n + n - 2] = 1.0;
 
           for (int ii=n-3; ii >= 0; ii--) {
-             out[tid * n + ii] = (2.0 * ii + 3.0) / x[tid] * out[tid * n + ii + 1] - out[tid * n + ii + 2];                  
+             out[tid * n + ii] = (2.0 * ii + 3.0) / x[tid] * out[tid * n + ii + 1] - out[tid * n + ii + 2];
+             
+             // avoid numerical issues if started with too large n
+             if (fabs(out[tid * n + ii]) > 1.0E6 * fabs(out[tid * n + ref_seq_pos])) {
+                 ref_seq_pos = ii;
+                 out[tid * n + ii + 1] /= 1.0E6;
+                 out[tid * n + ii] /= 1.0E6;
+             }
+                               
           }
           double norm = 0.5 * (out[tid * n] / j_0 + out[tid * n + 1] / j_1);  
 
           for (int ii = 0; ii < n; ii++) {
-              out[tid * n + ii] = out[tid * n + ii] / norm;
+              out[tid * n + ii] /= norm;
               if (ii == 0) {
                   deriv[tid * n + ii] = (cos(x[tid]) - sin(x[tid]) / x[tid]) / x[tid];
               }
@@ -74,27 +84,44 @@ try:
     """, "my_jn")
 
 
-    def yn(n: int, z: cp.ndarray):
+    def yn(n: int,
+           z: cp.ndarray,
+           threads: int = 256):
+        """
+
+        :param n:
+        :param z:
+        :param threads:
+        :return yn, derivative:
+        """
         out = cp.zeros((z.size, n), dtype=cp.double)
         derivative = cp.zeros((z.size, n), dtype=cp.double)
         z = z.astype(cp.double)
 
-        threads = 256
         blocks = int(np.ceil(z.size / threads))
         yn_kernel((blocks,), (threads,), (n, z, z.size, out, derivative))
 
         return out, derivative
 
 
-    def jn(n: int, z: cp.ndarray):
-        n_with_overhead = 4 * n
-        out = cp.zeros((z.size, n_with_overhead), dtype=cp.double)
-        derivative = cp.zeros((z.size, n_with_overhead), dtype=cp.double)
+    def jn(n: int,
+           z: cp.ndarray,
+           threads: int = 256,
+           overhead: int = 40,):
+        """
+
+        :param n:
+        :param z:
+        :param threads:
+        :param overhead:
+        :return jn, derivative:
+        """
+        out = cp.zeros((z.size, n * overhead), dtype=cp.double)
+        derivative = cp.zeros((z.size, n * overhead), dtype=cp.double)
         z = z.astype(cp.double)
 
-        threads = 256
         blocks = int(np.ceil(z.size / threads))
-        jn_kernel((blocks,), (threads,), (n_with_overhead, z, z.size, out, derivative))
+        jn_kernel((blocks,), (threads,), (n * overhead, z, z.size, out, derivative))
 
         return out[:, :n], derivative[:, :n]
 
@@ -128,7 +155,8 @@ def mie_efield(wavelength: float,
                beam_theta: float = 0.,
                beam_phi: float = 0.,
                beam_psi: float = 0.,
-               use_gpu: bool = False) -> (array, array, array, array):
+               use_gpu: bool = False,
+               **kwargs) -> (array, array, array, array):
     """
     Use miepython to compute multipolar coefficients, and use either scipy special functions
     or GPU accelerated custom CuPy kernels to calculate fields. There are many good references
@@ -191,7 +219,6 @@ def mie_efield(wavelength: float,
     # https://miepython.readthedocs.io/en/latest/01_basics.html
     # #######################
     # MiePython uses convention Im(n) < 0, so take conjugate
-    # todo: in my testing this is fast ... e.g. 1e-4s
     an, bn = _mie_An_Bn(np.conj(n_sphere) / no, k * radius)
     an = an.conj()
     bn = bn.conj()
@@ -215,7 +242,6 @@ def mie_efield(wavelength: float,
                 h_ns[ii], dh_ns[ii] = spherical_hn(ls[ii], k * r)
 
                 # Bohren 4.46
-                # todo: in my testing takes maybe 1/10 of time of hankel computation
                 pi_ns[ii] = lpmv(1, ls[ii], xp.cos(theta)) / xp.sin(theta)
 
                 # correct behavior at zero
@@ -224,8 +250,8 @@ def mie_efield(wavelength: float,
                 th_eff = 1e-4
                 pi_ns[ii][th_zero] = lpmv(1, ls[ii], xp.cos(th_eff)) / xp.sin(th_eff)
         else:
-            jns, djns = jn(len(ls) + 1, k * r)
-            yns, dyns = yn(len(ls) + 1, k * r)
+            jns, djns = jn(len(ls) + 1, k * r, **kwargs)
+            yns, dyns = yn(len(ls) + 1, k * r, **kwargs)
 
             jns = jns.transpose()[1:].reshape((len(ls),) + xx.shape)
             yns = yns.transpose()[1:].reshape((len(ls),) + xx.shape)
@@ -245,7 +271,7 @@ def mie_efield(wavelength: float,
 
     # compute tau_ns from Bohren 4.47
     tau_ns = ls[:, None, None] * xp.cos(theta) * pi_ns - \
-              (ls[:, None, None] + 1) * xp.concatenate((xp.zeros((1, ny, nx)), pi_ns[:-1]), axis=0)
+             (ls[:, None, None] + 1) * xp.concatenate((xp.zeros((1, ny, nx)), pi_ns[:-1]), axis=0)
 
     # #######################
     # compute field
