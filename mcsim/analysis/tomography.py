@@ -41,8 +41,7 @@ from localize_psf.affine import (params2xform,
                                  xform2params,
                                  fit_xform_points_ransac,
                                  fit_xform_points,
-                                 xform_points,
-                                 xform_mat)
+                                 xform_points)
 from mcsim.analysis.phase_unwrap import phase_unwrap as weighted_phase_unwrap
 from mcsim.analysis.optimize import to_cpu
 from mcsim.analysis.fft import ft3, ift3, ft2, ift2, translate_ft
@@ -169,7 +168,7 @@ class Tomography:
         # ########################
         if save_dir is not None:
             self.save_dir = Path(save_dir)
-            self.save_dir.mkdir(exist_ok=True)
+            self.save_dir.mkdir(exist_ok=True, parents=True)
 
             self.store = zarr.open(self.save_dir / self.store_name, "a")
         else:
@@ -209,15 +208,36 @@ class Tomography:
         # ########################
         # images
         # ########################
-        # convert to photons
-        # todo: ensure that are dask arrays?
-        self.imgs_raw = (imgs_raw.astype(float) - offset) / gain
-        self.imgs_raw_bg = None
-        if imgs_raw_bg is not None:
-            self.imgs_raw_bg = (imgs_raw_bg.astype(float) - offset) / gain
+        if not isinstance(imgs_raw, da.core.Array):
+            raise ValueError(f"imgs_raw should be a dask array, but was {type(imgs_raw)}")
 
+        if imgs_raw.chunksize[-3:] != imgs_raw.shape[-3:]:
+            raise ValueError(f"imgs_raw chunksize along last three dimensions should match array size, but"
+                             f"{imgs_raw.chunksize[-3:]} != {imgs_raw.shape[-3:]}")
+
+        # convert to photons
+        self.imgs_raw = (imgs_raw.astype(float) - offset) / gain
         self.npatterns, self.ny, self.nx = imgs_raw.shape[-3:]
         self.nextra_dims = imgs_raw.ndim - 3
+
+        # ########################
+        # background images
+        # ########################
+        self.imgs_raw_bg = None
+        if imgs_raw_bg is not None:
+            if not isinstance(imgs_raw_bg, da.core.Array):
+                raise ValueError(f"imgs_raw_bg should be a dask array, but was {type(imgs_raw)}")
+
+            if imgs_raw_bg.chunksize[-3:] != imgs_raw_bg.shape[-3:]:
+                raise ValueError(f"imgs_raw_bg chunksize along last three dimensions should match array size, but"
+                                 f"{imgs_raw_bg.chunksize[-3:]} != {imgs_raw_bg.shape[-3:]}")
+
+            try:
+                np.broadcast_shapes(self.imgs_raw.shape, imgs_raw_bg.shape)
+            except ValueError:
+                raise ValueError("foreground and background image shapes are not compatible")
+
+            self.imgs_raw_bg = (imgs_raw_bg.astype(float) - offset) / gain
 
         # ########################
         # information about nd-array axes
@@ -238,6 +258,7 @@ class Tomography:
         # ########################
         # reference frequency
         # shape = n0 x ... x nm x 2 where
+        # todo: check shape
         if reference_frq is None:
             self.reference_frq = None
             self.use_fixed_ref = False
@@ -599,8 +620,6 @@ class Tomography:
         :return:
         """
 
-        client = Client(LocalCluster())
-
         future = []
         for axis, label in zip([-3, -2, -1],
                                ["z", "y", "x"]):
@@ -609,8 +628,10 @@ class Tomography:
                                                                                          compute=False,
                                                                                          compressor=compressor)
                           )
-        dcompute(*future)
-        del client
+        # client = Client(LocalCluster())
+        with LocalCluster() as cluster, Client(cluster) as client:
+            dcompute(*future)
+        # del client
 
     def estimate_hologram_frqs(self,
                                save: bool = False,
@@ -634,7 +655,8 @@ class Tomography:
         """
 
         # https://distributed.dask.org/en/latest/scheduling-policies.html#adjusting-or-disabling-queuing
-        dask_cfg_set({"distributed.scheduler.worker-saturation": worker_saturation})
+        dask_cfg_set({"distributed.scheduler.worker-saturation": worker_saturation,
+                      "logging.distributed": "error"})
         cluster = LocalCluster(processes=processes,
                                n_workers=n_workers,
                                threads_per_worker=threads_per_worker)
@@ -1793,9 +1815,9 @@ class Tomography:
         dcompute([n.to_zarr(self.store.store.path,
                             component="n",
                             compute=False,
-                            compressor=self.compressor)])  # compute
+                            compressor=self.compressor)])
 
-        # save profile to see what takes the most time
+        # save profile
         client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
 
         del client
@@ -3104,8 +3126,11 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         except KeyError:
             affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
 
-    affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
-    affine_cam2recon = inv(affine_recon2cam)
+    try:
+        affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
+        # affine_cam2recon = inv(affine_recon2cam)
+    except TypeError:
+        affine_recon2cam = params2xform([1, 0, 0, 1, 0, 0])
 
     with dask_cfg_set(scheduler='threads',
                       **{'array.slicing.split_large_chunks': False}):
@@ -3269,8 +3294,10 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             e_fwd = da.expand_dims(da.from_zarr(img_z.efwd)[slices], axis=-3)
             e_fwd_abs = da.abs(e_fwd)
             e_fwd_angle = da.angle(e_fwd)
-            efwd_ebg_abs_diff = e_fwd_abs - ebg_abs
-            efwd_ebg_phase_diff = da.mod(e_fwd_angle - ebg_angle, 2 * np.pi)
+
+            # need to slice bg because may have already broadcast
+            efwd_ebg_abs_diff = e_fwd_abs - ebg_abs[..., :, slice(0, 1), :, :]
+            efwd_ebg_phase_diff = da.mod(e_fwd_angle - ebg_angle[..., :, slice(0, 1), :, :], 2 * np.pi)
             efwd_ebg_phase_diff -= - 2 * np.pi * (efwd_ebg_phase_diff > np.pi)
         else:
             e_fwd_abs = np.zeros((1, 1))
