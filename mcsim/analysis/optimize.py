@@ -46,7 +46,9 @@ def soft_threshold(tau: float,
     """
     Soft-threshold function, which is the proximal operator for the LASSO (L1 regularization) problem
 
-    x_out = argmin{ 0.5 * |x - y|_2^2 + t * |x - y|_1}
+    .. math::
+
+      \\text{prox}_t(x) = \\text{argmin}_y \\left\\{ \\frac{1}{2} \\left|x - y \\right|_2^2 + t  \\left|y \\right|_1 \\right\\}
 
     :param tau: softmax parameter
     :param x: array to take softmax of
@@ -64,6 +66,12 @@ def tv_prox(x: array,
             tau: float) -> array:
     """
     Apply TV proximal operator to x. Helper function which runs on CPU or GPU
+
+    .. math::
+
+      \\text{prox}_t(x) &= \\text{argmin}_y \\left\\{ \\frac{1}{2} \\left|x - y \\right|_2^2 + t  \\text{TV}(y) \\right\\}
+
+      \\text{TV}(y) &= \sum_{ij} \\sqrt{ \\left(y_{i+1,j} - y_{i,j}\\right)^2 + \\left(y_{i, j+1} - y_{i, j}\\right)^2}
 
     :param x:
     :param tau:
@@ -90,21 +98,51 @@ class Optimizer:
     def fwd_model(self,
                   x: array,
                   inds: Optional[Sequence[int]] = None) -> array:
+        """
+        Apply the forward model to x, assuming the loss function can be interpreted as a difference
+        between the forward model and the measured result
+
+        :param x:
+        :param inds:
+        :return:
+        """
         pass
 
     def fwd_model_adjoint(self,
                           y: array,
                           inds: Optional[Sequence[int]] = None) -> array:
+        """
+        Adjoint operator to forward model.
+
+        :param y:
+        :param inds:
+        :return:
+        """
         pass
 
     def cost(self,
              x: array,
              inds: Optional[Sequence[int]] = None) -> array:
+        """
+        Compute the data penalty part of cost/loss function at x.
+        Compute only those components specified by inds
+
+        :param x:
+        :param inds:
+        :return:
+        """
         pass
 
     def gradient(self,
                  x: array,
                  inds: Optional[Sequence[int]] = None) -> array:
+        """
+        Compute the gradient of the loss function at x for the loss functions specified by inds
+
+        :param x:
+        :param inds:
+        :return:
+        """
         pass
 
     def test_gradient(self,
@@ -113,6 +151,7 @@ class Optimizer:
                       inds: Optional[Sequence[int]] = None,
                       dx: float = 1e-5) -> (array, array):
         """
+        Numerically test the gradient computation at a single coordinate of x.
 
         :param x: point to compute gradient at
         :param jind: 1D index into x to compute gradient at
@@ -162,10 +201,23 @@ class Optimizer:
     def prox(self,
              x: array,
              step: float) -> array:
+        """
+        Apply the proximal operator
+
+        :param x:
+        :param step:
+        :return:
+        """
         pass
 
     def guess_step(self,
                    x: Optional[array] = None) -> float:
+        """
+        Guess an appropriate step-size for gradient descent
+
+        :param x:
+        :return:
+        """
         pass
 
     def run(self,
