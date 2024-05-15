@@ -921,11 +921,6 @@ class RIOptimizer(Optimizer):
 
         return costs
 
-    def propagate(self,
-                  efield_start: array,
-                  n: array) -> array:
-        pass
-
 
 class LinearScatt(RIOptimizer):
     def __init__(self,
@@ -1072,11 +1067,6 @@ class LinearScatt(RIOptimizer):
 
         return ft3(get_v(n_prox, self.no, self.wavelength))
 
-    # def run(self,
-    #         x_start: array,
-    #         **kwargs) -> dict:
-    #     return super(LinearScatt, self).run(x_start, **kwargs)
-
 
 class BPM(RIOptimizer):
     """
@@ -1178,8 +1168,16 @@ class BPM(RIOptimizer):
         apodization = xp.asarray(self.apodization)
 
         # Fourier space propagation operators
-        prop_kernel = xp.asarray(get_angular_spectrum_kernel(self.fx, self.fy, self.drs_n[0], self.wavelength, self.no))
-        kernel_img = xp.asarray(get_angular_spectrum_kernel(self.fx, self.fy, self.dz_final, self.wavelength, self.no))
+        prop_kernel = xp.asarray(get_angular_spectrum_kernel(self.fx,
+                                                             self.fy,
+                                                             self.drs_n[0],
+                                                             self.wavelength,
+                                                             self.no))
+        kernel_img = xp.asarray(get_angular_spectrum_kernel(self.fx,
+                                                            self.fy,
+                                                            self.dz_final,
+                                                            self.wavelength,
+                                                            self.no))
 
         # ##########################
         # propagate
@@ -1269,7 +1267,11 @@ class BPM(RIOptimizer):
         e_fwd[:, -2] *= dl_de
 
         # backpropagate plane-by-plane
-        prop_kernel_conj = xp.asarray(get_angular_spectrum_kernel(self.fx, self.fy, self.drs_n[0], self.wavelength, self.no))
+        prop_kernel_conj = xp.asarray(get_angular_spectrum_kernel(self.fx,
+                                                                  self.fy,
+                                                                  self.drs_n[0],
+                                                                  self.wavelength,
+                                                                  self.no))
         xp.conj(prop_kernel_conj, out=prop_kernel_conj)
         for ii in range(self.shape_n[0] - 1, 0, -1):
             dl_de = ft2(ift2(dl_de *
@@ -1383,9 +1385,10 @@ class SSNP(RIOptimizer):
             # apply effect of RI using Q
             temp = phi[..., ii, :, :, :, :] * apodization
             temp[..., 1, 0] += (temp[..., 0, 0] *
-                               (2 * np.pi / self.wavelength) ** 2 *
-                               (self.no ** 2 - n[ii] ** 2) *
-                               self.drs_n[0])
+                                (2 * np.pi / self.wavelength) ** 2 *
+                                (self.no ** 2 - n[ii] ** 2) *
+                                self.drs_n[0]
+                                )
 
             phi[..., ii + 1, :, :, :, :] = ift2(
                 xp.matmul(p, ft2(temp, axes=yx_axes, shift=False)
@@ -1503,9 +1506,9 @@ class SSNP(RIOptimizer):
                                              shift=False)
                                         )
                               ),
-                   axes=yx_axes,
-                   adjoint=True,
-                   shift=False)
+                    axes=yx_axes,
+                    adjoint=True,
+                    shift=False)
 
         # last propagation also
         dl_de = ft2(xp.matmul(p_adj,
