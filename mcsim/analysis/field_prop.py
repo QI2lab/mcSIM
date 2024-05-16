@@ -785,12 +785,20 @@ class RIOptimizer(Optimizer):
         :param efield_cost_factor:
         """
 
-        super(RIOptimizer, self).__init__()
+        super(RIOptimizer, self).__init__(e_measured.shape[-3],
+                                          prox_parameters={"tau_tv_real": float(tau_tv_real),
+                                                           "tau_tv_imag": float(tau_tv_imag),
+                                                           "tau_l1_real": float(tau_l1_real),
+                                                           "tau_l1_imag": float(tau_l1_imag),
+                                                           "use_imaginary_constraint": bool(use_imaginary_constraint),
+                                                           "use_real_constraint": bool(use_real_constraint),
+                                                           "max_imaginary_part": float(max_imaginary_part)
+                                                           }
+                                          )
 
         self.e_measured = e_measured
         self.e_measured_bg = e_measured_bg
         self.beam_frqs = beam_frqs
-        self.n_samples = self.e_measured.shape[-3]
         self.no = no
         self.wavelength = wavelength
         self.drs_e = drs_e
@@ -817,15 +825,6 @@ class RIOptimizer(Optimizer):
             if mask.dtype.kind != "b":
                 raise ValueError("mask must be `None` or a boolean array")
         self.mask = mask
-
-        self.prox_parameters = {"tau_tv_real": float(tau_tv_real),
-                                "tau_tv_imag": float(tau_tv_imag),
-                                "tau_l1_real": float(tau_l1_real),
-                                "tau_l1_imag": float(tau_l1_imag),
-                                "use_imaginary_constraint": bool(use_imaginary_constraint),
-                                "use_real_constraint": bool(use_real_constraint),
-                                "max_imaginary_part": float(max_imaginary_part)
-                                }
 
     def prox(self,
              x: array,

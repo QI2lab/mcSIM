@@ -91,9 +91,11 @@ def tv_prox(x: array,
 
 
 class Optimizer:
-    def __init__(self):
-        self.n_samples = None
-        self.prox_parameters = {}
+    def __init__(self,
+                 n_samples: int,
+                 prox_parameters: Optional[dict] = None):
+        self.n_samples = int(n_samples)
+        self.prox_parameters = prox_parameters
 
     def fwd_model(self,
                   x: array,
@@ -219,6 +221,19 @@ class Optimizer:
         :return:
         """
         pass
+
+    def _lipschitz_condition_violated(self,
+                                      step: float,
+                                      y: array,
+                                      x: array,
+                                      cx: float,
+                                      gx: array,
+                                      inds):
+        xp = cp if cp and isinstance(x, cp.ndarray) else np
+        cy = xp.mean(self.cost(y, inds=inds), axis=0)
+        return (cy > cx + xp.sum(gx.real * (y - x).real +
+                                 gx.imag * (y - x).imag) +
+                0.5 / step * xp.linalg.norm(y - x)**2)
 
     def run(self,
             x_start: array,
@@ -400,14 +415,8 @@ class Optimizer:
 
                 y = self.prox(x - steps[ii] * gx, steps[ii])
 
-                def lipschitz_condition_violated(y, cx, gx):
-                    cy = xp.mean(self.cost(y, inds=inds), axis=0)
-                    return cy > cx + xp.sum(gx.real * (y - x).real +
-                                            gx.imag * (y - x).imag) + \
-                                            0.5 / steps[ii] * xp.linalg.norm(y - x)**2
-
                 # reduce step until we don't violate Lipschitz continuous gradient condition
-                while lipschitz_condition_violated(y, cx, gx):
+                while self._lipschitz_condition_violated(steps[ii], y, x, cx, gx, inds):
                     steps[ii] *= line_search_factor
                     y = self.prox(x - steps[ii] * gx, steps[ii])
                     ls_iters += 1

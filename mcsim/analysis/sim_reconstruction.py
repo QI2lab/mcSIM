@@ -4124,18 +4124,15 @@ class FistaSim(Optimizer):
         :param apodization:
         """
 
-        super(FistaSim, self).__init__()
-
-        self.prox_parameters = {"tau_tv": float(tau_tv),
-                                "tau_l1": float(tau_l1),
-                                "enforce_positivity": enforce_positivity
-                                }
-
+        super(FistaSim, self).__init__(patterns.shape[0],
+                                       prox_parameters={"tau_tv": float(tau_tv),
+                                                        "tau_l1": float(tau_l1),
+                                                        "enforce_positivity": enforce_positivity}
+                                       )
         self.nbin = nbin
         self.imgs = imgs
         self.ny, self.nx = imgs.shape[-2:]
         self.patterns = patterns
-        self.n_samples = patterns.shape[0]
         self.psf = psf
 
         if cp and isinstance(imgs, cp.ndarray):
