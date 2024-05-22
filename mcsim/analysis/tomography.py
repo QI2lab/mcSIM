@@ -640,9 +640,10 @@ class Tomography:
                                threads_per_worker: int = 1,
                                worker_saturation: float = 1.0) -> None:
         """
-        Estimate hologram frequencies from raw images.
-        Guess values need to be within a few pixels for this to succeed. Can easily achieve this accuracy by
-        looking at FFT
+        Estimate hologram frequencies from raw images. The current value of self.hologram_frqs() is used as the guess.
+        Guess values usually need to be within a few pixels for fitting to succeed. This accuracy is usually
+        achievable by looking at the Fourier transform of the hologram. To display the Fourier transform,
+        use the function plot_image()
 
         :param save:
         :param fit_on_gpu: do fitting on GPU with gpufit. Otherwise, use CPU.
@@ -2705,7 +2706,7 @@ def get_scattered_field(efields: array,
 
     :param efields: array of size n0 x ... x nm x ny x nx
     :param efields_bg: broadcastable to same size as efields
-    :param regularization: limit the influence of any pixels where |efields| < regularization
+    :param regularization: limit the influence of any pixels where abs(efields) < regularization
     :param use_born: whether to use the Born or Rytov model.
     :param use_weighted_unwrap: whether to use phase wrap routine where confidence is weighted by the
       electric field amplitude
