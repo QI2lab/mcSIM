@@ -652,8 +652,8 @@ class Tomography:
         :param worker_saturation:
         :return:
         """
+        # todo: why not combine this function with unmix_holograms()?
         # todo: can I set this in cluster?
-        # https://distributed.dask.org/en/latest/scheduling-policies.html#adjusting-or-disabling-queuing
         with dask_cfg_set({"distributed.scheduler.worker-saturation": worker_saturation,
                            "logging.distributed": "error"}):
             with LocalCluster(n_workers=n_workers,
@@ -663,51 +663,28 @@ class Tomography:
                 if self.verbose:
                     print(cluster.dashboard_link)
 
-                # fitting logic
-                # todo: re-implement!
-                if not self.use_fixed_holo_frequencies:
-                    slices_bg = tuple([slice(None) for _ in range(self.nextra_dims)])
-                else:
-                    slices_bg = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
-
                 fit_data_imgs = not self.use_fixed_holo_frequencies or self.use_average_as_background
-                fit_bg_imgs = not self.use_average_as_background
 
-                # create array for ref frqs
-                # NOTE only works for equal multiplex for all images!
+                # create array for ref frqs. NOTE only works for equal multiplex for all images!
                 hologram_frqs_guess = np.stack(self.hologram_frqs, axis=0)
-
-                # frequencies
-                fxs = self.fxs
-                fys = self.fys
-                dfx = fxs[1] - fxs[0]
-                dfy = fys[1] - fys[0]
-
-                apodization = np.outer(hann(self.ny),
-                                       hann(self.nx))
-
-                # get rois
-                cx_pix = np.round((hologram_frqs_guess[..., 0] - fxs[0]) / dfx).astype(int)
-                cy_pix = np.round((hologram_frqs_guess[..., 1] - fys[0]) / dfy).astype(int)
-                c_guess = np.stack((cy_pix, cx_pix), axis=-1)
+                c_guess = np.stack((np.round((hologram_frqs_guess[..., 1] - self.fys[0]) / self.dfy).astype(int),
+                                    np.round((hologram_frqs_guess[..., 0] - self.fxs[0]) / self.dfx).astype(int)
+                                    ),
+                                   axis=-1)
 
                 rois_all = get_centered_rois(c_guess,
-                                             [self.freq_roi_size_pix,
-                                              self.freq_roi_size_pix],
+                                             [self.freq_roi_size_pix, self.freq_roi_size_pix],
                                              min_vals=(0, 0),
                                              max_vals=(self.ny, self.nx)
                                              )
 
-                xx, yy = np.meshgrid(range(self.freq_roi_size_pix),
-                                     range(self.freq_roi_size_pix))
-
-                # cut rois
                 def cut_rois(img: array,
                              roi_size_pix: int,
                              block_id=None,):
-                    img_ft = ft2(img * apodization)
 
-                    npatt, ny, nx = img_ft.shape[-3:]
+                    npatt, ny, nx = img.shape[-3:]
+                    img_ft = ft2(img * hann(ny)[:, None] * hann(nx)[None, :])
+
                     nroi = rois_all.shape[1]
                     roi_out = np.zeros(img_ft.shape[:-3] + (npatt, nroi, roi_size_pix, roi_size_pix))
                     for ii in range(npatt):
@@ -731,7 +708,12 @@ class Tomography:
                                              meta=np.array((), dtype=float))
 
                 rois_cut_bg = None
-                if fit_bg_imgs:
+                if not self.use_average_as_background:
+                    if not self.use_fixed_holo_frequencies:
+                        slices_bg = tuple([slice(None) for _ in range(self.nextra_dims)])
+                    else:
+                        slices_bg = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
+
                     rois_cut_bg = da.map_blocks(cut_rois,
                                                 self.imgs_raw_bg,
                                                 self.freq_roi_size_pix,
@@ -747,6 +729,9 @@ class Tomography:
                 def fit_rois_cpu(img_rois,
                                  model=gauss2d_symm(),
                                  ):
+
+                    xx, yy = np.meshgrid(range(img_rois.shape[-1]),
+                                         range(img_rois.shape[-2]))
 
                     centers = np.zeros(img_rois.shape[:-2] + (2,))
 
@@ -805,7 +790,7 @@ class Tomography:
                         cx = centers[..., 0]
                         cy = centers[..., 1]
 
-                    if fit_bg_imgs:
+                    if not self.use_average_as_background:
                         centers_bg = da.map_blocks(fit_rois_cpu,
                                                    rois_cut_bg,
                                                    drop_axis=(-1, -2),
@@ -821,20 +806,20 @@ class Tomography:
                         cx, cy, fit_params, init_params, fit_states = fit_rois_gpu(rois_cut,
                                                                                    self.freq_roi_size_pix)
 
-                    if fit_bg_imgs:
+                    if not self.use_average_as_background:
                         cx_bg, cy_bg, _, _, _ = fit_rois_gpu(rois_cut_bg,
                                                              self.freq_roi_size_pix)
 
                 # final frequencies
                 if fit_data_imgs:
-                    frqs_hologram = np.stack((cx * dfx + fxs[rois_all[..., 2]],
-                                              cy * dfy + fys[rois_all[..., 0]]), axis=-1)
+                    frqs_hologram = np.stack((cx * self.dfx + self.fxs[rois_all[..., 2]],
+                                              cy * self.dfy + self.fys[rois_all[..., 0]]), axis=-1)
                 else:
                     frqs_hologram = None
 
-                if fit_bg_imgs:
-                    frqs_hologram_bg = np.stack((cx_bg * dfx + fxs[rois_all[..., 2]],
-                                                 cy_bg * dfy + fys[rois_all[..., 0]]), axis=-1)
+                if not self.use_average_as_background:
+                    frqs_hologram_bg = np.stack((cx_bg * self.dfx + self.fxs[rois_all[..., 2]],
+                                                 cy_bg * self.dfy + self.fys[rois_all[..., 0]]), axis=-1)
                 else:
                     frqs_hologram_bg = None
 
@@ -855,12 +840,17 @@ class Tomography:
                 # #########################
                 def plot(img,
                          frqs_holo,
+                         fx,
+                         fy,
                          frqs_guess=None,
                          rois_all=None,
                          save_dir=None,
                          prefix="",
                          figsize=(20, 10),
                          block_id=None):
+
+                    dfx = fx[1] - fx[0]
+                    dfy = fy[1] - fy[0]
 
                     img_ft = ft2(img).squeeze()
                     if img_ft.ndim != 2:
@@ -871,8 +861,8 @@ class Tomography:
                         figh = plt.figure(figsize=figsize)
 
                     ax = figh.add_subplot(1, 2, 1)
-                    extent_f = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
-                                fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]
+                    extent_f = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx,
+                                fy[-1] + 0.5 * dfy, fy[0] - 0.5 * dfy]
 
                     ax.set_title("$|I(f)|$")
                     ax.imshow(np.abs(img_ft),
@@ -885,9 +875,9 @@ class Tomography:
 
                     if rois_all is not None:
                         for roi in rois_all:
-                            ax.add_artist(Rectangle((fxs[roi[2]], fys[roi[0]]),
-                                                    fxs[roi[3] - 1] - fxs[roi[2]],
-                                                    fys[roi[1] - 1] - fys[roi[0]],
+                            ax.add_artist(Rectangle((fx[roi[2]], fy[roi[0]]),
+                                                    fx[roi[3] - 1] - fx[roi[2]],
+                                                    fy[roi[1] - 1] - fy[roi[0]],
                                                     edgecolor='k',
                                                     fill=False))
 
@@ -898,10 +888,10 @@ class Tomography:
                     roi = rois_all[0]
                     iroi = cut_roi(roi, img_ft)[0]
 
-                    extent_f_roi = [fxs[roi[2]] - 0.5 * dfx,
-                                    fxs[roi[3] - 1] + 0.5 * dfx,
-                                    fys[roi[1] - 1] + 0.5 * dfy,
-                                    fys[roi[0]] - 0.5 * dfy]
+                    extent_f_roi = [fx[roi[2]] - 0.5 * dfx,
+                                    fx[roi[3] - 1] + 0.5 * dfx,
+                                    fy[roi[1] - 1] + 0.5 * dfy,
+                                    fy[roi[0]] - 0.5 * dfy]
 
                     ax.imshow(np.abs(iroi),
                               extent=extent_f_roi,
@@ -928,7 +918,7 @@ class Tomography:
                     with rc_context({'interactive': False,
                                      'backend': "agg"}):
 
-                        if fit_bg_imgs:
+                        if not self.use_average_as_background:
                             iraw = self.imgs_raw_bg[slice_start].squeeze(axis=axes_start)
                             h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs_bg]
                         else:
@@ -937,6 +927,8 @@ class Tomography:
 
                         dcompute([delayed(plot)(iraw[ii],
                                                 h[ii],
+                                                self.fxs,
+                                                self.fys,
                                                 save_dir=frq_dir,
                                                 frqs_guess=hologram_frqs_guess[ii],
                                                 prefix=f"{ii:d}",
