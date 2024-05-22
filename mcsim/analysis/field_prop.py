@@ -1083,6 +1083,7 @@ class BPM(RIOptimizer):
                  shape_n: Sequence[int, int, int],
                  e_measured: Optional[array] = None,
                  e_measured_bg: Optional[array] = None,
+                 infer_ctf: bool = False,
                  **kwargs
                  ):
         """
@@ -1114,6 +1115,8 @@ class BPM(RIOptimizer):
                                   e_measured_bg,
                                   **kwargs)
 
+        self.infer_ctf = infer_ctf
+
         # include cosine obliquity factor
         if self.beam_frqs is not None:
             thetas, _ = frqs2angles(self.beam_frqs, self.no / self.wavelength)
@@ -1135,9 +1138,11 @@ class BPM(RIOptimizer):
         self.fx = xp.expand_dims(xp.fft.fftfreq(self.shape_n[2], self.drs_n[2]), axis=0)
         self.fy = xp.expand_dims(xp.fft.fftfreq(self.shape_n[1], self.drs_n[1]), axis=1)
 
+        self.f = 1e-1
+
     def propagate(self,
                   efield_start: array,
-                  n: array,
+                  x: array,
                   thetas: array) -> array:
         """
         Propagate electric field through medium with index of refraction n(x, y, z) using the projection approximation,
@@ -1145,7 +1150,7 @@ class BPM(RIOptimizer):
         and then include the effect of the inhomogeneous refractive index in the projection approximation
 
         :param efield_start: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
-        :param n: nz x ny x nx array
+        :param x: nz x ny x nx array or (nz + 1) x ny x nx array
         :param thetas: assuming a plane wave input, this is the angle between the plane wave propagation direction
           and the optical axis. This provides a better approximation for the phase shift of the beam through a
           refractive index layer
@@ -1161,10 +1166,16 @@ class BPM(RIOptimizer):
 
         # ensure arrays of correct type
         efield_start = xp.asarray(efield_start)
-        n = xp.asarray(n)
+        x = xp.asarray(x)
         thetas = xp.expand_dims(xp.asarray(thetas), axis=(-1, -2))
-        atf = xp.asarray(self.atf)
         apodization = xp.asarray(self.apodization)
+
+        if self.infer_ctf:
+            atf = x[-1] * self.f
+            n = x[:-1]
+        else:
+            atf = xp.asarray(self.atf)
+            n = x
 
         # Fourier space propagation operators
         prop_kernel = xp.asarray(get_angular_spectrum_kernel(self.fx,
@@ -1215,6 +1226,13 @@ class BPM(RIOptimizer):
             xp = cp
         else:
             xp = np
+
+        if self.infer_ctf:
+            atf = xp.array(x[-1], copy=True) * self.f
+            n = x[:-1]
+        else:
+            atf = xp.asarray(self.atf)
+            n = x
 
         # arrays we will need
         thetas = xp.expand_dims(xp.asarray(self.thetas[inds]), axis=(-1, -2))
@@ -1271,7 +1289,7 @@ class BPM(RIOptimizer):
 
         dl_de = ft2(dl_de *
                     kernel_img.conj() *
-                    xp.conj(xp.asarray(self.atf)),
+                    xp.conj(atf),
                     adjoint=True, shift=False)
         e_fwd[:, -2] *= dl_de
 
@@ -1283,15 +1301,28 @@ class BPM(RIOptimizer):
                                                                   self.no))
         xp.conj(prop_kernel_conj, out=prop_kernel_conj)
         for ii in range(self.shape_n[0] - 1, 0, -1):
-            dl_de = ft2(ift2(dl_de *
+            dl_de = (ft2(ift2(dl_de *
                              xp.exp(1j * (2 * np.pi / self.wavelength) * self.drs_n[0] *
-                                    (x[ii] - self.no) / xp.cos(thetas)).conj(),
-                                    adjoint=True, shift=False) *
-                                    prop_kernel_conj,
-                                    adjoint=True, shift=False) * xp.conj(apodization)
+                                    (n[ii] - self.no) / xp.cos(thetas)).conj(),
+                             adjoint=True, shift=False) *
+                             prop_kernel_conj,
+                             adjoint=True, shift=False) *
+                     xp.conj(apodization))
             e_fwd[:, ii] *= dl_de
 
-        return e_fwd[:, 1:-1]
+        # e_fwd[:, 0] stores dL/dE_{in}
+        # e_fwd[:, 0] = (ft2(ift2(dl_de *
+        #                      xp.exp(1j * (2 * np.pi / self.wavelength) * self.drs_n[0] *
+        #                             (x[0] - self.no) / xp.cos(thetas)).conj(),
+        #                      adjoint=True, shift=False) *
+        #                      prop_kernel_conj,
+        #                      adjoint=True, shift=False) *
+        #              xp.conj(apodization))
+
+        if self.infer_ctf:
+            return e_fwd[:, 1:]
+        else:
+            return e_fwd[:, 1:-1]
 
     def get_estart(self,
                    inds: Optional[Sequence[int]] = None) -> array:
@@ -1303,6 +1334,22 @@ class BPM(RIOptimizer):
                                      self.no,
                                      self.drs_n[1:],
                                      self.wavelength)[..., 0, :, :]
+
+    def prox(self,
+             x: array,
+             step: float) -> array:
+
+        xp = cp if cp and isinstance(x, cp.ndarray) else np
+
+        if self.infer_ctf:
+            # apply proximal operator on n
+            n_prox = super(BPM, self).prox(x[:-1], step)
+            ctf = xp.array(x[-1], copy=True)
+            ctf[self.atf == 0] = 0.
+
+            return xp.concatenate((n_prox, xp.expand_dims(ctf, axis=0)), axis=0)
+        else:
+            return super(BPM, self).prox(x, step)
 
 
 class SSNP(RIOptimizer):
