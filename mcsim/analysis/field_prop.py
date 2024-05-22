@@ -838,10 +838,10 @@ class RIOptimizer(Optimizer):
         # ###########################
         def apply_l1(x_real, x_imag):
             if self.prox_parameters["tau_l1_real"] != 0:
-                x_real = soft_threshold(self.prox_parameters["tau_l1_real"] * step, x_real - self.no) + self.no
+                x_real = soft_threshold(self.prox_parameters["tau_l1_real"], x_real - self.no) + self.no
 
             if self.prox_parameters["tau_l1_imag"] != 0:
-                x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"] * step, x_imag)
+                x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"], x_imag)
 
             return x_real, x_imag
 
@@ -851,10 +851,10 @@ class RIOptimizer(Optimizer):
         def apply_tv(x_real, x_imag):
             # note cucim TV implementation requires ~10x memory as array does
             if self.prox_parameters["tau_tv_real"] != 0:
-                x_real = tv_prox(x_real, self.prox_parameters["tau_tv_real"] * step)
+                x_real = tv_prox(x_real, self.prox_parameters["tau_tv_real"])
 
             if self.prox_parameters["tau_tv_imag"] != 0:
-                x_imag = tv_prox(x_imag, self.prox_parameters["tau_tv_imag"] * step)
+                x_imag = tv_prox(x_imag, self.prox_parameters["tau_tv_imag"])
 
             return x_real, x_imag
 
