@@ -1262,8 +1262,8 @@ class BPM(RIOptimizer):
 
         # gradient wrt CTF
         dl_de = ift2(dl_de, adjoint=True, shift=False)
-        e_fwd[:, -1] = (kernel_img * ft2(e_fwd[:, -2], shift=False)).conj()
-        e_fwd[:, -1] *= dl_de * self.f
+        # e_fwd[:, -1] = (kernel_img * ft2(e_fwd[:, -2], shift=False)).conj()
+        # e_fwd[:, -1] *= dl_de * self.f
 
         # gradients wrt n
         xp.conjugate(e_fwd[:, :-1], out=e_fwd[:, :-1])
