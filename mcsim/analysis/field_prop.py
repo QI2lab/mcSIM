@@ -1253,13 +1253,23 @@ class BPM(RIOptimizer):
         # These are adjoint in the sense that for any pair of fields a, b we have
         # np.sum(a.conj() * propagate_inhomogeneous(b)) = np.sum(backpropagate_inhomogeneous(a).conj() * b)
         # #########################
-        # conjugate in place
-        xp.conjugate(e_fwd, out=e_fwd)
-        e_fwd *= -1j * (2 * np.pi / self.wavelength) * self.drs_n[0] / xp.expand_dims(xp.cos(thetas), axis=-1)
-
         # propagate from imaging plane back to last plane
-        kernel_img = xp.asarray(get_angular_spectrum_kernel(self.fx, self.fy, self.dz_final, self.wavelength, self.no))
-        dl_de = ft2(ift2(dl_de, adjoint=True, shift=False) *
+        kernel_img = xp.asarray(get_angular_spectrum_kernel(self.fx,
+                                                            self.fy,
+                                                            self.dz_final,
+                                                            self.wavelength,
+                                                            self.no))
+
+        # gradient wrt CTF
+        dl_de = ift2(dl_de, adjoint=True, shift=False)
+        e_fwd[:, -1] = (kernel_img * ft2(e_fwd[:, -2], shift=False)).conj()
+        e_fwd[:, -1] *= dl_de * self.f
+
+        # gradients wrt n
+        xp.conjugate(e_fwd[:, :-1], out=e_fwd[:, :-1])
+        e_fwd[:, :-1] *= -1j * (2 * np.pi / self.wavelength) * self.drs_n[0] / xp.expand_dims(xp.cos(thetas), axis=-1)
+
+        dl_de = ft2(dl_de *
                     kernel_img.conj() *
                     xp.conj(xp.asarray(self.atf)),
                     adjoint=True, shift=False)
