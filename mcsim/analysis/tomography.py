@@ -754,6 +754,7 @@ class Tomography:
 
                     init_params = np.zeros((data_shape[0], 5), dtype=np.float32)
 
+                    # todo: can I use model to do this?
                     # amplitude
                     init_params[:, 0] = data.max(axis=-1)
 
@@ -862,12 +863,12 @@ class Tomography:
                         figh = plt.figure(figsize=figsize)
 
                     ax = figh.add_subplot(1, 2, 1)
-                    extent_f = [fx[0] - 0.5 * dfx, fx[-1] + 0.5 * dfx,
-                                fy[-1] + 0.5 * dfy, fy[0] - 0.5 * dfy]
-
                     ax.set_title("$|I(f)|$")
                     ax.imshow(np.abs(img_ft),
-                              extent=extent_f,
+                              extent=[fx[0] - 0.5 * dfx,
+                                      fx[-1] + 0.5 * dfx,
+                                      fy[-1] + 0.5 * dfy,
+                                      fy[0] - 0.5 * dfy],
                               norm=PowerNorm(gamma=0.1),
                               cmap="bone")
                     if frqs_guess is not None:
@@ -889,18 +890,18 @@ class Tomography:
                     roi = rois_all[0]
                     iroi = cut_roi(roi, img_ft)[0]
 
-                    extent_f_roi = [fx[roi[2]] - 0.5 * dfx,
-                                    fx[roi[3] - 1] + 0.5 * dfx,
-                                    fy[roi[1] - 1] + 0.5 * dfy,
-                                    fy[roi[0]] - 0.5 * dfy]
-
                     ax.imshow(np.abs(iroi),
-                              extent=extent_f_roi,
+                              extent=[fx[roi[2]] - 0.5 * dfx,
+                                      fx[roi[3] - 1] + 0.5 * dfx,
+                                      fy[roi[1] - 1] + 0.5 * dfy,
+                                      fy[roi[0]] - 0.5 * dfy],
                               cmap="bone")
 
                     if frqs_guess is not None:
-                        ax.plot(frqs_guess[0, 0], frqs_guess[0, 1], 'gx')
-                    ax.plot(frqs_holo[0, 0], frqs_holo[0, 1], 'rx')
+                        ax.plot(frqs_guess[0, 0],
+                                frqs_guess[0, 1], 'gx')
+                    ax.plot(frqs_holo[0, 0],
+                            frqs_holo[0, 1], 'rx')
 
                     ax.set_xlabel("$f_x$ (1/$\mu m$)")
                     ax.set_ylabel("$f_y$ (1/$\mu m$)")
@@ -909,15 +910,15 @@ class Tomography:
                         figh.savefig(Path(save_dir, f"{prefix:s}=hologram_frq_diagnostic.png"))
                         plt.close(figh)
 
-                slice_start = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
-                axes_start = tuple(range(self.nextra_dims))
-
                 if save and self.save_dir is not None:
                     frq_dir = self.save_dir / f"frq_fits"
                     frq_dir.mkdir(exist_ok=True)
 
                     with rc_context({'interactive': False,
                                      'backend': "agg"}):
+
+                        slice_start = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
+                        axes_start = tuple(range(self.nextra_dims))
 
                         if not self.use_average_as_background:
                             iraw = self.imgs_raw_bg[slice_start].squeeze(axis=axes_start)
@@ -939,7 +940,7 @@ class Tomography:
 
                     client.profile(filename=frq_dir / f"frequency_fitting_dask_profile.html")
 
-    def get_beam_frqs(self) -> list[array]:
+    def get_beam_frqs(self) -> list[np.ndarray]:
         """
         Get beam incident beam frequencies from hologram frequencies and reference frequency
 
@@ -996,7 +997,7 @@ class Tomography:
         else:
             return None
 
-        # # map pupil positions to frequency
+        # map pupil positions to frequency
         frqs_from_pupil = xform_points(centers_dmd, xform_dmd2frq)
         # estimate frequency of reference beam from affine transformation and previous calibration information
         frq_dmd_center = xform_points(np.array([[0, 0]]), xform_dmd2frq)[0]
@@ -1507,7 +1508,6 @@ class Tomography:
                                                    mode="born" if self.model == "born" else "rytov",
                                                    interpolate=False,
                                                    use_gpu=use_gpu)
-
         if self.verbose:
             print(f"Generated linear model for initial guess in {perf_counter() - tstart_linear_model:.2f}s")
 
