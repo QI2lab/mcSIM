@@ -43,7 +43,7 @@ from localize_psf.affine import (params2xform,
                                  fit_xform_points,
                                  xform_points)
 from mcsim.analysis.phase_unwrap import phase_unwrap as weighted_phase_unwrap
-from mcsim.analysis.optimize import to_cpu
+from mcsim.analysis.optimize import Optimizer, to_cpu, soft_threshold
 from mcsim.analysis.fft import ft3, ift3, ft2, ift2, translate_ft
 from mcsim.analysis.field_prop import (get_n,
                                        get_v,
@@ -112,6 +112,7 @@ class Tomography:
                  fit_phases: bool = False,
                  fit_translations: bool = False,
                  translation_thresh: float = 1 / 30,
+                 fit_phase_profile: bool = False,
                  apodization: Optional[np.ndarray] = None,
                  save_auxiliary_fields: bool = False,
                  compressor: Codec = Zlib(),
@@ -292,6 +293,7 @@ class Tomography:
         self.translations_bg = np.zeros_like(self.translations)
         self.phase_params = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1), dtype=complex)
         self.phase_params_bg = np.ones_like(self.phase_params)
+        self.fit_phase_profile = fit_phase_profile
 
         self.save_auxiliary_fields = save_auxiliary_fields
 
@@ -1147,13 +1149,18 @@ class Tomography:
                         compressor: Codec = Zlib(),
                         **kwargs):
         """
-        Unmix and preprocess holograms.
+        Unmix and preprocess holograms. Additional kwargs are passed through to dask LocalCluster()
 
         :param use_gpu:
         :param processes:
         :param compressor:
         :return:
         """
+
+        if use_gpu and cp:
+            xp = cp
+        else:
+            xp = np
 
         with LocalCluster(processes=processes, **kwargs) as cluster, Client(cluster) as client:
             if self.verbose:
@@ -1165,12 +1172,6 @@ class Tomography:
             ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes else slice(None)
                                for a in range(self.nextra_dims)] +
                               [slice(None)] * 3)
-
-            # set up
-            if use_gpu and cp:
-                xp = cp
-            else:
-                xp = np
 
             # #########################
             # get electric field from holograms
@@ -1213,6 +1214,8 @@ class Tomography:
             # #########################
             if self.fit_translations:
                 print("computing translations")
+
+                def _ft_abs(m: array) -> array: return ft2(abs(ift2(m)))
 
                 holograms_abs_ft = da.map_blocks(_ft_abs,
                                                  holograms_ft,
@@ -1323,6 +1326,44 @@ class Tomography:
             # #########################
             # compute
             # #########################
+            def correct_phase_profile(eft, ebg_ft, block_id=None):
+                nextra_dims = eft.ndim - 3
+                extra_dims = tuple(range(eft.ndim - 3))
+
+                pc = PhaseCorr(ift2(eft.squeeze(extra_dims)),
+                               ift2(ebg_ft.squeeze(extra_dims)),
+                               tau_l1=1e3,
+                               escale=40.)
+                rpc = pc.run(xp.ones(eft.shape[-2:], dtype=complex),
+                             step=1e5,
+                             max_iterations=10,
+                             line_search=True,
+                             line_search_iter_limit=3,
+                             n_batch=3,
+                             compute_batch_grad_parallel=True,
+                             compute_cost=False,
+                             verbose=False,
+                             print_newline=False,
+                             )
+
+                return rpc["x"].reshape((1,) * nextra_dims + (1,) + eft.shape[-2:])
+
+            if self.fit_phase_profile:
+                phase_prof = da.map_blocks(correct_phase_profile,
+                                           holograms_ft,
+                                           holograms_ft_bg,
+                                           drop_axis=(-3),
+                                           new_axis=(-3),
+                                           dtype=complex,
+                                           meta=xp.array((), dtype=complex),
+                                           )
+                holograms_ft = ft2(phase_prof * ift2(holograms_ft))
+            else:
+                phase_prof = da.ones(1)
+
+            # #########################
+            # compute
+            # #########################
             future = [da.map_blocks(to_cpu,
                               holograms_ft,
                                     dtype=complex).to_zarr(self.store.store.path,
@@ -1334,7 +1375,14 @@ class Tomography:
                                     dtype=complex).to_zarr(self.store.store.path,
                                                            component="efield_bg_ft",
                                                            compute=False,
-                                                           compressor=compressor)]
+                                                           compressor=compressor),
+                      da.map_blocks(to_cpu,
+                                    phase_prof,
+                                    dtype=complex).to_zarr(self.store.store.path,
+                                                           component="phase_correction_profile",
+                                                           compute=False,
+                                                           compressor=compressor)
+                      ]
             dcompute(*future)
 
             self.efields_ft = da.from_zarr(self.store["efields_ft"])
@@ -2449,9 +2497,6 @@ class Tomography:
         return figh
 
 
-def _ft_abs(m: array) -> array: return ft2(abs(ift2(m)))
-
-
 def cut_mask(img: array,
              mask: array,
              mask_val: float = 0) -> array:
@@ -2987,7 +3032,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             show_mips = False
 
         if show_mips:
-
             n_maxz = da.expand_dims(da.from_zarr(img_z.n_maxz)[slices[:-1]] - no, axis=(-3, -4))
             n_maxy = da.expand_dims(da.from_zarr(img_z.n_maxy)[slices[:-1]] - no, axis=(-3, -4))
             n_maxx = da.flip(da.swapaxes(da.expand_dims(da.from_zarr(img_z.n_maxx)[slices[:-1]] - no,
@@ -3101,7 +3145,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         # ######################
         # simulated forward fields
         # ######################
-        if show_efields_fwd:
+        if show_efields_fwd and hasattr(img_z, "efwd"):
             print("loading fwd electric fields")
             e_fwd = da.expand_dims(da.from_zarr(img_z.efwd)[slices], axis=-3)
             e_fwd_abs = da.abs(e_fwd)
@@ -3128,6 +3172,25 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             e_fwd_angle = np.broadcast_to(e_fwd_angle, bcast_shape_efwd)
             efwd_ebg_abs_diff = np.broadcast_to(efwd_ebg_abs_diff, bcast_shape_efwd)
             efwd_ebg_phase_diff = np.broadcast_to(efwd_ebg_phase_diff, bcast_shape_efwd)
+
+        # ######################
+        # phase correction
+        # ######################
+        if hasattr(img_z, "phase_correction_profile"):
+            pcorr = da.expand_dims(da.from_zarr(img_z.phase_correction_profile)[slices], axis=-3)
+            pcorr_abs = da.abs(pcorr)
+            pcorr_angle = da.angle(pcorr)
+        else:
+            pcorr_abs = np.ones((1, 1))
+            pcorr_angle = np.ones_like(pcorr_abs)
+
+        if compute:
+            pcorr_abs, pcorr_angle = dcompute([pcorr_abs, pcorr_angle])[0]
+
+            bcast_shape_pcorr = np.broadcast_shapes(pcorr_abs.shape, bcast_shape)
+            pcorr_abs = np.broadcast_to(pcorr_abs, bcast_shape_pcorr)
+            pcorr_angle = np.broadcast_to(pcorr_angle, bcast_shape_pcorr)
+
 
         # ######################
         # create viewer
@@ -3161,7 +3224,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         # electric fields
         # ######################
         if show_efields:
-
             # field amplitudes
             viewer.add_image(ebg_abs,
                              scale=scale,
@@ -3278,6 +3340,27 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                                  colormap=phase_cmap,
                                  name=f"{prefix:s}Im(e scatt)",
                                  )
+
+        # ######################
+        # phase correction
+        # ######################
+        viewer.add_image(pcorr_abs,
+                         scale=scale,
+                         affine=affine_recon2cam,
+                         translate=[zoffset, yshift_pix, 0],
+                         contrast_limits=[0., 1.],
+                         colormap=real_cmap,
+                         name=f"{prefix:s}abs(P)",
+                         )
+
+        viewer.add_image(pcorr_angle,
+                         scale=scale,
+                         affine=affine_recon2cam,
+                         translate=[zoffset, yshift_pix, 0],
+                         contrast_limits=[-phase_lim, phase_lim],
+                         colormap=phase_cmap,
+                         name=f"{prefix:s}angle(P)",
+                         )
 
         # ######################
         # reconstructed index of refraction
@@ -3433,3 +3516,59 @@ def parse_time(dt: float) -> (tuple, str):
     tstr = f"{days:02d} days, {hours:02d}h:{mins:02d}m:{secs:04.1f}s"
 
     return (days, hours, mins, secs), tstr
+
+class PhaseCorr(Optimizer):
+    def __init__(self,
+                 e,
+                 ebg,
+                 tau_l1: float = 0,
+                 escale: float = 40.):
+        super(PhaseCorr, self).__init__(e.shape[-3],
+                                        prox_parameters={"tau_l1": float(tau_l1)})
+
+        self.e = e
+        self.ebg = ebg
+        self.escale = float(escale)
+
+    def gradient(self,
+                 x: array,
+                 inds: Optional[Sequence[int]] = None) -> array:
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        einds = self.e[inds]
+
+        g = ((einds * x - self.ebg[inds]) * einds.conj() /
+             (np.abs(self.ebg[inds])**2 + self.escale**2))
+
+        return g
+
+    def cost(self,
+             x: array,
+             inds: Optional[Sequence[int]] = None) -> array:
+        if inds is None:
+            inds = list(range(self.n_samples))
+
+        c = 0.5 * ((abs(self.e[inds] * x - self.ebg[inds])**2)/
+                   (abs(self.ebg[inds])**2 + self.escale**2)).sum(axis=(-1, -2))
+        return c
+
+    def prox(self,
+             x: array,
+             step: float = 1.) -> array:
+
+        if cp and isinstance(x, cp.ndarray):
+            xp = cp
+        else:
+            xp = np
+
+        # apply l1 to FT
+        if self.prox_parameters["tau_l1"] != 0:
+            ft_x = ft2(x)
+            ft_prox = soft_threshold(self.prox_parameters["tau_l1"],
+                                     abs(ft_x)) * xp.exp(1j * xp.angle(ft_x))
+            y = ift2(ft_prox)
+        else:
+            y = xp.array(x, copy=True)
+
+        return y
