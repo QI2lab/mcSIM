@@ -1476,23 +1476,6 @@ class Tomography:
                                             mode=self.model,
                                             interpolate=True,
                                             use_gpu=use_gpu)
-
-            if self.verbose:
-                tstart_step = perf_counter()
-                print("estimating step size")
-
-            # mguess = LinearScatt(np.empty((1, self.ny, self.nx)),
-            #                      linear_model,
-            #                      self.no,
-            #                      self.wavelength,
-            #                      None,
-            #                      None,
-            #                      None)
-            # step = mguess.guess_step()
-
-            if self.verbose:
-                print(f"estimated in {perf_counter() - tstart_step:.2f}s")
-
         else:
             optimizer = self.models[self.model]
 
@@ -1984,67 +1967,6 @@ class Tomography:
 
         return figh2
 
-    def plot_costs(self,
-                   index: Optional[tuple[int]] = None,
-                   **kwargs) -> Figure:
-        """
-        Plot value of cost function during optimization
-
-        :param index:
-        :param kwargs: passed through to figure
-        :return figh_cost:
-        """
-
-        if index is None:
-            index = (0,) * self.nextra_dims
-
-        if len(index) != self.nextra_dims:
-            raise ValueError(f"len(index) was {len(index):d} != {self.nextra_dims:d}")
-
-        # todo: implement index
-        figh_cost = plt.figure(**kwargs)
-        ax = figh_cost.add_subplot(1, 1, 1)
-
-        if hasattr(self.store, "costs"):
-            carr = np.array(self.store.costs)[index].transpose()
-
-            ax.plot(carr, '.')
-            ax.set_xlabel("iteration")
-            ax.set_ylabel("cost")
-
-        return figh_cost
-
-    def plot_steps(self,
-                   index: Optional[tuple[int]] = None,
-                   **kwargs):
-        """
-        Plot step sizes used during inference
-
-        :param index:
-        :param kwargs: passed through to figure
-        :return figh_step:
-        """
-
-        if index is None:
-            index = (0,) * self.nextra_dims
-
-        if len(index) != self.nextra_dims:
-            raise ValueError(f"len(index) was {len(index):d} != {self.nextra_dims:d}")
-
-        # todo: implement index
-        figh_step = plt.figure(**kwargs)
-        ax = figh_step.add_subplot(1, 1, 1)
-
-        if hasattr(self.store, "steps"):
-            # plot steps
-            sarr = np.array(self.store.steps)[index]
-
-            ax.plot(sarr, '.')
-            ax.set_xlabel("iteration")
-            ax.set_ylabel("step-size")
-
-        return figh_step
-
     def plot_diagnostics(self,
                          time_axis: int,
                          index: Optional[tuple[int]] = None,
@@ -2088,27 +2010,17 @@ class Tomography:
                                                    figsize=(15, 5),
                                                    **kwargs)
 
-            # costs
-            figh_costs = self.plot_costs(index=index)
-
-            # step
-            figh_steps = self.plot_steps(index=index)
-
         if save:
             figh_frq.savefig(self.save_dir / "hologram_frequency_stability.png")
             figh_ph.savefig(self.save_dir / "phase_stability.png")
             figh_xl.savefig(self.save_dir / "registration.png")
             figh_sampling.savefig(self.save_dir / "fourier_sampling.png")
-            figh_costs.savefig(self.save_dir / "costs.png")
-            figh_steps.savefig(self.save_dir / "steps.png")
 
         if not interactive:
             plt.close(figh_frq)
             plt.close(figh_ph)
             plt.close(figh_xl)
             plt.close(figh_sampling)
-            plt.close(figh_costs)
-            plt.close(figh_costs)
 
     def plot_odt_sampling(self,
                           index: Optional[tuple[int]] = None,
