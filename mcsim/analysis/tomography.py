@@ -2837,6 +2837,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              show_scattered_fields: bool = False,
                              show_efields: bool = False,
                              show_efields_fwd: bool = False,
+                             show_phase_correction_profiles: bool = False,
                              compute: bool = True,
                              slices: Optional[tuple] = None,
                              data_slice: Optional[tuple] = None,
@@ -3090,7 +3091,10 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             e_angle = da.angle(e)
 
             # background field
-            ebg_load_ft = da.expand_dims(da.from_zarr(img_z.efield_bg_ft)[slices], axis=-3)
+            ebg_shape = img_z.efield_bg_ft.shape
+            slices_bg = tuple([s if ebg_shape[ii] != 1 else slice(None) for ii, s in enumerate(slices)])
+
+            ebg_load_ft = da.expand_dims(da.from_zarr(img_z.efield_bg_ft)[slices_bg], axis=-3)
             ebg = da.map_blocks(ift2, ebg_load_ft, dtype=complex)
             ebg_abs = da.abs(ebg)
             ebg_angle = da.angle(ebg)
@@ -3176,7 +3180,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         # ######################
         # phase correction
         # ######################
-        if hasattr(img_z, "phase_correction_profile"):
+        if hasattr(img_z, "phase_correction_profile") and show_phase_correction_profiles:
             pcorr = da.expand_dims(da.from_zarr(img_z.phase_correction_profile)[slices], axis=-3)
             pcorr_abs = da.abs(pcorr)
             pcorr_angle = da.angle(pcorr)
@@ -3344,23 +3348,24 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         # ######################
         # phase correction
         # ######################
-        viewer.add_image(pcorr_abs,
-                         scale=scale,
-                         affine=affine_recon2cam,
-                         translate=[zoffset, yshift_pix, 0],
-                         contrast_limits=[0., 1.],
-                         colormap=real_cmap,
-                         name=f"{prefix:s}abs(P)",
-                         )
+        if show_phase_correction_profiles:
+            viewer.add_image(pcorr_abs,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=[zoffset, yshift_pix, 0],
+                             contrast_limits=[0., 1.],
+                             colormap=real_cmap,
+                             name=f"{prefix:s}abs(P)",
+                             )
 
-        viewer.add_image(pcorr_angle,
-                         scale=scale,
-                         affine=affine_recon2cam,
-                         translate=[zoffset, yshift_pix, 0],
-                         contrast_limits=[-phase_lim, phase_lim],
-                         colormap=phase_cmap,
-                         name=f"{prefix:s}angle(P)",
-                         )
+            viewer.add_image(pcorr_angle,
+                             scale=scale,
+                             affine=affine_recon2cam,
+                             translate=[zoffset, yshift_pix, 0],
+                             contrast_limits=[-phase_lim, phase_lim],
+                             colormap=phase_cmap,
+                             name=f"{prefix:s}angle(P)",
+                             )
 
         # ######################
         # reconstructed index of refraction
