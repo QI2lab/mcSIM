@@ -2580,12 +2580,14 @@ def fit_phase_ramp(imgs_ft: array,
     """
     Given a stack of images and reference images, determine the phase ramp parameters relating them
 
-    :param imgs_ft: n0 x n1 x ... x n_{-2} x n_{-1} array
+    :param imgs_ft: n0 x n1 x ... x n_{-2} x n_{-1} array. This function operates along the
+     last two axes.
     :param ref_imgs_ft: reference images. Should be broadcastable to same size as imgs.
-    :param dxy:
-    :param thresh:
-    :param init_params:
-    :return fit_params:
+    :param dxy: pixel size
+    :param thresh: Ignore points in imgs_ft which have magnitude less than this fraction of
+     max(|ref_imgs_ft|)
+    :param init_params: [fx, fy]
+    :return fit_params: [fx, fy]
     """
 
     if cp and isinstance(imgs_ft, cp.ndarray):
@@ -3195,7 +3197,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             pcorr_abs = np.broadcast_to(pcorr_abs, bcast_shape_pcorr)
             pcorr_angle = np.broadcast_to(pcorr_angle, bcast_shape_pcorr)
 
-
         # ######################
         # create viewer
         # ######################
@@ -3522,6 +3523,7 @@ def parse_time(dt: float) -> (tuple, str):
 
     return (days, hours, mins, secs), tstr
 
+
 class PhaseCorr(Optimizer):
     def __init__(self,
                  e,
@@ -3554,7 +3556,7 @@ class PhaseCorr(Optimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        c = 0.5 * ((abs(self.e[inds] * x - self.ebg[inds])**2)/
+        c = 0.5 * ((abs(self.e[inds] * x - self.ebg[inds])**2) /
                    (abs(self.ebg[inds])**2 + self.escale**2)).sum(axis=(-1, -2))
         return c
 

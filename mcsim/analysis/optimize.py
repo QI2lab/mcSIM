@@ -213,7 +213,7 @@ class Optimizer:
 
         :param x:
         :param step:
-        :return:
+        :return prox(x):
         """
         pass
 
@@ -223,7 +223,7 @@ class Optimizer:
         Guess an appropriate step-size for gradient descent
 
         :param x:
-        :return:
+        :return step_guess:
         """
         pass
 
