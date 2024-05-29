@@ -159,7 +159,8 @@ class Tomography:
         :param translation_thresh:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         :param save_auxiliary_fields:
-        :param compressor:
+        :param compressor: by default use Zlib(), which is a good combination of fast/reasonable compression ratio.
+          For better compression, use bz2.BZ2(), although this is much slower.
         :param save_float32:
         :param step:
         :param reconstruction_kwargs: settings passed through to RI reconstructor
@@ -542,13 +543,11 @@ class Tomography:
         return zraw, zc, imgs, imgs_bg
 
     def save(self,
-             attributes: Optional[dict] = None,
-             compressor: Codec = Zlib()):
+             attributes: Optional[dict] = None):
         """
-        Save information from instance to zarr
+        Save information from instance to zarr file
 
         :param attributes:
-        :param compressor:
         :return:
         """
 
@@ -567,7 +566,7 @@ class Tomography:
 
             self.store.array(k,
                              stack,
-                             compressor=compressor,
+                             compressor=self.compressor,
                              dtype=float)
 
         try:
@@ -577,7 +576,7 @@ class Tomography:
 
         self.store.array("beam_frqs",
                          stack,
-                         compressor=compressor,
+                         compressor=self.compressor,
                          dtype=float)
 
         # save everything else
@@ -591,7 +590,7 @@ class Tomography:
                             if v.dtype == bool:
                                 c = packbits.PackBits()
                             else:
-                                c = compressor
+                                c = self.compressor
 
                             # todo: ensure reasonable chunk size
                             self.store.array(k,
