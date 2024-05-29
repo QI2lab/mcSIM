@@ -250,10 +250,9 @@ class Optimizer:
             verbose: bool = False,
             compute_cost: bool = False,
             compute_all_costs: bool = False,
-            line_search: bool = False,
+            line_search_iter_limit: Optional[int] = 0,
             line_search_factor: float = 0.5,
             restart_line_search: bool = False,
-            line_search_iter_limit: Optional[int] = None,
             stop_on_nan: bool = True,
             xtol: float = 0.0,
             ftol: float = 0.0,
@@ -275,12 +274,11 @@ class Optimizer:
         :param verbose: print iteration info
         :param compute_cost: optionally compute and store the cost. This can make optimization slower
         :param compute_all_costs: compute costs for all samples, even those not in the current batch
-        :param line_search: use line search to shrink step-size as necessary
+        :param line_search_iter_limit: only run line search if loop iteration number is less than this number.
+         To never run a line search, set to 0 (default). To always run a line search, set to None.
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
         :param restart_line_search: if true, restart line search from initial value at each iteration. If false,
           restart line search from step-size determined at previous iteration
-        :param line_search_iter_limit: if line_search=True, only run line search if loop iteration number is less
-          than this number.
         :param stop_on_nan: stop if there are NaN's in x
         :param xtol: When norm(x[t] - x[t-1]) / norm(x[0]) < xtol, stop iteration
         :param ftol: stop iterating when cost function relative change < ftol. Not yet implemented
@@ -342,7 +340,7 @@ class Optimizer:
             # ###################################
 
             ls_iters = 0
-            if not line_search or (line_search_iter_limit is not None and ii > line_search_iter_limit):
+            if line_search_iter_limit is not None and ii >= line_search_iter_limit:
                 # ###################################
                 # compute cost
                 # ###################################
@@ -426,8 +424,8 @@ class Optimizer:
                     y = self.prox(x - steps[ii] * gx, steps[ii])
                     ls_iters += 1
 
-                # if this is the only line search, set subsequent step-sizes
-                if ii == line_search_iter_limit:
+                # set subsequent step-sizes
+                if ii == (line_search_iter_limit - 1):
                     steps[ii:] = steps[ii]
 
                 # not exclusively prox
@@ -463,7 +461,7 @@ class Optimizer:
             else:
                 x = y + (q_last - 1) / q * (y - y_last)
 
-            # update for next gradient-descent/FISTA iteration
+            # update for next iteration
             q_last = q
             y_last = y
 
