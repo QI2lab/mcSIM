@@ -116,6 +116,7 @@ class Tomography:
                  apodization: Optional[np.ndarray] = None,
                  save_auxiliary_fields: bool = False,
                  compressor: Codec = Zlib(),
+                 save_float32: bool = False,
                  step: float = 1.,
                  **reconstruction_kwargs,
                  ):
@@ -159,6 +160,8 @@ class Tomography:
         :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
         :param save_auxiliary_fields:
         :param compressor:
+        :param save_float32:
+        :param step:
         :param reconstruction_kwargs: settings passed through to RI reconstructor
         """
         self.verbose = verbose
@@ -176,6 +179,7 @@ class Tomography:
             self.save_dir = None
             self.store = zarr.open()
         self.compressor = compressor
+        self.save_float32 = bool(save_float32)
 
         # ########################
         # physical parameters
@@ -1806,7 +1810,7 @@ class Tomography:
                           e_scatt_out=e_scatt_out,
                           n_start_out=n_start_out,
                           chunks=(1,) * self.nextra_dims + self.n_shape,
-                          dtype=complex,
+                          dtype=np.complex64 if self.save_float32 else complex,
                           )
 
         with LocalCluster(processes=processes,
