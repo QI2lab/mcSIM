@@ -63,7 +63,9 @@ def soft_threshold(tau: float,
 
 
 def tv_prox(x: array,
-            tau: float) -> array:
+            tau: float,
+            max_num_iter: int = 200,
+            eps: float = 2e-4) -> array:
     """
     Apply TV proximal operator to x. Helper function which runs on CPU or GPU
 
@@ -73,8 +75,11 @@ def tv_prox(x: array,
 
       \\text{TV}(y) &= \sum_{ij} \\sqrt{ \\left(y_{i+1,j} - y_{i,j}\\right)^2 + \\left(y_{i, j+1} - y_{i, j}\\right)^2}
 
-    :param x:
-    :param tau:
+    :param x: array to be denoised
+    :param tau: strength of TV term compared with data fidelity term
+    :param max_num_iter: see denoise_tv_chambolle() for more details. The default values used here
+     are the same as in the cucim version of this function.
+    :param eps:
     :return x_tv:
     """
 
@@ -87,7 +92,7 @@ def tv_prox(x: array,
     else:
         tv = denoise_tv_chambolle
 
-    return tv(x, weight=tau, channel_axis=None)
+    return tv(x, weight=tau, channel_axis=None, max_num_iter=max_num_iter, eps=eps)
 
 
 class Optimizer:

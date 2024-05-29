@@ -752,6 +752,7 @@ class RIOptimizer(Optimizer):
                  tau_tv_imag: float = 0.,
                  tau_l1_real: float = 0.,
                  tau_l1_imag: float = 0.,
+                 max_num_iter: int = 200,
                  apply_tv_first: bool = False,
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
@@ -792,7 +793,8 @@ class RIOptimizer(Optimizer):
                                                            "tau_l1_imag": float(tau_l1_imag),
                                                            "use_imaginary_constraint": bool(use_imaginary_constraint),
                                                            "use_real_constraint": bool(use_real_constraint),
-                                                           "max_imaginary_part": float(max_imaginary_part)
+                                                           "max_imaginary_part": float(max_imaginary_part),
+                                                           "max_num_iter": max_num_iter
                                                            }
                                           )
 
@@ -851,10 +853,14 @@ class RIOptimizer(Optimizer):
         def apply_tv(x_real, x_imag):
             # note cucim TV implementation requires ~10x memory as array does
             if self.prox_parameters["tau_tv_real"] != 0:
-                x_real = tv_prox(x_real, self.prox_parameters["tau_tv_real"])
+                x_real = tv_prox(x_real,
+                                 self.prox_parameters["tau_tv_real"],
+                                 max_num_iter=self.prox_parameters["max_num_iter"])
 
             if self.prox_parameters["tau_tv_imag"] != 0:
-                x_imag = tv_prox(x_imag, self.prox_parameters["tau_tv_imag"])
+                x_imag = tv_prox(x_imag,
+                                 self.prox_parameters["tau_tv_imag"],
+                                 max_num_iter=self.prox_parameters["max_num_iter"])
 
             return x_real, x_imag
 
