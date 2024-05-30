@@ -186,10 +186,14 @@ def get_angular_spectrum_kernel(fx: array,
         xp = np
     fy = xp.asarray(fy)
 
+    # todo: test fastest way
     fzs = get_fzs(fx, fy, no, wavelength)
-    allowed = xp.logical_not(xp.isnan(fzs))
-    kernel = xp.zeros(fzs.shape, dtype=complex)
-    kernel[allowed] = xp.exp(1j * dz * 2*np.pi * fzs[allowed])
+    # allowed = xp.logical_not(xp.isnan(fzs))
+    # kernel = xp.zeros(fzs.shape, dtype=complex)
+    # kernel[allowed] = xp.exp(1j * dz * 2*np.pi * fzs[allowed])
+    kernel = xp.exp(1j * dz * 2 * np.pi * fzs)
+    # kernel[xp.isnan(fzs)] = 0.
+    xp.nan_to_num(kernel, copy=False)
 
     return kernel
 
@@ -1138,14 +1142,30 @@ class BPM(RIOptimizer):
                          self.dz_refocus)
 
         # backpropagation distance to compute starting field
-        self.dz_back = np.array([-float(self.dz_final) -
-                                 float(self.drs_n[0]) * self.shape_n[0]
-                                 ])
+        self.dz_back = -float(self.dz_final) - float(self.drs_n[0]) * self.shape_n[0]
 
+        # precompute propagation kernels we will need
         xp = cp if cp else np
         self.fx = xp.expand_dims(xp.fft.fftfreq(self.shape_n[2], self.drs_n[2]), axis=0)
         self.fy = xp.expand_dims(xp.fft.fftfreq(self.shape_n[1], self.drs_n[1]), axis=1)
 
+        self.prop_kernel = get_angular_spectrum_kernel(self.fx,
+                                                       self.fy,
+                                                       self.drs_n[0],
+                                                       self.wavelength,
+                                                       self.no)
+        self.img_kernel = get_angular_spectrum_kernel(self.fx,
+                                                      self.fy,
+                                                      self.dz_final,
+                                                      self.wavelength,
+                                                      self.no)
+        self.start_kernel = get_angular_spectrum_kernel(self.fx,
+                                                        self.fy,
+                                                        self.dz_back,
+                                                        self.wavelength,
+                                                        self.no)
+
+    #@line_profiler.profile
     def propagate(self,
                   efield_start: array,
                   n: array,
@@ -1177,18 +1197,6 @@ class BPM(RIOptimizer):
         atf = xp.asarray(self.atf)
         apodization = xp.asarray(self.apodization)
 
-        # Fourier space propagation operators
-        prop_kernel = xp.asarray(get_angular_spectrum_kernel(self.fx,
-                                                             self.fy,
-                                                             self.drs_n[0],
-                                                             self.wavelength,
-                                                             self.no))
-        kernel_img = xp.asarray(get_angular_spectrum_kernel(self.fx,
-                                                            self.fy,
-                                                            self.dz_final,
-                                                            self.wavelength,
-                                                            self.no))
-
         # ##########################
         # propagate
         # ##########################
@@ -1198,12 +1206,12 @@ class BPM(RIOptimizer):
         efield[..., 0, :, :] = efield_start
         for ii in range(nz):
             efield[..., ii + 1, :, :] = (ift2(ft2(efield[..., ii, :, :] * apodization, shift=False) *
-                                              prop_kernel, shift=False) *
+                                              self.prop_kernel, shift=False) *
                                          xp.exp(1j * (2 * np.pi / self.wavelength) * self.drs_n[0] *
                                                 (n[ii] - self.no) / xp.cos(thetas)))
 
         # propagate to imaging plane
-        efield[..., -1, :, :] = ift2(ft2(efield[..., -2, :, :], shift=False) * kernel_img * atf, shift=False)
+        efield[..., -1, :, :] = ift2(ft2(efield[..., -2, :, :], shift=False) * self.img_kernel * atf, shift=False)
 
         return efield
 
@@ -1264,13 +1272,6 @@ class BPM(RIOptimizer):
         # These are adjoint in the sense that for any pair of fields a, b we have
         # np.sum(a.conj() * propagate_inhomogeneous(b)) = np.sum(backpropagate_inhomogeneous(a).conj() * b)
         # #########################
-        # propagate from imaging plane back to last plane
-        kernel_img = xp.asarray(get_angular_spectrum_kernel(self.fx,
-                                                            self.fy,
-                                                            self.dz_final,
-                                                            self.wavelength,
-                                                            self.no))
-
         # gradient wrt CTF
         dl_de = ift2(dl_de, adjoint=True, shift=False)
         # e_fwd[:, -1] = (kernel_img * ft2(e_fwd[:, -2], shift=False)).conj()
@@ -1281,18 +1282,13 @@ class BPM(RIOptimizer):
         e_fwd[:, :-1] *= -1j * (2 * np.pi / self.wavelength) * self.drs_n[0] / xp.expand_dims(xp.cos(thetas), axis=-1)
 
         dl_de = ft2(dl_de *
-                    kernel_img.conj() *
+                    self.img_kernel.conj() *
                     xp.conj(xp.asarray(self.atf)),
                     adjoint=True, shift=False)
         e_fwd[:, -2] *= dl_de
 
         # backpropagate plane-by-plane
-        prop_kernel_conj = xp.asarray(get_angular_spectrum_kernel(self.fx,
-                                                                  self.fy,
-                                                                  self.drs_n[0],
-                                                                  self.wavelength,
-                                                                  self.no))
-        xp.conj(prop_kernel_conj, out=prop_kernel_conj)
+        prop_kernel_conj = self.prop_kernel.conj()
         for ii in range(self.shape_n[0] - 1, 0, -1):
             dl_de = ft2(ift2(dl_de *
                              xp.exp(1j * (2 * np.pi / self.wavelength) * self.drs_n[0] *
@@ -1309,11 +1305,7 @@ class BPM(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        return propagate_homogeneous(self.e_measured_bg[inds],
-                                     self.dz_back,
-                                     self.no,
-                                     self.drs_n[1:],
-                                     self.wavelength)[..., 0, :, :]
+        return ift2(self.start_kernel * ft2(self.e_measured_bg[inds], shift=False), shift=False)
 
 
 class SSNP(RIOptimizer):
