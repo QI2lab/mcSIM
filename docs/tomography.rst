@@ -2,7 +2,7 @@ ODT reconstruction API
 =================================
 
 .. currentmodule:: analysis.tomography
-.. autoclass:: tomography
+.. autoclass:: Tomography
    :members:
 
 .. autoclass:: BPM

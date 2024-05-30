@@ -8,6 +8,7 @@ from time import perf_counter
 from random import sample
 from typing import Union, Optional
 from collections.abc import Sequence
+from scipy.ndimage import median_filter
 from skimage.restoration import denoise_tv_chambolle
 
 
@@ -21,6 +22,12 @@ try:
     from cucim.skimage.restoration import denoise_tv_chambolle as denoise_tv_chambolle_gpu
 except ImportError:
     denoise_tv_chambolle_gpu = None
+
+try:
+    from cupyx.scipy.ndimage import median_filter as median_filter_gpu
+except ImportError:
+    median_filter_gpu = None
+
 
 if cp:
     array = Union[np.ndarray, cp.ndarray]
@@ -46,7 +53,9 @@ def soft_threshold(tau: float,
     """
     Soft-threshold function, which is the proximal operator for the LASSO (L1 regularization) problem
 
-    x_out = argmin{ 0.5 * |x - y|_2^2 + t * |x - y|_1}
+    .. math::
+
+      \\text{prox}_t(x) = \\text{argmin}_y \\left\\{ \\frac{1}{2} \\left|x - y \\right|_2^2 + t  \\left|y \\right|_1 \\right\\}
 
     :param tau: softmax parameter
     :param x: array to take softmax of
@@ -61,12 +70,23 @@ def soft_threshold(tau: float,
 
 
 def tv_prox(x: array,
-            tau: float) -> array:
+            tau: float,
+            max_num_iter: int = 200,
+            eps: float = 2e-4) -> array:
     """
     Apply TV proximal operator to x. Helper function which runs on CPU or GPU
 
-    :param x:
-    :param tau:
+    .. math::
+
+      \\text{prox}_t(x) &= \\text{argmin}_y \\left\\{ \\frac{1}{2} \\left|x - y \\right|_2^2 + t  \\text{TV}(y) \\right\\}
+
+      \\text{TV}(y) &= \sum_{ij} \\sqrt{ \\left(y_{i+1,j} - y_{i,j}\\right)^2 + \\left(y_{i, j+1} - y_{i, j}\\right)^2}
+
+    :param x: array to be denoised
+    :param tau: strength of TV term compared with data fidelity term
+    :param max_num_iter: see denoise_tv_chambolle() for more details. The default values used here
+     are the same as in the cucim version of this function.
+    :param eps:
     :return x_tv:
     """
 
@@ -79,32 +99,83 @@ def tv_prox(x: array,
     else:
         tv = denoise_tv_chambolle
 
-    return tv(x, weight=tau, channel_axis=None)
+    return tv(x, weight=tau, channel_axis=None, max_num_iter=max_num_iter, eps=eps)
+
+
+def median_prox(x: array,
+                size: Sequence[int]):
+    """
+
+    :param x:
+    :param size:
+    :return:
+    """
+    if cp and isinstance(x, cp.ndarray):
+        if not median_filter_gpu:
+            raise ValueError("array x is a CuPy array, but a GPU compatible median filter implementation was not"
+                             " imported successfully.")
+        f = median_filter_gpu
+    else:
+        f = median_filter
+
+    return f(x, size=size)
 
 
 class Optimizer:
-    def __init__(self):
-        self.n_samples = None
-        self.prox_parameters = {}
+    def __init__(self,
+                 n_samples: int,
+                 prox_parameters: Optional[dict] = None):
+        self.n_samples = int(n_samples)
+        self.prox_parameters = prox_parameters
 
     def fwd_model(self,
                   x: array,
                   inds: Optional[Sequence[int]] = None) -> array:
+        """
+        Apply the forward model to x, assuming the loss function can be interpreted as a difference
+        between the forward model and the measured result
+
+        :param x:
+        :param inds:
+        :return:
+        """
         pass
 
     def fwd_model_adjoint(self,
                           y: array,
                           inds: Optional[Sequence[int]] = None) -> array:
+        """
+        Adjoint operator to forward model.
+
+        :param y:
+        :param inds:
+        :return:
+        """
         pass
 
     def cost(self,
              x: array,
              inds: Optional[Sequence[int]] = None) -> array:
+        """
+        Compute the data penalty part of cost/loss function at x.
+        Compute only those components specified by inds
+
+        :param x:
+        :param inds:
+        :return:
+        """
         pass
 
     def gradient(self,
                  x: array,
                  inds: Optional[Sequence[int]] = None) -> array:
+        """
+        Compute the gradient of the loss function at x for the loss functions specified by inds
+
+        :param x:
+        :param inds:
+        :return:
+        """
         pass
 
     def test_gradient(self,
@@ -113,6 +184,7 @@ class Optimizer:
                       inds: Optional[Sequence[int]] = None,
                       dx: float = 1e-5) -> (array, array):
         """
+        Numerically test the gradient computation at a single coordinate of x.
 
         :param x: point to compute gradient at
         :param jind: 1D index into x to compute gradient at
@@ -162,11 +234,37 @@ class Optimizer:
     def prox(self,
              x: array,
              step: float) -> array:
+        """
+        Apply the proximal operator
+
+        :param x:
+        :param step:
+        :return prox(x):
+        """
         pass
 
     def guess_step(self,
                    x: Optional[array] = None) -> float:
+        """
+        Guess an appropriate step-size for gradient descent
+
+        :param x:
+        :return step_guess:
+        """
         pass
+
+    def _lipschitz_condition_violated(self,
+                                      step: float,
+                                      y: array,
+                                      x: array,
+                                      cx: float,
+                                      gx: array,
+                                      inds):
+        xp = cp if cp and isinstance(x, cp.ndarray) else np
+        cy = xp.mean(self.cost(y, inds=inds), axis=0)
+        return (cy > cx + xp.sum(gx.real * (y - x).real +
+                                 gx.imag * (y - x).imag) +
+                0.5 / step * xp.linalg.norm(y - x)**2)
 
     def run(self,
             x_start: array,
@@ -178,10 +276,9 @@ class Optimizer:
             verbose: bool = False,
             compute_cost: bool = False,
             compute_all_costs: bool = False,
-            line_search: bool = False,
+            line_search_iter_limit: Optional[int] = 0,
             line_search_factor: float = 0.5,
             restart_line_search: bool = False,
-            line_search_iter_limit: Optional[int] = None,
             stop_on_nan: bool = True,
             xtol: float = 0.0,
             ftol: float = 0.0,
@@ -203,12 +300,11 @@ class Optimizer:
         :param verbose: print iteration info
         :param compute_cost: optionally compute and store the cost. This can make optimization slower
         :param compute_all_costs: compute costs for all samples, even those not in the current batch
-        :param line_search: use line search to shrink step-size as necessary
+        :param line_search_iter_limit: only run line search if loop iteration number is less than this number.
+         To never run a line search, set to 0 (default). To always run a line search, set to None.
         :param line_search_factor: factor to shrink step-size if line-search determines step too large
         :param restart_line_search: if true, restart line search from initial value at each iteration. If false,
           restart line search from step-size determined at previous iteration
-        :param line_search_iter_limit: if line_search=True, only run line search if loop iteration number is less
-          than this number.
         :param stop_on_nan: stop if there are NaN's in x
         :param xtol: When norm(x[t] - x[t-1]) / norm(x[0]) < xtol, stop iteration
         :param ftol: stop iterating when cost function relative change < ftol. Not yet implemented
@@ -270,7 +366,7 @@ class Optimizer:
             # ###################################
 
             ls_iters = 0
-            if not line_search or (line_search_iter_limit is not None and ii > line_search_iter_limit):
+            if line_search_iter_limit is not None and ii >= line_search_iter_limit:
                 # ###################################
                 # compute cost
                 # ###################################
@@ -348,20 +444,14 @@ class Optimizer:
 
                 y = self.prox(x - steps[ii] * gx, steps[ii])
 
-                def lipschitz_condition_violated(y, cx, gx):
-                    cy = xp.mean(self.cost(y, inds=inds), axis=0)
-                    return cy > cx + xp.sum(gx.real * (y - x).real +
-                                            gx.imag * (y - x).imag) + \
-                                            0.5 / steps[ii] * xp.linalg.norm(y - x)**2
-
                 # reduce step until we don't violate Lipschitz continuous gradient condition
-                while lipschitz_condition_violated(y, cx, gx):
+                while self._lipschitz_condition_violated(steps[ii], y, x, cx, gx, inds):
                     steps[ii] *= line_search_factor
                     y = self.prox(x - steps[ii] * gx, steps[ii])
                     ls_iters += 1
 
-                # if this is the only line search, set subsequent step-sizes
-                if ii == line_search_iter_limit:
+                # set subsequent step-sizes
+                if ii == (line_search_iter_limit - 1):
                     steps[ii:] = steps[ii]
 
                 # not exclusively prox
@@ -397,7 +487,7 @@ class Optimizer:
             else:
                 x = y + (q_last - 1) / q * (y - y_last)
 
-            # update for next gradient-descent/FISTA iteration
+            # update for next iteration
             q_last = q
             y_last = y
 

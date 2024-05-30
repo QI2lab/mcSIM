@@ -13,9 +13,9 @@ Welcome to mcSIM's documentation!
    sim
    tomography
    field_prop
+   optimize
    fft
    mie_fields
-   tools
    phase_unwrap
    dmd_patterns
    dmd_simulation

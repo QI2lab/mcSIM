@@ -12,7 +12,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import svds
 from mcsim.analysis.fft import ft2, ift2, ft3, ift3
-from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox
+from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, median_prox
 
 try:
     import cupy as cp
@@ -312,7 +312,7 @@ def propagate_homogeneous(efield_start: array,
     :return efield_prop: propagated electric field of shape no x ... x nm x nz x ny x nx
     """
 
-    if isinstance(efield_start, cp.ndarray):
+    if cp and isinstance(efield_start, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -752,6 +752,8 @@ class RIOptimizer(Optimizer):
                  tau_tv_imag: float = 0.,
                  tau_l1_real: float = 0.,
                  tau_l1_imag: float = 0.,
+                 max_num_iter: int = 200,
+                 median_filter_size: Sequence[int, int, int] = (1, 1, 1),
                  apply_tv_first: bool = False,
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
@@ -785,12 +787,22 @@ class RIOptimizer(Optimizer):
         :param efield_cost_factor:
         """
 
-        super(RIOptimizer, self).__init__()
+        super(RIOptimizer, self).__init__(e_measured.shape[-3],
+                                          prox_parameters={"tau_tv_real": float(tau_tv_real),
+                                                           "tau_tv_imag": float(tau_tv_imag),
+                                                           "tau_l1_real": float(tau_l1_real),
+                                                           "tau_l1_imag": float(tau_l1_imag),
+                                                           "use_imaginary_constraint": bool(use_imaginary_constraint),
+                                                           "use_real_constraint": bool(use_real_constraint),
+                                                           "max_imaginary_part": float(max_imaginary_part),
+                                                           "max_num_iter": max_num_iter,
+                                                           "median_filter_size": median_filter_size,
+                                                           }
+                                          )
 
         self.e_measured = e_measured
         self.e_measured_bg = e_measured_bg
         self.beam_frqs = beam_frqs
-        self.n_samples = self.e_measured.shape[-3]
         self.no = no
         self.wavelength = wavelength
         self.drs_e = drs_e
@@ -818,33 +830,6 @@ class RIOptimizer(Optimizer):
                 raise ValueError("mask must be `None` or a boolean array")
         self.mask = mask
 
-        self.set_prox(tau_tv_real,
-                      tau_tv_imag,
-                      tau_l1_real,
-                      tau_l1_imag,
-                      use_imaginary_constraint,
-                      use_real_constraint,
-                      max_imaginary_part)
-
-    def set_prox(self,
-                 tau_tv_real: float = 0.,
-                 tau_tv_imag: float = 0.,
-                 tau_l1_real: float = 0.,
-                 tau_l1_imag: float = 0.,
-                 use_imaginary_constraint: bool = False,
-                 use_real_constraint: bool = False,
-                 max_imaginary_part: float = np.inf
-                 ):
-
-        self.prox_parameters = {"tau_tv_real": float(tau_tv_real),
-                                "tau_tv_imag": float(tau_tv_imag),
-                                "tau_l1_real": float(tau_l1_real),
-                                "tau_l1_imag": float(tau_l1_imag),
-                                "use_imaginary_constraint": bool(use_imaginary_constraint),
-                                "use_real_constraint": bool(use_real_constraint),
-                                "max_imaginary_part": float(max_imaginary_part)
-                                }
-
     def prox(self,
              x: array,
              step: float) -> array:
@@ -852,15 +837,18 @@ class RIOptimizer(Optimizer):
         x_real = x.real
         x_imag = x.imag
 
+        if self.prox_parameters["median_filter_size"] != (1, 1, 1):
+            x_real = median_prox(x_real, self.prox_parameters["median_filter_size"])
+
         # ###########################
         # L1 proximal operators (softmax)
         # ###########################
         def apply_l1(x_real, x_imag):
             if self.prox_parameters["tau_l1_real"] != 0:
-                x_real = soft_threshold(self.prox_parameters["tau_l1_real"] * step, x_real - self.no) + self.no
+                x_real = soft_threshold(self.prox_parameters["tau_l1_real"], x_real - self.no) + self.no
 
             if self.prox_parameters["tau_l1_imag"] != 0:
-                x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"] * step, x_imag)
+                x_imag = soft_threshold(self.prox_parameters["tau_l1_imag"], x_imag)
 
             return x_real, x_imag
 
@@ -870,10 +858,14 @@ class RIOptimizer(Optimizer):
         def apply_tv(x_real, x_imag):
             # note cucim TV implementation requires ~10x memory as array does
             if self.prox_parameters["tau_tv_real"] != 0:
-                x_real = tv_prox(x_real, self.prox_parameters["tau_tv_real"] * step)
+                x_real = tv_prox(x_real,
+                                 self.prox_parameters["tau_tv_real"],
+                                 max_num_iter=self.prox_parameters["max_num_iter"])
 
             if self.prox_parameters["tau_tv_imag"] != 0:
-                x_imag = tv_prox(x_imag, self.prox_parameters["tau_tv_imag"] * step)
+                x_imag = tv_prox(x_imag,
+                                 self.prox_parameters["tau_tv_imag"],
+                                 max_num_iter=self.prox_parameters["max_num_iter"])
 
             return x_real, x_imag
 
@@ -938,16 +930,6 @@ class RIOptimizer(Optimizer):
                           ).sum(axis=-1)
 
         return costs
-
-    def propagate(self,
-                  efield_start: array,
-                  n: array) -> array:
-        pass
-
-    def backpropagate(self,
-                      efield_start: array,
-                      n: array) -> array:
-        pass
 
 
 class LinearScatt(RIOptimizer):
@@ -1018,7 +1000,6 @@ class LinearScatt(RIOptimizer):
         models = [self.model[slice(ny*nx*ii, ny*nx*(ii + 1)), :] for ii in inds]
         nind = len(inds)
 
-        # first division is average
         # second division converts Fourier space to real-space sum
         # factor of 0.5 in cost function killed by derivative factor of 2
         efwd = spnow.vstack(models).dot(x.ravel()).reshape([nind, ny, nx])
@@ -1096,11 +1077,6 @@ class LinearScatt(RIOptimizer):
 
         return ft3(get_v(n_prox, self.no, self.wavelength))
 
-    def run(self,
-            x_start: array,
-            **kwargs) -> dict:
-        return super(LinearScatt, self).run(x_start, **kwargs)
-
 
 class BPM(RIOptimizer):
     """
@@ -1166,10 +1142,14 @@ class BPM(RIOptimizer):
                                  float(self.drs_n[0]) * self.shape_n[0]
                                  ])
 
+        xp = cp if cp else np
+        self.fx = xp.expand_dims(xp.fft.fftfreq(self.shape_n[2], self.drs_n[2]), axis=0)
+        self.fy = xp.expand_dims(xp.fft.fftfreq(self.shape_n[1], self.drs_n[1]), axis=1)
+
     def propagate(self,
                   efield_start: array,
                   n: array,
-                  thetas: Optional[array] = None) -> array:
+                  thetas: array) -> array:
         """
         Propagate electric field through medium with index of refraction n(x, y, z) using the projection approximation,
         which is paraxial. That is, first propagate through the background medium using the angular spectrum method,
@@ -1190,108 +1170,40 @@ class BPM(RIOptimizer):
         else:
             xp = np
 
-        if thetas is None:
-            thetas = xp.zeros(efield_start.shape[:-2] + (1, 1))
-        thetas = xp.asarray(thetas)
-
-        if thetas.ndim == 1:
-            thetas = xp.expand_dims(thetas, axis=(-1, -2))
-
         # ensure arrays of correct type
         efield_start = xp.asarray(efield_start)
         n = xp.asarray(n)
+        thetas = xp.expand_dims(xp.asarray(thetas), axis=(-1, -2))
         atf = xp.asarray(self.atf)
         apodization = xp.asarray(self.apodization)
 
-        dz, dy, dx = self.drs_n
-        nz, ny, nx = n.shape
-
         # Fourier space propagation operators
-        fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
-        fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
-        prop_kernel = xp.asarray(get_angular_spectrum_kernel(fx, fy, dz, self.wavelength, self.no))
-        kernel_img = xp.asarray(get_angular_spectrum_kernel(fx, fy, self.dz_final, self.wavelength, self.no))
+        prop_kernel = xp.asarray(get_angular_spectrum_kernel(self.fx,
+                                                             self.fy,
+                                                             self.drs_n[0],
+                                                             self.wavelength,
+                                                             self.no))
+        kernel_img = xp.asarray(get_angular_spectrum_kernel(self.fx,
+                                                            self.fy,
+                                                            self.dz_final,
+                                                            self.wavelength,
+                                                            self.no))
 
         # ##########################
         # propagate
         # ##########################
+        nz, ny, nx = n.shape
         efield = xp.zeros(efield_start.shape[:-2] + (nz + 2, ny, nx),
                           dtype=complex)
         efield[..., 0, :, :] = efield_start
         for ii in range(nz):
             efield[..., ii + 1, :, :] = (ift2(ft2(efield[..., ii, :, :] * apodization, shift=False) *
                                               prop_kernel, shift=False) *
-                                         xp.exp(1j * (2 * np.pi / self.wavelength) * dz *
+                                         xp.exp(1j * (2 * np.pi / self.wavelength) * self.drs_n[0] *
                                                 (n[ii] - self.no) / xp.cos(thetas)))
 
         # propagate to imaging plane
         efield[..., -1, :, :] = ift2(ft2(efield[..., -2, :, :], shift=False) * kernel_img * atf, shift=False)
-
-        return efield
-
-    def backpropagate(self,
-                      efield_end: array,
-                      n: array,
-                      thetas: Optional[array] = None) -> array:
-        """
-        Apply the adjoint operation to propagate(). This is adjoint in the sense that for any pair of fields
-        a, b we have
-        np.sum(a.conj() * propagate_inhomogeneous(b)) = np.sum(backpropagate_inhomogeneous(a).conj() * b)
-
-        :param efield_end: n0 x ... x nm x ny x nx NumPy or CuPy array. If CuPy array, run computation on GPU
-        :param n: nz x ny x nx array
-        :param thetas: assuming a plane wave input, this is the angle between the plane wave propagation direction
-          and the optical axis. This provides a better approximation for the phase shift of the beam through a
-          refractive index layer
-        :return efield: n0 x ... x nm x nz x ny x nx electric field
-        """
-
-        if cp and isinstance(efield_end, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
-
-        efield_end = xp.asarray(efield_end)
-        n = xp.asarray(n)
-        atf = xp.asarray(self.atf)
-        apodization = xp.asarray(self.apodization)
-
-        if thetas is None:
-            thetas = xp.zeros(efield_end.shape[:-2] + (1, 1))
-        thetas = xp.asarray(thetas)
-
-        if thetas.ndim == 1:
-            thetas = xp.expand_dims(thetas, axis=(-1, -2))
-
-        dz, dy, dx = self.drs_n
-        nz, ny, nx = n.shape
-
-        # frequency grid
-        fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
-        fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
-
-        # propagate
-        out_shape = efield_end.shape[:-2] + (nz + 2, ny, nx)
-
-        efield = xp.zeros(out_shape, dtype=complex)
-        efield[..., -1, :, :] = efield_end
-
-        prop_kernel = xp.asarray(get_angular_spectrum_kernel(fx, fy, dz, self.wavelength, self.no))
-
-        # propagate from imaging plane back to last plane
-        kernel_img = xp.asarray(get_angular_spectrum_kernel(fx, fy, self.dz_final, self.wavelength, self.no))
-        efield[..., -2, :, :] = ft2(ift2(efield[..., -1, :, :], adjoint=True, shift=False) *
-                                    kernel_img.conj() *
-                                    xp.conj(atf),
-                                    adjoint=True, shift=False)
-
-        for ii in range(nz - 1, -1, -1):
-            efield[..., ii, :, :] = ft2(ift2(efield[..., ii + 1, :, :] *
-                                             xp.exp(1j * (2 * np.pi / self.wavelength) * dz *
-                                                    (n[ii] - self.no) / xp.cos(thetas)).conj(),
-                                             adjoint=True, shift=False) *
-                                        prop_kernel.conj(),
-                                        adjoint=True, shift=False) * xp.conj(apodization)
 
         return efield
 
@@ -1310,48 +1222,87 @@ class BPM(RIOptimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        e_fwd = self.fwd_model(x, inds=inds)
-
-        # denom
-        if self.scale_cost_to_field:
-            denom = abs(self.e_measured[inds]) ** 2 + self.cost_regularization ** 2
-        else:
-            denom = 1.
-
-        # back propagation ... build the gradient from this to save memory
-        dtemp = 0
-        if self.efield_cost_factor > 0:
-            dtemp += (self.efield_cost_factor *
-                      (e_fwd[:, -1, :, :] - self.e_measured[inds])) / denom
-
-        if (1 - self.efield_cost_factor) > 0:
-            dtemp += ((1 - self.efield_cost_factor) *
-                      (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) *
-                      e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])) / denom
-
-        if self.mask is not None:
-            dtemp *= self.mask
-
-        dc_dn = self.backpropagate(dtemp, x, thetas=self.thetas[inds])[:, 1:-1, :, :]
-        del dtemp
-
-        # cost function gradient
         if cp and isinstance(x, cp.ndarray):
             xp = cp
         else:
             xp = np
 
-        thetas = xp.asarray(self.thetas[inds])
-        if thetas.ndim == 1:
-            thetas = xp.expand_dims(thetas, axis=(-1, -2, -3))
+        # arrays we will need
+        thetas = xp.expand_dims(xp.asarray(self.thetas[inds]), axis=(-1, -2))
+        apodization = xp.asarray(self.apodization)
 
-        dc_dn *= -1j * (2 * np.pi / self.wavelength) * self.drs_n[0] / xp.cos(thetas)
+        # initial electric field
+        e_fwd = self.fwd_model(x, inds=inds)
 
-        # conjugate in place to avoid using extra GPU memory
-        xp.conjugate(e_fwd, out=e_fwd)
-        dc_dn *= e_fwd[:, 1:-1, :, :]
+        # #########################
+        # compute dLoss/dE
+        # #########################
+        # denominator accounting for efield amplitude
+        if self.scale_cost_to_field:
+            denom = abs(self.e_measured[inds]) ** 2 + self.cost_regularization ** 2
+        else:
+            denom = 1.
 
-        return dc_dn
+        # dL/dE
+        dl_de = 0
+        if self.efield_cost_factor > 0:
+            dl_de += (self.efield_cost_factor *
+                      (e_fwd[:, -1, :, :] - self.e_measured[inds])) / denom
+
+        if (1 - self.efield_cost_factor) > 0:
+            dl_de += ((1 - self.efield_cost_factor) *
+                      (abs(e_fwd[:, -1, :, :]) - abs(self.e_measured[inds])) *
+                      e_fwd[:, -1, :, :] / abs(e_fwd[:, -1, :, :])) / denom
+
+        if self.mask is not None:
+            dl_de *= self.mask
+
+        # #########################
+        # compute dLoss/dn
+        # to save memory, overwrite e_fwd as dl_dn and overwrite dl_de as backpropagated dl_de
+        # backpropagation operations are the adjoint of the forward propagation
+        # These are adjoint in the sense that for any pair of fields a, b we have
+        # np.sum(a.conj() * propagate_inhomogeneous(b)) = np.sum(backpropagate_inhomogeneous(a).conj() * b)
+        # #########################
+        # propagate from imaging plane back to last plane
+        kernel_img = xp.asarray(get_angular_spectrum_kernel(self.fx,
+                                                            self.fy,
+                                                            self.dz_final,
+                                                            self.wavelength,
+                                                            self.no))
+
+        # gradient wrt CTF
+        dl_de = ift2(dl_de, adjoint=True, shift=False)
+        # e_fwd[:, -1] = (kernel_img * ft2(e_fwd[:, -2], shift=False)).conj()
+        # e_fwd[:, -1] *= dl_de * self.f
+
+        # gradients wrt n
+        xp.conjugate(e_fwd[:, :-1], out=e_fwd[:, :-1])
+        e_fwd[:, :-1] *= -1j * (2 * np.pi / self.wavelength) * self.drs_n[0] / xp.expand_dims(xp.cos(thetas), axis=-1)
+
+        dl_de = ft2(dl_de *
+                    kernel_img.conj() *
+                    xp.conj(xp.asarray(self.atf)),
+                    adjoint=True, shift=False)
+        e_fwd[:, -2] *= dl_de
+
+        # backpropagate plane-by-plane
+        prop_kernel_conj = xp.asarray(get_angular_spectrum_kernel(self.fx,
+                                                                  self.fy,
+                                                                  self.drs_n[0],
+                                                                  self.wavelength,
+                                                                  self.no))
+        xp.conj(prop_kernel_conj, out=prop_kernel_conj)
+        for ii in range(self.shape_n[0] - 1, 0, -1):
+            dl_de = ft2(ift2(dl_de *
+                             xp.exp(1j * (2 * np.pi / self.wavelength) * self.drs_n[0] *
+                                    (x[ii] - self.no) / xp.cos(thetas)).conj(),
+                                    adjoint=True, shift=False) *
+                                    prop_kernel_conj,
+                                    adjoint=True, shift=False) * xp.conj(apodization)
+            e_fwd[:, ii] *= dl_de
+
+        return e_fwd[:, 1:-1]
 
     def get_estart(self,
                    inds: Optional[Sequence[int]] = None) -> array:
@@ -1411,6 +1362,9 @@ class SSNP(RIOptimizer):
         kz[xp.isnan(kz)] = 0
         self.kz = kz
 
+        self.fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
+        self.fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
+
     def propagate(self,
                   efield_start: array,
                   de_dz_start: array,
@@ -1429,23 +1383,17 @@ class SSNP(RIOptimizer):
             xp = np
 
         n = xp.asarray(n)
-        atf = xp.asarray(self.atf)
-        apodization = xp.asarray(self.apodization)
         # expand over phi dims + extra dim
-        atf = xp.expand_dims(xp.asarray(xp.atleast_2d(atf)), axis=(-1, -2))
-        apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(apodization)), axis=(-1, -2))
-
-        dz, dy, dx = self.drs_n
-        nz, ny, nx = n.shape
+        atf = xp.expand_dims(xp.asarray(xp.atleast_2d(self.atf)), axis=(-1, -2))
+        apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(self.apodization)), axis=(-1, -2))
 
         # construct propagation operators we will need
-        fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
-        fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
-        p = propagation_kernel(fx, fy, dz, self.wavelength, self.no)
-        p_img = propagation_kernel(fx, fy, self.dz_final, self.wavelength, self.no)
-        fb_proj = forward_backward_proj(fx, fy, self.wavelength, self.no)[..., slice(0, 1), :]
+        p = propagation_kernel(self.fx, self.fy, self.drs_n[0], self.wavelength, self.no)
+        p_img = propagation_kernel(self.fx, self.fy, self.dz_final, self.wavelength, self.no)
+        fb_proj = forward_backward_proj(self.fx, self.fy, self.wavelength, self.no)[..., slice(0, 1), :]
 
         # add extra dimension at the end for broadcasting during matmult
+        nz, ny, nx = n.shape
         out_shape = efield_start.shape[:-2] + (nz + 2, ny, nx, 2, 1)
         yx_axes = (-3, -4)
         phi = xp.zeros(out_shape, dtype=complex)
@@ -1454,14 +1402,16 @@ class SSNP(RIOptimizer):
         phi[..., 0, :, :, 1, 0] = xp.asarray(de_dz_start)
         # z-step propagation
         for ii in range(nz):
-            # refractive index matrix
-            q = xp.ones((n.shape[1:]) + (2, 2), dtype=complex)
-            q[..., 0, 1] = 0
-            q[..., 1, 0] = (2 * np.pi / self.wavelength) ** 2 * (self.no ** 2 - n[ii] ** 2) * dz
+            # apply effect of RI using Q
+            temp = phi[..., ii, :, :, :, :] * apodization
+            temp[..., 1, 0] += (temp[..., 0, 0] *
+                                (2 * np.pi / self.wavelength) ** 2 *
+                                (self.no ** 2 - n[ii] ** 2) *
+                                self.drs_n[0]
+                                )
 
             phi[..., ii + 1, :, :, :, :] = ift2(
-                xp.matmul(p, ft2(xp.matmul(q, phi[..., ii, :, :, :, :] * apodization),
-                                 axes=yx_axes, shift=False)
+                xp.matmul(p, ft2(temp, axes=yx_axes, shift=False)
                           ),
                 axes=yx_axes, shift=False)
 
@@ -1470,98 +1420,12 @@ class SSNP(RIOptimizer):
         # so this is (phi_f, phi_b) whereas the others are (phi, dphi / dz)
         phi[..., -1, :, :, 0, :] = ift2(xp.matmul(fb_proj, atf * xp.matmul(p_img,
                                                                            ft2(phi[..., -2, :, :, :, :],
-                                                                               axes=yx_axes, shift=False))),
-                                        axes=yx_axes, shift=False)[..., 0, :]
-
-        # strip off extra dim
-        return phi[..., 0]
-
-    def backpropagate(self,
-                      efield_end: array,
-                      n: array) -> array:
-        """
-        This acts with the adjoint operators required when taking the gradient
-
-        :param efield_end:
-        :param n:
-        """
-
-        use_gpu = cp and isinstance(efield_end, cp.ndarray)
-        if use_gpu:
-            xp = cp
-        else:
-            xp = np
-
-        n = xp.asarray(n)
-        atf = xp.asarray(self.atf)
-        apodization = xp.asarray(self.apodization)
-        # expand over phi dims + extra dim
-        atf = xp.expand_dims(xp.asarray(xp.atleast_2d(atf)), axis=(-1, -2))
-        apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(apodization)), axis=(-1, -2))
-
-        dz, dy, dx = self.drs_n
-        nz, ny, nx = n.shape
-
-        # construct field propagators
-        fx = xp.expand_dims(xp.fft.fftfreq(nx, dx), axis=0)
-        fy = xp.expand_dims(xp.fft.fftfreq(ny, dy), axis=1)
-        p = propagation_kernel(fx, fy, dz, self.wavelength, self.no)
-        p_img = propagation_kernel(fx, fy, self.dz_final, self.wavelength, self.no)
-
-        p_adj = p.conj().swapaxes(-1, -2)
-        p_img_adj = p_img.conj().swapaxes(-1, -2)
-
-        fb_proj_adj = forward_backward_proj(fx,
-                                            fy,
-                                            self.wavelength,
-                                            self.no).conj()[..., slice(0, 1), :].swapaxes(-1, -2)
-
-        # add extra dimension at the end for broadcasting during matmult
-        out_shape = efield_end.shape[:-2] + (nz + 2, ny, nx, 2, 1)
-        yx_axes = (-3, -4)
-        phi = xp.zeros(out_shape, dtype=complex)
-        phi[..., -1, :, :, 0, 0] = xp.asarray(efield_end)
-
-        # adjoint of imaging/final prop operation
-        fadj = ft2(xp.matmul(p_img_adj,
-                             xp.conj(atf) *
-                             xp.matmul(fb_proj_adj,
-                                       ift2(phi[..., -1, :, :, slice(0, 1), :],
-                                            axes=yx_axes,
-                                            adjoint=True,
-                                            shift=False)
-                                       )
-                             ),
-                   axes=yx_axes,
-                   adjoint=True,
-                   shift=False)
-
-        # last propagation also
-        phi[..., -2, :, :, :, :] = ft2(xp.matmul(p_adj,
-                                                 ift2(fadj,
-                                                      axes=yx_axes,
-                                                      adjoint=True,
-                                                      shift=False)
-                                                 ),
-                                       axes=yx_axes,
-                                       adjoint=True,
-                                       shift=False)
-        # loop backwards through z-stack
-        for ii in range(nz - 1, -1, -1):
-            q_adj = xp.ones((n.shape[1:]) + (2, 2), dtype=complex)
-            q_adj[..., 0, 1] = (2 * np.pi / self.wavelength) ** 2 * (self.no ** 2 - n[ii] ** 2).conj() * dz
-            q_adj[..., 1, 0] = 0
-
-            phi[..., ii, :, :, :, :] = ft2(xp.matmul(p_adj,
-                                                     ift2(xp.matmul(q_adj,
-                                                                    phi[..., ii + 1, :, :, :, :]) *
-                                                          xp.conj(apodization),
-                                                          axes=yx_axes,
-                                                          adjoint=True,
-                                                          shift=False)),
-                                           axes=yx_axes,
-                                           adjoint=True,
-                                           shift=False)
+                                                                               axes=yx_axes,
+                                                                               shift=False)
+                                                                           )
+                                                  ),
+                                        axes=yx_axes,
+                                        shift=False)[..., 0, :]
 
         # strip off extra dim
         return phi[..., 0]
@@ -1601,6 +1465,9 @@ class SSNP(RIOptimizer):
 
         phi_fwd = self.phi_fwd(x, inds=inds)
 
+        # ##############################
+        # dL/dE
+        # ##############################
         if self.scale_cost_to_field:
             denom = abs(self.e_measured[inds]) ** 2 + self.cost_regularization ** 2
         else:
@@ -1608,30 +1475,93 @@ class SSNP(RIOptimizer):
 
         # this is the backpropagated field, but we will eventually transform it into the gradient
         # do things this way to reduce memory overhead
-        dtemp = 0
+        dl_de = 0
         if self.efield_cost_factor > 0:
-            dtemp += (self.efield_cost_factor *
+            dl_de += (self.efield_cost_factor *
                       (phi_fwd[inds, -1, :, :, 0] - self.e_measured[inds])) / denom
 
         if (1 - self.efield_cost_factor) > 0:
-            dtemp += ((1 - self.efield_cost_factor) *
+            dl_de += ((1 - self.efield_cost_factor) *
                       (abs(phi_fwd[:, -1, :, :, 0]) - abs(self.e_measured[inds])) *
                       phi_fwd[:, -1, :, :, 0] / abs(phi_fwd[:, -1, :, :, 0])) / denom
 
         if self.mask is not None:
-            dtemp *= self.mask
+            dl_de *= self.mask
 
-        # from phi_back, take derivative part
-        dc_dn = self.backpropagate(dtemp, x)[:, 1:-1, :, :, 1]
-        del dtemp
-        dc_dn *= -2 * (2 * np.pi / self.wavelength) ** 2 * self.drs_n[0] * x.conj()
-
-        # conjugate in place to avoid using extra memory
+        # ##############################
+        # dLoss/dn
+        # to save memory, overwrite the field part of phi_fwd as dl_dn and
+        # overwrite dl_de as backpropagated dl_de
+        # ##############################
         xp.conjugate(phi_fwd, out=phi_fwd)
-        # from phi_fwd, take the electric field part
-        dc_dn *= phi_fwd[:, :-2, :, :, 0]
+        phi_fwd[..., :-2, :, :, 0] *= -2 * (2 * np.pi / self.wavelength) ** 2 * self.drs_n[0] * x.conj()
 
-        return dc_dn
+        # expand over phi dims + extra dim
+        atf = xp.expand_dims(xp.atleast_2d(xp.asarray(self.atf)), axis=(-1, -2))
+        apodization = xp.expand_dims(xp.atleast_2d(xp.asarray(self.apodization)), axis=(-1, -2))
+
+        # construct field propagators
+        p_adj = propagation_kernel(self.fx, self.fy, self.drs_n[0], self.wavelength, self.no).swapaxes(-1, -2)
+        xp.conj(p_adj, out=p_adj)
+
+        p_img_adj = propagation_kernel(self.fx, self.fy, self.dz_final, self.wavelength, self.no).swapaxes(-1, -2)
+        xp.conj(p_img_adj, out=p_img_adj)
+
+        fb_proj_adj = forward_backward_proj(self.fx,
+                                            self.fy,
+                                            self.wavelength,
+                                            self.no)[..., slice(0, 1), :].swapaxes(-1, -2)
+        xp.conj(fb_proj_adj, out=fb_proj_adj)
+
+        # add extra dimension at the end for broadcasting during matmult
+        yx_axes = (-3, -4)
+
+        # adjoint of imaging/final prop operation
+        dl_de = ft2(xp.matmul(p_img_adj,
+                              xp.conj(atf) *
+                              xp.matmul(fb_proj_adj,
+                                        ift2(dl_de[..., None, None],
+                                             axes=yx_axes,
+                                             adjoint=True,
+                                             shift=False)
+                                        )
+                              ),
+                    axes=yx_axes,
+                    adjoint=True,
+                    shift=False)
+
+        # last propagation also
+        dl_de = ft2(xp.matmul(p_adj,
+                              ift2(dl_de,
+                                   axes=yx_axes,
+                                   adjoint=True,
+                                   shift=False)
+                              ),
+                    axes=yx_axes,
+                    adjoint=True,
+                    shift=False)
+        phi_fwd[..., -3, :, :, 0] *= dl_de[..., 1, 0]
+
+        # loop backwards through z-stack
+        for ii in range(self.shape_n[0] - 1, 0, -1):
+            # apply Q adjoint
+            dl_de[..., 0, 0] += (dl_de[..., 1, 0] *
+                                 (2 * np.pi / self.wavelength) ** 2 *
+                                 (self.no ** 2 - x[ii] ** 2).conj() *
+                                 self.drs_n[0])
+
+            dl_de = ft2(xp.matmul(p_adj,
+                                  ift2(dl_de * xp.conj(apodization),
+                                       axes=yx_axes,
+                                       adjoint=True,
+                                       shift=False)),
+                        axes=yx_axes,
+                        adjoint=True,
+                        shift=False)
+
+            phi_fwd[..., ii - 1, :, :, 0] *= dl_de[..., 1, 0]
+
+        return phi_fwd[..., :-2, :, :, 0]
 
     def get_estart(self,
                    inds: Optional[Sequence[int]] = None) -> (array, array):

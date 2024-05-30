@@ -295,6 +295,9 @@ dask-worker-space/
 # python packaging
 *.egg-info
 
+# temporary files
+*.*~
+
 # scratch space
 examples/data/**
 # temporary files

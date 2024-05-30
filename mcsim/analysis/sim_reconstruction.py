@@ -130,13 +130,13 @@ class SimImageSet:
             The second case corresponds to a system that has different OTF's per SIM acquisition angle.
         :param wiener_parameter: Attenuation parameter for Wiener filtering. This has a sligtly different meaning
             depending on the value of combine_bands_mode
-        :param str frq_estimation_mode: "band-correlation", "fourier-transform", or "fixed"
+        :param frq_estimation_mode: "band-correlation", "fourier-transform", or "fixed"
            "band-correlation" first unmixes the bands using the phase guess values and computes the correlation between
            the shifted and unshifted band
            "fourier-transform" correlates the Fourier transform of the image with itself.
            "fixed" uses the frq_guess values
         :param frq_guess: 2 x nangles array of guess SIM frequency values
-        :param str phase_estimation_mode: "wicker-iterative", "real-space", "naive", or "fixed"
+        :param phase_estimation_mode: "wicker-iterative", "real-space", "naive", or "fixed"
            "wicker-iterative" follows the approach of https://doi.org/10.1364/OE.21.002032.
            "real-space" follows the approach of section IV-B in https://doir.org/10.1109/JSTQE.2016.2521542.
            "naive" uses the phase of the Fourier transform of the raw data.
@@ -236,9 +236,7 @@ class SimImageSet:
         :param use_gpu: Run SIM computations on the GPU
         :param print_to_terminal: Print diagnostic information to the terminal dureing reconstruction
 
-        =================
-        Coordinates
-        =================
+        Coordinates:
         Both the raw data and the SIM data use the same coordinates as the FFT with the origin in the center.
         i.e. the coordinates in the raw image are x = (arange(nx) - (nx // 2)) * dxy
         and for the SIM image they are            x = ((arange(2*nx) - (2*nx)//2) * 0.5 * dxy
@@ -247,9 +245,7 @@ class SimImageSet:
         images are at (2*n) // 2 = n. This translation is due to the fact that for odd n,
         n // 2 != (2*n) // 2 * 0.5 = n / 2
 
-        =================
         Examples:
-        =================
         For normal use cases, it is best to use the classmethod initialize() as the constructor for the class.
         initialize() requires that all SIM reconstruction settings be known when the constructor is called.
 
@@ -3561,7 +3557,7 @@ def get_band_overlap(band0: array,
 
     .. math::
 
-      C &= \\frac{\\sum_f b_0(f) * b_1^*(f + f_o)}{\\sum |b_0(f)|^2}
+      C &= \\frac{\\sum_f b_0(f) b_1^*(f + f_o)}{\\sum |b_0(f)|^2}
 
       b_1(f + f_o) &= O(f)
 
@@ -3571,13 +3567,13 @@ def get_band_overlap(band0: array,
 
     .. math::
 
-       b_1(f) = m  e^{-i * \\phi_c} * b_0(f)
+       b_1(f) = m  e^{-i \\phi_c} b_0(f)
 
     Given this information, can perform the phase correction
 
     .. math::
 
-      b_1(f + f_o) \\to \\frac{e^{i \\phi_c}}{m} b_1(f + f_o)`
+      b_1(f + f_o) \\to \\frac{e^{i \\phi_c}}{m} b_1(f + f_o)
 
     This function return :math:`m e^{i \\phi_c}`
 
@@ -4104,7 +4100,7 @@ def get_hexagonal_patterns(dxy: float,
     return patterns
 
 
-class fista_sim(Optimizer):
+class FistaSim(Optimizer):
     def __init__(self,
                  psf: array,
                  patterns: array,
@@ -4128,18 +4124,15 @@ class fista_sim(Optimizer):
         :param apodization:
         """
 
-        super(fista_sim, self).__init__()
-
-        self.prox_parameters = {"tau_tv": float(tau_tv),
-                                "tau_l1": float(tau_l1),
-                                "enforce_positivity": enforce_positivity
-                                }
-
+        super(FistaSim, self).__init__(patterns.shape[0],
+                                       prox_parameters={"tau_tv": float(tau_tv),
+                                                        "tau_l1": float(tau_l1),
+                                                        "enforce_positivity": enforce_positivity}
+                                       )
         self.nbin = nbin
         self.imgs = imgs
         self.ny, self.nx = imgs.shape[-2:]
         self.patterns = patterns
-        self.n_samples = patterns.shape[0]
         self.psf = psf
 
         if cp and isinstance(imgs, cp.ndarray):
