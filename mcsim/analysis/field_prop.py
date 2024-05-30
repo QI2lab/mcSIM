@@ -12,7 +12,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import svds
 from mcsim.analysis.fft import ft2, ift2, ft3, ift3
-from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox
+from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, median_prox
 
 try:
     import cupy as cp
@@ -312,7 +312,7 @@ def propagate_homogeneous(efield_start: array,
     :return efield_prop: propagated electric field of shape no x ... x nm x nz x ny x nx
     """
 
-    if isinstance(efield_start, cp.ndarray):
+    if cp and isinstance(efield_start, cp.ndarray):
         xp = cp
     else:
         xp = np
@@ -753,6 +753,7 @@ class RIOptimizer(Optimizer):
                  tau_l1_real: float = 0.,
                  tau_l1_imag: float = 0.,
                  max_num_iter: int = 200,
+                 median_filter_size: Sequence[int, int, int] = (1, 1, 1),
                  apply_tv_first: bool = False,
                  use_imaginary_constraint: bool = False,
                  use_real_constraint: bool = False,
@@ -794,7 +795,8 @@ class RIOptimizer(Optimizer):
                                                            "use_imaginary_constraint": bool(use_imaginary_constraint),
                                                            "use_real_constraint": bool(use_real_constraint),
                                                            "max_imaginary_part": float(max_imaginary_part),
-                                                           "max_num_iter": max_num_iter
+                                                           "max_num_iter": max_num_iter,
+                                                           "median_filter_size": median_filter_size,
                                                            }
                                           )
 
@@ -834,6 +836,9 @@ class RIOptimizer(Optimizer):
 
         x_real = x.real
         x_imag = x.imag
+
+        if self.prox_parameters["median_filter_size"] != (1, 1, 1):
+            x_real = median_prox(x_real, self.prox_parameters["median_filter_size"])
 
         # ###########################
         # L1 proximal operators (softmax)

@@ -8,6 +8,7 @@ from time import perf_counter
 from random import sample
 from typing import Union, Optional
 from collections.abc import Sequence
+from scipy.ndimage import median_filter
 from skimage.restoration import denoise_tv_chambolle
 
 
@@ -21,6 +22,12 @@ try:
     from cucim.skimage.restoration import denoise_tv_chambolle as denoise_tv_chambolle_gpu
 except ImportError:
     denoise_tv_chambolle_gpu = None
+
+try:
+    from cupyx.scipy.ndimage import median_filter as median_filter_gpu
+except ImportError:
+    median_filter_gpu = None
+
 
 if cp:
     array = Union[np.ndarray, cp.ndarray]
@@ -93,6 +100,25 @@ def tv_prox(x: array,
         tv = denoise_tv_chambolle
 
     return tv(x, weight=tau, channel_axis=None, max_num_iter=max_num_iter, eps=eps)
+
+
+def median_prox(x: array,
+                size: Sequence[int]):
+    """
+
+    :param x:
+    :param size:
+    :return:
+    """
+    if cp and isinstance(x, cp.ndarray):
+        if not median_filter_gpu:
+            raise ValueError("array x is a CuPy array, but a GPU compatible median filter implementation was not"
+                             " imported successfully.")
+        f = median_filter_gpu
+    else:
+        f = median_filter
+
+    return f(x, size=size)
 
 
 class Optimizer:
