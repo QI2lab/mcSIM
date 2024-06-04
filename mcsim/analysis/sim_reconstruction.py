@@ -38,8 +38,9 @@ from io import StringIO
 # loading and exporting data
 import json
 import tifffile
-import zarr
 import h5py
+import zarr
+from numcodecs import Zlib
 # plotting
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -2195,7 +2196,7 @@ class SimImageSet:
                   save_processed_data: bool = False,
                   attributes: Optional[dict] = None,
                   arrays: Optional[dict] = None,
-                  compressor: Optional = None) -> Path:
+                  compressor: Optional = Zlib()) -> Path:
         """
         Save SIM results and metadata to file
 
