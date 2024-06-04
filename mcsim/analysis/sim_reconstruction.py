@@ -714,6 +714,9 @@ class SimImageSet:
             if slices is None:
                 slices = tuple([slice(None) for _ in range(self.n_extra_dims)])
 
+            if self.imgs[slices].size == 0:
+                raise ValueError(f"After slicing, imgs array had size zero and shape {self.imgs[slices].shape}")
+
             # always average over first dims after slicing...
             imgs = da.mean(self.imgs[slices],
                            axis=tuple(range(self.n_extra_dims))).compute()
