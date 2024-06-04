@@ -882,7 +882,7 @@ class Tomography:
 
                     if rois_all is not None:
                         for roi in rois_all:
-                            ax.add_artist(Rectangle((fx[roi[2]], fy[roi[0]]),
+                            ax.add_artist(Rectangle((fx[roi[2]] - 0.5*dfx, fy[roi[0]] - 0.5*dfy),
                                                     fx[roi[3] - 1] - fx[roi[2]],
                                                     fy[roi[1] - 1] - fy[roi[0]],
                                                     edgecolor='k',
