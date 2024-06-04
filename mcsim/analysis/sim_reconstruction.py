@@ -1246,7 +1246,7 @@ class SimImageSet:
 
             # put in modulation depth and global phase corrections
             # components array useful for diagnostic plots
-            # todo: if do not explicitely delete self.sim_sr_ft_components it will hold memory
+            # todo: if do not explicitly delete self.sim_sr_ft_components it will hold memory
             # self.sim_sr_ft_components = self.bands_shifted_ft * self.weights * corr_mat / self.weights_norm
             self.sim_sr_ft_components = self.bands_shifted_ft * corr_mat
             self.sim_sr_ft_components *= self.weights
@@ -1297,7 +1297,7 @@ class SimImageSet:
                 attr = getattr(self, attr_name)
 
                 # if cupy array, move off GPU
-                if isinstance(attr, cp.ndarray):
+                if cp and isinstance(attr, cp.ndarray):
                     setattr(self, attr_name, to_cpu(attr))
 
                 # if dask array, move off GPU delayed
