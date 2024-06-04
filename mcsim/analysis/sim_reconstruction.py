@@ -4252,8 +4252,8 @@ class FistaSim(Optimizer):
                  patterns: array,
                  imgs: array,
                  nbin: int = 1,
-                 tau_tv: float = 0,
-                 tau_l1: float = 0,
+                 tau_tv: float = 0.,
+                 tau_l1: float = 0.,
                  enforce_positivity: bool = True,
                  apodization: Optional[array] = None):
         """
@@ -4334,7 +4334,7 @@ class FistaSim(Optimizer):
         else:
             xp = np
 
-        return 0.5 * xp.mean(xp.abs(self.fwd_model(x, inds=inds) - self.imgs[inds]) ** 2, axis=(1, 2))
+        return 0.5 * xp.sum(xp.abs(self.fwd_model(x, inds=inds) - self.imgs[inds]) ** 2, axis=(1, 2))
 
     def gradient(self, x, inds=None):
         if inds is None:
@@ -4349,6 +4349,6 @@ class FistaSim(Optimizer):
         dc_do = xp.stack([blur_img_psf(bin_adjoint(img_model[ii] - self.imgs[ind], (self.nbin, self.nbin), mode="sum"),
                                      self.psf_reversed, self.apodization).real
                         for ii, ind in enumerate(inds)])
-        dc_do *= self.patterns[inds] / (self.ny * self.nx)
+        dc_do *= self.patterns[inds]
 
         return dc_do
