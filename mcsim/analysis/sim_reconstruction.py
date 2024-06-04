@@ -477,7 +477,6 @@ class SimImageSet:
         # image preprocessing
         # #############################################
         # remove background and convert from ADU to photons
-        # todo: this should probably be users responsibility
         self.imgs = (self.imgs_raw - self._preprocessing_settings["offset"]) / self._preprocessing_settings["gain"]
         self.imgs[self.imgs <= 0] = 1e-12
 
@@ -874,8 +873,6 @@ class SimImageSet:
             if self.use_gpu:
                 # find this is necessary, else mempool gets too big for 8GB GPU's
                 mempool.free_all_blocks()
-                # self.print_log(f"after phase estimation used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-                # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
 
         elif self._recon_settings["phase_estimation_mode"] == "real-space":
             phase_guess = self.phases_guess
@@ -903,8 +900,6 @@ class SimImageSet:
             if self.use_gpu:
                 # find this is necessary, else mempool gets too big for 8GB GPU's
                 mempool.free_all_blocks()
-                # self.print_log(f"after phase estimation used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-                # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
         else:
             raise ValueError(f"phase_estimation_mode must be one of {self.allowed_phase_estimation_modes}"
                              f" but was '{self._recon_settings['phase_estimation_mode']:s}'")
@@ -948,9 +943,6 @@ class SimImageSet:
            self._recon_settings["mod_depth_estimation_mode"] != "fixed":
             tstart_mod_depth = perf_counter()
 
-            # self.print_log(f"before band separation used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-            # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
-
             # do band separation
             bands_shifted_ft = shift_bands(unmix_bands(imgs_ft, self.phases, amps=self.amps),
                                            self.frqs,
@@ -958,8 +950,6 @@ class SimImageSet:
                                            self.upsample_fact)
 
             if self.use_gpu:
-                # self.print_log(f"after upsampling and band shifting used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-                # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
                 mempool.free_all_blocks()
 
             # upsample and shift OTFs
@@ -1020,8 +1010,6 @@ class SimImageSet:
             self.print_log(f"estimated global phases and modulation depths in {perf_counter() - tstart_mod_depth:.2f}s")
 
             if self.use_gpu:
-                # self.print_log(f"after phase correction used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-                # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
                 mempool.free_all_blocks()
 
             del mask
@@ -1114,11 +1102,6 @@ class SimImageSet:
         self.estimate_parameters(slices=slices,
                                  frq_search_bounds=frq_search_bounds)
 
-        # if self.use_gpu:
-        #     mempool = cp.get_default_memory_pool()
-        #     self.print_log(f"used GPU memory = {(mempool.used_bytes()) / 1e9:.3f}GB")
-        #     self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
-
         # #############################################
         # various types of "reconstruction"
         # #############################################
@@ -1128,9 +1111,6 @@ class SimImageSet:
         # get widefield image
         # #############################################
         if compute_widefield:
-            apodization = xp.array(np.outer(tukey(self.ny, alpha=0.1),
-                                            tukey(self.nx, alpha=0.1)))
-
             self.widefield = da.nanmean(self.imgs, axis=(-3, -4))
 
         # #############################################
@@ -2358,10 +2338,6 @@ class SimImageSet:
                         factor = 1
                     else:
                         factor = self.upsample_fact
-
-                    # if imagej_axes_order:
-                    #     use_imagej = True
-                    #     img = tifffile.transpose_axes(img, axes=imagej_axes_order, asaxes="TZCYXS")
 
                     tifffile.imwrite(save_dir / f"{save_prefix:s}{attr:s}{save_suffix:s}.tif",
                                      img,
