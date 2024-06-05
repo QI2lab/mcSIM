@@ -18,8 +18,7 @@ from localize_psf import affine, localize, fit_psf
 # ################################
 # data files and options
 # ################################
-# data_dirs = [Path(r"I:\2023_08_22\007_red_sim_calibration")]
-data_dirs = [Path(r"I:\2023_08_22\004_blue_green_sim_calibration")]
+data_dirs = [Path(r"F:\2024_05_30\001_sim_mod_depth_100nm_beads")]
 
 # channel dependent settings
 
@@ -33,22 +32,25 @@ data_dirs = [Path(r"I:\2023_08_22\004_blue_green_sim_calibration")]
 # min_fit_amp = [100, 100]
 # bead_radii = 0.5 * np.array([0.2, 0.2])
 
-
 # blue/green with 505/515nm 0.1um beads
 # ignore_color = [False, False]
 # min_fit_amp = [1000, 30]
 # bead_radii = 0.5 * np.array([0.1, 0.1])
 
 # blue/green
-ignore_color = [False, False]
-min_fit_amp = [200, 200]
-bead_radii = 0.5 * np.array([0.1, 0.1])
+# ignore_color = [False, False]
+# min_fit_amp = [200, 200]
+# bead_radii = 0.5 * np.array([0.1, 0.1])
 
 # red beads
 # ignore_color = [False]
 # min_fit_amp = [1000]
 # bead_radii = 0.5 * np.array([0.2])
 
+# blue
+ignore_color = [False]
+min_fit_amp = [300]
+bead_radii = 0.5 * np.array([0.1])
 
 # channel independent setings
 use_gpu = True
@@ -100,7 +102,7 @@ for d in data_dirs:
 
     # get axes sizes and names
     axes_names = arrs[0].attrs["dimensions"]
-    npos, ntimes, nz, nparams, npatterns, ny, nx = arrs[0].shape
+    nt_fast, npos, ntimes, nz, nparams, npatterns, ny, nx = arrs[0].shape
     nphases = arrs[0].attrs["nphases"]
     nangles = arrs[0].attrs["nangles"]
 
@@ -131,6 +133,9 @@ for d in data_dirs:
     # load images
     nextra_dims = arrs[0].ndim - 3
     imgs = [np.array(a).reshape(a.shape[:nextra_dims] + (nangles, nphases, ny, nx)) for a in arrs]
+
+    shape_extra = imgs[0].shape[:nextra_dims]
+    ntot_extra = np.prod(shape_extra)
 
     # make save directory
     if save_results:
@@ -167,7 +172,8 @@ for d in data_dirs:
         print(f"started initial fitting for channel {ic:d}")
 
         # take widefield image
-        img_middle_wf = np.mean(imgs[ic][0, 0, nz//2, 0], axis=(0, 1))
+        # img_middle_wf = np.mean(imgs[ic][0, 0, 0, nz//2, 0], axis=(0, 1))
+        img_middle_wf = np.max(imgs[ic].mean(axis=(-3, -4)), axis=tuple(range(nextra_dims)))
 
         zz, yy, xx = localize.get_coords((1,) + img_middle_wf.shape, (1, dxy, dxy), broadcast=True)
         coords = localize.get_coords((1,) + img_middle_wf.shape, (1, dxy, dxy), broadcast=False)
@@ -223,7 +229,7 @@ for d in data_dirs:
         ips_start[ic] = ips_temp[to_keep]
 
         # define array to hold later fit results
-        fps[ic] = np.zeros((npos, ntimes, nz, nparams, nangles, nphases, len(rois[ic]), nmodel_param))
+        fps[ic] = np.zeros(shape_extra + (nangles, nphases, len(rois[ic]), nmodel_param))
 
         # ##############
         # plot detected bead positions along with amplitudes and sigmas
@@ -284,8 +290,6 @@ for d in data_dirs:
         # #################################################
         # do fitting for all other images
         # #################################################
-        shape_extra = imgs[ic].shape[:nextra_dims]
-        ntot_extra = np.prod(shape_extra)
         for ccc in range(ntot_extra):
             for ia in range(nangles):
                 for ip in range(nphases):
