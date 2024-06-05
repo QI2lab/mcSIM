@@ -4,6 +4,7 @@ Tests for some important functions from sim_reconstruction.py
 import unittest
 import numpy as np
 from scipy.fft import fftshift, ifftshift, fftfreq, fft, ifft, fft2, ifft2
+from scipy.signal.windows import tukey
 import mcsim.analysis.sim_reconstruction as sim
 from mcsim.analysis.fft import translate_ft
 from localize_psf.camera import bin
@@ -372,6 +373,55 @@ class TestSIM(unittest.TestCase):
             self.assertTrue(max_err < 1e-7)
 
         # todo: also test approximately gives the right thing for partial pixel shifts (i.e. that the phases make sense)
+
+    def test_sim_grad(self):
+        dxy = 0.065
+        nbin = 2
+        na = 1.3
+        wavelength = 0.532
+        nxy = 501
+        nxy_sim = 2*nxy
+        dxy_sim = 0.5 * dxy
+
+        imgs = np.random.random((9, nxy, nxy))
+
+        x = (np.arange(nxy_sim) - (nxy_sim // 2)) * dxy_sim
+        y = (np.arange(nxy_sim) - (nxy_sim // 2)) * dxy_sim
+        fwhm = 0.51 * wavelength / na
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        psf = np.exp(-np.sqrt(x[None, :]**2 + y[:, None]**2) / (2*sigma))
+
+        fmag = 0.75 * (2 * na / wavelength)
+        fangles = np.array([0, 60 * np.pi/180, 120 * np.pi/180])
+        frqs = np.array([[fmag * np.cos(a), fmag * np.sin(a)] for a in fangles])
+        frqs = np.kron(frqs, np.ones((3, 1)))
+
+        phases = np.kron(np.ones(3), np.array([0., 2*np.pi/3, 4*np.pi/3]))
+        patterns = sim.get_sinusoidal_patterns(0.5 * dxy,
+                                               (2*nxy, 2*nxy),
+                                               frqs,
+                                               phases,
+                                               mod_depths=np.ones(9)
+                                               )
+
+        apodization = np.outer(tukey(nxy_sim, 0.1), tukey(nxy_sim, 0.1))
+
+        xp = np
+
+        fsim = sim.FistaSim(xp.asarray(psf),
+                            xp.asarray(patterns),
+                            xp.asarray(imgs),
+                            nbin=nbin,
+                            tau_tv=0.,
+                            tau_l1=0.,
+                            apodization=apodization
+                            )
+
+        jind = np.ravel_multi_index((nxy_sim//2, nxy_sim//2), (nxy_sim, nxy_sim))
+        g, gn = fsim.test_gradient(np.ones((nxy_sim, nxy_sim)),
+                                   jind=jind)
+
+        np.testing.assert_allclose(g, gn, rtol=1e-1)
 
 
 if __name__ == "__main__":

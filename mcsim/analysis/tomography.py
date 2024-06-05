@@ -882,7 +882,7 @@ class Tomography:
 
                     if rois_all is not None:
                         for roi in rois_all:
-                            ax.add_artist(Rectangle((fx[roi[2]], fy[roi[0]]),
+                            ax.add_artist(Rectangle((fx[roi[2]] - 0.5*dfx, fy[roi[0]] - 0.5*dfy),
                                                     fx[roi[3] - 1] - fx[roi[2]],
                                                     fy[roi[1] - 1] - fy[roi[0]],
                                                     edgecolor='k',
@@ -2850,6 +2850,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              n_lim: tuple[float, float] = (0., 0.05),
                              e_lim: tuple[float, float] = (0., 500.),
                              escatt_lim: tuple[float, float] = (-5., 5.),
+                             n_cmap="gray_r",
                              real_cmap="bone",
                              phase_cmap="RdBu",
                              scale_z: bool = True,
@@ -3390,7 +3391,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                                  scale=scale,
                                  affine=affine_recon2cam,
                                  translate=(zoffset, 0, 0),
-                                 colormap=real_cmap,
+                                 colormap=n_cmap,
                                  contrast_limits=n_lim,
                                  visible=False,
                                  name=f"{prefix:s}n start - no",
@@ -3410,7 +3411,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              scale=scale,
                              affine=affine_recon2cam,
                              translate=(zoffset, 0, 0),
-                             colormap=real_cmap,
+                             colormap=n_cmap,
                              contrast_limits=n_lim,
                              name=f"{prefix:s}n-no",
                              )
@@ -3421,7 +3422,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              affine=affine_recon2cam,
                              translate=(zoffset, 0, 0),
                              contrast_limits=n_lim,
-                             colormap=real_cmap,
+                             colormap=n_cmap,
                              name=f"{prefix:s}n max z"
                              )
 
@@ -3431,7 +3432,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              affine=affine_recon2cam,
                              translate=(zoffset, ny + mip_separation_pix, 0),
                              contrast_limits=n_lim,
-                             colormap=real_cmap,
+                             colormap=n_cmap,
                              name=f"{prefix:s}n max y"
                              )
 
@@ -3441,7 +3442,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              affine=affine_recon2cam,
                              translate=(zoffset, 0, -nz * drs_n[0] / drs_n[1] - mip_separation_pix),
                              contrast_limits=n_lim,
-                             colormap=real_cmap,
+                             colormap=n_cmap,
                              name=f"{prefix:s}n max x"
                              )
 

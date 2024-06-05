@@ -38,9 +38,11 @@ from io import StringIO
 # loading and exporting data
 import json
 import tifffile
-import zarr
 import h5py
+import zarr
+from numcodecs import Zlib
 # plotting
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.cm import ScalarMappable
@@ -477,7 +479,6 @@ class SimImageSet:
         # image preprocessing
         # #############################################
         # remove background and convert from ADU to photons
-        # todo: this should probably be users responsibility
         self.imgs = (self.imgs_raw - self._preprocessing_settings["offset"]) / self._preprocessing_settings["gain"]
         self.imgs[self.imgs <= 0] = 1e-12
 
@@ -714,6 +715,9 @@ class SimImageSet:
             if slices is None:
                 slices = tuple([slice(None) for _ in range(self.n_extra_dims)])
 
+            if self.imgs[slices].size == 0:
+                raise ValueError(f"After slicing, imgs array had size zero and shape {self.imgs[slices].shape}")
+
             # always average over first dims after slicing...
             imgs = da.mean(self.imgs[slices],
                            axis=tuple(range(self.n_extra_dims))).compute()
@@ -871,8 +875,6 @@ class SimImageSet:
             if self.use_gpu:
                 # find this is necessary, else mempool gets too big for 8GB GPU's
                 mempool.free_all_blocks()
-                # self.print_log(f"after phase estimation used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-                # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
 
         elif self._recon_settings["phase_estimation_mode"] == "real-space":
             phase_guess = self.phases_guess
@@ -900,8 +902,6 @@ class SimImageSet:
             if self.use_gpu:
                 # find this is necessary, else mempool gets too big for 8GB GPU's
                 mempool.free_all_blocks()
-                # self.print_log(f"after phase estimation used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-                # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
         else:
             raise ValueError(f"phase_estimation_mode must be one of {self.allowed_phase_estimation_modes}"
                              f" but was '{self._recon_settings['phase_estimation_mode']:s}'")
@@ -945,9 +945,6 @@ class SimImageSet:
            self._recon_settings["mod_depth_estimation_mode"] != "fixed":
             tstart_mod_depth = perf_counter()
 
-            # self.print_log(f"before band separation used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-            # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
-
             # do band separation
             bands_shifted_ft = shift_bands(unmix_bands(imgs_ft, self.phases, amps=self.amps),
                                            self.frqs,
@@ -955,8 +952,6 @@ class SimImageSet:
                                            self.upsample_fact)
 
             if self.use_gpu:
-                # self.print_log(f"after upsampling and band shifting used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-                # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
                 mempool.free_all_blocks()
 
             # upsample and shift OTFs
@@ -1017,8 +1012,6 @@ class SimImageSet:
             self.print_log(f"estimated global phases and modulation depths in {perf_counter() - tstart_mod_depth:.2f}s")
 
             if self.use_gpu:
-                # self.print_log(f"after phase correction used GPU memory = {(mempool.used_bytes() - memory_start) / 1e9:.3f}GB")
-                # self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
                 mempool.free_all_blocks()
 
             del mask
@@ -1111,11 +1104,6 @@ class SimImageSet:
         self.estimate_parameters(slices=slices,
                                  frq_search_bounds=frq_search_bounds)
 
-        # if self.use_gpu:
-        #     mempool = cp.get_default_memory_pool()
-        #     self.print_log(f"used GPU memory = {(mempool.used_bytes()) / 1e9:.3f}GB")
-        #     self.print_log(f"GPU memory pool = {(mempool.total_bytes()) / 1e9:.3f}GB")
-
         # #############################################
         # various types of "reconstruction"
         # #############################################
@@ -1125,9 +1113,6 @@ class SimImageSet:
         # get widefield image
         # #############################################
         if compute_widefield:
-            apodization = xp.array(np.outer(tukey(self.ny, alpha=0.1),
-                                            tukey(self.nx, alpha=0.1)))
-
             self.widefield = da.nanmean(self.imgs, axis=(-3, -4))
 
         # #############################################
@@ -1261,7 +1246,7 @@ class SimImageSet:
 
             # put in modulation depth and global phase corrections
             # components array useful for diagnostic plots
-            # todo: if do not explicitely delete self.sim_sr_ft_components it will hold memory
+            # todo: if do not explicitly delete self.sim_sr_ft_components it will hold memory
             # self.sim_sr_ft_components = self.bands_shifted_ft * self.weights * corr_mat / self.weights_norm
             self.sim_sr_ft_components = self.bands_shifted_ft * corr_mat
             self.sim_sr_ft_components *= self.weights
@@ -1312,7 +1297,7 @@ class SimImageSet:
                 attr = getattr(self, attr_name)
 
                 # if cupy array, move off GPU
-                if isinstance(attr, cp.ndarray):
+                if cp and isinstance(attr, cp.ndarray):
                     setattr(self, attr_name, to_cpu(attr))
 
                 # if dask array, move off GPU delayed
@@ -1442,90 +1427,92 @@ class SimImageSet:
         # plot settings
         # #############################################
         if not interactive_plotting:
-            plt.ioff()
-            plt.switch_backend("agg")
+            settings = {'interactive': False, 'backend': "agg"}
+        else:
+            settings = {}
 
-        # #############################################
-        # figures/names to output
-        # #############################################
-        figs = []
-        fig_names = []
+        with matplotlib.rc_context(settings):
+            # #############################################
+            # figures/names to output
+            # #############################################
+            figs = []
+            fig_names = []
 
-        # get slice to display
-        if slices is None:
-            slices = tuple([slice(n // 2, n // 2 + 1) for n in self.imgs.shape[:-4]])
+            # get slice to display
+            if slices is None:
+                slices = tuple([slice(n // 2, n // 2 + 1) for n in self.imgs.shape[:-4]])
 
-        tstart = perf_counter()
+            tstart = perf_counter()
 
-        saving = save_dir is not None
-        if saving:
-            save_dir = Path(save_dir)
+            saving = save_dir is not None
+            if saving:
+                save_dir = Path(save_dir)
 
-        # plot MCNR diagnostic
-        fnow, fnames_now = self.plot_mcnr_diagnostic(slices, figsize=figsize)
+            # plot MCNR diagnostic
+            fnow, fnames_now = self.plot_mcnr_diagnostic(slices, figsize=figsize)
 
-        figs += fnow
-        fig_names += fnames_now
+            figs += fnow
+            fig_names += fnames_now
 
-        figh = fnow[0]
-        fname = fnames_now[0]
+            figh = fnow[0]
+            fname = fnames_now[0]
 
-        if saving:
-            figh.savefig(save_dir / f"{save_prefix:s}{fname:s}{save_suffix:s}.png",
-                         dpi=imgs_dpi)
-        if not interactive_plotting:
-            plt.close(figh)
+            if saving:
+                figh.savefig(save_dir / f"{save_prefix:s}{fname:s}{save_suffix:s}.png",
+                             dpi=imgs_dpi)
+            if not interactive_plotting:
+                plt.close(figh)
 
-        # plot frequency fits
-        if self._recon_settings['frq_estimation_mode'] != "fixed":
-            fighs, fig_names_now = self.plot_frequency_fits(figsize=figsize)
+            # plot frequency fits
+            if self._recon_settings['frq_estimation_mode'] != "fixed":
+                fighs, fig_names_now = self.plot_frequency_fits(figsize=figsize)
+                figs += fighs
+                fig_names += fig_names_now
+
+                for fh, fn in zip(fighs, fig_names_now):
+                    if saving:
+                        fh.savefig(save_dir / f"{save_prefix:s}{fn:s}{save_suffix:s}.png")
+                    if not interactive_plotting:
+                        plt.close(fh)
+
+            # plot filters used in reconstruction
+            fighs, fig_names_now = self.plot_reconstruction_diagnostics(slices, figsize=figsize)
+
             figs += fighs
             fig_names += fig_names_now
 
             for fh, fn in zip(fighs, fig_names_now):
                 if saving:
-                    fh.savefig(save_dir / f"{save_prefix:s}{fn:s}{save_suffix:s}.png")
+                    fh.savefig(save_dir / f"{save_prefix:s}{fn:s}{save_suffix:s}.png",
+                               dpi=imgs_dpi)
                 if not interactive_plotting:
                     plt.close(fh)
 
-        # plot filters used in reconstruction
-        fighs, fig_names_now = self.plot_reconstruction_diagnostics(slices, figsize=figsize)
-
-        figs += fighs
-        fig_names += fig_names_now
-
-        for fh, fn in zip(fighs, fig_names_now):
-            if saving:
-                fh.savefig(save_dir / f"{save_prefix:s}{fn:s}{save_suffix:s}.png",
-                           dpi=imgs_dpi)
-            if not interactive_plotting:
-                plt.close(fh)
-
-        # plot otf
-        fig = self.plot_otf(figsize=figsize)
-        fig_name_now = "otf"
-
-        figs += [fig]
-        fig_names += [fig_name_now]
-
-        if saving:
-            fig.savefig(save_dir / f"{save_prefix:s}{fig_name_now:s}{save_suffix:s}.png")
-        if not interactive_plotting:
-            plt.close(fig)
-
-        if not diagnostics_only:
-            # plot reconstruction results
-            fig = self.plot_reconstruction(slices, figsize=figsize)
-            fig_name_now = "sim_reconstruction"
+            # plot otf
+            fig = self.plot_otf(figsize=figsize)
+            fig_name_now = "otf"
 
             figs += [fig]
             fig_names += [fig_name_now]
 
             if saving:
-                fig.savefig(save_dir / f"{save_prefix:s}{fig_name_now:s}{save_suffix:s}.png",
-                            dpi=imgs_dpi)
+                fig.savefig(save_dir / f"{save_prefix:s}{fig_name_now:s}{save_suffix:s}.png")
             if not interactive_plotting:
                 plt.close(fig)
+
+            if not diagnostics_only:
+                # plot reconstruction results
+                fig = self.plot_reconstruction(slices, figsize=figsize)
+                fig_name_now = "sim_reconstruction"
+
+                figs += [fig]
+                fig_names += [fig_name_now]
+
+                if saving:
+                    fig.savefig(save_dir / f"{save_prefix:s}{fig_name_now:s}{save_suffix:s}.png",
+                                dpi=imgs_dpi)
+                if not interactive_plotting:
+                    plt.close(fig)
 
         tend = perf_counter()
         self.print_log(f"plotting results took {tend - tstart:.2f}s")
@@ -1535,6 +1522,8 @@ class SimImageSet:
     def plot_mcnr_diagnostic(self,
                              slices: Optional[tuple[slice]] = None,
                              figsize: Sequence[float, float] = (20., 10.),
+                             nbins_histogram: int = 50,
+                             gamma: float = 1.,
                              **kwargs) -> (list[plt.figure], list[str]):
         """
         Display SIM images for visual inspection. Use this to examine SIM pictures and their Fourier transforms
@@ -1563,8 +1552,10 @@ class SimImageSet:
 
             vmax_mcnr = np.percentile(mcnr, 99)
 
-        extent = [self.x[0] - 0.5 * self.dx, self.x[-1] + 0.5 * self.dx,
-                  self.y[-1] + 0.5 * self.dy, self.y[0] - 0.5 * self.dy]
+        extent = [self.x[0] - 0.5 * self.dx,
+                  self.x[-1] + 0.5 * self.dx,
+                  self.y[-1] + 0.5 * self.dy,
+                  self.y[0] - 0.5 * self.dy]
 
         # parameters for real space plot
         vmin = np.percentile(imgs.ravel(), 0.1)
@@ -1578,93 +1569,100 @@ class SimImageSet:
         # plot real-space
         # ########################################
         figh = plt.figure(figsize=figsize, **kwargs)
-        figh.suptitle(f"SIM MCNR diagnostic, index={[s.start for s in slices[:-4]]}")
+        figh.suptitle(f"Modulation-contrast-to-noise-ratio (MCNR) diagnostic, "
+                      f"index={[s.start for s in slices[:-4]]}\n"
+                      f"SIM angles vary with rows, and phases vary with columns")
 
-        n_factor = 4  # colorbar will be 1/n_factor of images
-        # 5 types of plots + 2 colorbars
-        grid = figh.add_gridspec(self.nangles, n_factor * (self.nphases + 2) + 3)
+        grid = figh.add_gridspec(nrows=self.nangles + 2,
+                                 hspace=0.04,
+                                 height_ratios=[1] * self.nangles + [0.2, 0.2],
+                                 ncols=self.nphases + 2,
+                                 wspace=0.04,
+                                 )
         
-        mean_int = np.mean(imgs, axis=(2, 3))
-        rel_int_phases = mean_int / np.expand_dims(np.max(mean_int, axis=1), axis=1)
-        
-        mean_int_angles = np.mean(imgs, axis=(1, 2, 3))
-        rel_int_angles = mean_int_angles / np.max(mean_int_angles)
-
         for ii in range(self.nangles):
             for jj in range(self.nphases):
-
                 # ########################################
                 # raw real-space SIM images
                 # ########################################
-
-                ax = figh.add_subplot(grid[ii, n_factor*jj:n_factor*(jj+1)])
+                ax = figh.add_subplot(grid[ii, jj])
+                norm_imgs = PowerNorm(vmin=vmin, vmax=vmax, gamma=1)
                 ax.imshow(imgs[ii, jj],
-                          vmin=vmin,
-                          vmax=vmax,
                           extent=extent,
                           interpolation=None,
+                          norm=norm_imgs,
                           cmap="bone")
 
                 if ii == 0:
                     ax.set_title(f"phase {jj:d}")
+
                 if jj == 0:
-                    tstr = f'angle {ii:d}, relative intensity={rel_int_angles[ii]:.3f}\nphase int='
-                    for aa in range(self.nphases):
-                        tstr += f"{rel_int_phases[ii, aa]:.3f}, "
-                    ax.set_ylabel(tstr)
+                    ax.set_ylabel(f'angle {ii:d}')
+                else:
+                    ax.set_yticks([])
+
                 if ii == (self.nangles - 1):
                     ax.set_xlabel("Position (um)")
-
-                if jj != 0:
-                    ax.set_yticks([])
+                else:
+                    ax.set_xticks([])
 
             # ########################################
             # histograms of real-space images
             # ########################################
-            nbins = 50
-            bin_edges = np.linspace(0, np.percentile(imgs, 99), nbins + 1)
-            bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
+            bin_edges = np.linspace(0, np.percentile(imgs, 99), nbins_histogram + 1)
 
-            ax = figh.add_subplot(grid[ii, n_factor*self.nphases + 2:n_factor*(self.nphases+1) + 2])
+            ax = figh.add_subplot(grid[ii, self.nphases])
             for jj in range(self.nphases):
                 histogram, _ = np.histogram(imgs[ii, jj].ravel(), bins=bin_edges)
-                ax.semilogy(bin_centers, histogram)
-                ax.set_xlim([0, bin_edges[-1]])
+                ax.semilogy(0.5 * (bin_edges[1:] + bin_edges[:-1]),
+                            histogram,
+                            label=f"phase {jj + 1:d}")
+            ax.set_xlim([0, bin_edges[-1]])
 
             ax.set_yticks([])
             if ii == 0:
-                ax.set_title("image histogram\nmedian %0.1f" % (np.median(imgs[ii, jj].ravel())))
-            else:
-                ax.set_title("median %0.1f" % (np.median(imgs[ii, jj].ravel())))
-            if ii != (self.nangles - 1):
-                ax.set_xticks([])
-            else:
+                ax.set_title(f"image histogram")
+                ax.legend()
+
+            if ii == (self.nangles - 1):
                 ax.set_xlabel("counts")
+            else:
+                ax.set_xticks([])
 
             # ########################################
             # spatially resolved mcnr
             # ########################################
             if self.mcnr is not None:
-                ax = figh.add_subplot(grid[ii, n_factor*(self.nphases + 1) + 2:n_factor*(self.nphases+2) + 2])
+                ax = figh.add_subplot(grid[ii, self.nphases + 1])
                 if vmax_mcnr <= 0:
                     vmax_mcnr += 1e-12
 
-                im = ax.imshow(mcnr[ii], vmin=0, vmax=vmax_mcnr, cmap="inferno")
+                norm_mcnr = PowerNorm(vmin=0, vmax=vmax_mcnr, gamma=1)
+                ax.imshow(mcnr[ii], norm=norm_mcnr, cmap="inferno")
                 ax.set_xticks([])
                 ax.set_yticks([])
                 if ii == 0:
-                    ax.set_title("mcnr")
+                    ax.set_title("MCNR")
+
+                # colorbar for MCNR
+                if ii == (self.nangles - 1):
+                    ax = figh.add_subplot(grid[-1, self.nphases:])
+                    plt.colorbar(ScalarMappable(norm=norm_mcnr, cmap="inferno"),
+                                 ax=ax,
+                                 fraction=0.9,
+                                 label="MCNR",
+                                 orientation="horizontal"
+                                 )
+                    ax.set_visible(False)
 
         # colorbar for images
-        ax = figh.add_subplot(grid[:, n_factor*self.nphases])
-        norm = PowerNorm(vmin=vmin, vmax=vmax, gamma=1)
-        plt.colorbar(ScalarMappable(norm=norm, cmap="bone"), cax=ax)
-
-        if self.mcnr is not None:
-            # colorbar for MCNR
-            ax = figh.add_subplot(grid[:, n_factor*(self.nphases + 2) + 2])
-            norm = PowerNorm(vmin=0, vmax=vmax_mcnr, gamma=1)
-            plt.colorbar(ScalarMappable(norm=norm, cmap="inferno"), cax=ax, label="MCNR")
+        ax = figh.add_subplot(grid[-1, :self.nphases])
+        plt.colorbar(ScalarMappable(norm=norm_imgs, cmap="bone"),
+                     ax=ax,
+                     fraction=0.9,
+                     label="Intensity (photons)",
+                     orientation="horizontal")
+        ax.set_visible(False)
 
         return [figh], ["mcnr_diagnostic"]
 
@@ -1694,18 +1692,27 @@ class SimImageSet:
         wf_slice_list = slices + (slice(None),) * 2
 
         # extents for plots
-        extent_wf = [self.fx[0] - 0.5 * self.dfx, self.fx[-1] + 0.5 * self.dfx,
-                     self.fy[-1] + 0.5 * self.dfy, self.fy[0] - 0.5 * self.dfy]
-        extent_rec = [self.fx_us[0] - 0.5 * self.dfx_us, self.fx_us[-1] + 0.5 * self.dfx_us,
-                      self.fy_us[-1] + 0.5 * self.dfy_us, self.fy_us[0] - 0.5 * self.dfy_us]
-        extent_wf_real = [self.x[0] - 0.5 * self.dx, self.x[-1] + 0.5 * self.dx,
-                          self.y[-1] + 0.5 * self.dy, self.y[0] - 0.5 * self.dy]
-        extent_us_real = [self.x_us[0] - 0.5 * self.dx_us, self.x_us[-1] + 0.5 * self.dx_us,
-                          self.y_us[-1] + 0.5 * self.dy_us, self.y_us[0] - 0.5 * self.dy_us]
+        extent_wf = [self.fx[0] - 0.5 * self.dfx,
+                     self.fx[-1] + 0.5 * self.dfx,
+                     self.fy[-1] + 0.5 * self.dfy,
+                     self.fy[0] - 0.5 * self.dfy]
+        extent_rec = [self.fx_us[0] - 0.5 * self.dfx_us,
+                      self.fx_us[-1] + 0.5 * self.dfx_us,
+                      self.fy_us[-1] + 0.5 * self.dfy_us,
+                      self.fy_us[0] - 0.5 * self.dfy_us]
+        extent_wf_real = [self.x[0] - 0.5 * self.dx,
+                          self.x[-1] + 0.5 * self.dx,
+                          self.y[-1] + 0.5 * self.dy,
+                          self.y[0] - 0.5 * self.dy]
+        extent_us_real = [self.x_us[0] - 0.5 * self.dx_us,
+                          self.x_us[-1] + 0.5 * self.dx_us,
+                          self.y_us[-1] + 0.5 * self.dy_us,
+                          self.y_us[0] - 0.5 * self.dy_us]
 
         # create plot
         figh = plt.figure(figsize=figsize, **kwargs)
-        grid = figh.add_gridspec(nrows=2, ncols=3)
+        grid = figh.add_gridspec(nrows=2,
+                                 ncols=3)
         figh.suptitle(f"SIM reconstruction\n"
                       f"wiener parameter{self._recon_settings['wiener_parameter']:.2f}, "
                       f"phase estimation mode '{self._recon_settings['phase_estimation_mode']:s}', "
@@ -1809,7 +1816,11 @@ class SimImageSet:
             vmax = np.percentile(sim_sr.ravel()[sim_sr.ravel() >= 0], max_percentile)
             if vmax <= vmin:
                 vmax += 1e-12
-            ax.imshow(sim_sr, vmin=vmin, vmax=vmax, cmap="bone", extent=extent_us_real)
+            ax.imshow(sim_sr,
+                      vmin=vmin,
+                      vmax=vmax,
+                      cmap="bone",
+                      extent=extent_us_real)
             ax.set_title('SR-SIM')
             ax.set_xlabel('x-position ($\mu m$)')
 
@@ -1905,7 +1916,7 @@ class SimImageSet:
 
         # plot one image for each angle
         for ii in range(self.nangles):
-            ttl_str = f"SIM bands diagnostic, angle {ii:d}\n"
+            ttl_str = f"SIM reconstruction diagnostic, angle {ii:d}\n"
 
             if parameters_estimated:
                 dp1 = np.mod(self.phases[ii, 1] - self.phases[ii, 0], 2 * np.pi)
@@ -1921,12 +1932,11 @@ class SimImageSet:
 
             fig = plt.figure(figsize=figsize, **kwargs)
             fig.suptitle(ttl_str)
-
-            # 6 diagnostic images + 4 extra columns for colorbars
-            grid = fig.add_gridspec(nrows=self.nphases,
-                                    ncols=8,
-                                    width_ratios=[1, 1, 0.2, 0.2] + [1, 0.2, 0.2] + [2],
-                                    wspace=0.1)
+            grid = fig.add_gridspec(nrows=self.nphases + 1,
+                                    height_ratios=[1] * self.nphases + [0.2],
+                                    ncols=4,
+                                    width_ratios=[1, 1, 1, 3],
+                                    wspace=0.04)
 
             vmax = np.max(np.abs(imgs_ft))
             vmin = 1e-5 * vmax
@@ -1936,26 +1946,44 @@ class SimImageSet:
                 # raw images at different phases
                 # ####################
                 ax = fig.add_subplot(grid[jj, 0])
-                ax.set_title("Raw data, phase %d" % jj)
+                ax.set_title(f"Raw data, phase {jj:d}")
 
                 to_plot = np.abs(imgs_ft[ii, jj])
                 to_plot[to_plot <= 0] = np.nan
 
-                im = ax.imshow(to_plot, norm=LogNorm(vmin=vmin, vmax=vmax), extent=extent, cmap="bone")
+                im = ax.imshow(to_plot,
+                               norm=LogNorm(vmin=vmin, vmax=vmax),
+                               extent=extent,
+                               cmap="bone")
 
                 if parameters_estimated:
-                    ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
-                    ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
+                    ax.scatter(self.frqs[ii, 0],
+                               self.frqs[ii, 1],
+                               edgecolor='k',
+                               facecolor='none')
+                    ax.scatter(-self.frqs[ii, 0],
+                               -self.frqs[ii, 1],
+                               edgecolor='k',
+                               facecolor='none')
                 else:
                     if self.frqs_guess is not None:
-                        ax.scatter(self.frqs_guess[ii, 0], self.frqs_guess[ii, 1], edgecolor='k', facecolor='none')
-                        ax.scatter(-self.frqs_guess[ii, 0], -self.frqs_guess[ii, 1], edgecolor='k', facecolor='none')
+                        ax.scatter(self.frqs_guess[ii, 0],
+                                   self.frqs_guess[ii, 1],
+                                   edgecolor='k',
+                                   facecolor='none')
+                        ax.scatter(-self.frqs_guess[ii, 0],
+                                   -self.frqs_guess[ii, 1],
+                                   edgecolor='k',
+                                   facecolor='none')
 
-                ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
+                ax.add_artist(Circle((0, 0),
+                                     radius=self.fmax,
+                                     color='r',
+                                     fill=False,
+                                     ls='--'))
 
                 ax.set_xlim([-2*self.fmax, 2*self.fmax])
                 ax.set_ylim([2*self.fmax, -2*self.fmax])
-
                 ax.set_xticks([])
                 ax.set_yticks([])
 
@@ -1973,25 +2001,53 @@ class SimImageSet:
                     cs_ft_toplot = np.abs(bands_shifted_ft[ii, jj])
                     cs_ft_toplot[cs_ft_toplot <= 0] = np.nan
 
-                    # to keep same color scale, must correct for upsampled normalization change
-                    ax.imshow(cs_ft_toplot, norm=LogNorm(vmin=4*vmin, vmax=4*vmax), extent=extent_upsampled, cmap="bone")
+                    # to keep same color scale must correct for upsampled normalization change
+                    ax.imshow(cs_ft_toplot,
+                              norm=LogNorm(vmin=self.upsample_fact**2 * vmin,
+                                           vmax=self.upsample_fact**2 * vmax),
+                              extent=extent_upsampled,
+                              cmap="bone")
 
                     ax.scatter(0, 0, edgecolor='k', facecolor='none')
 
-                    ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=False, ls='--'))
+                    ax.add_artist(Circle((0, 0),
+                                         radius=self.fmax,
+                                         color='r',
+                                         fill=False,
+                                         ls='--'))
 
                     if jj == 0:
                         ax.set_title('O(f)otf(f)')
-                        ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
-                        ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
+                        ax.scatter(self.frqs[ii, 0],
+                                   self.frqs[ii, 1],
+                                   edgecolor='k',
+                                   facecolor='none')
+                        ax.scatter(-self.frqs[ii, 0],
+                                   -self.frqs[ii, 1],
+                                   edgecolor='k',
+                                   facecolor='none')
                     if jj == 1:
                         ax.set_title('m*O(f)otf(f+fo)')
-                        ax.scatter(-self.frqs[ii, 0], -self.frqs[ii, 1], edgecolor='k', facecolor='none')
-                        ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='m', fill=0, ls='--'))
+                        ax.scatter(-self.frqs[ii, 0],
+                                   -self.frqs[ii, 1],
+                                   edgecolor='k',
+                                   facecolor='none')
+                        ax.add_artist(Circle(-self.frqs[ii],
+                                             radius=self.fmax,
+                                             color='m',
+                                             fill=False,
+                                             ls='--'))
                     elif jj == 2:
                         ax.set_title('m*O(f)otf(f-fo)')
-                        ax.scatter(self.frqs[ii, 0], self.frqs[ii, 1], edgecolor='k', facecolor='none')
-                        ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='m', fill=0, ls='--'))
+                        ax.scatter(self.frqs[ii, 0],
+                                   self.frqs[ii, 1],
+                                   edgecolor='k',
+                                   facecolor='none')
+                        ax.add_artist(Circle(self.frqs[ii],
+                                             radius=self.fmax,
+                                             color='m',
+                                             fill=False,
+                                             ls='--'))
                     if jj == (self.nphases - 1):
                         ax.set_xlabel("$f_x$")
 
@@ -2000,29 +2056,44 @@ class SimImageSet:
                     ax.set_xticks([])
                     ax.set_yticks([])
 
-                    # colorbar
                     if jj == 0:
-                        # colorbar refers to unshifted components raw values (related to shifted by factor of 4)
-                        ax = fig.add_subplot(grid[:, 2])
-                        plt.colorbar(im, cax=ax)
+                        ax = fig.add_subplot(grid[-1, :2])
+                        plt.colorbar(im,
+                                     ax=ax,
+                                     fraction=0.9,
+                                     orientation='horizontal',
+                                     label="Spectral weight")
+                        ax.set_visible(False)
 
                     # ####################
                     # normalized weights
                     # ####################
-                    ax = fig.add_subplot(grid[jj, 4])
+                    ax = fig.add_subplot(grid[jj, 2])
                     if jj == 0:
                         ax.set_title(r"$\frac{w_i(k)}{\sum_j |w_j(k)|^2 + \eta^2}$")
 
                     im2 = ax.imshow(np.abs(weights[ii, jj] / weights_norm),
                                     norm=PowerNorm(gamma=0.1, vmin=1e-5, vmax=10),
                                     extent=extent_upsampled,
-                                    cmap="bone")
+                                    cmap="cividis")
 
-                    ax.add_artist(Circle((0, 0), radius=self.fmax, color='r', fill=0, ls='--'))
+                    ax.add_artist(Circle((0, 0),
+                                         radius=self.fmax,
+                                         color='r',
+                                         fill=False,
+                                         ls='--'))
                     if jj == 1:
-                        ax.add_artist(Circle(-self.frqs[ii], radius=self.fmax, color='m', fill=0, ls='--'))
+                        ax.add_artist(Circle(-self.frqs[ii],
+                                             radius=self.fmax,
+                                             color='m',
+                                             fill=False,
+                                             ls='--'))
                     elif jj == 2:
-                        ax.add_artist(Circle(self.frqs[ii], radius=self.fmax, color='m', fill=0, ls='--'))
+                        ax.add_artist(Circle(self.frqs[ii],
+                                             radius=self.fmax,
+                                             color='m',
+                                             fill=False,
+                                             ls='--'))
 
                     if jj == (self.nphases - 1):
                         ax.set_xlabel("$f_x$")
@@ -2035,10 +2106,16 @@ class SimImageSet:
                     ax.set_xticks([])
                     ax.set_yticks([])
 
-                    # colorbar
                     if jj == 0:
-                        ax = fig.add_subplot(grid[:, 5])
-                        fig.colorbar(im2, cax=ax, format="%0.2g", ticks=[10, 1, 0.1, 1e-2, 1e-3, 1e-4, 1e-5])
+                        ax = fig.add_subplot(grid[-1, 2])
+                        fig.colorbar(im2,
+                                     ax=ax,
+                                     fraction=0.9,
+                                     orientation='horizontal',
+                                     format="%0.2g",
+                                     ticks=[10, 1, 0.1, 1e-2, 1e-3],
+                                     label="Filter weight (arb)")
+                        ax.set_visible(False)
 
             if reconstructed_already:
                 # real space bands
@@ -2057,14 +2134,16 @@ class SimImageSet:
 
                 img0 = (np.expand_dims(band0, axis=-1) - vmin0) / (vmax0 - vmin0) * np.expand_dims(color0, axis=(0, 1))
                 img1 = (np.expand_dims(band1, axis=-1) - vmin1) / (vmax1 - vmin1) * np.expand_dims(color1, axis=(0, 1))
+                # manually clip to avoid error message
+                img_color = np.clip(img0 + img1, a_min=0, a_max=1)
 
                 # ######################################
                 # plot real space version of 0th and +/- 1st bands
                 # ######################################
-                ax = fig.add_subplot(grid[:, 7])
+                ax = fig.add_subplot(grid[:-1, 3])
                 ax.set_title("band 0 (cyan) and band 1 (magenta)")
-
-                ax.imshow(img0 + img1, extent=extent_upsampled_real)
+                ax.imshow(img_color,
+                          extent=extent_upsampled_real)
                 ax.yaxis.tick_right()
                 ax.yaxis.set_label_position("right")
                 ax.set_ylabel("y-position ($\mu m$)")
@@ -2111,8 +2190,6 @@ class SimImageSet:
         return figs, fig_names
 
     def plot_otf(self,
-                 na: Optional[float] = None,
-                 wavelength: Optional[float] = None,
                  cmap: str = "brg",
                  figsize: Sequence[float, float] = (20., 10.),
                  **kwargs) -> plt.figure:
@@ -2120,42 +2197,45 @@ class SimImageSet:
         Plot optical transfer function (OTF) versus frequency and show SIM frequencies. Compare with ideal OTF if
         NA and wavelength are provided
 
-        :param na: numerical aperture
-        :param wavelength: emission wavelength in nm
         :param cmap:
         :param figsize:
         :return figh:
         """
 
-        otf_vals = np.zeros(self.nangles)
-
+        otf_at_frqs = np.zeros(self.nangles)
         for ii in range(self.nangles):
             ix = np.argmin(np.abs(self.frqs[ii, 0] - self.fx))
             iy = np.argmin(np.abs(self.frqs[ii, 1] - self.fy))
-            otf_vals[ii] = np.abs(self.otf[..., ii, iy, ix])
+            otf_at_frqs[ii] = np.abs(self.otf[..., ii, iy, ix])
 
-        otf_at_frqs = otf_vals
-
-        extent_fxy = [self.fx[0] - 0.5 * self.dfx, self.fx[-1] + 0.5 * self.dfx,
-                      self.fy[-1] + 0.5 * self.dfy, self.fy[0] - 0.5 * self.dfy]
+        extent_fxy = [self.fx[0] - 0.5 * self.dfx,
+                      self.fx[-1] + 0.5 * self.dfx,
+                      self.fy[-1] + 0.5 * self.dfy,
+                      self.fy[0] - 0.5 * self.dfy]
 
         figh = plt.figure(figsize=figsize, **kwargs)
         tstr = "OTF diagnostic\nvalue at frqs="
         for ii in range(self.nangles):
             tstr += f" {otf_at_frqs[ii]:.3f},"
         figh.suptitle(tstr)
+        grid = figh.add_gridspec(nrows=1,
+                                 ncols=3,
+                                 width_ratios=[1, 1, 0.1],
+                                 )
 
         ff = np.sqrt(np.expand_dims(self.fx, axis=0) ** 2 +
                      np.expand_dims(self.fy, axis=1) ** 2)
 
         # max freq to display
-        fmax_disp = 1.2 * max([np.max(np.linalg.norm(self.frqs, axis=-1)), self.fmax])
+        fmax_disp = 1.2 * max([np.max(np.linalg.norm(self.frqs, axis=-1)),
+                               self.fmax])
         # colors fo
-        colors = plt.get_cmap(cmap)(np.linspace(0, 1, self.nangles))
+        colors = plt.get_cmap(cmap)(np.linspace(0, 1, self.nangles + 1, endpoint=True))
 
         # 1D plots
-        ax = figh.add_subplot(1, 2, 1)
-        ax.set_title("1D OTF")
+        ax = figh.add_subplot(grid[0, 0])
+        ax.set_title("1D OTF\n"
+                     "vertical lines show SIM pattern frequencies and Abbe limit")
         ax.set_xlabel("Frequency (1/um)")
         ax.set_ylabel("OTF")
         # plot real OTF's per angle
@@ -2165,15 +2245,17 @@ class SimImageSet:
                     c=colors[ii],
                     label=f"OTF, angle {ii:d}")
 
-        if na is not None and wavelength is not None:
-            otf_ideal = circ_aperture_otf(ff, 0, na, wavelength)
+        if self.na is not None and self.wavelength is not None:
+            otf_ideal = circ_aperture_otf(ff, 0, self.na, self.wavelength)
             ax.plot(ff.ravel(),
                     otf_ideal.ravel(),
                     label="OTF ideal")
 
         ax.axvline(self.fmax,
-                   c="k",
-                   label="fmax")
+                   c=colors[-1],
+                   label="Abbe limit")
+        ax.axhline(0,
+                   c="k")
 
         # plot SIM frequencies
         fs = np.linalg.norm(self.frqs, axis=1)
@@ -2183,21 +2265,36 @@ class SimImageSet:
         ax.set_xlim([0, fmax_disp])
         ax.legend()
 
-        # 2D plot
-        ax = figh.add_subplot(1, 2, 2)
+        # 2D OTF plot
+        ax = figh.add_subplot(grid[0, 1])
         ax.set_title("Mean 2D OTF")
-        ax.imshow(np.mean(np.abs(self.otf), axis=0),
-                  extent=extent_fxy,
-                  cmap="bone")
+        im = ax.imshow(np.mean(np.abs(self.otf), axis=0),
+                       extent=extent_fxy,
+                       norm=PowerNorm(vmin=1e-5, vmax=1, gamma=0.3),
+                       cmap="hsv")
         ax.scatter(self.frqs[:, 0],
                    self.frqs[:, 1],
-                   color=colors,
+                   color='k',
+                   # color=colors[:-1],
                    marker='o')
-        ax.add_artist(Circle((0, 0), self.fmax, facecolor='none', edgecolor='y'))
+        ax.add_artist(Circle((0, 0),
+                             self.fmax,
+                             facecolor='none',
+                             edgecolor='k',
+                             # edgecolor=colors[-1]
+                             )
+                      )
         ax.set_xlabel("$f_x (1/\mu m)$")
         ax.set_ylabel("$f_y (1/\mu m)$")
         ax.set_xlim([-fmax_disp, fmax_disp])
         ax.set_ylim([fmax_disp, -fmax_disp])
+
+        # 2D OTF colorbar
+        ax = figh.add_subplot(grid[0, 2])
+        plt.colorbar(im,
+                     cax=ax,
+                     ticks=[1, 0.3, 0.1, 3e-2, 1e-2, 1e-3, 1e-4],
+                     label="spectral weight (arb)")
 
         return figh
 
@@ -2212,7 +2309,7 @@ class SimImageSet:
                   save_processed_data: bool = False,
                   attributes: Optional[dict] = None,
                   arrays: Optional[dict] = None,
-                  compressor: Optional = None) -> Path:
+                  compressor: Optional = Zlib()) -> Path:
         """
         Save SIM results and metadata to file
 
@@ -2355,10 +2452,6 @@ class SimImageSet:
                         factor = 1
                     else:
                         factor = self.upsample_fact
-
-                    # if imagej_axes_order:
-                    #     use_imagej = True
-                    #     img = tifffile.transpose_axes(img, axes=imagej_axes_order, asaxes="TZCYXS")
 
                     tifffile.imwrite(save_dir / f"{save_prefix:s}{attr:s}{save_suffix:s}.tif",
                                      img,
@@ -2815,8 +2908,10 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     fys = fftshift(fftfreq(img1_ft.shape[0], dxy))
     dfy = fys[1] - fys[0]
 
-    extent = [fxs[0] - 0.5 * dfx, fxs[-1] + 0.5 * dfx,
-              fys[-1] + 0.5 * dfy, fys[0] - 0.5 * dfy]
+    extent = [fxs[0] - 0.5 * dfx,
+              fxs[-1] + 0.5 * dfx,
+              fys[-1] + 0.5 * dfy,
+              fys[0] - 0.5 * dfy]
 
     if otf is None:
         otf = 1.
@@ -2828,12 +2923,13 @@ def plot_correlation_fit(img1_ft: np.ndarray,
 
     otf_factor = np.conj(otf) / (np.abs(otf) ** 2 + wiener_param ** 2)
 
-    cc = np.abs(correlate(img2_ft * otf_factor,
-                          img1_ft * otf_factor,
-                          mode='same')) / \
-         np.abs(correlate(otf_factor,
-                          otf_factor,
-                          mode='same'))
+    with np.errstate(divide="ignore"):
+        cc = np.abs(correlate(img2_ft * otf_factor,
+                              img1_ft * otf_factor,
+                              mode='same')) / \
+             np.abs(correlate(otf_factor,
+                              otf_factor,
+                              mode='same'))
 
     # compute peak values
     fx_sim, fy_sim = frqs
@@ -2849,7 +2945,7 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # create figure
     figh = plt.figure(figsize=figsize)
     gspec = figh.add_gridspec(ncols=4,
-                              width_ratios=[8, 1] * 2,
+                              width_ratios=[1, 1/8] * 2,
                               wspace=0.5,
                               nrows=2,
                               hspace=0.3)
@@ -2896,8 +2992,10 @@ def plot_correlation_fit(img1_ft: np.ndarray,
 
     fys_roi = fys[roi[0]:roi[1]]
     fxs_roi = fxs[roi[2]:roi[3]]
-    extent_roi = [fxs_roi[0] - 0.5 * dfx, fxs_roi[-1] + 0.5 * dfx,
-                  fys_roi[-1] + 0.5 * dfy, fys_roi[0] - 0.5 * dfy]
+    extent_roi = [fxs_roi[0] - 0.5 * dfx,
+                  fxs_roi[-1] + 0.5 * dfx,
+                  fys_roi[-1] + 0.5 * dfy,
+                  fys_roi[0] - 0.5 * dfy]
 
     ax = figh.add_subplot(gspec[0, 0])
     ax.set_title("cross correlation, ROI")
@@ -2906,17 +3004,33 @@ def plot_correlation_fit(img1_ft: np.ndarray,
                     norm=PowerNorm(gamma=gamma),
                     extent=extent_roi,
                     cmap=cmap)
-    ax.scatter(frqs[0], frqs[1], color='r', marker='x', label="frq fit")
+    ax.scatter(frqs[0],
+               frqs[1],
+               color='r',
+               marker='x',
+               label="frq fit")
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
-            ax.scatter(frqs_guess[0], frqs_guess[1], color='g', marker='x', label="frq guess")
+            ax.scatter(frqs_guess[0],
+                       frqs_guess[1],
+                       color='g',
+                       marker='x',
+                       label="frq guess")
         else:
-            ax.scatter(-frqs_guess[0], -frqs_guess[1], color='g', marker='x', label="frq guess")
+            ax.scatter(-frqs_guess[0],
+                       -frqs_guess[1],
+                       color='g',
+                       marker='x',
+                       label="frq guess")
 
     ax.legend(loc="upper right")
 
     if fmax is not None:
-        ax.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0, ls='--'))
+        ax.add_artist(Circle((0, 0),
+                             radius=fmax,
+                             color='k',
+                             fill=False,
+                             ls='--'))
 
     ax.set_xlabel('$f_x (1/\mu m)$')
     ax.set_ylabel('$f_y (1/\mu m)$')
@@ -2929,20 +3043,28 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # full cross-correlation
     # #######################################
     ax2 = figh.add_subplot(gspec[0, 2])
-    im2 = ax2.imshow(cc, interpolation=None, norm=PowerNorm(gamma=gamma), extent=extent, cmap=cmap)
+    im2 = ax2.imshow(cc,
+                     interpolation=None,
+                     norm=PowerNorm(gamma=gamma),
+                     extent=extent,
+                     cmap=cmap)
 
     if fmax is not None:
         ax2.set_xlim([-fmax, fmax])
         ax2.set_ylim([fmax, -fmax])
 
         # plot maximum frequency
-        ax2.add_artist(Circle((0, 0), radius=fmax, color='k', fill=0))
+        ax2.add_artist(Circle((0, 0),
+                              radius=fmax,
+                              color='k',
+                              fill=False))
 
-    ax2.add_artist(Rectangle((fxs[roi[2]], fys[roi[0]]),
+    ax2.add_artist(Rectangle((fxs[roi[2]] - 0.5 * dfx, fys[roi[0]] - 0.5 * dfy),
                              fxs[roi[3] - 1] - fxs[roi[2]],
                              fys[roi[1] - 1] - fys[roi[0]],
                              edgecolor='k',
-                             fill=0))
+                             fill=False)
+                   )
 
     ax2.set_title(r"$C(f_o) = \sum_f g_1(f) \times g^*_2(f+f_o)$")
     ax2.set_xlabel('$f_x (1/\mu m)$')
@@ -2956,19 +3078,25 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # ft 1
     # #######################################
     ax3 = figh.add_subplot(gspec[1, 0])
-    ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0) = $"  " %0.3g and %0.2fdeg" %
-                  (np.abs(peak1_dc), np.angle(peak1_dc) * 180/np.pi))
+    ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0)=$" +
+                  f"{np.abs(peak1_dc):.3g} and "
+                  f"{np.angle(peak1_dc) * 180/np.pi:.2f}deg")
     ax3.set_xlabel('$f_x (1/\mu m)$')
     ax3.set_ylabel('$f_y (1/\mu m)$')
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
-    roi_center = get_centered_rois([cy_c, cx_c], [roi[1] - roi[0], roi[3] - roi[2]], [0, 0], img1_ft.shape)[0]
+    roi_center = get_centered_rois([cy_c, cx_c],
+                                   [roi[1] - roi[0], roi[3] - roi[2]],
+                                   [0, 0],
+                                   img1_ft.shape)[0]
 
     fys_roic = fys[roi_center[0]:roi_center[1]]
     fxs_roic = fxs[roi_center[2]:roi_center[3]]
-    extent_roic = [fxs_roic[0] - 0.5 * dfx, fxs_roic[-1] + 0.5 * dfx,
-                   fys_roic[-1] + 0.5 * dfy, fys_roic[0] - 0.5 * dfy]
+    extent_roic = [fxs_roic[0] - 0.5 * dfx,
+                   fxs_roic[-1] + 0.5 * dfx,
+                   fys_roic[-1] + 0.5 * dfy,
+                   fys_roic[0] - 0.5 * dfy]
 
     im3 = ax3.imshow(cut_roi(roi_center, np.abs(img1_ft)**2)[0],
                      interpolation=None,
@@ -2985,11 +3113,13 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # ft 2
     # #######################################
     ax4 = figh.add_subplot(gspec[1, 2])
-    title = r"$|g_2(f)|^2$" + r"near $f_o$, $g_2(f_p) =$" + " %0.3g and %0.2fdeg" % \
-            (np.abs(peak2), np.angle(peak2) * 180 / np.pi)
+    title = (r"$|g_2(f)|^2$" + r"near $f_o$, $g_2(f_p) =$" +
+             f" {np.abs(peak2):.3g} and "
+             f"{np.angle(peak2) * 180 / np.pi:.2f}deg")
     if frqs_guess is not None:
         peak2_g = get_peak_value(img2_ft, fxs, fys, frqs_guess, peak_pixels)
-        title += "\nguess peak = %0.3g and %0.2fdeg" % (np.abs(peak2_g), np.angle(peak2_g) * 180 / np.pi)
+        title += (f"\nguess peak = {np.abs(peak2_g):.3g} and "
+                  f"{np.angle(peak2_g) * 180 / np.pi:.2f}deg")
     ax4.set_title(title)
     ax4.set_xlabel('$f_x (1/\mu m)$')
 
@@ -3001,9 +3131,15 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     ax4.scatter(frqs[0], frqs[1], color='r', marker='x')
     if frqs_guess is not None:
         if np.linalg.norm(frqs - frqs_guess) < np.linalg.norm(frqs + frqs_guess):
-            ax4.scatter(frqs_guess[0], frqs_guess[1], color='g', marker='x')
+            ax4.scatter(frqs_guess[0],
+                        frqs_guess[1],
+                        color='g',
+                        marker='x')
         else:
-            ax4.scatter(-frqs_guess[0], -frqs_guess[1], color='g', marker='x')
+            ax4.scatter(-frqs_guess[0],
+                        -frqs_guess[1],
+                        color='g',
+                        marker='x')
 
     # colorbar
     cbar_ax = figh.add_subplot(gspec[1, 3])
@@ -3185,23 +3321,29 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
                     gamma = 0.1
 
                     figh = plt.figure(figsize=(16, 8))
-                    grid = figh.add_gridspec(2, 3)
+                    grid = figh.add_gridspec(nrows=2,
+                                             ncols=3)
                     figh.suptitle(f"(i, j, band) = ({ii:d}, {jj:d}, {ml:d})")
 
                     ax = figh.add_subplot(grid[0, 0])
-                    ax.imshow(np.abs(imgs_ft[ii]), norm=PowerNorm(gamma=gamma), extent=extentf)
+                    ax.imshow(np.abs(imgs_ft[ii]),
+                              norm=PowerNorm(gamma=gamma),
+                              extent=extentf)
                     ax.plot(sim_frq[0], sim_frq[1], 'r+')
                     ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
                     ax.set_title("$D_i(k)$")
 
                     ax = figh.add_subplot(grid[0, 1])
-                    ax.imshow(np.abs(band_shifted), norm=PowerNorm(gamma=gamma), extent=extentf)
+                    ax.imshow(np.abs(band_shifted),
+                              norm=PowerNorm(gamma=gamma),
+                              extent=extentf)
                     ax.plot(sim_frq[0], sim_frq[1], 'r+')
                     ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
                     ax.set_title("$D_j(k-lp)$")
 
                     ax = figh.add_subplot(grid[0, 2])
-                    ax.imshow(np.abs(imgs_ft[ii] * band_shifted.conj()), norm=PowerNorm(gamma=gamma),
+                    ax.imshow(np.abs(imgs_ft[ii] * band_shifted.conj()),
+                              norm=PowerNorm(gamma=gamma),
                               extent=extentf)
                     ax.plot(sim_frq[0], sim_frq[1], 'r+')
                     ax.plot(-sim_frq[0], -sim_frq[1], 'r.')
@@ -3229,9 +3371,13 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
 
     # optimize
     if fit_amps:
-        def minv(p): return get_band_mixing_inv([0, p[0], p[1]], mod_depth=1, amps=[1, p[2], p[3]])
+        def minv(p): return get_band_mixing_inv([0, p[0], p[1]],
+                                                mod_depth=1,
+                                                amps=[1, p[2], p[3]])
     else:
-        def minv(p): return get_band_mixing_inv([0, p[0], p[1]], mod_depth=1, amps=[1, 1, 1])
+        def minv(p): return get_band_mixing_inv([0, p[0], p[1]],
+                                                mod_depth=1,
+                                                amps=[1, 1, 1])
 
     # condition = ii - (j + l)
     index_condition = np.expand_dims(np.array(band_inds), axis=(1, 2)) - \
@@ -4106,8 +4252,8 @@ class FistaSim(Optimizer):
                  patterns: array,
                  imgs: array,
                  nbin: int = 1,
-                 tau_tv: float = 0,
-                 tau_l1: float = 0,
+                 tau_tv: float = 0.,
+                 tau_l1: float = 0.,
                  enforce_positivity: bool = True,
                  apodization: Optional[array] = None):
         """
@@ -4188,7 +4334,7 @@ class FistaSim(Optimizer):
         else:
             xp = np
 
-        return 0.5 * xp.mean(xp.abs(self.fwd_model(x, inds=inds) - self.imgs[inds]) ** 2, axis=(1, 2))
+        return 0.5 * xp.sum(xp.abs(self.fwd_model(x, inds=inds) - self.imgs[inds]) ** 2, axis=(1, 2))
 
     def gradient(self, x, inds=None):
         if inds is None:
@@ -4203,6 +4349,6 @@ class FistaSim(Optimizer):
         dc_do = xp.stack([blur_img_psf(bin_adjoint(img_model[ii] - self.imgs[ind], (self.nbin, self.nbin), mode="sum"),
                                      self.psf_reversed, self.apodization).real
                         for ii, ind in enumerate(inds)])
-        dc_do *= self.patterns[inds] / (self.ny * self.nx)
+        dc_do *= self.patterns[inds]
 
         return dc_do
