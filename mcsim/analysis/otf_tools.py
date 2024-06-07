@@ -22,7 +22,7 @@ from matplotlib.patches import Circle
 import matplotlib.pyplot as plt
 from mcsim.analysis.simulate_dmd import xy2uvector, blaze_envelope
 from mcsim.analysis.sim_reconstruction import get_noise_power, fit_modulation_frq, plot_correlation_fit, get_peak_value
-from localize_psf.affine import xform_sinusoid_params_roi, xform_shift_center, xform_mat
+from localize_psf.affine import xform_sinusoid_params_roi, params2xform, xform_mat
 from localize_psf.fit_psf import circ_aperture_otf
 from mcsim.analysis.dmd_patterns import (get_sim_unit_cell,
                                          get_efield_fourier_components,
@@ -501,7 +501,7 @@ def plot_pattern(img: np.ndarray,
     ny, nx = img_roi.shape
 
     # transform pattern using affine transformation
-    xform_roi = xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
+    xform_roi = params2xform([1, 0, -roi[2], 1, 0, -roi[1]]).dot(affine_xform)
     img_coords = np.meshgrid(range(nx), range(ny))
     pattern_xformed = xform_mat(pattern, xform_roi, img_coords, mode="interp")
 

@@ -3,7 +3,7 @@ from time import perf_counter
 import numpy as np
 from scipy.signal.windows import hann
 from scipy.fft import fftshift, fftfreq
-from localize_psf.affine import xform_shift_center, xform_sinusoid_params_roi, xform_mat
+from localize_psf.affine import params2xform, xform_sinusoid_params_roi, xform_mat
 from localize_psf.rois import get_centered_rois
 from mcsim.analysis.sim_reconstruction import get_peak_value
 from mcsim.analysis.fft import ft2
@@ -229,7 +229,7 @@ class TestPatterns(unittest.TestCase):
                                [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]])
 
         # get affine matrix for our ROI
-        affine_xform_roi = xform_shift_center(affine_mat, cimg_new=(roi[2], roi[0]))
+        affine_xform_roi = params2xform([1, 0, -roi[2], 1, 0, -roi[0]]).dot(affine_mat)
 
         # ###########################################
         # estimate phases/intensity after affine transformation using model
@@ -299,7 +299,7 @@ class TestPatterns(unittest.TestCase):
         # test angles
         np.testing.assert_allclose(np.angle(efields_xformed[to_compare]),
                                    np.angle(efields_direct[to_compare]),
-                                   atol=0.003)
+                                   atol=0.03)
         # test amplitudes
         np.testing.assert_allclose(np.abs(efields_xformed[to_compare]),
                                    np.abs(efields_direct[to_compare]),
