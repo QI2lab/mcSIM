@@ -251,11 +251,11 @@ class TestPatterns(unittest.TestCase):
             xform_sinusoid_params_roi(vecs[..., 0],
                                       vecs[..., 1],
                                       np.angle(efields),
+                                      affine_mat,
                                       pattern.shape,
                                       roi,
-                                      affine_mat,
-                                      input_origin="fft",
-                                      output_origin="fft"))
+                                      input_origin_fft=True,
+                                      output_origin_fft=True))
         efields_xformed = np.abs(efields) * np.exp(1j * phases)
 
         ###########################################

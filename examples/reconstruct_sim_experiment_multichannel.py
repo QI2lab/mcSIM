@@ -116,9 +116,9 @@ for kk in range(ncolors):
              phases_guess[ii, jj]) = xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0],
                                                                frqs_dmd[kk, ii, 1],
                                                                phases_dmd[kk, ii, jj],
+                                                               xform,
                                                                [dmd_ny, dmd_nx],
-                                                               roi,
-                                                               xform)
+                                                               roi)
 
     # convert frequencies from 1/mirrors to 1/um
     frqs_guess = frqs_guess / pixel_size
