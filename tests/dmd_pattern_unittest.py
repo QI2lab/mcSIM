@@ -3,7 +3,7 @@ from time import perf_counter
 import numpy as np
 from scipy.signal.windows import hann
 from scipy.fft import fftshift, fftfreq
-from localize_psf.affine import params2xform, xform_sinusoid_params_roi, xform_mat
+from localize_psf.affine import params2xform, xform_sinusoid_params, xform_mat
 from localize_psf.rois import get_centered_rois
 from mcsim.analysis.sim_reconstruction import get_peak_value
 from mcsim.analysis.fft import ft2
@@ -247,15 +247,18 @@ class TestPatterns(unittest.TestCase):
         efields = efields / np.max(np.abs(efields))
 
         vecs_xformed = np.zeros(vecs.shape)
-        vecs_xformed[..., 0], vecs_xformed[..., 1], phases = (
-            xform_sinusoid_params_roi(vecs[..., 0],
-                                      vecs[..., 1],
-                                      np.angle(efields),
-                                      affine_mat,
-                                      pattern.shape,
-                                      roi,
-                                      input_origin_fft=True,
-                                      output_origin_fft=True))
+
+        xform_input2edge = params2xform([1, 0, (pattern.shape[1] // 2),
+                                         1, 0, (pattern.shape[0] // 2)])
+        xform_full2roi = params2xform([1, 0, -roi[2],
+                                       1, 0, -roi[0]])
+        xform_edge2output = params2xform([1, 0, -((roi[3] - roi[2]) // 2),
+                                          1, 0, -((roi[1] - roi[0]) // 2)])
+        xform_full = xform_edge2output.dot(xform_full2roi.dot(affine_mat.dot(xform_input2edge)))
+        vecs_xformed[..., 0], vecs_xformed[..., 1], phases = xform_sinusoid_params(vecs[..., 0],
+                                                                                   vecs[..., 1],
+                                                                                   np.angle(efields),
+                                                                                   xform_full)
         efields_xformed = np.abs(efields) * np.exp(1j * phases)
 
         ###########################################

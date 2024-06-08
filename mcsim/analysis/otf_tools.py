@@ -22,7 +22,7 @@ from matplotlib.patches import Circle
 import matplotlib.pyplot as plt
 from mcsim.analysis.simulate_dmd import xy2uvector, blaze_envelope
 from mcsim.analysis.sim_reconstruction import get_noise_power, fit_modulation_frq, plot_correlation_fit, get_peak_value
-from localize_psf.affine import xform_sinusoid_params_roi, params2xform, xform_mat
+from localize_psf.affine import xform_sinusoid_params, params2xform, xform_mat
 from localize_psf.fit_psf import circ_aperture_otf
 from mcsim.analysis.dmd_patterns import (get_sim_unit_cell,
                                          get_efield_fourier_components,
@@ -402,14 +402,27 @@ def get_intensity_fourier_thry(efields,
 
     # compute frequency vectors in camera space (1/pixels)
     frq_vects_cam = np.zeros(frq_vects_dmd.shape)
-    frq_vects_cam[..., 0], frq_vects_cam[..., 1], _ = xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
-                                                                                frq_vects_dmd[..., 1],
-                                                                                0,
-                                                                                affine_xform,
-                                                                                dmd_shape,
-                                                                                roi,
-                                                                                input_origin_fft=True,
-                                                                                output_origin_fft=True)
+
+    xform_input2edge = params2xform([1, 0, (dmd_shape[1] // 2),
+                                     1, 0, (dmd_shape[0] // 2)])
+    xform_full2roi = params2xform([1, 0, -roi[2],
+                                   1, 0, -roi[0]])
+    xform_edge2output = params2xform([1, 0, -((roi[3] - roi[2]) // 2),
+                                      1, 0, -((roi[1] - roi[0]) // 2)])
+    xform_full = xform_edge2output.dot(xform_full2roi.dot(affine_xform.dot(xform_input2edge)))
+    frq_vects_cam[..., 0], frq_vects_cam[..., 1], _ = xform_sinusoid_params(frq_vects_dmd[..., 0],
+                                                                            frq_vects_dmd[..., 1],
+                                                                            0,
+                                                                            xform_full)
+
+    # frq_vects_cam[..., 0], frq_vects_cam[..., 1], _ = xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
+    #                                                                             frq_vects_dmd[..., 1],
+    #                                                                             0,
+    #                                                                             affine_xform,
+    #                                                                             dmd_shape,
+    #                                                                             roi,
+    #                                                                             input_origin_fft=True,
+    #                                                                             output_origin_fft=True)
 
     # correct frequency vectors in camera space to be in real units (1/um)
     frq_vects_um = frq_vects_cam / pixel_size_um
@@ -429,14 +442,19 @@ def get_intensity_fourier_thry(efields,
     intensity_theory = intensity_theory / np.max(np.abs(intensity_theory), axis=(1, 2))[:, None, None]
 
     # compute phase in new coordinates
-    _, _, intensity_phases = xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
-                                                       frq_vects_dmd[..., 1],
-                                                       np.angle(intensity_theory),
-                                                       affine_xform,
-                                                       dmd_shape,
-                                                       roi,
-                                                       input_origin_fft=True,
-                                                       output_origin_fft=True)
+    # _, _, intensity_phases = xform_sinusoid_params_roi(frq_vects_dmd[..., 0],
+    #                                                    frq_vects_dmd[..., 1],
+    #                                                    np.angle(intensity_theory),
+    #                                                    affine_xform,
+    #                                                    dmd_shape,
+    #                                                    roi,
+    #                                                    input_origin_fft=True,
+    #                                                    output_origin_fft=True)
+    _, _, intensity_phases = xform_sinusoid_params(frq_vects_dmd[..., 0],
+                                                   frq_vects_dmd[..., 1],
+                                                   np.angle(intensity_theory),
+                                                   xform_full)
+
     intensity_theory_xformed = np.abs(intensity_theory) * np.exp(1j * intensity_phases)
 
     return intensity_theory, intensity_theory_xformed, frq_vects_cam, frq_vects_um
