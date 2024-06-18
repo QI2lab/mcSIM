@@ -1,5 +1,6 @@
 """
 Reconstruct multichannel SIM images of argoSIM slide pattern of closely spaced line pairs.
+The data needed to run this example can be downloaded from Zenodo as described in the README
 """
 import datetime
 import numpy as np
@@ -7,14 +8,14 @@ from numpy.fft import fftshift, fftfreq
 import pickle
 import tifffile
 from pathlib import Path
-from mcsim.analysis.sim_reconstruction import SimImageSet
-from localize_psf.affine import xform_sinusoid_params_roi
+from mcsim.analysis.sim_reconstruction import SimImageSet, show_sim_napari
+from localize_psf.affine import xform_sinusoid_params, params2xform
 from localize_psf.rois import get_centered_rois
 from localize_psf.fit_psf import circ_aperture_otf
 
 tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 
-# load data (data can be downloaded from Zenodo as described in README)
+# load data
 root_dir = Path("data")
 fname_raw_data = root_dir / "argosim_line_pairs.tif"
 
@@ -51,7 +52,6 @@ excitation_wavelengths = [0.465, 0.532]
 # determined by fit to measured OTF
 otf_attenuation_params = np.array([2.446])
 
-
 def otf_fn(f, fmax): return (1 / (1 + (f / fmax * otf_attenuation_params[0]) ** 2) *
                              circ_aperture_otf(f, 0, na, 2 * na / fmax))
 
@@ -73,13 +73,10 @@ for p in affine_fnames:
 dmd_pattern_data_fpath = [root_dir / "sim_patterns_period=6.01_nangles=3.pkl",
                           root_dir / "sim_patterns_period=6.82_nangles=3.pkl"]
 
-frqs_dmd = np.zeros((2, 3, 2))
+frqs_dmd = np.zeros((ncolors, nangles, 2))
 phases_dmd = np.zeros((ncolors, nangles, nphases))
 for kk in range(ncolors):
-    ppath = dmd_pattern_data_fpath[kk]
-    xform = affine_xforms[kk]
-
-    with open(ppath, 'rb') as f:
+    with open(dmd_pattern_data_fpath[kk], 'rb') as f:
         pattern_data = pickle.load(f)
 
     # DMD intensity frequency and phase (twice electric field frq/phase)
@@ -95,7 +92,7 @@ for kk in range(ncolors):
     # ###########################################
     # construct otf matrix
     # ###########################################
-    fmax = 1 / (0.5 * emission_wavelengths[kk] / na)
+    fmax = 2 * na / emission_wavelengths[kk]
     fx = fftshift(fftfreq(nx_roi, pixel_size))
     fy = fftshift(fftfreq(ny_roi, pixel_size))
     ff = np.sqrt(np.expand_dims(fx, axis=0) ** 2 +
@@ -104,24 +101,23 @@ for kk in range(ncolors):
     otf[ff >= fmax] = 0
 
     # ###########################################
-    # guess frequencies/phases
+    # guess frequencies/phases in image ROI using affine transformations from DMD
+    # output phase in FFT coordinate system, where first pixel is centered at -(n//2) along each axis
     # ###########################################
-    frqs_guess = np.zeros((nangles, 2))
-    phases_guess = np.zeros((nangles, nphases))
-    for ii in range(nangles):
-        for jj in range(nphases):
-            # estimate frequencies based on affine_xform
-            (frqs_guess[ii, 0],
-             frqs_guess[ii, 1],
-             phases_guess[ii, jj]) = xform_sinusoid_params_roi(frqs_dmd[kk, ii, 0],
-                                                               frqs_dmd[kk, ii, 1],
-                                                               phases_dmd[kk, ii, jj],
-                                                               [dmd_ny, dmd_nx],
-                                                               roi,
-                                                               xform)
+    xform_input2edge = params2xform([1, 0, (dmd_nx // 2),
+                                     1, 0, (dmd_ny // 2)])
+    xform_full2roi = params2xform([1, 0, -roi[2],
+                                   1, 0, -roi[0]])
+    xform_edge2output = params2xform([1, 0, -((roi[3] - roi[2]) // 2),
+                                      1, 0, -((roi[1] - roi[0]) // 2)])
+    xform_full = xform_edge2output.dot(xform_full2roi.dot(affine_xforms[kk].dot(xform_input2edge)))
 
+    fx_guess, fy_guess, phases_guess = xform_sinusoid_params(frqs_dmd[kk, :, 0][:, None],
+                                                             frqs_dmd[kk, :, 1][:, None],
+                                                             phases_dmd[kk],
+                                                             xform_full)
     # convert frequencies from 1/mirrors to 1/um
-    frqs_guess = frqs_guess / pixel_size
+    frqs_guess = np.concatenate((fx_guess, fy_guess), axis=1) / pixel_size
 
     # ###########################################
     # initialize SIM reconstruction
@@ -151,31 +147,14 @@ for kk in range(ncolors):
                        compute_os=True,
                        compute_deconvolved=True,
                        compute_mcnr=True)
-
-    # ###########################################
-    # print parameters
-    # ###########################################
     imgset.print_parameters()
-
-    # ###########################################
-    # save reconstruction results
-    # ###########################################
     fname_out = imgset.save_imgs(save_dir,
-                                 # format="tiff",
-                                 format="zarr",
+                                 format="zarr",  # "tiff"
                                  save_raw_data=False,
                                  save_patterns=False
                                  )
-
-    # ###########################################
-    # save diagnostic plots
-    # ###########################################
     imgset.plot_figs(save_dir,
                      diagnostics_only=True,
                      figsize=(20, 10),
                      imgs_dpi=300)
-
-    # ###########################################
-    # show reconstruction in napari
-    # ###########################################
-    # sim.show_sim_napari(fname_out)
+    show_sim_napari(fname_out)

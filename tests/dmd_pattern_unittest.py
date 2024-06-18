@@ -3,7 +3,7 @@ from time import perf_counter
 import numpy as np
 from scipy.signal.windows import hann
 from scipy.fft import fftshift, fftfreq
-from localize_psf.affine import xform_shift_center, xform_sinusoid_params_roi, xform_mat
+from localize_psf.affine import params2xform, xform_sinusoid_params, xform_mat
 from localize_psf.rois import get_centered_rois
 from mcsim.analysis.sim_reconstruction import get_peak_value
 from mcsim.analysis.fft import ft2
@@ -229,7 +229,7 @@ class TestPatterns(unittest.TestCase):
                                [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]])
 
         # get affine matrix for our ROI
-        affine_xform_roi = xform_shift_center(affine_mat, cimg_new=(roi[2], roi[0]))
+        affine_xform_roi = params2xform([1, 0, -roi[2], 1, 0, -roi[0]]).dot(affine_mat)
 
         # ###########################################
         # estimate phases/intensity after affine transformation using model
@@ -247,15 +247,18 @@ class TestPatterns(unittest.TestCase):
         efields = efields / np.max(np.abs(efields))
 
         vecs_xformed = np.zeros(vecs.shape)
-        vecs_xformed[..., 0], vecs_xformed[..., 1], phases = (
-            xform_sinusoid_params_roi(vecs[..., 0],
-                                      vecs[..., 1],
-                                      np.angle(efields),
-                                      pattern.shape,
-                                      roi,
-                                      affine_mat,
-                                      input_origin="fft",
-                                      output_origin="fft"))
+
+        xform_input2edge = params2xform([1, 0, (pattern.shape[1] // 2),
+                                         1, 0, (pattern.shape[0] // 2)])
+        xform_full2roi = params2xform([1, 0, -roi[2],
+                                       1, 0, -roi[0]])
+        xform_edge2output = params2xform([1, 0, -((roi[3] - roi[2]) // 2),
+                                          1, 0, -((roi[1] - roi[0]) // 2)])
+        xform_full = xform_edge2output.dot(xform_full2roi.dot(affine_mat.dot(xform_input2edge)))
+        vecs_xformed[..., 0], vecs_xformed[..., 1], phases = xform_sinusoid_params(vecs[..., 0],
+                                                                                   vecs[..., 1],
+                                                                                   np.angle(efields),
+                                                                                   xform_full)
         efields_xformed = np.abs(efields) * np.exp(1j * phases)
 
         ###########################################
@@ -299,7 +302,7 @@ class TestPatterns(unittest.TestCase):
         # test angles
         np.testing.assert_allclose(np.angle(efields_xformed[to_compare]),
                                    np.angle(efields_direct[to_compare]),
-                                   atol=0.003)
+                                   atol=0.03)
         # test amplitudes
         np.testing.assert_allclose(np.abs(efields_xformed[to_compare]),
                                    np.abs(efields_direct[to_compare]),

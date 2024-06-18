@@ -2877,10 +2877,10 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     :param compute:
     :param slices: slice n others fields using this tuple of slices. Should be of length n.ndim - 3
     :param data_slice:
-    :param phase_lim:
-    :param n_lim:
-    :param e_lim:
-    :param escatt_lim:
+    :param phase_lim: phase_min_max
+    :param n_lim: (nmin, nmax)
+    :param e_lim: (emin, emax)
+    :param escatt_lim: (emin, emax)
     :param real_cmap: color map to use for intensity-like images
     :param phase_cmap: color map to use for phase-like images
     :param scale_z: whether to scale the z-direction realistically so 3D displays are not distorted
@@ -2997,7 +2997,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
     # with dask_cfg_set(scheduler='threads',
     #                   **{'array.slicing.split_large_chunks': False}):
-    with LocalCluster(processes=False) as cluster, Client(cluster) as client:
+    with (LocalCluster(processes=False) as cluster, Client(cluster) as client):
         # ######################
         # prepare n
         # ######################
@@ -3186,7 +3186,9 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         # ######################
         # phase correction
         # ######################
-        if hasattr(img_z, "phase_correction_profile") and show_phase_correction_profiles:
+        if (hasattr(img_z, "phase_correction_profile") and
+            show_phase_correction_profiles and
+            img_z.phase_correction_profile.size != 1):
             pcorr = da.expand_dims(da.from_zarr(img_z.phase_correction_profile)[slices], axis=-3)
             pcorr_abs = da.abs(pcorr)
             pcorr_angle = da.angle(pcorr)
@@ -3533,13 +3535,15 @@ class PhaseCorr(Optimizer):
                  e,
                  ebg,
                  tau_l1: float = 0,
-                 escale: float = 40.):
+                 escale: float = 40.,
+                 fit_magnitude: bool = True):
         super(PhaseCorr, self).__init__(e.shape[-3],
                                         prox_parameters={"tau_l1": float(tau_l1)})
 
         self.e = e
         self.ebg = ebg
         self.escale = float(escale)
+        self.fit_magnitude = bool(fit_magnitude)
 
     def gradient(self,
                  x: array,
@@ -3576,9 +3580,13 @@ class PhaseCorr(Optimizer):
         # apply l1 to FT
         if self.prox_parameters["tau_l1"] != 0:
             ft_x = ft2(x)
-            ft_prox = soft_threshold(self.prox_parameters["tau_l1"],
-                                     abs(ft_x)) * xp.exp(1j * xp.angle(ft_x))
+            ft_prox = (soft_threshold(self.prox_parameters["tau_l1"], abs(ft_x)) *
+                       xp.exp(1j * xp.angle(ft_x)))
+
             y = ift2(ft_prox)
+            if not self.fit_magnitude:
+                y = xp.exp(1j * xp.angle(y))
+
         else:
             y = xp.array(x, copy=True)
 

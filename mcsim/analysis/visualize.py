@@ -168,8 +168,7 @@ def get_color_projection(n: np.ndarray,
     return n_proj, colors
 
 
-def export_mips_movie(out_fname,
-                      mips: Sequence[np.ndarray],
+def export_mips_movie(mips: Sequence[np.ndarray],
                       dz: float,
                       dxy: float,
                       dt: float = 1.,
@@ -183,30 +182,37 @@ def export_mips_movie(out_fname,
                       linked_centers: Optional = None,
                       trajectory_memory_frames: int = 100,
                       draw_calibration_bar: bool = True,
+                      cbar_position: Sequence[float, float, float, float] = (0.05, 0.65, 0.025, 0.3),
+                      out_fname: Optional[Union[str, Path]] = None,
+                      fig=None,
+                      ax=None,
                       **kwargs
                       ) -> Callable:
     """
-    Export movie
+    Display max projections along 3 orthogonal directions or export a time series of these as a movie
 
-    :param out_fname: full path ending in .mp4
-    :param mips: (maxz, maxy, maxx)
+    :param mips: (maxz, maxy, maxx) where these are 3D arrays of sizes (nt, ny, nx), (nt, nz, nx), and (nt, nz, ny)
     :param dz:
     :param dxy:
-    :param dt:
-    :param roi:
-    :param video_length_s:
-    :param boundary_pix:
-    :param lw:
+    :param dt: time between images
+    :param roi: [zstart, zend, ystart, yend, xstart, xend]. crop projections to this area before plotting.
+    :param video_length_s: desired video length in seconds
+    :param boundary_pix: pixels separating the different projections
+    :param lw: rectangle boundary width
     :param scale_bar_um:
-    :param clims:
-    :param zlims:
+    :param clims: (cmin, cmax) color limits for displaying projections
+    :param zlims: (zmin, zmax) color limits for displaying localizations
     :param linked_centers:
     :param trajectory_memory_frames:
+    :param draw_calibration_bar: whether to draw the calibration bar
+    :param cbar_position: (left, bottom, width, height) axes position on figure
+    :param out_fname: full path ending in .mp4
+    :param fig: figure to use
+    :param ax: axis to use
     :param kwargs: passed through to writer
-    :return animate_fn:
+    :return animate_fn, fig, ax: A function which will draw the MIP's for a given frame on a figure and axis
     """
 
-    # settings
     plot_options = {"marker": 'o',
                     "s": np.pi * 7 ** 2,
                     "lw": 1.5,
@@ -265,34 +271,44 @@ def export_mips_movie(out_fname,
                        cmap="bone_r")
 
         # rectangles
-        ax.add_artist(Rectangle((lw, lw),
-                                width=nx,
-                                height=ny,
-                                facecolor="none",
-                                edgecolor="gold",
-                                lw=lw,
-                                aa=True
-                                ))
-        ax.add_artist(Rectangle((lw, ny + boundary_pix),
-                                width=nx,
-                                height=ny_proj - ny - boundary_pix - lw,
-                                facecolor="none",
-                                edgecolor="purple",
-                                lw=lw,
-                                aa=True
-                                ))
-        ax.add_artist(Rectangle((nx + boundary_pix, lw),
-                                width=nx_proj - nx - boundary_pix - lw,
+        # note: linewidth is drawn symmetrically inside and outside of rectangle
+        # note: linewidth set in pts
+        patch = Rectangle((-0.5, -0.5),
+                          width=nx,
+                          height=ny,
+                          facecolor="none",
+                          edgecolor="gold",
+                          lw=2*lw,
+                          aa=True
+                          )
+        ax.add_artist(patch)
+        patch.set_clip_path(patch)
+
+        patch = Rectangle((-0.5, ny + boundary_pix - 0.5),
+                          width=nx,
+                          height=ny_proj - ny - boundary_pix,
+                          facecolor="none",
+                          edgecolor="purple",
+                          lw=2 * lw,
+                          aa=True
+                          )
+        ax.add_artist(patch)
+        patch.set_clip_path(patch)
+
+        patch = Rectangle((nx + boundary_pix - 0.5, -0.5),
+                                width=nx_proj - nx - boundary_pix,
                                 height=ny,
                                 facecolor="none",
                                 edgecolor="deepskyblue",
-                                lw=lw,
+                                lw=2*lw,
                                 aa=True
-                                ))
+                                )
+        ax.add_artist(patch)
+        patch.set_clip_path(patch)
 
         # calibration bar
         if draw_calibration_bar:
-            ax_cb = fig.add_axes(plt.axes([0.05, 0.65, 0.025, 0.3]))
+            ax_cb = fig.add_axes(plt.axes(cbar_position, frameon=False))
             plt.colorbar(im, cax=ax_cb)
             ax_cb.set_yticklabels([])
             ax_cb.set_yticks([])
@@ -365,6 +381,17 @@ def export_mips_movie(out_fname,
 
         ax.axis('off')
 
+    proj_sample = assemble_2d_projections(n_maxz[0],
+                                          n_maxy[0],
+                                          n_maxx[0],
+                                          dz / dxy,
+                                          n_pix_sep=boundary_pix,
+                                          boundary_value=np.nan)
+
+    # ############################
+    # movie
+    # ############################
+    # save video results
     font = {'family': 'sans-serif',
             'size': 22}
     matplotlib.rc('font', **font)
@@ -377,38 +404,31 @@ def export_mips_movie(out_fname,
                      "top": 0.99
                      }
 
-    proj_sample = assemble_2d_projections(n_maxz[0],
-                                          n_maxy[0],
-                                          n_maxx[0],
-                                          dz / dxy,
-                                          n_pix_sep=boundary_pix,
-                                          boundary_value=np.nan)
+    if fig is None:
+        fig = plt.figure(figsize=(9, 9 * proj_sample.shape[0] / proj_sample.shape[1]))
 
-    # ############################
-    # movie
-    # ############################
-    fig = plt.figure(figsize=(9, 9 * proj_sample.shape[0] / proj_sample.shape[1]))
-    grid = fig.add_gridspec(**grid_settings)
-    ax = fig.add_subplot(grid[0, 0])
+    if ax is None:
+        grid = fig.add_gridspec(**grid_settings)
+        ax = fig.add_subplot(grid[0, 0])
 
-    animation = FuncAnimation(fig,
-                              partial(animate,
-                                      ax=ax,
-                                      fig=fig,
-                                      show_locs=True,
-                                      show_tracks=True),
-                              frames=range(nt))
+    if out_fname is not None:
+        animation = FuncAnimation(fig,
+                                  partial(animate,
+                                          ax=ax,
+                                          fig=fig,
+                                          show_locs=True,
+                                          show_tracks=True),
+                                  frames=range(nt))
 
-    # save video results
-    Writer = writers['ffmpeg']
-    animation.save(out_fname,
-                   writer=Writer(fps=nt / video_length_s,
-                                 metadata=dict(artist='qi2lab'),
-                                 **kwargs
-                                 )
-                   )
+        Writer = writers['ffmpeg']
+        animation.save(out_fname,
+                       writer=Writer(fps=nt / video_length_s,
+                                     metadata=dict(artist='qi2lab'),
+                                     **kwargs
+                                     )
+                       )
+        animation.event_source.stop()
+        plt.close(fig)
 
-    plt.close(fig)
-
-    return animate
+    return animate, fig, ax
 

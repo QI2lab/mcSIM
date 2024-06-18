@@ -25,7 +25,7 @@ from matplotlib.patches import Circle
 from mcsim.analysis.sim_reconstruction import get_peak_value
 from mcsim.analysis.fft import conj_transpose_fft, ft2
 from mcsim.analysis.simulate_dmd import xy2uvector, blaze_envelope, _dlp_1stgen_axis
-from localize_psf.affine import xform_sinusoid_params, xform_shift_center, xform_mat
+from localize_psf.affine import xform_sinusoid_params, xform_mat, params2xform
 
 array = Union[np.ndarray, np.ndarray]
 
@@ -1152,7 +1152,7 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
 
     # todo: generate roi directly instead of cropping
-    xform_roi = xform_shift_center(affine_xform, cimg_new=(roi[2], roi[0]))
+    xform_roi = params2xform([1, 0, -roi[2], 1, 0, -roi[1]]).dot(affine_xform)
     nx_roi = roi[3] - roi[2]
     ny_roi = roi[1] - roi[0]
     img_coords_roi = np.meshgrid(range(nx_roi), range(ny_roi))
