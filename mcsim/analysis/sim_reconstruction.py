@@ -54,6 +54,7 @@ from mcsim.analysis.fft import ft2, ift2, irft2, conj_transpose_fft, translate_f
 from localize_psf.rois import get_centered_rois, cut_roi
 from localize_psf.fit_psf import circ_aperture_otf, blur_img_psf, oversample_voxel
 from localize_psf.camera import bin, bin_adjoint, simulated_img
+from localize_psf.affine import params2xform
 
 # GPU
 try:
@@ -306,7 +307,6 @@ class SimImageSet:
         self._preprocessing_settings = {}
         self._recon_settings = {}
 
-        # todo: could replace with fmax only
         self.na = None
         self.wavelength = None
         self.fmax = None
@@ -371,6 +371,7 @@ class SimImageSet:
         self.sim_os = None
         self.sim_sr = None
         self.sim_sr_ft_components = None
+        self.affine_xform_raw2sim = None
 
     def preprocess_data(self,
                         pix_size_um: float,
@@ -520,6 +521,19 @@ class SimImageSet:
                                      dtype=complex,
                                      meta=xp.array(())
                                      )
+
+        # #############################################
+        # affine transformation connecting SIM and raw images
+        # #############################################
+        # todo: check this
+        # todo: use in plotting
+        self.affine_xform_raw2sim = params2xform([self.upsample_fact,
+                                                  0,
+                                                  self.x_us[0] / self.dx_us - self.x[0] / self.dx,
+                                                  self.upsample_fact,
+                                                  0,
+                                                  self.x_us[0] / self.dx_us - self.x[0] / self.dx,
+                                                  ])
 
     def update_recon_settings(self,
                               wiener_parameter: float = 0.1,
