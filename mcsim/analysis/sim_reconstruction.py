@@ -18,6 +18,7 @@ where :math:`h(r)` is the point-spread function of the system.
 """
 from sys import stdout
 from time import perf_counter
+from copy import deepcopy
 from warnings import warn
 from typing import Union, Optional
 from collections.abc import Sequence
@@ -114,7 +115,9 @@ class SimImageSet:
                    trim_negative_values: bool = False,
                    use_gpu: bool = cp is not None,
                    print_to_terminal: bool = True,
-                   axes_names: Optional[Sequence[str]] = None
+                   axes_names: Optional[Sequence[str]] = None,
+                   cam_roi: Optional[Sequence[int, int, int, int]] = None,
+                   data_roi: Optional[Sequence[int, int, int, int]] = None,
                    ):
         """
         Simplified constructor for SimImageSet. Use this constructor when all SIM reconstruction parameters
@@ -125,55 +128,57 @@ class SimImageSet:
 
         :param physical_params: {'pixel_size', 'na', 'wavelength'}. Pixel size and emission wavelength in um
         :param imgs: n0 x n1 x ... nm x nangles x nphases x ny x nx raw data to be reconstructed. The first
-           m-dimensions will be reconstructed in parallel. These may represent e.g. time-series and z-stack data.
-           The same reconstruction parameters must be used for the full stack, so these should not represent different
-           channels.
+         m-dimensions will be reconstructed in parallel. These may represent e.g. time-series and z-stack data.
+         The same reconstruction parameters must be used for the full stack, so these should not represent different
+         channels.
         :param otf: optical transfer function evaluated at the same frequencies as the fourier transforms of imgs.
-            If None, estimate from NA. This can either be an array of size ny x nx, or an array of size nangles x ny x nx
-            The second case corresponds to a system that has different OTF's per SIM acquisition angle.
+         If None, estimate from NA. This can either be an array of size ny x nx, or an array of size nangles x ny x nx
+         The second case corresponds to a system that has different OTF's per SIM acquisition angle.
         :param wiener_parameter: Attenuation parameter for Wiener filtering. This has a sligtly different meaning
-            depending on the value of combine_bands_mode
+         depending on the value of combine_bands_mode
         :param frq_estimation_mode: "band-correlation", "fourier-transform", or "fixed"
-           "band-correlation" first unmixes the bands using the phase guess values and computes the correlation between
-           the shifted and unshifted band
-           "fourier-transform" correlates the Fourier transform of the image with itself.
-           "fixed" uses the frq_guess values
+         "band-correlation" first unmixes the bands using the phase guess values and computes the correlation between
+         the shifted and unshifted band
+         "fourier-transform" correlates the Fourier transform of the image with itself.
+         "fixed" uses the frq_guess values
         :param frq_guess: 2 x nangles array of guess SIM frequency values
         :param phase_estimation_mode: "wicker-iterative", "real-space", "naive", or "fixed"
-           "wicker-iterative" follows the approach of https://doi.org/10.1364/OE.21.002032.
-           "real-space" follows the approach of section IV-B in https://doir.org/10.1109/JSTQE.2016.2521542.
-           "naive" uses the phase of the Fourier transform of the raw data.
-           "fixed" uses the values provided from phases_guess.
+         "wicker-iterative" follows the approach of https://doi.org/10.1364/OE.21.002032.
+         "real-space" follows the approach of section IV-B in https://doir.org/10.1109/JSTQE.2016.2521542.
+         "naive" uses the phase of the Fourier transform of the raw data.
+         "fixed" uses the values provided from phases_guess.
         :param phases_guess: nangles x nphases array of phase guesses
         :param combine_bands_mode: "fairSIM" if using method of https://doi.org/10.1038/ncomms10980 or "openSIM" if
-           using method of https://doi.org/10.1109/jstqe.2016.2521542
+         using method of https://doi.org/10.1109/jstqe.2016.2521542
         :param float fmax_exclude_band0: amount of the unshifted bands to exclude, as a fraction of fmax. This can
-           enhance optical sectioning by replacing the low frequency information in the reconstruction with the data.
-           from the shifted bands only.
-           For more details on the band replacement optical sectioning approach, see https://doi.org/10.1364/BOE.5.002580
-           and https://doi.org/10.1016/j.ymeth.2015.03.020
+         enhance optical sectioning by replacing the low frequency information in the reconstruction with the data.
+         from the shifted bands only.
+         For more details on the band replacement optical sectioning approach, see https://doi.org/10.1364/BOE.5.002580
+         and https://doi.org/10.1016/j.ymeth.2015.03.020
         :param mod_depths_guess: If use_fixed_mod_depths is True, these modulation depths are used
         :param use_fixed_mod_depths: if true, use mod_depths_guess instead of estimating the modulation depths from the data
         :param mod_depth_otf_mask_threshold:
         :param minimum_mod_depth: if modulation depth is estimated to be less than this value, it will be replaced
-           with this value during reconstruction
+         with this value during reconstruction
         :param normalize_histograms: for each phase, normalize histograms of images to account for laser power fluctuations
         :param background: Either a single number, or broadcastable to size of imgs. The background will be subtracted
-           before running the SIM reconstruction
+         before running the SIM reconstruction
         :param determine_amplitudes: whether to determine amplitudes as part of Wicker phase optimization.
-           This flag only has an effect if phase_estimation_mode is "wicker-iterative"
+         This flag only has an effect if phase_estimation_mode is "wicker-iterative"
         :param background: a single number, or an array which is broadcastable to the same size as images. This will
-           be subtracted from the raw data before processing.
+         be subtracted from the raw data before processing.
         :param gain: gain of the camera in ADU/photons. This is a single number or an array which is broadcastable to
-           the same size as the images whcih is sued to convert the ADU counts to photon numbers.
+         the same size as the images whcih is sued to convert the ADU counts to photon numbers.
         :param max_phase_err: If the determined phase error between components exceeds this value, use the phase guess
-           values instead of those determined by the estimation algorithm.
+         values instead of those determined by the estimation algorithm.
         :param min_p2nr: if the peak-to-noise ratio is smaller than this value, use the frequency guesses instead
-            of the frequencies determined by the estimation algorithm.
+         of the frequencies determined by the estimation algorithm.
         :param trim_negative_values: set values in SIM-SR reconstruction which are less than zero to zero
         :param use_gpu:
         :param print_to_terminal:
         :param axes_names: axes names for all input dimensions.
+        :param cam_roi: ROI camera chip has been cropped to wrt to the entire camera chip
+        :param data_roi: ROI the data has been cropped to after camera acquistion
         """
         
         tstart = perf_counter()
@@ -190,7 +195,9 @@ class SimImageSet:
                              normalize_histograms,
                              gain,
                              background,
-                             axes_names)
+                             axes_names,
+                             cam_roi,
+                             data_roi)
 
         # #############################################
         # set reconstruction settings
@@ -371,7 +378,7 @@ class SimImageSet:
         self.sim_os = None
         self.sim_sr = None
         self.sim_sr_ft_components = None
-        self.affine_xform_raw2sim = None
+        self.xform_dict = None
 
     def preprocess_data(self,
                         pix_size_um: float,
@@ -381,7 +388,9 @@ class SimImageSet:
                         normalize_histograms: bool,
                         gain: float,
                         background: float,
-                        axes_names: Optional[Sequence[str]] = None
+                        axes_names: Optional[Sequence[str]] = None,
+                        cam_roi: Optional[Sequence[int, int, int, int]] = None,
+                        data_roi: Optional[Sequence[int, int, int, int]] = None,
                         ):
         """
         Preprocess SIM data
@@ -394,6 +403,8 @@ class SimImageSet:
         :param gain:
         :param background:
         :param axes_names:
+        :param cam_roi:
+        :param data_roi:
         :return:
         """
 
@@ -525,15 +536,36 @@ class SimImageSet:
         # #############################################
         # affine transformation connecting SIM and raw images
         # #############################################
-        # todo: check this
+        # todo: check these
         # todo: use in plotting
-        self.affine_xform_raw2sim = params2xform([self.upsample_fact,
-                                                  0,
-                                                  self.x_us[0] / self.dx_us - self.x[0] / self.dx,
-                                                  self.upsample_fact,
-                                                  0,
-                                                  self.x_us[0] / self.dx_us - self.x[0] / self.dx,
-                                                  ])
+        xform_recon_pix2coords = params2xform([self.dy_us, 0, self.y_us[0],
+                                               self.dx_us, 0, self.x_us[0]])
+        xform_raw2sim = params2xform([self.upsample_fact, 0, (self.y_us[0] - self.y[0]) / self.dy_us,
+                                      self.upsample_fact, 0, (self.x_us[0] - self.x[0]) / self.dx_us])
+        xform_recon2raw = np.linalg.inv(xform_raw2sim)
+
+        xform_recon2cam_roi = None
+        xform_recon2cam = None
+        if data_roi is not None:
+            xform_data_roi2cam_roi = params2xform([1, 0, data_roi[0],
+                                                   1, 0, data_roi[2]])
+            xform_recon2cam_roi = xform_data_roi2cam_roi.dot(xform_recon2raw)
+
+            xform_recon2cam = deepcopy(xform_recon2cam_roi)
+            if cam_roi is not None:
+                xform_cam_roi2cam = params2xform([1, 0, cam_roi[0],
+                                                  1, 0, cam_roi[2]])
+                xform_recon2cam = xform_cam_roi2cam.dot(xform_recon2cam_roi)
+
+        # must be json serializable
+        self.xform_dict = {"affine_xform_recon_pix2coords": np.asarray(xform_recon_pix2coords).tolist(),
+                           "affine_xform_recon_2_raw_data_roi": np.asarray(xform_recon2raw).tolist(),
+                           "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_recon2cam_roi).tolist(),
+                           "affine_xform_recon_2_raw_camera": np.asarray(xform_recon2cam).tolist(),
+                           "data_roi": np.asarray(data_roi).tolist(),
+                           "camera_roi": np.asarray(cam_roi).tolist(),
+                           "coordinate_order": "yx"
+                           }
 
     def update_recon_settings(self,
                               wiener_parameter: float = 0.1,
@@ -2368,7 +2400,8 @@ class SimImageSet:
                     "nbands": self.nbands,
                     "reconstruction_settings": self._recon_settings,
                     "preprocessing_settings": self._preprocessing_settings,
-                    "axes_names": self.axes_names
+                    "axes_names": self.axes_names,
+                    "xform_dict": self.xform_dict
                     }
 
         metadata.update(attributes)
