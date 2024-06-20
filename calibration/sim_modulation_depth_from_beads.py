@@ -18,7 +18,7 @@ from localize_psf import affine, localize, fit_psf
 # ################################
 # data files and options
 # ################################
-data_dirs = [Path(r"F:\2024_05_30\001_sim_mod_depth_100nm_beads")]
+data_dirs = [Path(r"F:\2024_06_18\004_red_sim_cal")]
 
 # channel dependent settings
 
@@ -43,14 +43,14 @@ data_dirs = [Path(r"F:\2024_05_30\001_sim_mod_depth_100nm_beads")]
 # bead_radii = 0.5 * np.array([0.1, 0.1])
 
 # red beads
-# ignore_color = [False]
-# min_fit_amp = [1000]
-# bead_radii = 0.5 * np.array([0.2])
+ignore_color = [False]
+min_fit_amp = [1000]
+bead_radii = 0.5 * np.array([0.2])
 
 # blue
-ignore_color = [False]
-min_fit_amp = [300]
-bead_radii = 0.5 * np.array([0.1])
+# ignore_color = [False]
+# min_fit_amp = [300]
+# bead_radii = 0.5 * np.array([0.1])
 
 # channel independent setings
 use_gpu = True
@@ -60,6 +60,7 @@ save_results = True
 nrois_to_plot = 0
 
 # localization filtering parameters
+correct_mod_for_bead_size = True
 roi_size = (0, 1.5, 1.5)  # (sz, sy, sx) in um
 filters_small_sigma = (0.1, 0.1, 0.1)  # (sz, sy, sx) in um
 filters_large_sigma = (5, 5, 5)  # (sz, sy, sx) in um
@@ -172,7 +173,6 @@ for d in data_dirs:
         print(f"started initial fitting for channel {ic:d}")
 
         # take widefield image
-        # img_middle_wf = np.mean(imgs[ic][0, 0, 0, nz//2, 0], axis=(0, 1))
         img_middle_wf = np.max(imgs[ic].mean(axis=(-3, -4)), axis=tuple(range(nextra_dims)))
 
         zz, yy, xx = localize.get_coords((1,) + img_middle_wf.shape, (1, dxy, dxy), broadcast=True)
@@ -356,7 +356,10 @@ for d in data_dirs:
         m_ests[ic][amp_is_neg] = np.nan
 
         for ia in range(nangles):
-            mod_depth_bead_size_correction[ic, ia] = sim.correct_modulation_for_bead_size(bead_radii[ic], 1 / periods[ic][ia])
+            if correct_mod_for_bead_size:
+                mod_depth_bead_size_correction[ic, ia] = sim.correct_modulation_for_bead_size(bead_radii[ic], 1 / periods[ic][ia])
+            else:
+                mod_depth_bead_size_correction[ic, ia] = 1.
 
         # ####################################
         # plot results for each data set
@@ -487,9 +490,9 @@ for d in data_dirs:
                                              axes=axes2[ia * nangles: (ia + 1) * nangles],
                                              figsize=figsize)
 
-        if save_results:
-            figh.savefig(Path(save_dir, f"modulation_statistics_{id:s}.png"))
-            plt.close(figh)
+            if save_results:
+                figh.savefig(Path(save_dir, f"modulation_statistics_{id:s}.png"))
+                plt.close(figh)
 
-            figh2.savefig(save_dir / f"modulation_vs_position_{id:s}.png")
-            plt.close(figh2)
+                figh2.savefig(save_dir / f"modulation_vs_position_{id:s}.png")
+                plt.close(figh2)
