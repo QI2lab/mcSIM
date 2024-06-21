@@ -174,11 +174,13 @@ class Tomography:
         if save_dir is not None:
             self.save_dir = Path(save_dir)
             self.save_dir.mkdir(exist_ok=True, parents=True)
-
+            self.dask_tmp_dir = self.save_dir
             self.store = zarr.open(self.save_dir / self.store_name, "a")
         else:
             self.save_dir = None
             self.store = zarr.open()
+            self.dask_tmp_dir = None
+
         self.compressor = compressor
         self.save_float32 = bool(save_float32)
 
@@ -943,6 +945,8 @@ class Tomography:
                                   for ii in range(self.npatterns)]
                                  )
 
+                    # write log info
+                    save_dask_logs(client, frq_dir)
                     client.profile(filename=frq_dir / f"frequency_fitting_dask_profile.html")
 
     def get_beam_frqs(self) -> list[np.ndarray]:
@@ -1391,8 +1395,9 @@ class Tomography:
             self.efields_ft = da.from_zarr(self.store["efields_ft"])
             self.efield_bg_ft = da.from_zarr(self.store["efield_bg_ft"])
 
-            if self.save_dir is not None:
-                client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
+                if self.save_dir is not None:
+                    save_dask_logs(client, self.save_dir, prefix="preprocessing_")
+                    client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
 
     def reconstruct_n(self,
                       use_gpu: bool = False,
@@ -1812,18 +1817,22 @@ class Tomography:
                           dtype=np.complex64 if self.save_float32 else complex,
                           )
 
-        with LocalCluster(processes=processes,
-                          n_workers=n_workers,
-                          threads_per_worker=threads_per_worker) as cluster, Client(cluster) as client:
-            if self.verbose:
-                print(cluster.dashboard_link)
+        with dask_cfg_set({"distributed.scheduler.worker-saturation": 1,
+                           "temporary_directory": str(self.dask_tmp_dir)}):
+            with LocalCluster(processes=processes,
+                              n_workers=n_workers,
+                              threads_per_worker=threads_per_worker) as cluster, Client(cluster) as client:
+                if self.verbose:
+                    print(cluster.dashboard_link)
 
-            dcompute([n.to_zarr(self.store.store.path,
-                                component="n",
-                                compute=False,
-                                compressor=self.compressor)])
-            # save profile
-            client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
+                dcompute([n.to_zarr(self.store.store.path,
+                                    component="n",
+                                    compute=False,
+                                    compressor=self.compressor,
+                                    overwrite=overwrite)])
+                # save profile
+                save_dask_logs(client, self.save_dir, prefix="")
+                client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
 
     def plot_translations(self,
                           time_axis: int = 1,
@@ -3591,3 +3600,34 @@ class PhaseCorr(Optimizer):
             y = xp.array(x, copy=True)
 
         return y
+
+def save_dask_logs(client,
+                   root_dir: Union[str, Path],
+                   prefix: str = ""):
+    """
+    Save logs from dask workers and scheduler to text file
+
+    :param client:
+    :param root_dir:
+    :param prefix:
+    :return:
+    """
+    l = client.get_worker_logs()
+    for aa, (k, v) in enumerate(l.items()):
+        fname_log = root_dir / f"{prefix:s}worker_{aa:d}_log.txt"
+        with open(fname_log, "w") as flog:
+            flog.write(f"{k:s}\n")
+            flog.write("\n".join(p[1] for p in v))
+
+    # save nanny log
+    ln = client.get_worker_logs(nanny=True)
+    for aa, (k, v) in enumerate(ln.items()):
+        fname_log = root_dir / f"{prefix:s}nanny_{aa:d}_log.txt"
+        with open(fname_log, "w") as flog:
+            flog.write(f"{k:s}\n")
+            flog.write("\n".join(p[1] for p in v))
+
+    s = client.get_scheduler_logs()
+    fname_log = root_dir / f"{prefix:s}scheduler_log.txt"
+    with open(fname_log, "w") as flog:
+        flog.write("\n".join(p[1] for p in s))
