@@ -406,8 +406,8 @@ class Tomography:
         # for matrix, using image coordinates (0, 1, ..., N - 1)
         # note, due to order of operations -n//2 =/= - (n//2) when nx is odd
         if self.model in ["born", "rytov"]:
-            affine_xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1],
-                                                          self.drs_n[-2], 0, -(self.n_shape[-2] // 2) * self.drs_n[-2]])
+            affine_xform_recon_pix2coords = params2xform([self.drs_n[-2], 0, -(self.n_shape[-2] // 2) * self.drs_n[-2],
+                                                          self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1]])
         else:
             nbin_y = 1
             nbin_x = 1
@@ -421,35 +421,33 @@ class Tomography:
             xb = bin(self.x, [nbin_x], mode="mean")
             yb = bin(self.y, [nbin_y], mode="mean")
 
-            affine_xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, float(xb[0]),
-                                                          self.drs_n[-2], 0, float(yb[0])])
+            affine_xform_recon_pix2coords = params2xform([self.drs_n[-2], 0, float(yb[0]),
+                                                          self.drs_n[-1], 0, float(xb[0])])
 
         # ############################
-        # construct affine tranforms between reconstructed data and camera pixels
+        # construct affine tranformations
         # ############################
-        # todo: want to change order of affine xforms to use (y, x) instead of (x, y)
-        # affine transformation from camera ROI coordinates in um to pixel indices
-        xform_raw_roi_pix2coords = params2xform([self.dxy, 0, -(self.n_shape[-1] // 2) * self.dxy,
-                                                 self.dxy, 0, -(self.n_shape[-2] // 2) * self.dxy])
+        # transform from reconstruction coordinates in um to pixel indices
+        xform_raw_roi_pix2coords = params2xform([self.dxy, 0, -(self.n_shape[-2] // 2) * self.dxy,
+                                                 self.dxy, 0, -(self.n_shape[-1] // 2) * self.dxy])
 
-        # composing these two transforms gives affine from recon pixel indices to
-        # recon pix inds -> recon coords = ROI coordinates -> ROI pix inds
+        # transform from recon pixels to data roi pixels
         xform_recon2raw_roi = inv(xform_raw_roi_pix2coords).dot(affine_xform_recon_pix2coords)
 
         xform_odt_recon_to_cam_roi = None
         xform_odt_recon_to_full = None
         if self.data_roi is not None:
-            # transform from reconstruction processing roi to camera roi
+            # transform from data roi pixels to camera roi pixels
             odt_recon_roi = deepcopy(self.data_roi)
-            xform_process_roi_to_cam_roi = params2xform([1, 0, odt_recon_roi[2],
-                                                         1, 0, odt_recon_roi[0]])
+            xform_process_roi_to_cam_roi = params2xform([1, 0, odt_recon_roi[0],
+                                                         1, 0, odt_recon_roi[2]])
             xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
 
             if self.cam_roi is not None:
                 # todo: is there a problem with this transform?
-                # transform from camera roi to uncropped chip
-                xform_cam_roi_to_full = params2xform([1, 0, self.cam_roi[2],
-                                                      1, 0, self.cam_roi[0]])
+                # transform from camera roi to full camera chip
+                xform_cam_roi_to_full = params2xform([1, 0, self.cam_roi[0],
+                                                      1, 0, self.cam_roi[2]])
                 xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
 
         # store all transforms in JSON serializable form
@@ -459,7 +457,7 @@ class Tomography:
                            "affine_xform_recon_2_raw_camera": np.asarray(xform_odt_recon_to_full).tolist(),
                            "processing roi": np.asarray(self.data_roi).tolist(),
                            "camera roi": np.asarray(self.cam_roi).tolist(),
-                           "coordinate_order": "xy"
+                           "coordinate_order": "yx"
                            }
 
     @classmethod
@@ -2998,23 +2996,29 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     # ##############################
     # load affine xforms
     # ##############################
-    # Napari uses convention (y, x) whereas I'm using (x, y),
-    # so need to swap these dimensions in affine xforms
-    swap_xy = np.array([[0, 1, 0],
-                        [1, 0, 0],
-                        [0, 0, 1]])
-    try:
-        affine_recon2cam_xy = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
-    except KeyError:
-        try:
-            affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
-        except KeyError:
-            affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
+    order_is_yx = (hasattr(img_z.attrs["xform_dict"], "coordinate_order") and
+                   img_z.attrs["xform_dict"]["coordinate_order"] == "yx")
 
-    try:
-        affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
-    except TypeError:
-        affine_recon2cam = params2xform([1, 0, 0, 1, 0, 0])
+    if order_is_yx:
+        affine_recon2cam = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
+    else:
+        # Napari uses convention (y, x) whereas I'm using (x, y),
+        # so need to swap these dimensions in affine xforms
+        swap_xy = np.array([[0, 1, 0],
+                            [1, 0, 0],
+                            [0, 0, 1]])
+        try:
+            affine_recon2cam_xy = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
+        except KeyError:
+            try:
+                affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
+            except KeyError:
+                affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
+
+        try:
+            affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
+        except TypeError:
+            affine_recon2cam = params2xform([1, 0, 0, 1, 0, 0])
 
     # with dask_cfg_set(scheduler='threads',
     #                   **{'array.slicing.split_large_chunks': False}):
