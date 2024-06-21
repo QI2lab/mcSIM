@@ -188,11 +188,7 @@ def get_angular_spectrum_kernel(fx: array,
 
     # todo: test fastest way
     fzs = get_fzs(fx, fy, no, wavelength)
-    # allowed = xp.logical_not(xp.isnan(fzs))
-    # kernel = xp.zeros(fzs.shape, dtype=complex)
-    # kernel[allowed] = xp.exp(1j * dz * 2*np.pi * fzs[allowed])
     kernel = xp.exp(1j * dz * 2 * np.pi * fzs)
-    # kernel[xp.isnan(fzs)] = 0.
     xp.nan_to_num(kernel, copy=False)
 
     return kernel
