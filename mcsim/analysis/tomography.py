@@ -2852,7 +2852,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              show_n3d: bool = True,
                              show_n_aux: bool = False,
                              show_mips: bool = False,
-                             mip_separation_pix: int = 0,
                              show_raw: bool = False,
                              show_scattered_fields: bool = False,
                              show_efields: bool = False,
@@ -2868,9 +2867,8 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              n_cmap="gray_r",
                              real_cmap="bone",
                              phase_cmap="RdBu",
-                             scale_z: bool = True,
-                             xshift_pix: int = 0,
-                             yshift_pix: int = 0,
+                             xshift_pix: Optional[int] = None,
+                             yshift_pix: Optional[int] = None,
                              prefix: str = "",
                              viewer=None,
                              block_while_display: bool = True,
@@ -2884,7 +2882,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     :param show_n3d:
     :param show_n_aux:
     :param show_mips:
-    :param mip_separation_pix:
     :param show_raw:
     :param show_scattered_fields:
     :param show_efields:
@@ -2898,7 +2895,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     :param escatt_lim: (emin, emax)
     :param real_cmap: color map to use for intensity-like images
     :param phase_cmap: color map to use for phase-like images
-    :param scale_z: whether to scale the z-direction realistically so 3D displays are not distorted
     :param xshift_pix: shift images laterally to view electric fields and n simultaneously by this many pixels
     :param yshift_pix:
     :param prefix:
@@ -2944,6 +2940,12 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     n_extra_dims = img_z.n.ndim - 3
     nz, ny, nx = img_z.n.shape[-3:]
     npatterns = img_z.attrs["npatterns"]
+
+    if yshift_pix is None:
+        yshift_pix = ny
+
+    if xshift_pix is None:
+        xshift_pix = nx
 
     # NOTE: do not operate on these arrays after broadcasting otherwise memory use will explode
     # broadcasting does not cause memory size expansion, but in-place operations later will
@@ -3231,12 +3233,8 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                                    **kwargs)
 
         # for convenience of affine xforms, keep xy scale in pixels
-        if scale_z:
-            scale = (drs_n[0] / drs_n[1], 1, 1)
-            zoffset /= drs_n[1]
-        else:
-            scale = (1, 1, 1)
-            zoffset /= drs_n[0]
+        scale = (drs_n[0] / drs_n[1], 1, 1)
+        zoffset /= drs_n[1]
 
         # ######################
         # raw data
@@ -3451,7 +3449,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             viewer.add_image(n_maxy,
                              scale=(scale[0], drs_n[0] / drs_n[1], scale[2]),
                              affine=affine_recon2cam,
-                             translate=(zoffset, ny + mip_separation_pix, 0),
+                             translate=(zoffset, ny, 0),
                              contrast_limits=n_lim,
                              colormap=n_cmap,
                              name=f"{prefix:s}n max y"
@@ -3461,7 +3459,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             viewer.add_image(n_maxx,
                              scale=(scale[0], scale[1], drs_n[0] / drs_n[1]),
                              affine=affine_recon2cam,
-                             translate=(zoffset, 0, -nz * drs_n[0] / drs_n[1] - mip_separation_pix),
+                             translate=(zoffset, 0, -nz * drs_n[0] / drs_n[1]),
                              contrast_limits=n_lim,
                              colormap=n_cmap,
                              name=f"{prefix:s}n max x"
@@ -3515,22 +3513,6 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
                                  **kwargs)
 
     return v
-
-
-def display_mips(location: Union[str, Path, zarr.hierarchy.Group],
-                 **kwargs
-                 ):
-    """
-    Display maximum intensity projections from saved RI reconstruction data
-
-    :param location:
-    :param kwargs:
-    :return viewer:
-    """
-    return display_tomography_recon(location,
-                                    show_n3d=False,
-                                    show_mips=True,
-                                    **kwargs)
 
 
 def parse_time(dt: float) -> (tuple, str):
