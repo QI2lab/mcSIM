@@ -337,8 +337,65 @@ class Tomography:
         self.reconstruction_settings = reconstruction_kwargs
 
         # ########################
-        # affine transformation from reconstruction coordinates to pixel indices
+        # prepare zarr arrays to store results
         # ########################
+        # todo: define this here once can figure out how to write into it with to_zarr()
+        # self.store.create("efields_ft",
+        #                   shape=self.imgs_raw.shape,
+        #                   chunks=(1,) * self.nextra_dims + self.imgs_raw.shape[-3:],
+        #                   compressor=self.compressor,
+        #                   dtype=np.complex64 if self.save_float32 else complex)
+
+        if not hasattr(self.store, "efwd"):
+            self.store.create("efwd",
+                              shape=self.imgs_raw.shape,
+                              chunks=(1,) * (self.imgs_raw.ndim - 2) + (self.ny, self.nx),
+                              compressor=self.compressor,
+                              dtype=complex)
+
+        if not hasattr(self.store, "escatt"):
+            e_scatt_out_shape = list(self.imgs_raw.shape)
+            e_scatt_out_shape[-3] *= self.nmax_multiplex
+            self.store.create("escatt",
+                              shape=e_scatt_out_shape,
+                              chunks=(1,) * (self.imgs_raw.ndim - 2) + (self.ny, self.nx),
+                              compressor=self.compressor,
+                              dtype=complex)
+
+        if not hasattr(self.store, "n_start"):
+            if self.n_guess is None:
+                self.store.create("n_start",
+                                  shape=self.imgs_raw.shape[:-3] + self.n_shape,
+                                  chunks=(1,) * self.nextra_dims + self.n_shape,
+                                  compressor=self.compressor,
+                                  dtype=complex)
+            else:
+                self.store.array("n_start",
+                                 np.expand_dims(self.n_guess, axis=list(range(self.nextra_dims))),
+                                 compressor=self.compressor,
+                                 dtype=complex)
+
+        if "max_iterations" not in self.reconstruction_settings.keys():
+            raise ValueError()
+
+        if not hasattr(self.store, "costs"):
+            self.store.create("costs",
+                              shape=self.imgs_raw.shape[:-3] +
+                                    (self.reconstruction_settings["max_iterations"] + 1, self.npatterns),
+                              chunks=(1,) * (self.imgs_raw.ndim - 3) +
+                                     (self.reconstruction_settings["max_iterations"] + 1, self.npatterns),
+                              compressor=self.compressor,
+                              dtype=float)
+
+        if not hasattr(self.store, "steps"):
+            self.store.create("steps",
+                              shape=self.imgs_raw.shape[:-3] +
+                                    (self.reconstruction_settings["max_iterations"],),
+                              chunks=(1,) * (self.imgs_raw.ndim - 3) +
+                                     (self.reconstruction_settings["max_iterations"],),
+                              compressor=self.compressor,
+                              dtype=float)
+
         # ########################
         # ROI and affine transformations
         # ########################
@@ -1419,59 +1476,6 @@ class Tomography:
         else:
             xp = np
 
-        if self.save_auxiliary_fields:
-            chunk_shape = (1,) * (self.efields_ft.ndim - 2) + self.efields_ft.shape[-2:]
-            e_fwd_out = self.store.create("efwd",
-                                          shape=self.efields_ft.shape,
-                                          chunks=chunk_shape,
-                                          compressor=self.compressor,
-                                          dtype=complex)
-
-            e_scatt_out_shape = list(self.efields_ft.shape)
-            e_scatt_out_shape[-3] *= self.nmax_multiplex
-            e_scatt_out = self.store.create("escatt",
-                                            shape=e_scatt_out_shape,
-                                            chunks=chunk_shape,
-                                            compressor=self.compressor,
-                                            dtype=complex)
-
-            if self.n_guess is None:
-                n_start_out = self.store.create("n_start",
-                                                shape=self.efields_ft.shape[:-3] + self.n_shape,
-                                                compressor=self.compressor,
-                                                dtype=complex)
-            else:
-                n_start_out = None
-                self.store.array("n_start",
-                                 np.expand_dims(self.n_guess, axis=list(range(self.nextra_dims))),
-                                 compressor=self.compressor,
-                                 dtype=complex)
-
-        else:
-            e_fwd_out = None
-            e_scatt_out = None
-            n_start_out = None
-
-        if self.save_auxiliary_fields and "max_iterations" in self.reconstruction_settings.keys():
-            cost_shape = (self.efields_ft.shape[:-3] +
-                          (self.reconstruction_settings["max_iterations"] + 1, self.npatterns))
-            cost_chunk = (1,) * (self.efields_ft.ndim - 3) + cost_shape[-2:]
-            costs_out = self.store.create("costs",
-                                          shape=cost_shape,
-                                          chunks=cost_chunk,
-                                          compressor=self.compressor,
-                                          dtype=float)
-
-            step_shape = self.efields_ft.shape[:-3] + (self.reconstruction_settings["max_iterations"],)
-            step_chunk = (1,) * (self.efields_ft.ndim - 3) + step_shape[-1:]
-            steps_out = self.store.create("steps",
-                                          shape=step_shape,
-                                          chunks=step_chunk,
-                                          compressor=self.compressor,
-                                          dtype=float)
-        else:
-            costs_out = None
-            steps_out = None
 
         # ############################
         # get beam frequencies
@@ -1590,6 +1594,8 @@ class Tomography:
                   e_fwd_out=None,
                   e_scatt_out=None,
                   n_start_out=None,
+                  costs_out=None,
+                  steps_out=None,
                   block_id=None):
 
             nextra_dims = efields_ft.ndim - 3
@@ -1802,9 +1808,13 @@ class Tomography:
                           self.verbose,
                           print_fft_cache,
                           n_guess=self.n_guess,
-                          e_fwd_out=e_fwd_out,
-                          e_scatt_out=e_scatt_out,
-                          n_start_out=n_start_out,
+                          e_fwd_out=self.store.efwd if self.save_auxiliary_fields else None,
+                          e_scatt_out=self.store.escatt if self.save_auxiliary_fields else None,
+                          n_start_out=self.store.n_start if self.save_auxiliary_fields and
+                                                            self.n_guess is None
+                                                            else None,
+                          costs_out=self.store.costs,
+                          steps_out=self.store.steps,
                           chunks=(1,) * self.nextra_dims + self.n_shape,
                           dtype=np.complex64 if self.save_float32 else complex,
                           )
