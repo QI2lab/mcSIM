@@ -562,8 +562,8 @@ class SimImageSet:
                            "affine_xform_recon_2_raw_data_roi": np.asarray(xform_recon2raw).tolist(),
                            "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_recon2cam_roi).tolist(),
                            "affine_xform_recon_2_raw_camera": np.asarray(xform_recon2cam).tolist(),
-                           "data_roi": np.asarray(data_roi).tolist(),
-                           "camera_roi": np.asarray(cam_roi).tolist(),
+                           "data_roi": np.array(data_roi).tolist(),
+                           "camera_roi": np.array(cam_roi).tolist(),
                            "coordinate_order": "yx"
                            }
 

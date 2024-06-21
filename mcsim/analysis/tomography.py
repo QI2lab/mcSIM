@@ -399,9 +399,6 @@ class Tomography:
         # ########################
         # ROI and affine transformations
         # ########################
-        self.data_roi = data_roi
-        self.cam_roi = cam_roi
-
         # for reconstruction, using FFT induced coordinates, i.e. zero is at array index (ny // 2, nx // 2)
         # for matrix, using image coordinates (0, 1, ..., N - 1)
         # note, due to order of operations -n//2 =/= - (n//2) when nx is odd
@@ -436,27 +433,25 @@ class Tomography:
 
         xform_odt_recon_to_cam_roi = None
         xform_odt_recon_to_full = None
-        if self.data_roi is not None:
+        if data_roi is not None:
             # transform from data roi pixels to camera roi pixels
-            odt_recon_roi = deepcopy(self.data_roi)
-            xform_process_roi_to_cam_roi = params2xform([1, 0, odt_recon_roi[0],
-                                                         1, 0, odt_recon_roi[2]])
+            xform_process_roi_to_cam_roi = params2xform([1, 0, data_roi[0],
+                                                         1, 0, data_roi[2]])
             xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
 
-            if self.cam_roi is not None:
-                # todo: is there a problem with this transform?
+            if cam_roi is not None:
                 # transform from camera roi to full camera chip
-                xform_cam_roi_to_full = params2xform([1, 0, self.cam_roi[0],
-                                                      1, 0, self.cam_roi[2]])
+                xform_cam_roi_to_full = params2xform([1, 0, cam_roi[0],
+                                                      1, 0, cam_roi[2]])
                 xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
 
         # store all transforms in JSON serializable form
         self.xform_dict = {"affine_xform_recon_pix2coords": np.asarray(affine_xform_recon_pix2coords).tolist(),
-                           "affine_xform_recon_2_raw_process_roi": np.asarray(xform_recon2raw_roi).tolist(),
+                           "affine_xform_recon_2_raw_data_roi": np.asarray(xform_recon2raw_roi).tolist(),
                            "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_odt_recon_to_cam_roi).tolist(),
                            "affine_xform_recon_2_raw_camera": np.asarray(xform_odt_recon_to_full).tolist(),
-                           "processing roi": np.asarray(self.data_roi).tolist(),
-                           "camera roi": np.asarray(self.cam_roi).tolist(),
+                           "data_roi": np.array(data_roi).tolist(),
+                           "camera_roi": np.array(cam_roi).tolist(),
                            "coordinate_order": "yx"
                            }
 
