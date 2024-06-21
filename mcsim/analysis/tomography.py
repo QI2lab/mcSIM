@@ -677,6 +677,7 @@ class Tomography:
                     print(f"{k:s} {e}")
 
     def save_projections(self,
+                         overwrite: bool = True,
                          compressor: Codec = Zlib(),
                          **kwargs
                          ):
@@ -693,7 +694,8 @@ class Tomography:
             future.append(da.max(da.real(da.from_zarr(self.store.n)), axis=axis).to_zarr(self.store.store.path,
                                                                                          component=f"n_max{label:s}",
                                                                                          compute=False,
-                                                                                         compressor=compressor)
+                                                                                         compressor=compressor,
+                                                                                         overwrite=overwrite)
                           )
 
         with LocalCluster(**kwargs) as cluster, Client(cluster) as client:
@@ -1461,6 +1463,7 @@ class Tomography:
 
     def reconstruct_n(self,
                       use_gpu: bool = False,
+                      overwrite: bool = True,
                       print_fft_cache: bool = False,
                       processes: bool = False,
                       n_workers: int = 1,
