@@ -207,13 +207,6 @@ class Tomography:
         self.model = model
 
         # ########################
-        # ROI and transformation info
-        # ########################
-        self.xform_dict = None
-        self.data_roi = data_roi
-        self.cam_roi = cam_roi
-
-        # ########################
         # images
         # ########################
         if not isinstance(imgs_raw, da.core.Array):
@@ -345,6 +338,12 @@ class Tomography:
         # ########################
         # affine transformation from reconstruction coordinates to pixel indices
         # ########################
+        # ########################
+        # ROI and affine transformations
+        # ########################
+        self.data_roi = data_roi
+        self.cam_roi = cam_roi
+
         # for reconstruction, using FFT induced coordinates, i.e. zero is at array index (ny // 2, nx // 2)
         # for matrix, using image coordinates (0, 1, ..., N - 1)
         # note, due to order of operations -n//2 =/= - (n//2) when nx is odd
@@ -377,6 +376,7 @@ class Tomography:
         # ############################
         # construct affine tranforms between reconstructed data and camera pixels
         # ############################
+        # todo: want to change order of affine xforms to use (y, x) instead of (x, y)
         # affine transformation from camera ROI coordinates in um to pixel indices
         xform_raw_roi_pix2coords = params2xform([self.dxy, 0, -(self.n_shape[-1] // 2) * self.dxy,
                                                  self.dxy, 0, -(self.n_shape[-2] // 2) * self.dxy])
@@ -407,7 +407,8 @@ class Tomography:
                            "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_odt_recon_to_cam_roi).tolist(),
                            "affine_xform_recon_2_raw_camera": np.asarray(xform_odt_recon_to_full).tolist(),
                            "processing roi": np.asarray(self.data_roi).tolist(),
-                           "camera roi": np.asarray(self.cam_roi).tolist()
+                           "camera roi": np.asarray(self.cam_roi).tolist(),
+                           "coordinate_order": "xy"
                            }
 
     @classmethod
@@ -2991,16 +2992,15 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                         [1, 0, 0],
                         [0, 0, 1]])
     try:
-        affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
+        affine_recon2cam_xy = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
     except KeyError:
         try:
-            affine_recon2cam_xy = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
+            affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
         except KeyError:
             affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
 
     try:
         affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
-        # affine_cam2recon = inv(affine_recon2cam)
     except TypeError:
         affine_recon2cam = params2xform([1, 0, 0, 1, 0, 0])
 
@@ -3235,7 +3235,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              scale=scale,
                              translate=(zoffset, 0, 0),
                              colormap=real_cmap,
-                             # affine=affine_cam2recon,
                              contrast_limits=[0, 4096],
                              name=f"{prefix:s}raw images",
                              )
