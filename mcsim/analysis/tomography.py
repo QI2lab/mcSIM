@@ -219,6 +219,7 @@ class Tomography:
         # convert to photons
         self.imgs_raw = (imgs_raw.astype(float) - offset) / gain
         self.npatterns, self.ny, self.nx = imgs_raw.shape[-3:]
+        self.extra_shape = imgs_raw.shape[:-3]
         self.nextra_dims = imgs_raw.ndim - 3
 
         # ########################
@@ -284,18 +285,20 @@ class Tomography:
 
         # ########################
         # correction parameters
+        # parameter arrays should be broadcastable to same size as image arrays
         # ########################
         # self.phase_offsets = phase_offsets
+        # logic
         self.fit_phases = fit_phases
         self.fit_translations = fit_translations
         self.translation_thresh = translation_thresh
+        self.fit_phase_profile = fit_phase_profile
+        self.save_auxiliary_fields = save_auxiliary_fields
+        # arrays
         self.translations = np.zeros((1,) * self.nextra_dims + (self.npatterns, 1, 1, 2), dtype=float)
         self.translations_bg = np.zeros_like(self.translations)
         self.phase_params = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1), dtype=complex)
         self.phase_params_bg = np.ones_like(self.phase_params)
-        self.fit_phase_profile = fit_phase_profile
-
-        self.save_auxiliary_fields = save_auxiliary_fields
 
         # electric fields
         self.efields_ft = None
@@ -325,9 +328,7 @@ class Tomography:
                                    tukey(self.nx, alpha=0.1))
         self.apodization = apodization
 
-        self.ctf = np.expand_dims(np.sqrt(self.fxs[None, :] ** 2 +
-                                          self.fys[:, None] ** 2) <= self.fmax,
-                                  axis=tuple(range(self.nextra_dims)) + (-3,))
+        self.ctf = (np.sqrt(self.fxs[None, :] ** 2 + self.fys[:, None] ** 2) <= self.fmax).astype(complex)
 
         # ########################
         # values passed through to RI reconstruction
@@ -351,13 +352,6 @@ class Tomography:
             affine_xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1],
                                                           self.drs_n[-2], 0, -(self.n_shape[-2] // 2) * self.drs_n[-2]])
         else:
-            # if not (self.ny / self.n_shape[1]).is_integer():
-            #     raise ValueError()
-            # if not (self.nx / self.n_shape[2]).is_integer():
-            #     raise ValueError()
-            #
-            # nbin_y = int(self.ny // self.n_shape[1])
-            # nbin_x = int(self.nx // self.n_shape[2])
             nbin_y = 1
             nbin_x = 1
 
@@ -1500,15 +1494,16 @@ class Tomography:
         # ############################
         # check arrays are chunked by volume
         # ############################
-        # todo: rechunk here if necessary ...
         if self.efields_ft.chunksize[-3] != self.npatterns:
-            raise ValueError("")
+            raise ValueError(f"Chunksize along the pattern direction was not equal to the number of patterns "
+                             f"{self.efields_ft.chunksize[-3]:d} != {self.npatterns:d}")
 
         if self.efield_bg_ft.chunksize[-3] != self.npatterns:
-            raise ValueError("")
+            raise ValueError(f"Chunksize along the pattern direction was not equal to the number of patterns "
+                             f"{self.efields_bg_ft.chunksize[-3]:d} != {self.npatterns:d}")
 
         # ############################
-        # compute information we need for reconstructions e.g. linear models and dz_final
+        # compute information we need for reconstructions
         # ############################
         # todo: want this based on pupil function defined in init
         fx_atf = xp.fft.fftfreq(self.n_shape[-1], self.drs_n[-1])
@@ -1770,21 +1765,17 @@ class Tomography:
             # ################
             if e_fwd_out is not None:
                 tstart_efwd = perf_counter()
-                if verbose:
-                    print("computing forward model")
 
                 if optimizer == "born" or optimizer == "rytov":
                     e_fwd_out[block_ind] = to_cpu(ift2(model.fwd_model(ft3(get_v(n, no, wavelength)))))
                 else:
                     slices = (slice(0, 1), slice(-1, None), slice(None), slice(None))  # [0, -1, :, :]
-
-                    tstart_efwd = perf_counter()
                     for ii in range(nimgs):
                         ind_now = block_ind + (ii,)
                         e_fwd_out[ind_now] = to_cpu(model.fwd_model(n.squeeze(), inds=[ii])[slices]).squeeze()
 
                 if verbose:
-                    print(f"computed forward model in {perf_counter() - tstart_efwd:.2f}s")
+                    print(f"stored forward model in {perf_counter() - tstart_efwd:.2f}s")
 
             if use_gpu and print_fft_cache:
                 print(f"gpu memory usage after inference = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
