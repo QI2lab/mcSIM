@@ -492,8 +492,16 @@ class Tomography:
                 kwargs[k] = np.array(z[k])
 
         # correct any attributes that were not saved
-        kwargs["imgs_raw"] = da.zeros((1,) * z.attrs["nextra_dims"] +
-                                      (z.attrs["npatterns"], z.attrs["ny"], z.attrs["nx"]))
+        if hasattr(z, "efields_ft"):
+            kwargs["imgs_raw"] = da.zeros(z.efields_ft.shape,
+                                          chunks=z.efields_ft.chunks,
+                                          dtype=float)
+        else:
+            kwargs["imgs_raw"] = da.zeros((1,) * z.attrs["nextra_dims"] +
+                                          (z.attrs["npatterns"], z.attrs["ny"], z.attrs["nx"]),
+                                          chunks=(1,) * z.attrs["nextra_dims"] +
+                                          (z.attrs["npatterns"], z.attrs["ny"], z.attrs["nx"])
+                                          )
 
         # load kwargs passed through to other functions
         kwargs.update(z.attrs["reconstruction_settings"])
