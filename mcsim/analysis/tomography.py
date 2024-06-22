@@ -1454,29 +1454,31 @@ class Tomography:
             # #########################
             # compute
             # #########################
+            # todo: want to define these arrays in init ... but can't get to_zarr() to work then
             future = [da.map_blocks(to_cpu,
                               holograms_ft,
-                                    dtype=complex).to_zarr(self.store.store.path,
-                                                           component="efields_ft",
-                                                           compute=False,
-                                                           compressor=compressor),
+                                    dtype=np.complex64 if self.save_float32 else complex,
+                                    ).to_zarr(self.store.store.path,
+                                              component="efields_ft",
+                                              compute=False,
+                                              compressor=self.compressor),
                       da.map_blocks(to_cpu,
                               holograms_ft_bg,
-                                    dtype=complex).to_zarr(self.store.store.path,
-                                                           component="efield_bg_ft",
-                                                           compute=False,
-                                                           compressor=compressor),
+                                    dtype=np.complex64 if self.save_float32 else complex,
+                                    ).to_zarr(self.store.store.path,
+                                              component="efield_bg_ft",
+                                              compute=False,
+                                              compressor=self.compressor),
                       da.map_blocks(to_cpu,
                                     phase_prof,
-                                    dtype=complex).to_zarr(self.store.store.path,
-                                                           component="phase_correction_profile",
-                                                           compute=False,
-                                                           compressor=compressor)
+                                    dtype=np.complex64 if self.save_float32 else complex,
+                                    ).to_zarr(self.store.store.path,
+                                              component="phase_correction_profile",
+                                              compute=False,
+                                              compressor=self.compressor)
                       ]
             dask.compute(*future)
 
-            self.efields_ft = da.from_zarr(self.store["efields_ft"])
-            self.efield_bg_ft = da.from_zarr(self.store["efield_bg_ft"])
             if self.save_dir is not None:
                 save_dask_logs(client, self.save_dir, prefix="preprocessing_")
                 client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
@@ -1510,6 +1512,8 @@ class Tomography:
         else:
             xp = np
 
+        self.efields_ft = da.from_zarr(self.store.efields_ft)
+        self.efield_bg_ft = da.from_zarr(self.store.efield_bg_ft)
 
         # ############################
         # get beam frequencies
