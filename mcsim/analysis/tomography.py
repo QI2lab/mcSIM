@@ -18,7 +18,7 @@ from scipy.signal.windows import tukey, hann
 # parallelization
 from dask.config import set as dask_cfg_set
 from dask import delayed
-from dask import compute as dcompute
+import dask
 import dask.array as da
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster
@@ -611,30 +611,17 @@ class Tomography:
     def save(self,
              attributes: Optional[dict] = None):
         """
-        Save information from instance to zarr file
+        Save information from instance to zarr file, except for dask arrays. NumPy arrays are
+        stored as new zarr arrays. Other data types are stored as zarr attributes
 
-        :param attributes:
+        :param attributes: dictionary of additional items to be saved as zarr arrays or attributes
         :return:
         """
 
         if attributes is None:
             attributes = {}
 
-        # handle lists of arrays
-        stackable_keys = ["hologram_frqs",
-                          "hologram_frqs_bg"
-                          ]
-        for k in stackable_keys:
-            try:
-                stack = np.stack(getattr(self, k), axis=-3)
-            except TypeError:
-                stack = None
-
-            self.store.array(k,
-                             stack,
-                             compressor=self.compressor,
-                             dtype=float)
-
+        # store beam frequencies
         try:
             stack = np.stack(self.get_beam_frqs(), axis=-3)
         except np.AxisError:
@@ -645,23 +632,27 @@ class Tomography:
                          compressor=self.compressor,
                          dtype=float)
 
-        # save everything else
+        # store everything else
         for dictionary in [self.__dict__, attributes]:
             for k, v in dictionary.items():
-                if k in stackable_keys:
-                    continue
+                if k in ["hologram_frqs", "hologram_frqs_bg"]:
+                    try:
+                        stack = np.stack(getattr(self, k), axis=-3)
+                    except TypeError:
+                        stack = None
+
+                    self.store.array(k,
+                                     stack,
+                                     compressor=self.compressor,
+                                     dtype=float)
+
                 try:
                     if isinstance(v, array):
                         if v.size > 10:
-                            if v.dtype == bool:
-                                c = packbits.PackBits()
-                            else:
-                                c = self.compressor
-
                             # todo: ensure reasonable chunk size
                             self.store.array(k,
                                              to_cpu(v),
-                                             compressor=c,
+                                             compressor=packbits.PackBits() if v.dtype == bool else self.compressor,
                                              dtype=v.dtype)
                         else:
                             self.store.attrs[k] = to_cpu(v).tolist()
@@ -674,8 +665,11 @@ class Tomography:
                         if len(v) > 30:  # don't store long lists
                             raise TypeError()
                         self.store.attrs[k] = v
-                    else:
+                    elif isinstance(v, (dask.array.Array, Codec, zarr.hierarchy.Group)):
                         pass
+                    else:
+                        if self.verbose:
+                            print(f"did not save key {k:s} of unsupported type {type(v)}")
 
                 except TypeError as e:
                     print(f"{k:s} {e}")
@@ -704,7 +698,7 @@ class Tomography:
                           )
 
         with LocalCluster(**kwargs) as cluster, Client(cluster) as client:
-            dcompute(*future)
+            dask.compute(*future)
 
         self.timing["mips_processing_time"] = perf_counter() - tstart_proj
         if self.verbose:
@@ -963,7 +957,7 @@ class Tomography:
                             iraw = self.imgs_raw[slice_start].squeeze(axis=axes_start)
                             h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs]
 
-                        dcompute([delayed(plot)(iraw[ii],
+                        dask.compute([delayed(plot)(iraw[ii],
                                                 h[ii],
                                                 self.fxs,
                                                 self.fys,
@@ -1489,7 +1483,7 @@ class Tomography:
                                                            compute=False,
                                                            compressor=compressor)
                       ]
-            dcompute(*future)
+            dask.compute(*future)
 
             self.efields_ft = da.from_zarr(self.store["efields_ft"])
             self.efield_bg_ft = da.from_zarr(self.store["efield_bg_ft"])
@@ -1877,7 +1871,7 @@ class Tomography:
                 if self.verbose:
                     print(cluster.dashboard_link)
 
-                dcompute([n.to_zarr(self.store.store.path,
+                dask.compute([n.to_zarr(self.store.store.path,
                                     component="n",
                                     compute=False,
                                     compressor=self.compressor,
@@ -3099,8 +3093,8 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
         if compute:
             with ProgressBar():
-                n_real, n_imag = dcompute([n_real, n_imag])[0]
-                n_start_real, n_start_imag = dcompute([n_start_real, n_start_imag])[0]
+                n_real, n_imag = dask.compute([n_real, n_imag])[0]
+                n_start_real, n_start_imag = dask.compute([n_start_real, n_start_imag])[0]
 
             # broadcast
             bcast_shape_n = np.broadcast_shapes(n_real.shape, bcast_shape)
@@ -3131,7 +3125,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
         if compute:
             with ProgressBar():
-                n_maxz, n_maxy, n_maxx = dcompute([n_maxz, n_maxy, n_maxx])[0]
+                n_maxz, n_maxy, n_maxx = dask.compute([n_maxz, n_maxy, n_maxx])[0]
 
             n_maxz = np.broadcast_to(n_maxz,
                                      np.broadcast_shapes(n_maxz.shape, bcast_shape))
@@ -3155,7 +3149,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
         if compute:
             with ProgressBar():
-                imgs = dcompute(imgs)[0]
+                imgs = dask.compute(imgs)[0]
 
             # broadcast raw images
             bcast_shape_raw = np.broadcast_shapes(imgs.shape, bcast_shape)
@@ -3198,7 +3192,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         if compute:
             with ProgressBar():
                 e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff = \
-                    dcompute([e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff])[0]
+                    dask.compute([e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff])[0]
 
             # broadcast electric fields
             bcast_shape_e = np.broadcast_shapes(e_abs.shape, bcast_shape)
@@ -3223,7 +3217,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
         if compute:
             with ProgressBar():
-                escatt_real, escatt_imag = dcompute([escatt_real, escatt_imag])[0]
+                escatt_real, escatt_imag = dask.compute([escatt_real, escatt_imag])[0]
 
             # this can be a different size due to multiplexing
             bcast_root_scatt = (1,) * n_extra_dims + (1, nz, 1, 1)
@@ -3253,7 +3247,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         if compute:
             with ProgressBar():
                 e_fwd_abs, e_fwd_angle, efwd_ebg_abs_diff, efwd_ebg_phase_diff = \
-                dcompute([e_fwd_abs, e_fwd_angle, efwd_ebg_abs_diff, efwd_ebg_phase_diff])[0]
+                dask.compute([e_fwd_abs, e_fwd_angle, efwd_ebg_abs_diff, efwd_ebg_phase_diff])[0]
 
             # broadcast
             bcast_shape_efwd = np.broadcast_shapes(e_fwd_abs.shape, bcast_shape)
@@ -3276,7 +3270,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             pcorr_angle = np.ones_like(pcorr_abs)
 
         if compute:
-            pcorr_abs, pcorr_angle = dcompute([pcorr_abs, pcorr_angle])[0]
+            pcorr_abs, pcorr_angle = dask.compute([pcorr_abs, pcorr_angle])[0]
 
             bcast_shape_pcorr = np.broadcast_shapes(pcorr_abs.shape, bcast_shape)
             pcorr_abs = np.broadcast_to(pcorr_abs, bcast_shape_pcorr)
