@@ -163,7 +163,10 @@ class Tomography:
           For better compression, use bz2.BZ2(), although this is much slower.
         :param save_float32:
         :param step:
-        :param reconstruction_kwargs: settings passed through to RI reconstructor
+        :param reconstruction_kwargs: Additional keyword arguments are passed through to both the constructor
+          and the run() method of the optimizer. These are used to e.g. set the strength of TV regularization,
+          the number of iterations, etc. See Optimizer, RIOptimizer, and classes inheriting from RIOptimizer
+          for more details.
         """
         self.verbose = verbose
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
@@ -462,14 +465,15 @@ class Tomography:
                            "coordinate_order": "yx"
                            }
 
+
     @classmethod
     def load_file(cls,
                   location: Union[str, Path, zarr.hierarchy.Group]):
         """
-        Instantiated class from zarr store
+        Instantiate class from zarr store
 
         :param location:
-        :return:
+        :return instance:
         """
 
         if isinstance(location, (Path, str)):
@@ -678,13 +682,12 @@ class Tomography:
 
     def save_projections(self,
                          overwrite: bool = True,
-                         compressor: Codec = Zlib(),
                          **kwargs
                          ):
         """
         Store orthogonal projections of the refractive index
 
-        :param compressor:
+        :param overwrite: whether to overwrite max-z projections if they already exist
         :return:
         """
 
@@ -696,7 +699,7 @@ class Tomography:
             future.append(da.max(da.real(da.from_zarr(self.store.n)), axis=axis).to_zarr(self.store.store.path,
                                                                                          component=f"n_max{label:s}",
                                                                                          compute=False,
-                                                                                         compressor=compressor,
+                                                                                         compressor=self.compressor,
                                                                                          overwrite=overwrite)
                           )
 
@@ -710,7 +713,6 @@ class Tomography:
 
     def estimate_hologram_frqs(self,
                                save: bool = False,
-                               fit_on_gpu: bool = False,
                                processes: bool = True,
                                n_workers: int = 3,
                                threads_per_worker: int = 1,
@@ -722,7 +724,6 @@ class Tomography:
         use the function plot_image()
 
         :param save:
-        :param fit_on_gpu: do fitting on GPU with gpufit. Otherwise, use CPU.
         :param processes:
         :param n_workers:
         :param threads_per_worker:
@@ -734,12 +735,11 @@ class Tomography:
 
         # todo: why not combine this function with unmix_holograms()?
         # todo: can I set this in cluster?
-        with dask_cfg_set({"distributed.scheduler.worker-saturation": worker_saturation,
-                           "logging.distributed": "error"}):
+        with dask_cfg_set({"distributed.scheduler.worker-saturation": worker_saturation}):
             with LocalCluster(n_workers=n_workers,
                               processes=processes,
-                              threads_per_worker=threads_per_worker,
-                              silence_logs=True) as cluster, Client(cluster) as client:
+                              threads_per_worker=threads_per_worker) as cluster, Client(cluster) as client:
+
                 if self.verbose:
                     print(cluster.dashboard_link)
 
@@ -826,70 +826,27 @@ class Tomography:
 
                     return centers
 
-                def fit_rois_gpu(rois_cut,
-                                 roi_size_pix: int):
-                    data_shape = (np.prod(rois_cut.shape[:-2]), roi_size_pix ** 2)
-                    data = rois_cut.astype(np.float32).compute().reshape(data_shape)
+                if fit_data_imgs:
+                    centers = da.map_blocks(fit_rois_cpu,
+                                            rois_cut,
+                                            drop_axis=(-1, -2),
+                                            new_axis=(-1),
+                                            chunks=(rois_cut.chunksize[:-2] + (2,)),
+                                            dtype=float,
+                                            meta=np.array((), dtype=float)).compute()
+                    cx = centers[..., 0]
+                    cy = centers[..., 1]
 
-                    init_params = np.zeros((data_shape[0], 5), dtype=np.float32)
-
-                    # todo: can I use model to do this?
-                    # amplitude
-                    init_params[:, 0] = data.max(axis=-1)
-
-                    # center
-                    imax = np.argmax(data, axis=-1)
-                    iy_max, ix_max = np.unravel_index(imax, (roi_size_pix, roi_size_pix))
-                    init_params[:, 1] = ix_max
-                    init_params[:, 2] = iy_max
-
-                    # size
-                    init_params[:, 3] = 1
-                    init_params[:, 4] = data.min(axis=-1)
-
-                    fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data,
-                                                                             None,
-                                                                             gf.ModelID.GAUSS_2D,
-                                                                             init_params,
-                                                                             tolerance=1e-8,
-                                                                             max_number_iterations=100,
-                                                                             estimator_id=gf.EstimatorID.LSE)
-                    cx = fit_params[:, 1].reshape(rois_cut.shape[:-2])
-                    cy = fit_params[:, 2].reshape(rois_cut.shape[:-2])
-
-                    return cx, cy, fit_params, init_params, fit_states
-
-                if not fit_on_gpu:
-                    if fit_data_imgs:
-                        centers = da.map_blocks(fit_rois_cpu,
-                                                rois_cut,
-                                                drop_axis=(-1, -2),
-                                                new_axis=(-1),
-                                                chunks=(rois_cut.chunksize[:-2] + (2,)),
-                                                dtype=float,
-                                                meta=np.array((), dtype=float)).compute()
-                        cx = centers[..., 0]
-                        cy = centers[..., 1]
-
-                    if not self.use_average_as_background:
-                        centers_bg = da.map_blocks(fit_rois_cpu,
-                                                   rois_cut_bg,
-                                                   drop_axis=(-1, -2),
-                                                   new_axis=(-1),
-                                                   chunks=(rois_cut_bg.chunksize[:-2] + (2,)),
-                                                   dtype=float,
-                                                   meta=np.array((), dtype=float)).compute()
-                        cx_bg = centers_bg[..., 0]
-                        cy_bg = centers_bg[..., 1]
-
-                else:
-                    if fit_data_imgs:
-                        cx, cy, fit_params, init_params, fit_states = fit_rois_gpu(rois_cut,
-                                                                                   self.freq_roi_size_pix)
-
-                    if not self.use_average_as_background:
-                        cx_bg, cy_bg, _, _, _ = fit_rois_gpu(rois_cut_bg,
-                                                             self.freq_roi_size_pix)
+                if not self.use_average_as_background:
+                    centers_bg = da.map_blocks(fit_rois_cpu,
+                                               rois_cut_bg,
+                                               drop_axis=(-1, -2),
+                                               new_axis=(-1),
+                                               chunks=(rois_cut_bg.chunksize[:-2] + (2,)),
+                                               dtype=float,
+                                               meta=np.array((), dtype=float)).compute()
+                    cx_bg = centers_bg[..., 0]
+                    cy_bg = centers_bg[..., 1]
 
                 # final frequencies
                 if fit_data_imgs:
@@ -1225,24 +1182,91 @@ class Tomography:
 
         return xform_dmd2frq
 
+    def unmix_holograms_v2(self,
+                           use_gpu: bool = False,
+                           processes: bool = False,
+                           **kwargs
+                           ):
+
+        xp = cp if use_gpu and cp else np
+
+        def solve(imgs,
+                  imgs_ref,
+                  fx_ref,
+                  fy_ref,
+                  dxy,
+                  fmax,
+                  threshold=0.,
+                  apodization=None,
+                  eft_out=None,
+                  phase_corr_out=None,
+                  phase_params_out=None,
+                  translations_out=None,
+                  block_id=None
+                  ):
+
+            if block_id is None:
+                block_ind = None
+                label = ""
+            else:
+                block_ind = block_id[:imgs.ndim - 3]
+                label = f"{block_id} "
+
+            hft = unmix_hologram(imgs, dxy, fmax, fx_ref, fy_ref, apodization)
+            hft_ref = unmix_hologram(imgs_ref, dxy, fmax, fx_ref, fy_ref, apodization)
+
+            # translation correction
+            habs_ft = ft2(abs(ift2(imgs)))
+            habs_ft_ref = ft2(abs(ift2(imgs)))
+            translations = fit_phase_ramp(habs_ft, habs_ft_ref, dxy, threshold)
+
+            ny, nx = hft.shape[-2:]
+            fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
+            fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
+            fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
+            fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
+
+            hft *= np.exp(2 * np.pi * 1j * (fx_bcastable * translations[..., 0] +
+                                            fy_bcastable * translations[..., 1]))
+
+            # global phase correction
+            phase_params = get_global_phase_shifts(hft, hft_ref)
+            hft *= phase_params
+
+            # other phase correction
+            pc = PhaseCorr(ift2(hft),
+                           ift2(hft_ref),
+                           tau_l1=1e3,
+                           escale=40.)
+            rpc = pc.run(xp.ones(hft.shape[-2:], dtype=complex),
+                         step=1e5,
+                         max_iterations=10,
+                         line_search=True,
+                         line_search_iter_limit=3,
+                         n_batch=3,
+                         compute_batch_grad_parallel=True,
+                         compute_cost=False,
+                         verbose=False,
+                         print_newline=False,
+                         )
+
+            phase_prof = rpc["x"]
+            hft = ft2(phase_prof * ift2(hft))
+
     def unmix_holograms(self,
                         use_gpu: bool = False,
                         processes: bool = False,
-                        compressor: Codec = Zlib(),
                         **kwargs):
         """
         Unmix and preprocess holograms. Additional kwargs are passed through to dask LocalCluster()
 
         :param use_gpu:
         :param processes:
-        :param compressor:
         :return:
         """
+        tstart_holos = perf_counter()
 
-        if use_gpu and cp:
-            xp = cp
-        else:
-            xp = np
+        xp = cp if use_gpu and cp else np
 
         with LocalCluster(processes=processes, **kwargs) as cluster, Client(cluster) as client:
             if self.verbose:
@@ -1483,20 +1507,16 @@ class Tomography:
                       print_fft_cache: bool = False,
                       processes: bool = False,
                       n_workers: int = 1,
-                      threads_per_worker: int = 1) -> (array, tuple, dict):
+                      **kwargs) -> (array, tuple, dict):
 
         """
-        Reconstruct refractive index using one of a several different models
-
-        Additional keyword arguments are passed through to both the constructor and the run() method of
-        the optimizer. These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
-        See Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details.
+        Reconstruct refractive index using one of a several different models Additional keyword arguments are
+        passed through to the dask scheduler
 
         :param use_gpu:
         :param print_fft_cache: optionally print memory usage of GPU FFT cache at each iteration
         :param processes:
         :param n_workers:
-        :param threads_per_worker:
         """
 
         tstart_recon = perf_counter()
@@ -1853,7 +1873,7 @@ class Tomography:
                            "temporary_directory": str(self.dask_tmp_dir)}):
             with LocalCluster(processes=processes,
                               n_workers=n_workers,
-                              threads_per_worker=threads_per_worker) as cluster, Client(cluster) as client:
+                              threads_per_worker=1) as cluster, Client(cluster) as client:
                 if self.verbose:
                     print(cluster.dashboard_link)
 
@@ -3629,6 +3649,7 @@ class PhaseCorr(Optimizer):
             y = xp.array(x, copy=True)
 
         return y
+
 
 def save_dask_logs(client,
                    root_dir: Union[str, Path],
