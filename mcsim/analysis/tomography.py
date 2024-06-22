@@ -2560,6 +2560,16 @@ class Tomography:
 
         return figh
 
+    def display_tomography_recon(self, **kwargs):
+        """
+        Display reconstruction in napari
+
+        :param kwargs:
+        :return:
+        """
+        return display_tomography_recon(self.store,
+                                        **kwargs)
+
 
 def cut_mask(img: array,
              mask: array,
