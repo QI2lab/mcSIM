@@ -6,7 +6,6 @@ reconstruction tasks are carried out with the tomography class
 from time import perf_counter
 import datetime
 from warnings import catch_warnings, simplefilter
-from copy import deepcopy
 from typing import Union, Optional
 from collections.abc import Sequence
 from inspect import getfullargspec
@@ -289,7 +288,7 @@ class Tomography:
         if self.hologram_frqs is None:
             self.nmax_multiplex = 1
         else:
-            self.nmax_multiplex = np.max([f.shape[0] for f in self.hologram_frqs])
+            self.nmax_multiplex = int(np.max([f.shape[0] for f in self.hologram_frqs]))
 
         self.hologram_frqs_bg = None
 
@@ -364,10 +363,8 @@ class Tomography:
                               dtype=complex)
 
         if not hasattr(self.store, "escatt"):
-            e_scatt_out_shape = list(self.imgs_raw.shape)
-            e_scatt_out_shape[-3] *= self.nmax_multiplex
             self.store.create("escatt",
-                              shape=e_scatt_out_shape,
+                              shape=self.imgs_raw.shape[:-3] + (self.nmax_multiplex, self.ny, self.nx),
                               chunks=(1,) * (self.imgs_raw.ndim - 2) + (self.ny, self.nx),
                               compressor=self.compressor,
                               dtype=complex)
@@ -1273,11 +1270,10 @@ class Tomography:
                                for a in range(self.nextra_dims)] +
                               [slice(None)] * 3)
 
+
             # #########################
             # get electric field from holograms
             # #########################
-            apodization = xp.asarray(self.apodization)
-
             # make broadcastable to same size as raw images so can use with dask array
             ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
                                        chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
@@ -1288,7 +1284,7 @@ class Tomography:
                                          2*self.fmax,
                                          ref_frq_da[..., 0],
                                          ref_frq_da[..., 1],
-                                         apodization=apodization,
+                                         apodization=self.apodization,
                                          dtype=complex)
 
             # #########################
@@ -1306,7 +1302,7 @@ class Tomography:
                                                 2*self.fmax,
                                                 ref_frq_bg_da[..., 0],
                                                 ref_frq_bg_da[..., 1],
-                                                apodization=apodization,
+                                                apodization=self.apodization,
                                                 dtype=complex)
 
             # #########################
@@ -1314,19 +1310,13 @@ class Tomography:
             # #########################
             if self.fit_translations:
                 print("computing translations")
-
                 def _ft_abs(m: array) -> array: return ft2(abs(ift2(m)))
-
-                holograms_abs_ft = da.map_blocks(_ft_abs,
-                                                 holograms_ft,
-                                                 dtype=complex)
+                holograms_abs_ft = da.map_blocks(_ft_abs,holograms_ft, dtype=complex)
 
                 if self.use_average_as_background:
                     holograms_abs_ft_bg = holograms_abs_ft
                 else:
-                    holograms_abs_ft_bg = da.map_blocks(_ft_abs,
-                                                        holograms_ft_bg,
-                                                        dtype=complex)
+                    holograms_abs_ft_bg = da.map_blocks(_ft_abs,holograms_ft_bg, dtype=complex)
 
                 # fit phase ramp in holograms ft
                 self.translations = da.map_blocks(fit_phase_ramp,
@@ -1528,16 +1518,15 @@ class Tomography:
         mean_beam_frqs = [np.mean(f, axis=tuple(range(self.nextra_dims))) for f in beam_frqs]
 
         # convert to array ... for images which don't have enough multiplexed frequencies, replaced by inf
-        nmax_multiplex = np.max([len(f) for f in mean_beam_frqs])
-        mean_beam_frqs_arr = np.ones((nmax_multiplex, self.npatterns, 3), dtype=float) * np.inf
+        mean_beam_frqs_arr = np.ones((self.nmax_multiplex , self.npatterns, 3), dtype=float) * np.inf
         for aaa in range(self.npatterns):
             mean_beam_frqs_arr[:, aaa, :] = mean_beam_frqs[aaa]
 
         # beam frequencies with multiplexed freqs raveled
-        mean_beam_frqs_no_multi = np.zeros([self.npatterns * nmax_multiplex, 3])
+        mean_beam_frqs_no_multi = np.zeros([self.npatterns * self.nmax_multiplex, 3])
         for ii in range(self.npatterns):
-            for jj in range(nmax_multiplex):
-                mean_beam_frqs_no_multi[ii * nmax_multiplex + jj, :] = mean_beam_frqs_arr[jj, ii]
+            for jj in range(self.nmax_multiplex):
+                mean_beam_frqs_no_multi[ii * self.nmax_multiplex + jj, :] = mean_beam_frqs_arr[jj, ii]
 
         # ############################
         # check arrays are chunked by volume
@@ -1583,7 +1572,7 @@ class Tomography:
         if self.verbose:
             print(f"computing index of refraction for {int(np.prod(self.imgs_raw.shape[:-3])):d} images "
                   f"using model {self.model:s}.\n"
-                  f"Image size = {self.npatterns} x {self.ny:d} x {self.nx:d},\n"
+                  f"image size = {self.npatterns} x {self.ny:d} x {self.nx:d},\n"
                   f"reconstruction size = {self.n_shape[0]:d} x {self.n_shape[1]:d} x {self.n_shape[2]:d}")
 
         # #############################
@@ -1645,6 +1634,8 @@ class Tomography:
             nextra_dims = efields_ft.ndim - 3
             dims = tuple(range(nextra_dims))
             nimgs, ny, nx = efields_ft.shape[-3:]
+
+            nmax_multiplex = np.max([len(f) for f in beam_frqs])
 
             efields_ft = xp.asarray(efields_ft.squeeze(axis=dims))
             efields_bg_ft = xp.asarray(efields_bg_ft.squeeze(axis=dims))
