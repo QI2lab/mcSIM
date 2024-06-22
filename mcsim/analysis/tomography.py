@@ -184,6 +184,13 @@ class Tomography:
         self.compressor = compressor
         self.save_float32 = bool(save_float32)
 
+        self.timing = {"fit_frequency_time": None,
+                       "unmix_hologram_time": None,
+                       "plot_diagnostics_time": None,
+                       "reconstruction_time": None,
+                       "mips_processing_time": None
+                       }
+
         # ########################
         # physical parameters
         # ########################
@@ -681,6 +688,8 @@ class Tomography:
         :return:
         """
 
+        tstart_proj = perf_counter()
+
         future = []
         for axis, label in zip([-3, -2, -1],
                                ["z", "y", "x"]):
@@ -693,6 +702,11 @@ class Tomography:
 
         with LocalCluster(**kwargs) as cluster, Client(cluster) as client:
             dcompute(*future)
+
+        self.timing["mips_processing_time"] = perf_counter() - tstart_proj
+        if self.verbose:
+            print(f"MIPs time: {parse_time(self.timing['mips_processing_time'])[1]:s}")
+
 
     def estimate_hologram_frqs(self,
                                save: bool = False,
@@ -715,6 +729,9 @@ class Tomography:
         :param worker_saturation:
         :return:
         """
+
+        tstart_est_frqs = perf_counter()
+
         # todo: why not combine this function with unmix_holograms()?
         # todo: can I set this in cluster?
         with dask_cfg_set({"distributed.scheduler.worker-saturation": worker_saturation,
@@ -1002,7 +1019,10 @@ class Tomography:
 
                     # write log info
                     save_dask_logs(client, frq_dir)
-                    client.profile(filename=frq_dir / f"frequency_fitting_dask_profile.html")
+
+                    self.timing["fit_frequency_time"] = perf_counter() - tstart_est_frqs
+                    if self.verbose:
+                        print(f"calibration time: {parse_time(self.timing['fit_frequency_time'])[1]:s}")
 
     def get_beam_frqs(self) -> list[np.ndarray]:
         """
@@ -1449,10 +1469,13 @@ class Tomography:
 
             self.efields_ft = da.from_zarr(self.store["efields_ft"])
             self.efield_bg_ft = da.from_zarr(self.store["efield_bg_ft"])
+            if self.save_dir is not None:
+                save_dask_logs(client, self.save_dir, prefix="preprocessing_")
+                client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
 
-                if self.save_dir is not None:
-                    save_dask_logs(client, self.save_dir, prefix="preprocessing_")
-                    client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
+            self.timing["unmix_hologram_time"] = perf_counter() - tstart_holos
+            if self.verbose:
+                print(f"unmixed holograms and fit phases in {parse_time(self.timing['unmix_hologram_time'])[1]}")
 
     def reconstruct_n(self,
                       use_gpu: bool = False,
@@ -1475,6 +1498,9 @@ class Tomography:
         :param n_workers:
         :param threads_per_worker:
         """
+
+        tstart_recon = perf_counter()
+
         if use_gpu and cp:
             xp = cp
         else:
@@ -1840,6 +1866,11 @@ class Tomography:
                 save_dask_logs(client, self.save_dir, prefix="")
                 client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
 
+                self.timing["reconstruction_time"] = perf_counter() - tstart_recon
+                if self.verbose:
+                    print(f"recon time: {parse_time(self.timing['reconstruction_time'])[1]:s}")
+
+
     def plot_translations(self,
                           time_axis: int = 1,
                           index: Optional[tuple[int]] = None,
@@ -2050,6 +2081,8 @@ class Tomography:
         :return:
         """
 
+        tstart_plot = perf_counter()
+
         context = {}
         if not interactive:
             context['interactive'] = False
@@ -2087,6 +2120,10 @@ class Tomography:
             plt.close(figh_ph)
             plt.close(figh_xl)
             plt.close(figh_sampling)
+
+        self.timing["plot_diagnostics_time"] = perf_counter() - tstart_plot
+        if self.verbose:
+            print(f"plotted diagnostics in: {parse_time(self.timing['plot_diagnostics_time'])[1]:s}")
 
     def plot_odt_sampling(self,
                           index: Optional[tuple[int]] = None,
