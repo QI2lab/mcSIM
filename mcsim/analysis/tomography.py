@@ -3514,12 +3514,12 @@ class PhaseCorr(Optimizer):
                  escale: float = 40.,
                  fit_magnitude: bool = True):
         super(PhaseCorr, self).__init__(e.shape[-3],
-                                        prox_parameters={"tau_l1": float(tau_l1)})
+                                        prox_parameters={"tau_l1": float(tau_l1),
+                                                         "fit_magnitude": bool(fit_magnitude)})
 
         self.e = e
         self.ebg = ebg
         self.escale = float(escale)
-        self.fit_magnitude = bool(fit_magnitude)
 
     def gradient(self,
                  x: array,
@@ -3560,7 +3560,7 @@ class PhaseCorr(Optimizer):
                        xp.exp(1j * xp.angle(ft_x)))
 
             y = ift2(ft_prox)
-            if not self.fit_magnitude:
+            if not self.prox_parameters["fit_magnitude"]:
                 y = xp.exp(1j * xp.angle(y))
 
         else:
