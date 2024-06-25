@@ -358,6 +358,14 @@ class Tomography:
         #                   compressor=self.compressor,
         #                   dtype=np.complex64 if self.save_float32 else complex)
 
+        if not hasattr(self.store, "n"):
+            self.store.create("n",
+                              shape=self.imgs_raw.shape[:-3] + self.n_shape,
+                              chunks=(1,) * self.nextra_dims + self.n_shape,
+                              compressor=self.compressor,
+                              dtype=np.complex64 if self.save_float32 else complex
+                              )
+
         if not hasattr(self.store, "efwd"):
             self.store.create("efwd",
                               shape=self.imgs_raw.shape,
@@ -1427,7 +1435,6 @@ class Tomography:
 
     def reconstruct_n(self,
                       use_gpu: bool = False,
-                      overwrite: bool = True,
                       print_fft_cache: bool = False,
                       processes: bool = False,
                       n_workers: int = 1,
@@ -1536,12 +1543,6 @@ class Tomography:
         # #############################
         # reconstruction
         # #############################
-        n_size = self.n_shape
-        drs_n = self.drs_n
-        scattered_field_regularization = self.scattered_field_regularization
-        use_weighted_phase_unwrap = self.use_weighted_phase_unwrap
-        reconstruction_kwargs = self.reconstruction_settings
-
         def recon(efields_ft,
                   efields_bg_ft,
                   beam_frqs,
@@ -1556,10 +1557,16 @@ class Tomography:
                   optimizer,
                   verbose,
                   print_fft_cache,
+                  n_size,
+                  drs_n,
+                  scattered_field_regularization,
+                  use_weighted_phase_unwrap,
+                  reconstruction_kwargs,
                   n_guess=None,
                   e_fwd_out=None,
                   e_scatt_out=None,
                   n_start_out=None,
+                  n_out=None,
                   costs_out=None,
                   steps_out=None,
                   block_id=None):
@@ -1569,6 +1576,11 @@ class Tomography:
             nimgs, ny, nx = efields_ft.shape[-3:]
 
             nmax_multiplex = np.max([len(f) for f in beam_frqs])
+
+            if isinstance(efields_ft, dask.array.Array):
+                efields_ft = efields_ft.compute()
+            if isinstance(efields_bg_ft, dask.array.Array):
+                efields_bg_ft = efields_bg_ft.compute()
 
             efields_ft = xp.asarray(efields_ft.squeeze(axis=dims))
             efields_bg_ft = xp.asarray(efields_bg_ft.squeeze(axis=dims))
@@ -1755,12 +1767,19 @@ class Tomography:
                 print(f"gpu memory usage after inference = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
                 print(cp.fft.config.get_plan_cache())
 
-            return to_cpu(n).reshape((1,) * nextra_dims + n_size)
+
+            # ################
+            # store n
+            # ################
+            if n_out is not None:
+                n_out[block_ind] = to_cpu(n)
+            else:
+                return to_cpu(n).reshape((1,) * nextra_dims + n_size)
 
         # #######################
         # get refractive index
         # #######################
-        n = da.map_blocks(recon,
+        map_blocks_joblib(recon,
                           self.efields_ft,  # data
                           self.efield_bg_ft,  # background
                           mean_beam_frqs_arr,
@@ -1775,38 +1794,28 @@ class Tomography:
                           optimizer,
                           self.verbose,
                           print_fft_cache,
+                          self.n_shape,
+                          self.drs_n,
+                          self.scattered_field_regularization,
+                          self.use_weighted_phase_unwrap,
+                          self.reconstruction_settings,
                           n_guess=self.n_guess,
                           e_fwd_out=self.store.efwd if self.save_auxiliary_fields else None,
                           e_scatt_out=self.store.escatt if self.save_auxiliary_fields else None,
                           n_start_out=self.store.n_start if self.save_auxiliary_fields and
-                                                            self.n_guess is None
-                                                            else None,
+                                                            self.n_guess is None else None,
                           costs_out=self.store.costs,
                           steps_out=self.store.steps,
-                          chunks=(1,) * self.nextra_dims + self.n_shape,
-                          dtype=np.complex64 if self.save_float32 else complex,
+                          n_out=self.store.n,
+                          chunks=(1,) * self.nextra_dims + (None, None, None),
+                          n_workers=n_workers,
+                          processes=processes,
+                          verbose=False,
                           )
 
-        with dask_cfg_set({"distributed.scheduler.worker-saturation": 1,
-                           "temporary_directory": str(self.dask_tmp_dir)}):
-            with LocalCluster(processes=processes,
-                              n_workers=n_workers,
-                              threads_per_worker=1) as cluster, Client(cluster) as client:
-                if self.verbose:
-                    print(cluster.dashboard_link)
-
-                dask.compute([n.to_zarr(self.store.store.path,
-                                    component="n",
-                                    compute=False,
-                                    compressor=self.compressor,
-                                    overwrite=overwrite)])
-                # save profile
-                save_dask_logs(client, self.save_dir, prefix="")
-                client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
-
-                self.timing["reconstruction_time"] = perf_counter() - tstart_recon
-                if self.verbose:
-                    print(f"recon time: {parse_time(self.timing['reconstruction_time'])[1]:s}")
+        self.timing["reconstruction_time"] = perf_counter() - tstart_recon
+        if self.verbose:
+            print(f"recon time: {parse_time(self.timing['reconstruction_time'])[1]:s}")
 
 
     def plot_translations(self,
