@@ -1038,7 +1038,7 @@ class Tomography:
                           f"$1/M_x$ = {1 / xform_params[0]:.2f} mirror/$\mu m^{-1}$,"
                           f" $\\theta x$ = {xform_params[1] * 180 / np.pi:.2f} deg,"
                           f" $c_x$ = {xform_params[2]:.3f} $1/\mu m$\n"
-                          f"$1/M_y$ = {1 / xform_params[3]:.2f} mirror/$\mu m^{-1}$,"
+                          f"$1/M_y$ = {1 / xform_params[3]:.2f}" + "mirror/$\mu m^{-1}$,"
                           f" $\\theta y$ = {xform_params[4] * 180 / np.pi:.2f} deg,"
                           f" $c_y$ = {xform_params[5]:.3f} $1/\mu m$")
 
@@ -1462,7 +1462,7 @@ class Tomography:
         mean_beam_frqs = [np.mean(f, axis=tuple(range(self.nextra_dims))) for f in beam_frqs]
 
         # convert to array ... for images which don't have enough multiplexed frequencies, replaced by inf
-        mean_beam_frqs_arr = np.ones((self.nmax_multiplex , self.npatterns, 3), dtype=float) * np.inf
+        mean_beam_frqs_arr = np.ones((self.nmax_multiplex, self.npatterns, 3), dtype=float) * np.inf
         for aaa in range(self.npatterns):
             mean_beam_frqs_arr[:, aaa, :] = mean_beam_frqs[aaa]
 
@@ -1846,32 +1846,32 @@ class Tomography:
 
         # plot frequency differences
         ax = figh.add_subplot(1, 2, 1)
-        ax.plot(translations[..., 0], '.-', label="sig")
-        ax.plot(translations_bg[..., 0], label="bg")
+        ax.plot(translations[..., 0] / self.dxy, '.-', label="sig")
+        ax.plot(translations_bg[..., 0] / self.dxy, label="bg")
         ax.set_xlabel("time step")
-        ax.set_ylabel("x-position (um)")
+        ax.set_ylabel("x-position / dxy")
         ax.set_title("x-position")
 
         ax = figh.add_subplot(1, 2, 2)
-        ax.plot(translations[..., 1], '.-', label="sig")
-        ax.plot(translations_bg[..., 1], label="bg")
+        ax.plot(translations[..., 1] / self.dxy, '.-', label="sig")
+        ax.plot(translations_bg[..., 1] / self.dxy, label="bg")
         ax.set_xlabel("time step")
-        ax.set_ylabel("y-position (um)")
+        ax.set_ylabel("y-position / dxy")
         ax.set_title("y-position")
 
         return figh
 
     def plot_frqs(self,
-                  time_axis: int = 1,
+                  time_axis: int,
                   index: Optional[Sequence[int]] = None,
                   figsize: Sequence[float, float] = (30., 8.),
                   **kwargs) -> Figure:
         """
 
+        :param time_axis:
         :param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
           axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and
           the index could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
-        :param time_axis:
         :param figsize:
         :param kwargs: passed through to matplotlib.pyplot.figure
         :return:
@@ -1901,9 +1901,8 @@ class Tomography:
         # ####################################
         # hologram frequencies
         # ####################################
-
         # each element of list should have shape ntimes x nmultiplex x 2
-        hologram_frqs_mean = [np.mean(f, axis=1, keepdims=True) for f in self.hologram_frqs]
+        hologram_frqs_mean = [np.mean(f, axis=time_axis, keepdims=True) for f in self.hologram_frqs]
         hgram_frq_diffs = [(f - g)[slices].squeeze(axis=squeeze_axes)
                            for f, g in zip(self.hologram_frqs, hologram_frqs_mean)]
         # stack all hologram frqs
@@ -1911,7 +1910,7 @@ class Tomography:
 
         # shape = ntimes x 2
         ref_frq_diffs = (self.reference_frq - np.mean(self.reference_frq,
-                                                      axis=1,
+                                                      axis=time_axis,
                                                       keepdims=True))[ref_slices].squeeze(squeeze_axes)
 
         # plot
@@ -1919,27 +1918,18 @@ class Tomography:
         figh.suptitle(f"index={index}\nfrequency variation versus time")
 
         # plot frequency differences
-        ax = figh.add_subplot(1, 3, 1)
+        ax = figh.add_subplot(1, 2, 1)
         ax.plot(norm(hgram_frq_diffs, axis=-1) / self.dfx, '.-')
         ax.set_xlabel("time step")
-        ax.set_ylabel("(frequency - mean) / dfx")
+        ax.set_ylabel("|f - f_mean| / dfx")
         ax.set_title("hologram frequency deviation amplitude")
         ax.legend([f"{ii:d}" for ii in range(self.npatterns)])
 
-        # plot angles
-        angles_unwrapped = np.unwrap(np.angle(hgram_frq_diffs[..., 0] + 1j * hgram_frq_diffs[..., 1]))
-
-        ax = figh.add_subplot(1, 3, 2)
-        ax.plot(angles_unwrapped, '.-')
-        ax.set_xlabel("time step")
-        ax.set_ylabel("angle (rad)")
-        ax.set_title("hologram frequency deviation rotation")
-
         # plot mean frequency differences
-        ax = figh.add_subplot(1, 3, 3)
+        ax = figh.add_subplot(1, 2, 2)
         ax.plot(norm(ref_frq_diffs, axis=-1) / self.dfx, '.-')
         ax.set_xlabel("time step")
-        ax.set_ylabel("(frequency norm - mean) / dfx")
+        ax.set_ylabel("|fref - fref_mean| / dfx")
         ax.set_title("reference frequency deviation amplitude")
 
         return figh
@@ -3586,6 +3576,8 @@ def map_blocks_joblib(fn,
                       verbose=True,
                       **kwargs):
     """
+    Processes function along blocks of a chunked array with joblib. This is intended to be a replacement for
+    dask.array.map_blocks()
 
     :param fn: function to call on blocks
     :param args: first argument should be the main array to map blocks over. Subsequent arrays will also work
@@ -3629,6 +3621,7 @@ def map_blocks_joblib(fn,
                                      **kwargs)
                                      for ind in inds)
          )
+
     return r
 
 
