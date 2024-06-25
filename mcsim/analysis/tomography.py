@@ -1204,197 +1204,195 @@ class Tomography:
         """
         tstart_holos = perf_counter()
 
+        def _ft_abs(m: array) -> array:
+            return ft2(abs(ift2(m)))
+
+        def translate(e_ft, dxs, dys, fxs, fys):
+            e_ft_out = xp.array(e_ft, copy=True)
+
+            fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
+            fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
+
+            e_ft_out *= np.exp(2 * np.pi * 1j * (fx_bcastable * dxs +
+                                                 fy_bcastable * dys))
+
+            return e_ft_out
+
+        def correct_phase_profile(eft, ebg_ft, block_id=None):
+            nextra_dims = eft.ndim - 3
+            extra_dims = tuple(range(eft.ndim - 3))
+
+            pc = PhaseCorr(ift2(eft.squeeze(extra_dims)),
+                           ift2(ebg_ft.squeeze(extra_dims)),
+                           tau_l1=1e3,
+                           escale=40.,
+                           fit_magnitude=True)
+            rpc = pc.run(xp.ones(eft.shape[-2:], dtype=complex),
+                         step=1e5,
+                         max_iterations=10,
+                         line_search=True,
+                         line_search_iter_limit=3,
+                         n_batch=3,
+                         compute_batch_grad_parallel=True,
+                         compute_cost=False,
+                         verbose=False,
+                         print_newline=False,
+                         )
+
+            return rpc["x"].reshape((1,) * nextra_dims + (1,) + eft.shape[-2:])
+
         xp = cp if use_gpu and cp else np
 
         with LocalCluster(processes=processes, **kwargs) as cluster, Client(cluster) as client:
             if self.verbose:
                 print(cluster.dashboard_link)
 
+            if self.use_average_as_background:
+                imgs_raw_bg = self.imgs_raw
+            else:
+                imgs_raw_bg = self.imgs_raw_bg
+
+
+            # get electric field from holograms
+            # make broadcastable to same size as raw images so can use with dask array
+            ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
+                                          chunks=imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
+                                          )
+            hft_bg = da.map_blocks(unmix_hologram,
+                                            imgs_raw_bg,
+                                            self.dxy,
+                                            2*self.fmax,
+                                            ref_frq_bg_da[..., 0],
+                                            ref_frq_bg_da[..., 1],
+                                            apodization=self.apodization,
+                                            dtype=complex)
+
             # slice used as reference for computing phase shifts/translations/etc.
             # if we are going to average along a dimension (i.e. if it is in bg_average_axes) then need to use
             # single slice as background for that dimension.
-            ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes else slice(None)
-                               for a in range(self.nextra_dims)] +
-                              [slice(None)] * 3)
-
-
-            # #########################
-            # get electric field from holograms
-            # #########################
-            # make broadcastable to same size as raw images so can use with dask array
-            ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
-                                       chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
-                                       )
-            holograms_ft = da.map_blocks(unmix_hologram,
-                                         self.imgs_raw,
-                                         self.dxy,
-                                         2*self.fmax,
-                                         ref_frq_da[..., 0],
-                                         ref_frq_da[..., 1],
-                                         apodization=self.apodization,
-                                         dtype=complex)
+            ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes
+                               else slice(None)
+                               for a in range(self.nextra_dims)])
 
             # #########################
-            # get background electric field from holograms
-            # #########################
-            if self.use_average_as_background:
-                holograms_ft_bg = holograms_ft
-            else:
-                ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
-                                              chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
-                                              )
-                holograms_ft_bg = da.map_blocks(unmix_hologram,
-                                                self.imgs_raw_bg,
-                                                self.dxy,
-                                                2*self.fmax,
-                                                ref_frq_bg_da[..., 0],
-                                                ref_frq_bg_da[..., 1],
-                                                apodization=self.apodization,
-                                                dtype=complex)
-
-            # #########################
-            # fit translations between signal and background electric fields
+            # compute background
             # #########################
             if self.fit_translations:
-                print("computing translations")
-                def _ft_abs(m: array) -> array: return ft2(abs(ift2(m)))
-                holograms_abs_ft = da.map_blocks(_ft_abs,holograms_ft, dtype=complex)
+                # fit translations between signal and background electric fields
+                holograms_abs_ft_bg = da.map_blocks(_ft_abs, hft_bg, dtype=complex)
+                self.translations_bg = da.map_blocks(fit_phase_ramp,
+                                                     holograms_abs_ft_bg,
+                                                     holograms_abs_ft_bg[ref_slice],
+                                                     self.dxy,
+                                                     thresh=self.translation_thresh,
+                                                     dtype=float,
+                                                     new_axis=-1,
+                                                     chunks=holograms_abs_ft_bg.chunksize[:-2] + (1, 1, 2)).compute()
 
-                if self.use_average_as_background:
-                    holograms_abs_ft_bg = holograms_abs_ft
-                else:
-                    holograms_abs_ft_bg = da.map_blocks(_ft_abs,holograms_ft_bg, dtype=complex)
+                hft_bg = da.map_blocks(translate,
+                                       hft_bg,
+                                       da.from_array(self.translations_bg[..., 0], chunks=hft_bg.chunksize[:-2] + (1, 1)),
+                                       da.from_array(self.translations_bg[..., 1], chunks=hft_bg.chunksize[:-2] + (1, 1)),
+                                       self.fxs,
+                                       self.fys,
+                                       dtype=complex,
+                                       meta=xp.array((), dtype=complex))
 
-                # fit phase ramp in holograms ft
-                self.translations = da.map_blocks(fit_phase_ramp,
-                                                  holograms_abs_ft,
-                                                  holograms_abs_ft_bg[ref_slice],
-                                                  self.dxy,
-                                                  thresh=self.translation_thresh,
-                                                  dtype=float,
-                                                  new_axis=-1,
-                                                  chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
-
-                # correct translations
-                def translate(e_ft, dxs, dys, fxs, fys):
-                    e_ft_out = xp.array(e_ft, copy=True)
-
-                    fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
-                    fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
-
-                    e_ft_out *= np.exp(2*np.pi * 1j * (fx_bcastable * dxs +
-                                                       fy_bcastable * dys))
-
-                    return e_ft_out
-
-                dr_chunks = holograms_ft.chunksize[:-2] + (1, 1)
-                holograms_ft = da.map_blocks(translate,
-                                             holograms_ft,
-                                             da.from_array(self.translations[..., 0], chunks=dr_chunks),
-                                             da.from_array(self.translations[..., 1], chunks=dr_chunks),
-                                             self.fxs,
-                                             self.fys,
-                                             dtype=complex,
-                                             meta=xp.array((), dtype=complex))
-
-                if self.use_average_as_background:
-                    self.translations_bg = self.translations
-                    holograms_ft_bg = holograms_ft
-                else:
-                    self.translations_bg = da.map_blocks(fit_phase_ramp,
-                                                         holograms_abs_ft_bg,
-                                                         holograms_abs_ft_bg[ref_slice],
-                                                         self.dxy,
-                                                         thresh=self.translation_thresh,
-                                                         dtype=float,
-                                                         new_axis=-1,
-                                                         chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
-
-                    holograms_ft_bg = da.map_blocks(translate,
-                                                    holograms_ft_bg,
-                                                    da.from_array(self.translations_bg[..., 0], chunks=dr_chunks),
-                                                    da.from_array(self.translations_bg[..., 1], chunks=dr_chunks),
-                                                    self.fxs,
-                                                    self.fys,
-                                                    dtype=complex,
-                                                    meta=xp.array((), dtype=complex))
-
-            # #########################
             # determine phase offsets for background electric field, relative to initial slice
             # for each angle, so we can average this together to produce a single "background" image
-            # #########################
-            print("computing background phase shifts")
             if self.fit_phases:
                 self.phase_params_bg = da.map_blocks(get_global_phase_shifts,
-                                                     holograms_ft_bg,
-                                                     holograms_ft_bg[ref_slice],  # reference slices
+                                                     hft_bg,
+                                                     hft_bg[ref_slice],  # reference slices
                                                      dtype=complex,
-                                                     chunks=holograms_ft_bg.chunksize[:-2] + (1, 1)
+                                                     chunks=hft_bg.chunksize[:-2] + (1, 1)
                                                      ).compute()
+                hft_bg = hft_bg * self.phase_params_bg
 
-            # #########################
             # determine background electric field
-            # #########################
             print("computing background electric field")
-            holograms_ft_bg_comp = da.mean(holograms_ft_bg * self.phase_params_bg,
-                                           axis=self.bg_average_axes,
-                                           keepdims=True)
+            hft_bg_comp = da.mean(hft_bg,
+                                  axis=self.bg_average_axes,
+                                  keepdims=True)
 
-            holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(),
-                                            chunks=holograms_ft_bg.chunksize)
-
-            # #########################
-            # determine phase offsets between electric field and background
-            # #########################
-            print("computing phase offsets")
-            if self.use_average_as_background:
-                self.phase_params = self.phase_params_bg
-            else:
-                if self.fit_phases:
-                    self.phase_params = da.map_blocks(get_global_phase_shifts,
-                                                      holograms_ft,
-                                                      holograms_ft_bg,
-                                                      dtype=complex,
-                                                      chunks=holograms_ft.chunksize[:-2] + (1, 1),
-                                                      ).compute()
-
-            holograms_ft = holograms_ft * self.phase_params
-
-            # #########################
-            # compute
-            # #########################
-            def correct_phase_profile(eft, ebg_ft, block_id=None):
-                nextra_dims = eft.ndim - 3
-                extra_dims = tuple(range(eft.ndim - 3))
-
-                pc = PhaseCorr(ift2(eft.squeeze(extra_dims)),
-                               ift2(ebg_ft.squeeze(extra_dims)),
-                               tau_l1=1e3,
-                               escale=40.)
-                rpc = pc.run(xp.ones(eft.shape[-2:], dtype=complex),
-                             step=1e5,
-                             max_iterations=10,
-                             line_search=True,
-                             line_search_iter_limit=3,
-                             n_batch=3,
-                             compute_batch_grad_parallel=True,
-                             compute_cost=False,
-                             verbose=False,
-                             print_newline=False,
+            print("computing background")
+            hft_bg_arr = hft_bg_comp.compute()
+            self.store.array("efield_bg_ft",
+                             hft_bg_arr,
+                             chunks=hft_bg_comp.chunksize,
+                             compressor=self.compressor,
+                             dtype=np.complex64 if self.save_float32 else complex
                              )
 
-                return rpc["x"].reshape((1,) * nextra_dims + (1,) + eft.shape[-2:])
+            hft_bg_avg = da.from_array(hft_bg_arr,
+                                       chunks=hft_bg_comp.chunksize)
+
+
+            # #########################
+            # compute foreground
+            # #########################
+            if self.use_average_as_background:
+                hft = hft_bg
+                self.translations = self.translations_bg
+                self.phase_params = self.phase_params_bg
+            else:
+                ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
+                                           chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
+                                           )
+                hft = da.map_blocks(unmix_hologram,
+                                             self.imgs_raw,
+                                             self.dxy,
+                                             2*self.fmax,
+                                             ref_frq_da[..., 0],
+                                             ref_frq_da[..., 1],
+                                             apodization=self.apodization,
+                                             dtype=complex)
+
+                if self.fit_translations:
+                    # fit phase ramp in holograms ft
+                    holograms_abs_ft = da.map_blocks(_ft_abs, hft, dtype=complex)
+                    self.translations = da.map_blocks(fit_phase_ramp,
+                                                      holograms_abs_ft,
+                                                      _ft_abs(hft_bg_avg),
+                                                      # holograms_abs_ft_bg[ref_slice],
+                                                      self.dxy,
+                                                      thresh=self.translation_thresh,
+                                                      dtype=float,
+                                                      new_axis=-1,
+                                                      chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
+
+                    # correct translations
+                    hft = da.map_blocks(translate,
+                                        hft,
+                                        da.from_array(self.translations[..., 0],
+                                                      chunks=hft.chunksize[:-2] + (1, 1)),
+                                        da.from_array(self.translations[..., 1],
+                                                      chunks=hft.chunksize[:-2] + (1, 1)),
+                                        self.fxs,
+                                        self.fys,
+                                        dtype=complex,
+                                        meta=xp.array((), dtype=complex))
+
+                if self.fit_phases:
+                    self.phase_params = da.map_blocks(get_global_phase_shifts,
+                                                      hft,
+                                                      hft_bg_avg,
+                                                      dtype=complex,
+                                                      chunks=hft.chunksize[:-2] + (1, 1),
+                                                      ).compute()
+                    hft = hft * self.phase_params
+
 
             if self.fit_phase_profile:
                 phase_prof = da.map_blocks(correct_phase_profile,
-                                           holograms_ft,
-                                           holograms_ft_bg,
+                                           hft,
+                                           hft_bg_avg,
                                            drop_axis=(-3),
                                            new_axis=(-3),
                                            dtype=complex,
                                            meta=xp.array((), dtype=complex),
                                            )
-                holograms_ft = ft2(phase_prof * ift2(holograms_ft))
+                hft = ft2(phase_prof * ift2(hft))
             else:
                 phase_prof = da.ones(1)
 
@@ -1403,17 +1401,10 @@ class Tomography:
             # #########################
             # todo: want to define these arrays in init ... but can't get to_zarr() to work then
             future = [da.map_blocks(to_cpu,
-                              holograms_ft,
+                              hft,
                                     dtype=np.complex64 if self.save_float32 else complex,
                                     ).to_zarr(self.store.store.path,
                                               component="efields_ft",
-                                              compute=False,
-                                              compressor=self.compressor),
-                      da.map_blocks(to_cpu,
-                              holograms_ft_bg,
-                                    dtype=np.complex64 if self.save_float32 else complex,
-                                    ).to_zarr(self.store.store.path,
-                                              component="efield_bg_ft",
                                               compute=False,
                                               compressor=self.compressor),
                       da.map_blocks(to_cpu,
