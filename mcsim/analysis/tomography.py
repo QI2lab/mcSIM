@@ -15,6 +15,9 @@ from numpy.linalg import norm, inv
 from numpy.fft import fftshift, fftfreq
 from scipy.signal.windows import tukey, hann
 # parallelization
+from tqdm import tqdm
+import joblib
+from joblib.externals.loky import get_reusable_executor
 from dask.config import set as dask_cfg_set
 from dask import delayed
 import dask
@@ -221,9 +224,9 @@ class Tomography:
         if not isinstance(imgs_raw, da.core.Array):
             raise ValueError(f"imgs_raw should be a dask array, but was {type(imgs_raw)}")
 
-        if imgs_raw.chunksize[-3:] != imgs_raw.shape[-3:]:
-            raise ValueError(f"imgs_raw chunksize along last three dimensions should match array size, but"
-                             f"{imgs_raw.chunksize[-3:]} != {imgs_raw.shape[-3:]}")
+        if imgs_raw.chunksize[-2:] != imgs_raw.shape[-2:]:
+            raise ValueError(f"imgs_raw chunksize along last two dimensions should match array size, but"
+                             f"{imgs_raw.chunksize[-2:]} != {imgs_raw.shape[-2:]}")
 
         # convert to photons
         self.imgs_raw = (imgs_raw.astype(float) - offset) / gain
@@ -239,9 +242,9 @@ class Tomography:
             if not isinstance(imgs_raw_bg, da.core.Array):
                 raise ValueError(f"imgs_raw_bg should be a dask array, but was {type(imgs_raw)}")
 
-            if imgs_raw_bg.chunksize[-3:] != imgs_raw_bg.shape[-3:]:
+            if imgs_raw_bg.chunksize[-2:] != imgs_raw_bg.shape[-2:]:
                 raise ValueError(f"imgs_raw_bg chunksize along last three dimensions should match array size, but"
-                                 f"{imgs_raw_bg.chunksize[-3:]} != {imgs_raw_bg.shape[-3:]}")
+                                 f"{imgs_raw_bg.chunksize[-2:]} != {imgs_raw_bg.shape[-2:]}")
 
             try:
                 np.broadcast_shapes(self.imgs_raw.shape, imgs_raw_bg.shape)
@@ -705,9 +708,9 @@ class Tomography:
     def estimate_hologram_frqs(self,
                                save: bool = False,
                                processes: bool = True,
-                               n_workers: int = 3,
-                               threads_per_worker: int = 1,
-                               worker_saturation: float = 1.0) -> None:
+                               n_workers: int = -1,
+                               use_gpu: bool=cp is not None,
+                               ) -> None:
         """
         Estimate hologram frequencies from raw images. The current value of self.hologram_frqs() is used as the guess.
         Guess values usually need to be within a few pixels for fitting to succeed. This accuracy is usually
@@ -717,260 +720,204 @@ class Tomography:
         :param save:
         :param processes:
         :param n_workers:
-        :param threads_per_worker:
-        :param worker_saturation:
+        :param use_gpu:
         :return:
         """
+
+        if save and self.save_dir is not None:
+            frq_dir = self.save_dir / f"frq_fits"
+            frq_dir.mkdir(exist_ok=True)
 
         tstart_est_frqs = perf_counter()
 
         # todo: why not combine this function with unmix_holograms()?
-        # todo: can I set this in cluster?
-        with dask_cfg_set({"distributed.scheduler.worker-saturation": worker_saturation}):
-            with LocalCluster(n_workers=n_workers,
-                              processes=processes,
-                              threads_per_worker=threads_per_worker) as cluster, Client(cluster) as client:
-
-                if self.verbose:
-                    print(cluster.dashboard_link)
-
-                fit_data_imgs = not self.use_fixed_holo_frequencies or self.use_average_as_background
-
-                # create array for ref frqs. NOTE only works for equal multiplex for all images!
-                hologram_frqs_guess = np.stack(self.hologram_frqs, axis=0)
-                c_guess = np.stack((np.round((hologram_frqs_guess[..., 1] - self.fys[0]) / self.dfy).astype(int),
-                                    np.round((hologram_frqs_guess[..., 0] - self.fxs[0]) / self.dfx).astype(int)
-                                    ),
-                                   axis=-1)
-
-                rois_all = get_centered_rois(c_guess,
-                                             [self.freq_roi_size_pix, self.freq_roi_size_pix],
-                                             min_vals=(0, 0),
-                                             max_vals=(self.ny, self.nx)
-                                             )
-
-                def cut_rois(img: array,
-                             roi_size_pix: int,
-                             block_id=None,):
-
-                    npatt, ny, nx = img.shape[-3:]
-                    img_ft = ft2(img * hann(ny)[:, None] * hann(nx)[None, :])
-
-                    nroi = rois_all.shape[1]
-                    roi_out = np.zeros(img_ft.shape[:-3] + (npatt, nroi, roi_size_pix, roi_size_pix))
-                    for ii in range(npatt):
-                        roi_out[..., ii, :, :, :] = abs(np.stack(cut_roi(rois_all[ii],
-                                                                         img_ft[..., ii, :, :]), axis=-3))
-
-                    return roi_out
-
-                rois_cut = None
-                if fit_data_imgs:
-                    rois_cut = da.map_blocks(cut_rois,
-                                             self.imgs_raw,
-                                             self.freq_roi_size_pix,
-                                             drop_axis=(-1, -2),
-                                             new_axis=(-1, -2, -3),
-                                             chunks=self.imgs_raw.chunksize[:-2] +
-                                                    (self.nmax_multiplex,
-                                                     self.freq_roi_size_pix,
-                                                     self.freq_roi_size_pix),
-                                             dtype=float,
-                                             meta=np.array((), dtype=float))
-
-                rois_cut_bg = None
-                if not self.use_average_as_background:
-                    if not self.use_fixed_holo_frequencies:
-                        slices_bg = tuple([slice(None) for _ in range(self.nextra_dims)])
-                    else:
-                        slices_bg = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
-
-                    rois_cut_bg = da.map_blocks(cut_rois,
-                                                self.imgs_raw_bg,
-                                                self.freq_roi_size_pix,
-                                                drop_axis=(-1, -2),
-                                                new_axis=(-1, -2, -3),
-                                                chunks=self.imgs_raw_bg.chunksize[:-2] +
-                                                       (self.nmax_multiplex,
-                                                        self.freq_roi_size_pix,
-                                                        self.freq_roi_size_pix),
-                                                dtype=float,
-                                                meta=np.array((), dtype=float))[slices_bg]
-
-                def fit_rois_cpu(img_rois,
-                                 model=gauss2d_symm(),
-                                 ):
-
-                    xx, yy = np.meshgrid(range(img_rois.shape[-1]),
-                                         range(img_rois.shape[-2]))
-
-                    centers = np.zeros(img_rois.shape[:-2] + (2,))
-
-                    n_loop = np.prod(img_rois.shape[:-2])
-                    for ii in range(n_loop):
-                        ind = np.unravel_index(ii, img_rois.shape[:-2])
-                        rgauss = model.fit(img_rois[ind],
-                                           (yy, xx),
-                                           init_params=None,
-                                           guess_bounds=True)
-                        centers[ind] = rgauss["fit_params"][1:3]
-
-                    return centers
-
-                if fit_data_imgs:
-                    centers = da.map_blocks(fit_rois_cpu,
-                                            rois_cut,
-                                            drop_axis=(-1, -2),
-                                            new_axis=(-1),
-                                            chunks=(rois_cut.chunksize[:-2] + (2,)),
-                                            dtype=float,
-                                            meta=np.array((), dtype=float)).compute()
-                    cx = centers[..., 0]
-                    cy = centers[..., 1]
-
-                if not self.use_average_as_background:
-                    centers_bg = da.map_blocks(fit_rois_cpu,
-                                               rois_cut_bg,
-                                               drop_axis=(-1, -2),
-                                               new_axis=(-1),
-                                               chunks=(rois_cut_bg.chunksize[:-2] + (2,)),
-                                               dtype=float,
-                                               meta=np.array((), dtype=float)).compute()
-                    cx_bg = centers_bg[..., 0]
-                    cy_bg = centers_bg[..., 1]
-
-                # final frequencies
-                if fit_data_imgs:
-                    frqs_hologram = np.stack((cx * self.dfx + self.fxs[rois_all[..., 2]],
-                                              cy * self.dfy + self.fys[rois_all[..., 0]]), axis=-1)
-                else:
-                    frqs_hologram = None
-
-                if not self.use_average_as_background:
-                    frqs_hologram_bg = np.stack((cx_bg * self.dfx + self.fxs[rois_all[..., 2]],
-                                                 cy_bg * self.dfy + self.fys[rois_all[..., 0]]), axis=-1)
-                else:
-                    frqs_hologram_bg = None
-
-                if self.use_average_as_background:
-                    frqs_hologram_bg = frqs_hologram
-
-                if self.use_fixed_holo_frequencies:
-                    frqs_hologram = frqs_hologram_bg
-
-                self.hologram_frqs = [frqs_hologram[..., ii, :, :] for ii in range(self.npatterns)]
-                self.hologram_frqs_bg = [frqs_hologram_bg[..., ii, :, :] for ii in range(self.npatterns)]
-                if not self.use_fixed_ref:
-                    self.reference_frq = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
-                    self.reference_frq_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
-
-                # #########################
-                # optionally plot
-                # #########################
-                def plot(img,
-                         frqs_holo,
-                         fx,
-                         fy,
-                         frqs_guess=None,
-                         rois_all=None,
+        def fit_rois_cpu(img: array,
+                         frqs_guess: array,
+                         roi_size_pix,
+                         fx: array,
+                         fy: array,
+                         fmax: float,
+                         model=gauss2d_symm(),
                          save_dir=None,
-                         prefix="",
-                         figsize=(20, 10),
-                         block_id=None):
+                         prefix: str = "",
+                         figsize: Sequence[float, float] = (20., 10.),
+                         gamma: float = 0.2,
+                         use_gpu: bool = True,
+                         block_id=None,
+                         block_info=None,
+                         **fig_kwargs,
+                         ):
 
-                    dfx = fx[1] - fx[0]
-                    dfy = fy[1] - fy[0]
+            if isinstance(img, dask.array.Array):
+                img = img.compute()
 
-                    img_ft = ft2(img).squeeze()
-                    if img_ft.ndim != 2:
-                        raise ValueError()
+            # grab info about dimensions
+            nextra_dims = img.ndim - 3
+            pattern_offset = block_id[-3]
+            nmulti = frqs_guess.shape[-2]
+            npatterns, ny, nx = img.shape[-3:]
 
-                    with catch_warnings():
-                        simplefilter("ignore")
-                        figh = plt.figure(figsize=figsize)
+            # fourier transform image
+            xp = cp if use_gpu and cp else np
+            img_ft = to_cpu(ft2(xp.asarray(img) *
+                                xp.asarray(hann(ny)[:, None]) *
+                                xp.asarray(hann(nx)[None, :])))
 
-                    ax = figh.add_subplot(1, 2, 1)
-                    ax.set_title("$|I(f)|$")
-                    ax.imshow(np.abs(img_ft),
-                              extent=[fx[0] - 0.5 * dfx,
-                                      fx[-1] + 0.5 * dfx,
-                                      fy[-1] + 0.5 * dfy,
-                                      fy[0] - 0.5 * dfy],
-                              norm=PowerNorm(gamma=0.1),
-                              cmap="bone")
-                    if frqs_guess is not None:
-                        ax.plot(frqs_guess[:, 0], frqs_guess[:, 1], 'gx')
-                    ax.plot(frqs_holo[..., 0], frqs_holo[..., 1], 'rx')
+            # get ROIs
+            dfx = fx[1] - fx[0]
+            dfy = fy[1] - fy[0]
+            c_guess = np.stack((np.round((frqs_guess[..., 1] - fy[0]) / dfy),
+                                np.round((frqs_guess[..., 0] - fx[0]) / dfx)
+                                ),
+                               axis=-1).astype(int)
 
-                    if rois_all is not None:
-                        for roi in rois_all:
-                            ax.add_artist(Rectangle((fx[roi[2]] - 0.5*dfx, fy[roi[0]] - 0.5*dfy),
-                                                    fx[roi[3] - 1] - fx[roi[2]],
-                                                    fy[roi[1] - 1] - fy[roi[0]],
-                                                    edgecolor='k',
-                                                    fill=False))
+            rois_all = get_centered_rois(c_guess,
+                                         [roi_size_pix, roi_size_pix],
+                                         min_vals=(0, 0),
+                                         max_vals=(self.ny, self.nx)
+                                         )
 
-                    ax.set_xlabel("$f_x$ (1/$\mu m$)")
-                    ax.set_ylabel("$f_y$ (1/$\mu m$)")
+            # fit centers
+            centers = np.zeros(img.shape[:-2] + (nmulti, 2,), dtype=float)
+            for ii in range(np.prod(centers.shape[:-1])):
+                ind = np.unravel_index(ii, centers.shape[:-1])
+                ind_img = ind[:-1]
+                roi = rois_all[ind[-2:]]
 
-                    ax = figh.add_subplot(1, 2, 2)
-                    roi = rois_all[0]
-                    iroi = cut_roi(roi, img_ft)[0]
+                img_roi = abs(np.stack(cut_roi(roi, img_ft[ind_img]), axis=-3))[0]
 
-                    ax.imshow(np.abs(iroi),
-                              extent=[fx[roi[2]] - 0.5 * dfx,
-                                      fx[roi[3] - 1] + 0.5 * dfx,
-                                      fy[roi[1] - 1] + 0.5 * dfy,
-                                      fy[roi[0]] - 0.5 * dfy],
-                              cmap="bone")
+                fxfx, fyfy = np.meshgrid(fx[roi[2]:roi[3]], fy[roi[0]:roi[1]])
 
-                    if frqs_guess is not None:
-                        ax.plot(frqs_guess[0, 0],
-                                frqs_guess[0, 1], 'gx')
-                    ax.plot(frqs_holo[0, 0],
-                            frqs_holo[0, 1], 'rx')
+                rgauss = model.fit(img_roi,
+                                   (fyfy, fxfx),
+                                   init_params=None,
+                                   guess_bounds=True)
+                centers[ind] = rgauss["fit_params"][1:3]
 
-                    ax.set_xlabel("$f_x$ (1/$\mu m$)")
-                    ax.set_ylabel("$f_y$ (1/$\mu m$)")
-
-                    if save_dir is not None:
-                        figh.savefig(Path(save_dir, f"{prefix:s}=hologram_frq_diagnostic.png"))
-                        plt.close(figh)
-
-                if save and self.save_dir is not None:
-                    frq_dir = self.save_dir / f"frq_fits"
-                    frq_dir.mkdir(exist_ok=True)
-
+            # plot centers
+            if save_dir is not None and np.all(np.array(block_id[:-3]) == 0):
+                with catch_warnings():
+                    simplefilter("ignore")
                     with rc_context({'interactive': False,
                                      'backend': "agg"}):
 
-                        slice_start = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
-                        axes_start = tuple(range(self.nextra_dims))
+                        for aa in range(npatterns):
+                            figh = plt.figure(figsize=figsize, **fig_kwargs)
+                            ax = figh.add_subplot(1, 1, 1)
+                            ax.set_title("$|I(f)|$")
+                            im = ax.imshow(np.abs(img_ft).squeeze(axis=tuple(range(nextra_dims)))[aa],
+                                           extent=[fx[0] - 0.5 * dfx,
+                                                   fx[-1] + 0.5 * dfx,
+                                                   fy[-1] + 0.5 * dfy,
+                                                   fy[0] - 0.5 * dfy],
+                                           norm=PowerNorm(gamma=gamma),
+                                           cmap="bone")
+                            plt.colorbar(im)
 
-                        if not self.use_average_as_background:
-                            iraw = self.imgs_raw_bg[slice_start].squeeze(axis=axes_start)
-                            h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs_bg]
-                        else:
-                            iraw = self.imgs_raw[slice_start].squeeze(axis=axes_start)
-                            h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs]
+                            fy_min = fy[rois_all[aa, :, 0].min()] - fmax
+                            fy_max = fy[rois_all[aa, :, 1].max()] + fmax
+                            fx_min = fx[rois_all[aa, :, 2].min()] - fmax
+                            fx_max = fx[rois_all[aa, :, 3].max()] + fmax
+                            ax.set_xlim([fx_min, fx_max])
+                            ax.set_ylim([fy_max, fy_min])
 
-                        dask.compute([delayed(plot)(iraw[ii],
-                                                h[ii],
-                                                self.fxs,
-                                                self.fys,
-                                                save_dir=frq_dir,
-                                                frqs_guess=hologram_frqs_guess[ii],
-                                                prefix=f"{ii:d}",
-                                                rois_all=rois_all[ii])
-                                  for ii in range(self.npatterns)]
-                                 )
+                            # plot fit and guess frqs
+                            ax.plot(frqs_guess[aa, :, 0].squeeze(),
+                                    frqs_guess[aa, :, 1].squeeze(),
+                                    'gx')
+                            ax.plot(centers.squeeze(axis=tuple(range(nextra_dims)))[aa, :, 0],
+                                    centers.squeeze(axis=tuple(range(nextra_dims)))[aa, :, 1],
+                                    'rx')
 
-                    # write log info
-                    save_dask_logs(client, frq_dir)
+                            for bb in range(nmulti):
+                                roi = rois_all[aa, bb]
+                                ax.add_artist(Rectangle((fx[roi[2]] - 0.5 * dfx, fy[roi[0]] - 0.5 * dfy),
+                                                        fx[roi[3] - 1] - fx[roi[2]],
+                                                        fy[roi[1] - 1] - fy[roi[0]],
+                                                        edgecolor='k',
+                                                        fill=False))
 
-                    self.timing["fit_frequency_time"] = perf_counter() - tstart_est_frqs
-                    if self.verbose:
-                        print(f"calibration time: {parse_time(self.timing['fit_frequency_time'])[1]:s}")
+                            ax.set_xlabel("$f_x$ (1/$\mu m$)")
+                            ax.set_ylabel("$f_y$ (1/$\mu m$)")
+
+                            if save_dir is not None:
+                                figh.savefig(Path(save_dir, f"{prefix:s}pattern={aa + pattern_offset:d}=hologram_frq_diagnostic.png"))
+                                plt.close(figh)
+
+            del img_ft
+
+            return centers
+
+        # #####################################
+        # calibrate frequencies
+        # #####################################
+        hologram_frqs_guess = np.stack(self.hologram_frqs, axis=0)
+
+        if self.use_fixed_holo_frequencies:
+            slices_fit = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
+        else:
+            slices_fit = tuple([slice(None) for _ in range(self.nextra_dims)])
+
+        frqs_hologram = None
+        if not self.use_fixed_holo_frequencies or self.use_average_as_background:
+            print("fitting foreground frequencies")
+            r = map_blocks_joblib(fit_rois_cpu,
+                                  self.imgs_raw[slices_fit],
+                                  hologram_frqs_guess,
+                                  self.freq_roi_size_pix,
+                                  self.fxs,
+                                  self.fys,
+                                  self.fmax,
+                                  use_gpu=use_gpu,
+                                  save_dir=frq_dir if save and self.use_average_as_background else None,
+                                  n_workers=n_workers,
+                                  processes=processes,
+                                  chunksize=self.imgs_raw.chunksize[:-2] + (None, None),
+                                  )
+            frqs_hologram = np.stack(r, axis=0).reshape(self.imgs_raw.shape[:-2] + (self.nmax_multiplex, 2))
+
+        frqs_hologram_bg = None
+        if not self.use_average_as_background:
+            print("fitting background frequencies")
+            r = map_blocks_joblib(fit_rois_cpu,
+                                  self.imgs_raw_bg[slices_fit],
+                                  hologram_frqs_guess,
+                                  self.freq_roi_size_pix,
+                                  self.fxs,
+                                  self.fys,
+                                  self.fmax,
+                                  use_gpu=use_gpu,
+                                  prefix="bg_",
+                                  save_dir=frq_dir if save else None,
+                                  n_workers=n_workers,
+                                  processes=processes,
+                                  chunksize=self.imgs_raw_bg.chunksize[:-2] + (None, None),
+                                  )
+            frqs_hologram_bg = np.stack(r, axis=0).reshape(self.imgs_raw_bg.shape[:-2] + (self.nmax_multiplex, 2))
+
+        get_reusable_executor().shutdown(wait=True)
+
+        if self.use_average_as_background:
+            frqs_hologram_bg = frqs_hologram
+
+        if self.use_fixed_holo_frequencies:
+            frqs_hologram = frqs_hologram_bg
+
+        # self.hologram_frqs = frqs_hologram
+        # self.hologram_frqs_bg = frqs_hologram_bg
+        # if not self.use_fixed_ref:
+        #     self.reference_frq = np.mean(self.hologram_frqs, axis=(-2, -3))
+        #     self.reference_frq_bg = np.mean(self.hologram_frqs_bg, axis=(-2, -3))
+        self.hologram_frqs = [frqs_hologram[..., ii, :, :] for ii in range(self.npatterns)]
+        self.hologram_frqs_bg = [frqs_hologram_bg[..., ii, :, :] for ii in range(self.npatterns)]
+        if not self.use_fixed_ref:
+            self.reference_frq = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
+            self.reference_frq_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
+
+        # store and print timing information
+        self.timing["fit_frequency_time"] = perf_counter() - tstart_est_frqs
+        if self.verbose:
+            print(f"calibration time: {parse_time(self.timing['fit_frequency_time'])[1]:s}")
 
     def get_beam_frqs(self) -> list[np.ndarray]:
         """
@@ -1512,8 +1459,10 @@ class Tomography:
         else:
             xp = np
 
-        self.efields_ft = da.from_zarr(self.store.efields_ft)
-        self.efield_bg_ft = da.from_zarr(self.store.efield_bg_ft)
+        self.efields_ft = da.from_zarr(self.store.efields_ft,
+                                       chunks=(1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
+        self.efield_bg_ft = da.from_zarr(self.store.efield_bg_ft,
+                                         chunks=(1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
 
         # ############################
         # get beam frequencies
@@ -1531,17 +1480,6 @@ class Tomography:
         for ii in range(self.npatterns):
             for jj in range(self.nmax_multiplex):
                 mean_beam_frqs_no_multi[ii * self.nmax_multiplex + jj, :] = mean_beam_frqs_arr[jj, ii]
-
-        # ############################
-        # check arrays are chunked by volume
-        # ############################
-        if self.efields_ft.chunksize[-3] != self.npatterns:
-            raise ValueError(f"Chunksize along the pattern direction was not equal to the number of patterns "
-                             f"{self.efields_ft.chunksize[-3]:d} != {self.npatterns:d}")
-
-        if self.efield_bg_ft.chunksize[-3] != self.npatterns:
-            raise ValueError(f"Chunksize along the pattern direction was not equal to the number of patterns "
-                             f"{self.efields_bg_ft.chunksize[-3]:d} != {self.npatterns:d}")
 
         # ############################
         # compute information we need for reconstructions
@@ -3648,6 +3586,59 @@ class PhaseCorr(Optimizer):
             y = xp.array(x, copy=True)
 
         return y
+
+def map_blocks_joblib(fn,
+                      *args,
+                      n_workers=-1,
+                      processes=True,
+                      chunksize=None,
+                      verbose=True,
+                      **kwargs):
+    """
+
+    :param fn: function to call on blocks
+    :param args: first argument should be the main array to map blocks over. Subsequent arrays will also work
+    :param n_workers:
+    :param processes:
+    :param chunksize:
+    :param verbose:
+    :param kwargs: should not be arrays
+    :return:
+    """
+
+    fullsize = args[0].shape
+    nchunks_dims = np.array([f / c if c is not None
+                             else 1
+                             for c, f in zip(chunksize, fullsize)]).astype(int)
+    nchunks = np.prod(nchunks_dims)
+
+    def get_block_ind(chunk_ind):
+        return np.unravel_index(chunk_ind, nchunks_dims)
+
+
+    def slicer(a, chunk_ind):
+        if isinstance(a, (np.ndarray, dask.array.Array)) or (cp and isinstance(a, cp.ndarray)):
+            block_ind = get_block_ind(chunk_ind)
+            slices = [slice(c * s, (c + 1) * s) if s is not None
+                      else slice(None)
+                      for c, s in zip(block_ind, chunksize)]
+
+            # if a is not full dimensionality, only slice last dimensions
+            return a[tuple(slices)[-a.ndim:]]
+        else:
+            return a
+
+    inds = range(nchunks)
+    if verbose:
+        inds = tqdm(inds)
+
+    r = (joblib.Parallel(n_jobs=n_workers, prefer="processes" if processes else "threads")
+                 (joblib.delayed(fn)(*[slicer(a, ind) for a in args],
+                                     block_id=get_block_ind(ind),
+                                     **kwargs)
+                                     for ind in inds)
+         )
+    return r
 
 
 def save_dask_logs(client,
