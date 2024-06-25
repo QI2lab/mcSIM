@@ -705,8 +705,11 @@ class Tomography:
                                                                                          overwrite=overwrite)
                           )
 
-        with LocalCluster(**kwargs) as cluster, Client(cluster) as client:
-            dask.compute(*future)
+        cluster = LocalCluster(**kwargs)
+        client = Client(cluster)
+        dask.compute(*future)
+        del client
+        del cluster
 
         self.timing["mips_processing_time"] = perf_counter() - tstart_proj
         if self.verbose:
