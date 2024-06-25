@@ -352,11 +352,25 @@ class Tomography:
         # prepare zarr arrays to store results
         # ########################
         # todo: define this here once can figure out how to write into it with to_zarr()
-        # self.store.create("efields_ft",
-        #                   shape=self.imgs_raw.shape,
-        #                   chunks=(1,) * self.nextra_dims + self.imgs_raw.shape[-3:],
-        #                   compressor=self.compressor,
-        #                   dtype=np.complex64 if self.save_float32 else complex)
+        self.store.create("efields_ft",
+                          shape=self.imgs_raw.shape,
+                          chunks=(1,) * self.nextra_dims + self.imgs_raw.shape[-3:],
+                          compressor=self.compressor,
+                          dtype=np.complex64 if self.save_float32 else complex)
+
+        self.store.create("efield_bg_ft",
+                          shape=tuple([s if ii not in self.bg_average_axes
+                                       else 1
+                                       for ii, s in enumerate(self.imgs_raw.shape)]),
+                          chunks=(1,) * self.nextra_dims + self.imgs_raw.shape[-3:],
+                          compressor=self.compressor,
+                          dtype=np.complex64 if self.save_float32 else complex)
+
+        self.store.create("phase_correction_profile",
+                          shape=(1,) * self.nextra_dims + (self.ny, self.nx),
+                          compressor=self.compressor,
+                          dtype=np.complex64 if self.save_float32 else complex)
+
 
         if not hasattr(self.store, "n"):
             self.store.create("n",
@@ -1328,13 +1342,7 @@ class Tomography:
 
             print("computing background")
             hft_bg_arr = hft_bg_comp.compute()
-            self.store.array("efield_bg_ft",
-                             hft_bg_arr,
-                             chunks=hft_bg_comp.chunksize,
-                             compressor=self.compressor,
-                             dtype=np.complex64 if self.save_float32 else complex
-                             )
-
+            self.store.efield_bg_ft[:] = hft_bg_arr
             hft_bg_avg = da.from_array(hft_bg_arr,
                                        chunks=hft_bg_comp.chunksize)
 
@@ -1417,14 +1425,16 @@ class Tomography:
                                     ).to_zarr(self.store.store.path,
                                               component="efields_ft",
                                               compute=False,
-                                              compressor=self.compressor),
+                                              compressor=self.compressor,
+                                              overwrite=True),
                       da.map_blocks(to_cpu,
                                     phase_prof,
                                     dtype=np.complex64 if self.save_float32 else complex,
                                     ).to_zarr(self.store.store.path,
                                               component="phase_correction_profile",
                                               compute=False,
-                                              compressor=self.compressor)
+                                              compressor=self.compressor,
+                                              overwrite=True)
                       ]
             dask.compute(*future)
 
