@@ -872,7 +872,7 @@ class Tomography:
                                   save_dir=frq_dir if save and self.use_average_as_background else None,
                                   n_workers=n_workers,
                                   processes=processes,
-                                  chunksize=self.imgs_raw.chunksize[:-2] + (None, None),
+                                  chunks=self.imgs_raw.chunksize[:-2] + (None, None),
                                   )
             frqs_hologram = np.stack(r, axis=0).reshape(self.imgs_raw.shape[:-2] + (self.nmax_multiplex, 2))
 
@@ -891,7 +891,7 @@ class Tomography:
                                   save_dir=frq_dir if save else None,
                                   n_workers=n_workers,
                                   processes=processes,
-                                  chunksize=self.imgs_raw_bg.chunksize[:-2] + (None, None),
+                                  chunks=self.imgs_raw_bg.chunksize[:-2] + (None, None),
                                   )
             frqs_hologram_bg = np.stack(r, axis=0).reshape(self.imgs_raw_bg.shape[:-2] + (self.nmax_multiplex, 2))
 
@@ -3572,7 +3572,7 @@ def map_blocks_joblib(fn,
                       *args,
                       n_workers=-1,
                       processes=True,
-                      chunksize=None,
+                      chunks=None,
                       verbose=True,
                       **kwargs):
     """
@@ -3592,7 +3592,7 @@ def map_blocks_joblib(fn,
     fullsize = args[0].shape
     nchunks_dims = np.array([f / c if c is not None
                              else 1
-                             for c, f in zip(chunksize, fullsize)]).astype(int)
+                             for c, f in zip(chunks, fullsize)]).astype(int)
     nchunks = np.prod(nchunks_dims)
 
     def get_block_ind(chunk_ind):
@@ -3604,10 +3604,17 @@ def map_blocks_joblib(fn,
             block_ind = get_block_ind(chunk_ind)
             slices = [slice(c * s, (c + 1) * s) if s is not None
                       else slice(None)
-                      for c, s in zip(block_ind, chunksize)]
+                      for c, s in zip(block_ind, chunks)]
 
             # if a is not full dimensionality, only slice last dimensions
-            return a[tuple(slices)[-a.ndim:]]
+            slices_dim = slices[-a.ndim:]
+
+            # don't slice along dimension if a is broadcastable
+            slices_dim = [s if d != 1
+                          else slice(None)
+                          for s, d in zip(slices_dim, a.shape)]
+
+            return a[tuple(slices_dim)]
         else:
             return a
 
