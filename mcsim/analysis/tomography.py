@@ -18,6 +18,7 @@ from scipy.signal.windows import tukey, hann
 from tqdm import tqdm
 import joblib
 from joblib.externals.loky import get_reusable_executor
+from multiprocessing import Semaphore
 from dask.config import set as dask_cfg_set
 from dask import delayed
 import dask
@@ -1177,6 +1178,7 @@ class Tomography:
                       fit_phases=True,
                       fit_translations=True,
                       average_axes=None,
+                      semaphore=None,
                       block_id=None,
                       arr_full_size=None,
                       ):
@@ -1189,7 +1191,7 @@ class Tomography:
             fy_ref = fy_ref.squeeze(axis=squeeze_ax)
 
             # unmix holograms
-            hft = unmix_hologram(imgs, dxy, fmax, fx_ref, fy_ref, apodization)
+            hft = unmix_hologram(imgs, dxy, 2*fmax, fx_ref, fy_ref, apodization)
 
             # translation correction
             if fit_translations:
@@ -1247,7 +1249,10 @@ class Tomography:
                                 for ii, a in enumerate(arr_full_size)])
 
                 block_id_out = tuple([b if ii not in average_axes else 0 for ii, b in enumerate(block_id)])
+
+                semaphore.acquire()
                 eft_out[block_id_out[:-3]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
+                semaphore.release()
 
             return translations, phase_params
 
@@ -1264,12 +1269,14 @@ class Tomography:
         # get reference holograms
         hft_ref = unmix_hologram(imgs_raw_bg[ref_slice].compute(),
                                  self.dxy,
-                                 self.fmax,
+                                 2*self.fmax,
                                  self.reference_frq_bg[..., 0][ref_slice],
                                  self.reference_frq_bg[..., 1][ref_slice],
                                  self.apodization)
 
         # correct background
+        semaphore = Semaphore(1)
+
         rbg = map_blocks_joblib(calibrate,
                                 imgs_raw_bg,
                                 hft_ref,
@@ -1283,6 +1290,7 @@ class Tomography:
                                 fit_phases=self.fit_phases,
                                 fit_translations=self.fit_translations,
                                 average_axes=self.bg_average_axes,
+                                semaphore=semaphore,
                                 chunks=imgs_raw_bg.chunksize,
                                 n_workers=n_workers,
                                 processes=processes
@@ -1292,13 +1300,11 @@ class Tomography:
         self.translations_bg = np.stack(t, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1, 2))
         self.phase_params_bg = np.stack(p, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1))
 
-        self.efield_bg_ft = da.from_zarr(self.store.efield_bg_ft)
-
         # correct foreground
         # todo: more logic for using average as own background?
         r = map_blocks_joblib(calibrate,
                               self.imgs_raw,
-                              self.efield_bg_ft,
+                              da.from_zarr(self.store.efield_bg_ft),
                               self.reference_frq[..., 0],
                               self.reference_frq[..., 1],
                               self.dxy,
