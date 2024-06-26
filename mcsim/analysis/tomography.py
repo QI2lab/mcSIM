@@ -271,12 +271,13 @@ class Tomography:
         # beam frequencies
         # ########################
         # reference frequency
-        # shape = n0 x ... x nm x 2 where
+        # shape = n0 x ... x nm x 1 x 1 x 1 x 2 so either component is broadcastable with imgs
         # todo: check shape
         if reference_frq is None:
             self.reference_frq = None
             self.use_fixed_ref = False
         else:
+            # todo: coerce to correct shape
             self.reference_frq = np.array(reference_frq) + np.zeros(self.imgs_raw.shape[:-3] + (2,))
             self.use_fixed_ref = True
         self.reference_frq_bg = self.reference_frq
@@ -367,7 +368,8 @@ class Tomography:
                           dtype=np.complex64 if self.save_float32 else complex)
 
         self.store.create("phase_correction_profile",
-                          shape=(1,) * self.nextra_dims + (self.ny, self.nx),
+                          shape=self.imgs_raw.shape[:-3] + (1, self.ny, self.nx),
+                          chunks=(1,) * self.nextra_dims + (1, self.ny, self.nx),
                           compressor=self.compressor,
                           dtype=np.complex64 if self.save_float32 else complex)
 
@@ -602,6 +604,7 @@ class Tomography:
 
         # load and crop images
         imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 3) + zc.shape[-3:])[slices]
+        # imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 2) + zc.shape[-2:])[slices]
 
         # if background is a position slice of imgs use slice so preserve shape of array
         if bg_axis is not None:
@@ -936,8 +939,14 @@ class Tomography:
         self.hologram_frqs = [frqs_hologram[..., ii, :, :] for ii in range(self.npatterns)]
         self.hologram_frqs_bg = [frqs_hologram_bg[..., ii, :, :] for ii in range(self.npatterns)]
         if not self.use_fixed_ref:
-            self.reference_frq = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
-            self.reference_frq_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
+            self.reference_frq = np.expand_dims(np.mean(np.concatenate(self.hologram_frqs,
+                                                                       axis=-2),
+                                                        axis=-2),
+                                                axis=(-2, -3, -4))
+            self.reference_frq_bg = np.expand_dims(np.mean(np.concatenate(self.hologram_frqs_bg,
+                                                                          axis=-2),
+                                                           axis=-2),
+                                                   axis=(-2, -3, -4))
 
         # store and print timing information
         self.timing["fit_frequency_time"] = perf_counter() - tstart_est_frqs
@@ -951,7 +960,7 @@ class Tomography:
         :return beam_frqs: list (length n_patterns) with each element an array of size N1 x N2 ... x Nm x 3
         """
 
-        bxys = [f - np.expand_dims(self.reference_frq, axis=-2) for f in self.hologram_frqs]
+        bxys = [f - self.reference_frq.squeeze(axis=(-2, -3)) for f in self.hologram_frqs]
         bzs = [get_fzs(bxy[..., 0], bxy[..., 1], self.no, self.wavelength) for bxy in bxys]
         beam_frqs = [np.stack((bxy[..., 0], bxy[..., 1], bz), axis=-1) for bxy, bz in zip(bxys, bzs)]
 
@@ -984,7 +993,7 @@ class Tomography:
         # mean_hologram_frqs = np.mean(self.hologram_frqs, axis=tuple(range(self.nextra_dims)))
         # mean_hologram_frqs = np.concatenate([hf for hf in mean_hologram_frqs], axis=0)
 
-        mean_ref_frq = np.mean(self.reference_frq, axis=tuple(range(self.nextra_dims)))
+        mean_ref_frq = np.mean(self.reference_frq.squeeze(axis=(-2, -3, -4)), axis=tuple(range(self.nextra_dims)))
 
         beam_frqs = np.concatenate([np.mean(f, axis=tuple(range(self.nextra_dims)))
                                     for f in self.get_beam_frqs()], axis=0)
@@ -1146,75 +1155,172 @@ class Tomography:
         return xform_dmd2frq
 
     def unmix_holograms_v2(self,
-                           use_gpu: bool = False,
                            processes: bool = False,
-                           **kwargs
+                           n_workers: int = -1,
+                           use_gpu: bool = False,
                            ):
+
+        tstart_holos = perf_counter()
 
         xp = cp if use_gpu and cp else np
 
-        def solve(imgs,
-                  imgs_ref,
-                  fx_ref,
-                  fy_ref,
-                  dxy,
-                  fmax,
-                  threshold=0.,
-                  apodization=None,
-                  eft_out=None,
-                  phase_corr_out=None,
-                  phase_params_out=None,
-                  translations_out=None,
-                  block_id=None
-                  ):
+        def calibrate(imgs,
+                      hft_ref,
+                      fx_ref,
+                      fy_ref,
+                      dxy,
+                      fmax,
+                      threshold,
+                      apodization=None,
+                      eft_out=None,
+                      phase_corr_out=None,
+                      fit_phases=True,
+                      fit_translations=True,
+                      average_axes=None,
+                      block_id=None,
+                      arr_full_size=None,
+                      ):
 
-            if block_id is None:
-                block_ind = None
-                label = ""
-            else:
-                block_ind = block_id[:imgs.ndim - 3]
-                label = f"{block_id} "
+            squeeze_ax = tuple(range(imgs.ndim - 3))
 
+            imgs = xp.asarray(imgs.squeeze(axis=squeeze_ax))
+            hft_ref = xp.asarray(hft_ref.squeeze(axis=squeeze_ax))
+            fx_ref = fx_ref.squeeze(axis=squeeze_ax)
+            fy_ref = fy_ref.squeeze(axis=squeeze_ax)
+
+            # unmix holograms
             hft = unmix_hologram(imgs, dxy, fmax, fx_ref, fy_ref, apodization)
-            hft_ref = unmix_hologram(imgs_ref, dxy, fmax, fx_ref, fy_ref, apodization)
 
             # translation correction
-            habs_ft = ft2(abs(ift2(imgs)))
-            habs_ft_ref = ft2(abs(ift2(imgs)))
-            translations = fit_phase_ramp(habs_ft, habs_ft_ref, dxy, threshold)
+            if fit_translations:
+                translations = fit_phase_ramp(ft2(abs(ift2(hft))),
+                                              ft2(abs(ift2(hft_ref))),
+                                              dxy,
+                                              threshold)
 
-            ny, nx = hft.shape[-2:]
-            fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
-            fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
-            fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
-            fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
+                ny, nx = hft.shape[-2:]
+                fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
+                fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
+                fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
+                fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
 
-            hft *= np.exp(2 * np.pi * 1j * (fx_bcastable * translations[..., 0] +
-                                            fy_bcastable * translations[..., 1]))
+                hft *= np.exp(2 * np.pi * 1j * (fx_bcastable * translations[..., 0] +
+                                                fy_bcastable * translations[..., 1]))
+            else:
+                translations = np.zeros(hft.shape[:-2] + (1, 1, 2))
 
             # global phase correction
-            phase_params = get_global_phase_shifts(hft, hft_ref)
-            hft *= phase_params
+            if fit_phases:
+                phase_params = get_global_phase_shifts(hft, hft_ref)
+                hft *= phase_params
+            else:
+                phase_params = np.ones(hft.shape[:-2] + (1, 1), dtype=complex)
 
             # other phase correction
-            pc = PhaseCorr(ift2(hft),
-                           ift2(hft_ref),
-                           tau_l1=1e3,
-                           escale=40.)
-            rpc = pc.run(xp.ones(hft.shape[-2:], dtype=complex),
-                         step=1e5,
-                         max_iterations=10,
-                         line_search=True,
-                         line_search_iter_limit=3,
-                         n_batch=3,
-                         compute_batch_grad_parallel=True,
-                         compute_cost=False,
-                         verbose=False,
-                         print_newline=False,
-                         )
+            if phase_corr_out is not None:
+                pc = PhaseCorr(ift2(hft),
+                               ift2(hft_ref),
+                               tau_l1=1e3,
+                               escale=40.)
+                rpc = pc.run(xp.ones(hft.shape[-2:], dtype=complex),
+                             step=1e5,
+                             max_iterations=10,
+                             line_search=True,
+                             line_search_iter_limit=3,
+                             n_batch=3,
+                             compute_batch_grad_parallel=True,
+                             compute_cost=False,
+                             verbose=False,
+                             )
+                phase_prof = rpc["x"]
+                phase_corr_out[block_id[:-3] + (0,)] = phase_prof
+            else:
+                phase_prof = 1
 
-            phase_prof = rpc["x"]
-            hft = ft2(phase_prof * ift2(hft))
+            if average_axes is None:
+                eft_out[block_id[:-3]] = to_cpu(ft2(phase_prof * ift2(hft)))
+            else:
+                if arr_full_size is None:
+                    raise ValueError("average not supported unless arr_full_size is provided")
+
+                navg = np.prod([a if ii in average_axes else 1
+                                for ii, a in enumerate(arr_full_size)])
+
+                block_id_out = tuple([b if ii not in average_axes else 0 for ii, b in enumerate(block_id)])
+                eft_out[block_id_out[:-3]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
+
+            return translations, phase_params
+
+        #
+        ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes
+                           else slice(None)
+                           for a in range(self.nextra_dims)])
+
+        if self.use_average_as_background:
+            imgs_raw_bg = self.imgs_raw
+        else:
+            imgs_raw_bg = self.imgs_raw_bg
+
+        # get reference holograms
+        hft_ref = unmix_hologram(imgs_raw_bg[ref_slice].compute(),
+                                 self.dxy,
+                                 self.fmax,
+                                 self.reference_frq_bg[..., 0][ref_slice],
+                                 self.reference_frq_bg[..., 1][ref_slice],
+                                 self.apodization)
+
+        # correct background
+        rbg = map_blocks_joblib(calibrate,
+                                imgs_raw_bg,
+                                hft_ref,
+                                self.reference_frq_bg[..., 0],
+                                self.reference_frq_bg[..., 1],
+                                self.dxy,
+                                self.fmax,
+                                threshold=self.translation_thresh,
+                                apodization=self.apodization,
+                                eft_out=self.store.efield_bg_ft,
+                                fit_phases=self.fit_phases,
+                                fit_translations=self.fit_translations,
+                                average_axes=self.bg_average_axes,
+                                chunks=imgs_raw_bg.chunksize,
+                                n_workers=n_workers,
+                                processes=processes
+                                )
+
+        t, p = zip(*rbg)
+        self.translations_bg = np.stack(t, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1, 2))
+        self.phase_params_bg = np.stack(p, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1))
+
+        self.efield_bg_ft = da.from_zarr(self.store.efield_bg_ft)
+
+        # correct foreground
+        # todo: more logic for using average as own background?
+        r = map_blocks_joblib(calibrate,
+                              self.imgs_raw,
+                              self.efield_bg_ft,
+                              self.reference_frq[..., 0],
+                              self.reference_frq[..., 1],
+                              self.dxy,
+                              self.fmax,
+                              threshold=self.translation_thresh,
+                              apodization=self.apodization,
+                              eft_out=self.store.efields_ft,
+                              phase_corr_out=self.store.phase_correction_profile if self.fit_phase_profile else None,
+                              chunks=imgs_raw_bg.chunksize,
+                              n_workers=n_workers,
+                              processes=processes
+                              )
+
+        t, p = zip(*r)
+        self.translations = np.stack(t, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1, 2))
+        self.phase_params = np.stack(p, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1))
+
+        get_reusable_executor().shutdown(wait=True)
+
+        self.timing["unmix_hologram_time"] = perf_counter() - tstart_holos
+        if self.verbose:
+            print(f"unmixed holograms and fit phases in {parse_time(self.timing['unmix_hologram_time'])[1]}")
 
     def unmix_holograms(self,
                         use_gpu: bool = False,
@@ -1280,9 +1386,13 @@ class Tomography:
 
             # get electric field from holograms
             # make broadcastable to same size as raw images so can use with dask array
-            ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
+            # ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
+            #                               chunks=imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
+            #                               )
+            ref_frq_bg_da = da.from_array(self.reference_frq_bg,
                                           chunks=imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
                                           )
+
             hft_bg = da.map_blocks(unmix_hologram,
                                             imgs_raw_bg,
                                             self.dxy,
@@ -1355,7 +1465,10 @@ class Tomography:
                 self.translations = self.translations_bg
                 self.phase_params = self.phase_params_bg
             else:
-                ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
+                # ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
+                #                            chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
+                #                            )
+                ref_frq_da = da.from_array(self.reference_frq,
                                            chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
                                            )
                 hft = da.map_blocks(unmix_hologram,
@@ -1826,6 +1939,7 @@ class Tomography:
                           verbose=False,
                           )
 
+        get_reusable_executor().shutdown(wait=True)
         self.timing["reconstruction_time"] = perf_counter() - tstart_recon
         if self.verbose:
             print(f"recon time: {parse_time(self.timing['reconstruction_time'])[1]:s}")
@@ -1931,9 +2045,10 @@ class Tomography:
         hgram_frq_diffs = np.concatenate(hgram_frq_diffs, axis=1)
 
         # shape = ntimes x 2
-        ref_frq_diffs = (self.reference_frq - np.mean(self.reference_frq,
-                                                      axis=time_axis,
-                                                      keepdims=True))[ref_slices].squeeze(squeeze_axes)
+        rfrq_sq = self.reference_frq.squeeze(axis=(-2, -3, -4))
+        ref_frq_diffs = (rfrq_sq - np.mean(rfrq_sq,
+                                           axis=time_axis,
+                                           keepdims=True))[ref_slices].squeeze(squeeze_axes)
 
         # plot
         figh = plt.figure(figsize=figsize, **kwargs)
@@ -3596,19 +3711,20 @@ def map_blocks_joblib(fn,
                       processes=True,
                       chunks=None,
                       verbose=True,
-                      **kwargs):
+                      **kwargs) -> list:
     """
     Processes function along blocks of a chunked array with joblib. This is intended to be a replacement for
     dask.array.map_blocks()
 
     :param fn: function to call on blocks
-    :param args: first argument should be the main array to map blocks over. Subsequent arrays will also work
-    :param n_workers:
-    :param processes:
-    :param chunksize:
-    :param verbose:
+    :param args: first argument should be the main array to map blocks over. Will also map over subsequent arrays, if
+    they are broadcastable with args[0]
+    :param n_workers: number of joblib workers
+    :param processes: whether to use processes or threads
+    :param chunks: size of chunks
+    :param verbose: whether to display a progress bar
     :param kwargs: should not be arrays
-    :return:
+    :return results:
     """
 
     fullsize = args[0].shape
@@ -3617,9 +3733,7 @@ def map_blocks_joblib(fn,
                              for c, f in zip(chunks, fullsize)]).astype(int)
     nchunks = np.prod(nchunks_dims)
 
-    def get_block_ind(chunk_ind):
-        return np.unravel_index(chunk_ind, nchunks_dims)
-
+    def get_block_ind(chunk_ind): return np.unravel_index(chunk_ind, nchunks_dims)
 
     def slicer(a, chunk_ind):
         if isinstance(a, (np.ndarray, dask.array.Array)) or (cp and isinstance(a, cp.ndarray)):
@@ -3631,7 +3745,7 @@ def map_blocks_joblib(fn,
             # if a is not full dimensionality, only slice last dimensions
             slices_dim = slices[-a.ndim:]
 
-            # don't slice along dimension if a is broadcastable
+            # don't slice along dimension if we can broadcast
             slices_dim = [s if d != 1
                           else slice(None)
                           for s, d in zip(slices_dim, a.shape)]
@@ -3644,14 +3758,34 @@ def map_blocks_joblib(fn,
     if verbose:
         inds = tqdm(inds)
 
-    r = (joblib.Parallel(n_jobs=n_workers, prefer="processes" if processes else "threads")
+    spec = getfullargspec(fn)
+    # add block id
+    if "block_id" in kwargs.keys():
+        raise ValueError("detected special key 'block_id' in kwargs. This is not allowed.")
+
+    if "block_id" in spec.args:
+        def bid(id): return {"block_id": id}
+    else:
+        def bid(id): return {}
+
+    # add arr_full_size
+    if "arr_full_size" in kwargs.keys():
+        raise ValueError("detected special key 'arr_full_size' in kwargs. This is not allowed.")
+
+    if "arr_full_size" in spec.args:
+        kwargs.update({"arr_full_size": fullsize})
+
+    # todo: also pass full size?
+    # todo: pass input_chunks and separately chunks?
+    # todo: get input chunks for input array? Require it to have a chunksize attribute?
+    results = (joblib.Parallel(n_jobs=n_workers, prefer="processes" if processes else "threads")
                  (joblib.delayed(fn)(*[slicer(a, ind) for a in args],
-                                     block_id=get_block_ind(ind),
+                                     **bid(get_block_ind(ind)), # pass block id if function accepts it
                                      **kwargs)
                                      for ind in inds)
-         )
+              )
 
-    return r
+    return results
 
 
 def save_dask_logs(client,
