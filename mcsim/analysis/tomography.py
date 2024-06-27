@@ -573,7 +573,8 @@ class Tomography:
                          slice_axis: Optional[int] = None,
                          n_every: int = 1,
                          bg_axis: Optional[int] = None,
-                         bg_index: Optional[int] = None
+                         bg_index: Optional[int] = None,
+                         one_chunk_per_volume: bool = True,
                          ):
         """
 
@@ -604,8 +605,10 @@ class Tomography:
         slices = tuple(slices)
 
         # load and crop images
-        imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 3) + zc.shape[-3:])[slices]
-        # imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 2) + zc.shape[-2:])[slices]
+        if one_chunk_per_volume:
+            imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 3) + zc.shape[-3:])[slices]
+        else:
+            imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 2) + zc.shape[-2:])[slices]
 
         # if background is a position slice of imgs use slice so preserve shape of array
         if bg_axis is not None:
