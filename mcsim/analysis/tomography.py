@@ -2183,22 +2183,15 @@ class Tomography:
                                              index=index,
                                              **kwargs)
 
-            # plot sampling
-            figh_sampling = self.plot_odt_sampling(index=index,
-                                                   figsize=(15, 5),
-                                                   **kwargs)
-
         if save:
             figh_frq.savefig(self.save_dir / "hologram_frequency_stability.png")
             figh_ph.savefig(self.save_dir / "phase_stability.png")
             figh_xl.savefig(self.save_dir / "registration.png")
-            figh_sampling.savefig(self.save_dir / "fourier_sampling.png")
 
         if not interactive:
             plt.close(figh_frq)
             plt.close(figh_ph)
             plt.close(figh_xl)
-            plt.close(figh_sampling)
 
         self.timing["plot_diagnostics_time"] = perf_counter() - tstart_plot
         if self.verbose:
