@@ -2756,10 +2756,11 @@ def fit_phase_ramp(imgs_ft: array,
         ref_val = np.max(np.abs(ref_imgs_ft)) * thresh
         mask = xp.abs(imgs_ft[ind]) >= ref_val
 
-        imgs_ft_mask = imgs_ft[ind][mask]
-        fxfx_mask = fxfx[mask]
-        fyfy_mask = fyfy[mask]
-        ref_imgs_ft_mask = ref_imgs_ft[ind][mask]
+        # must be on CPU to run
+        imgs_ft_mask = to_cpu(imgs_ft[ind][mask])
+        fxfx_mask = to_cpu(fxfx[mask])
+        fyfy_mask = to_cpu(fyfy[mask])
+        ref_imgs_ft_mask = to_cpu(ref_imgs_ft[ind][mask])
 
         def fnh(p): return ref_imgs_ft_mask * np.exp(-2 * np.pi * 1j * (fxfx_mask * p[0] + fyfy_mask * p[1]))
 
@@ -2774,7 +2775,7 @@ def fit_phase_ramp(imgs_ft: array,
                             function_is_complex=True
                             )
 
-        fit_params[ind] = results["fit_params"]
+        fit_params[ind] = xp.asarray(results["fit_params"])
 
     return fit_params
 
