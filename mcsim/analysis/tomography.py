@@ -1163,8 +1163,6 @@ class Tomography:
 
         tstart_holos = perf_counter()
 
-        xp = cp if use_gpu and cp else np
-
         def calibrate(imgs,
                       hft_ref,
                       fx_ref,
@@ -1178,10 +1176,13 @@ class Tomography:
                       fit_phases=True,
                       fit_translations=True,
                       average_axes=None,
+                      use_gpu=False,
                       semaphore=None,
                       block_id=None,
                       arr_full_size=None,
                       ):
+
+            xp = cp if use_gpu and cp else np
 
             squeeze_ax = tuple(range(imgs.ndim - 3))
 
@@ -1250,13 +1251,15 @@ class Tomography:
 
                 block_id_out = tuple([b if ii not in average_axes else 0 for ii, b in enumerate(block_id)])
 
-                semaphore.acquire()
-                eft_out[block_id_out[:-3]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
-                semaphore.release()
+                if semaphore is not None:
+                    with semaphore:
+                        eft_out[block_id_out[:-3]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
+                else:
+                    # mostly for debugging
+                    eft_out[block_id_out[:-3]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
 
             return translations, phase_params
 
-        #
         ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes
                            else slice(None)
                            for a in range(self.nextra_dims)])
@@ -1275,8 +1278,8 @@ class Tomography:
                                  self.apodization)
 
         # correct background
+        print("correcting background")
         semaphore = Semaphore(1)
-
         rbg = map_blocks_joblib(calibrate,
                                 imgs_raw_bg,
                                 hft_ref,
@@ -1291,6 +1294,7 @@ class Tomography:
                                 fit_translations=self.fit_translations,
                                 average_axes=self.bg_average_axes,
                                 semaphore=semaphore,
+                                use_gpu=use_gpu,
                                 chunks=imgs_raw_bg.chunksize,
                                 n_workers=n_workers,
                                 processes=processes
@@ -1301,6 +1305,7 @@ class Tomography:
         self.phase_params_bg = np.stack(p, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1))
 
         # correct foreground
+        print("correcting foreground")
         # todo: more logic for using average as own background?
         r = map_blocks_joblib(calibrate,
                               self.imgs_raw,
@@ -1313,6 +1318,9 @@ class Tomography:
                               apodization=self.apodization,
                               eft_out=self.store.efields_ft,
                               phase_corr_out=self.store.phase_correction_profile if self.fit_phase_profile else None,
+                              fit_phases=self.fit_phases,
+                              fit_translations=self.fit_translations,
+                              use_gpu=use_gpu,
                               chunks=imgs_raw_bg.chunksize,
                               n_workers=n_workers,
                               processes=processes
