@@ -1183,6 +1183,7 @@ class Tomography:
                       semaphore=None,
                       block_id=None,
                       arr_full_size=None,
+                      phase_corr_kwargs=None,
                       ):
 
             xp = cp if use_gpu and cp else np
@@ -1232,17 +1233,9 @@ class Tomography:
 
                 pc = PhaseCorr(ift2(hft),
                                ift2(hft_ref),
-                               tau_l1=1e3,
-                               escale=40.)
+                               **phase_corr_kwargs)
                 rpc = pc.run(xp.ones(hft.shape[-2:], dtype=complex),
-                             step=1e5,
-                             max_iterations=10,
-                             line_search=True,
-                             line_search_iter_limit=3,
-                             n_batch=3,
-                             compute_batch_grad_parallel=True,
-                             compute_cost=False,
-                             verbose=False,
+                             **phase_corr_kwargs
                              )
                 phase_prof = rpc["x"]
                 phase_corr_out[block_id[:-n_used_dims] + (0,)] = to_cpu(phase_prof)
@@ -1328,6 +1321,19 @@ class Tomography:
                               fit_translations=self.fit_translations,
                               use_gpu=use_gpu,
                               chunks=imgs_raw_bg.chunksize,
+                              phase_corr_kwargs={"tau_l1": 1e3,
+                                                 "escale": 40.,
+                                                 "fit_magnitude": True,
+                                                 "step": 1e5,
+                                                 "max_iterations": 10,
+                                                 "line_search": True,
+                                                 "line_search_iter_limit": 3,
+                                                 "n_batch": 3,
+                                                 "compute_batch_grad_parallel": True,
+                                                 "compute_cost": False,
+                                                 "verbose": False,
+                                                 "print_newline": False,
+                                                 },
                               n_workers=n_workers,
                               processes=processes
                               )
@@ -1373,21 +1379,25 @@ class Tomography:
             nextra_dims = eft.ndim - 3
             extra_dims = tuple(range(eft.ndim - 3))
 
+            phase_corr_kwargs = {"tau_l1": 1e3,
+                                 "escale": 40.,
+                                 "fit_magnitude": True,
+                                 "step": 1e5,
+                                 "max_iterations": 10,
+                                 "line_search": True,
+                                 "line_search_iter_limit": 3,
+                                 "n_batch": 3,
+                                 "compute_batch_grad_parallel": True,
+                                 "compute_cost": False,
+                                 "verbose": False,
+                                 "print_newline": False,
+                                 }
+
             pc = PhaseCorr(ift2(eft.squeeze(extra_dims)),
                            ift2(ebg_ft.squeeze(extra_dims)),
-                           tau_l1=1e3,
-                           escale=40.,
-                           fit_magnitude=True)
+                           **phase_corr_kwargs)
             rpc = pc.run(xp.ones(eft.shape[-2:], dtype=complex),
-                         step=1e5,
-                         max_iterations=10,
-                         line_search=True,
-                         line_search_iter_limit=3,
-                         n_batch=3,
-                         compute_batch_grad_parallel=True,
-                         compute_cost=False,
-                         verbose=False,
-                         print_newline=False,
+                         **phase_corr_kwargs
                          )
 
             return rpc["x"].reshape((1,) * nextra_dims + (1,) + eft.shape[-2:])
@@ -3663,7 +3673,8 @@ class PhaseCorr(Optimizer):
                  ebg,
                  tau_l1: float = 0,
                  escale: float = 40.,
-                 fit_magnitude: bool = True):
+                 fit_magnitude: bool = True,
+                 **kwargs):
         super(PhaseCorr, self).__init__(e.shape[-3],
                                         prox_parameters={"tau_l1": float(tau_l1),
                                                          "fit_magnitude": bool(fit_magnitude)})
