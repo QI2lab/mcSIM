@@ -1186,8 +1186,11 @@ class Tomography:
                       ):
 
             xp = cp if use_gpu and cp else np
+            n_used_dims = imgs.ndim - np.min([ii for ii, s in enumerate(imgs.shape) if s!=1])
+            if n_used_dims != 2 and n_used_dims != 3:
+                raise ValueError("calibrate only supports arrays with 2 or 3 non-singleton dimensions")
 
-            squeeze_ax = tuple(range(imgs.ndim - 3))
+            squeeze_ax = tuple(range(imgs.ndim - n_used_dims))
 
             imgs = xp.asarray(imgs.squeeze(axis=squeeze_ax))
             hft_ref = xp.asarray(hft_ref.squeeze(axis=squeeze_ax))
@@ -1224,6 +1227,9 @@ class Tomography:
 
             # other phase correction
             if phase_corr_out is not None:
+                if n_used_dims != 3:
+                    raise ValueError("Can only run PhaseCorr if each chunk includes all angles")
+
                 pc = PhaseCorr(ift2(hft),
                                ift2(hft_ref),
                                tau_l1=1e3,
@@ -1239,12 +1245,12 @@ class Tomography:
                              verbose=False,
                              )
                 phase_prof = rpc["x"]
-                phase_corr_out[block_id[:-3] + (0,)] = phase_prof
+                phase_corr_out[block_id[:-n_used_dims] + (0,)] = to_cpu(phase_prof)
             else:
                 phase_prof = 1
 
             if average_axes is None:
-                eft_out[block_id[:-3]] = to_cpu(ft2(phase_prof * ift2(hft)))
+                eft_out[block_id[:-n_used_dims]] = to_cpu(ft2(phase_prof * ift2(hft)))
             else:
                 if arr_full_size is None:
                     raise ValueError("average not supported unless arr_full_size is provided")
@@ -1254,25 +1260,22 @@ class Tomography:
 
                 block_id_out = tuple([b if ii not in average_axes else 0 for ii, b in enumerate(block_id)])
 
-                if semaphore is not None:
-                    with semaphore:
-                        eft_out[block_id_out[:-3]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
-                else:
-                    # mostly for debugging
-                    eft_out[block_id_out[:-3]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
+                with semaphore:
+                    eft_out[block_id_out[:-n_used_dims]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
 
-            return translations, phase_params
+            return to_cpu(translations), to_cpu(phase_params)
 
-        ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes
-                           else slice(None)
-                           for a in range(self.nextra_dims)])
-
+        # choose background image
         if self.use_average_as_background:
             imgs_raw_bg = self.imgs_raw
         else:
             imgs_raw_bg = self.imgs_raw_bg
 
         # get reference holograms
+        ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes
+                           else slice(None)
+                           for a in range(self.nextra_dims)])
+
         hft_ref = unmix_hologram(imgs_raw_bg[ref_slice].compute(),
                                  self.dxy,
                                  2*self.fmax,
