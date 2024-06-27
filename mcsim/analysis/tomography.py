@@ -1207,8 +1207,8 @@ class Tomography:
                 ny, nx = hft.shape[-2:]
                 fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
                 fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
-                fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
-                fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
+                fx_bcastable = xp.expand_dims(fxs, axis=-2)
+                fy_bcastable = xp.expand_dims(fys, axis=-1)
 
                 hft *= np.exp(2 * np.pi * 1j * (fx_bcastable * translations[..., 0] +
                                                 fy_bcastable * translations[..., 1]))
