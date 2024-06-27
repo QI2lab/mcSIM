@@ -264,7 +264,7 @@ class Tomography:
 
         self.use_average_as_background = self.imgs_raw_bg is None
 
-        if bg_average_axes is None:
+        if bg_average_axes is None or not self.use_average_as_background:
             bg_average_axes = ()
         self.bg_average_axes = bg_average_axes
 
@@ -1297,8 +1297,8 @@ class Tomography:
                                 )
 
         t, p = zip(*rbg)
-        self.translations_bg = np.stack(t, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1, 2))
-        self.phase_params_bg = np.stack(p, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1))
+        self.translations_bg = np.stack(t, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1, 2))
+        self.phase_params_bg = np.stack(p, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1))
 
         # correct foreground
         # todo: more logic for using average as own background?
