@@ -1182,7 +1182,7 @@ class Tomography:
                       use_gpu=False,
                       semaphore=None,
                       block_id=None,
-                      arr_full_size=None,
+                      block_info=None,
                       phase_corr_kwargs=None,
                       ):
 
@@ -1245,8 +1245,10 @@ class Tomography:
             if average_axes is None:
                 eft_out[block_id[:-n_used_dims]] = to_cpu(ft2(phase_prof * ift2(hft)))
             else:
-                if arr_full_size is None:
-                    raise ValueError("average not supported unless arr_full_size is provided")
+                # save portion of average to block
+                arr_full_size = block_info[0]["shape"]
+                if arr_full_size is None or semaphore is None:
+                    raise ValueError("average not supported unless arr_full_size and semaphore are provided")
 
                 navg = np.prod([a if ii in average_axes else 1
                                 for ii, a in enumerate(arr_full_size)])
@@ -3783,29 +3785,38 @@ def map_blocks_joblib(fn,
     if verbose:
         inds = tqdm(inds)
 
+    # ########################
+    # detect and pass special keyword arguments for block logic
+    # ########################
     spec = getfullargspec(fn)
     # add block id
     if "block_id" in kwargs.keys():
         raise ValueError("detected special key 'block_id' in kwargs. This is not allowed.")
 
     if "block_id" in spec.args:
-        def bid(id): return {"block_id": id}
+        def bid(ind): return {"block_id": get_block_ind(ind)}
     else:
-        def bid(id): return {}
+        def bid(ind): return {}
 
-    # add arr_full_size
-    if "arr_full_size" in kwargs.keys():
-        raise ValueError("detected special key 'arr_full_size' in kwargs. This is not allowed.")
+    if "block_info" in kwargs.keys():
+        raise ValueError("detected special key 'block_info' in kwargs. This is not allowed.")
 
-    if "arr_full_size" in spec.args:
-        kwargs.update({"arr_full_size": fullsize})
+    if "block_info" in spec.args:
+        def binfo(ind): return {"block_info": {0: {"shape": fullsize,
+                                                  "num-chunks": nchunks_dims,
+                                                  "chunk-location": get_block_ind(ind),
+                                                  "array-location": None # todo
+                                                  }
+                                              }
+                               }
+    else:
+        def binfo(ind): return {}
 
-    # todo: also pass full size?
-    # todo: pass input_chunks and separately chunks?
-    # todo: get input chunks for input array? Require it to have a chunksize attribute?
+    # todo: pass input_chunks or derive from array (through chunksize attribute?) and separately (output) chunks?
     results = (joblib.Parallel(n_jobs=n_workers, prefer="processes" if processes else "threads")
                  (joblib.delayed(fn)(*[slicer(a, ind) for a in args],
-                                     **bid(get_block_ind(ind)), # pass block id if function accepts it
+                                     **bid(ind), # pass block id if function accepts it
+                                     **binfo(ind), # pass block info
                                      **kwargs)
                                      for ind in inds)
               )
