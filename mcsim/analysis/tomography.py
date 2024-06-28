@@ -116,6 +116,7 @@ class Tomography:
                  fit_translations: bool = False,
                  translation_thresh: float = 1 / 30,
                  fit_phase_profile: bool = False,
+                 phase_profile_l1: float = 1e3,
                  apodization: Optional[np.ndarray] = None,
                  save_auxiliary_fields: bool = False,
                  compressor: Codec = Zlib(),
@@ -307,6 +308,7 @@ class Tomography:
         self.fit_translations = fit_translations
         self.translation_thresh = translation_thresh
         self.fit_phase_profile = fit_phase_profile
+        self.phase_profile_l1 = phase_profile_l1
         self.save_auxiliary_fields = save_auxiliary_fields
         # arrays
         self.translations = np.zeros((1,) * self.nextra_dims + (self.npatterns, 1, 1, 2), dtype=float)
@@ -1322,20 +1324,17 @@ class Tomography:
                               fit_phases=self.fit_phases,
                               fit_translations=self.fit_translations,
                               use_gpu=use_gpu,
-                              chunks=imgs_raw_bg.chunksize,
-                              phase_corr_kwargs={"tau_l1": 1e3,
+                              phase_corr_kwargs={"tau_l1": self.phase_profile_l1,
                                                  "escale": 40.,
                                                  "fit_magnitude": True,
                                                  "step": 1e5,
                                                  "max_iterations": 10,
-                                                 "line_search": True,
                                                  "line_search_iter_limit": 3,
-                                                 "n_batch": 3,
+                                                 "n_batch": self.reconstruction_settings["n_batch"],
                                                  "compute_batch_grad_parallel": True,
-                                                 "compute_cost": False,
-                                                 "verbose": False,
-                                                 "print_newline": False,
                                                  },
+                              chunks=((1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
+                                      if self.fit_phase_profile else imgs_raw_bg.chunksize,
                               n_workers=n_workers,
                               processes=processes
                               )
@@ -1381,18 +1380,14 @@ class Tomography:
             nextra_dims = eft.ndim - 3
             extra_dims = tuple(range(eft.ndim - 3))
 
-            phase_corr_kwargs = {"tau_l1": 1e3,
+            phase_corr_kwargs = {"tau_l1": self.phase_profile_l1,
                                  "escale": 40.,
                                  "fit_magnitude": True,
                                  "step": 1e5,
                                  "max_iterations": 10,
-                                 "line_search": True,
-                                 "line_search_iter_limit": 3,
+                                 "line_search_iter_limit": self.reconstruction_settings["n_batch"],
                                  "n_batch": 3,
                                  "compute_batch_grad_parallel": True,
-                                 "compute_cost": False,
-                                 "verbose": False,
-                                 "print_newline": False,
                                  }
 
             pc = PhaseCorr(ift2(eft.squeeze(extra_dims)),
@@ -1417,10 +1412,6 @@ class Tomography:
 
 
             # get electric field from holograms
-            # make broadcastable to same size as raw images so can use with dask array
-            # ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
-            #                               chunks=imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
-            #                               )
             ref_frq_bg_da = da.from_array(self.reference_frq_bg,
                                           chunks=imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
                                           )
@@ -1497,9 +1488,6 @@ class Tomography:
                 self.translations = self.translations_bg
                 self.phase_params = self.phase_params_bg
             else:
-                # ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
-                #                            chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
-                #                            )
                 ref_frq_da = da.from_array(self.reference_frq,
                                            chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
                                            )
@@ -1982,6 +1970,14 @@ class Tomography:
                           index: Optional[tuple[int]] = None,
                           figsize: Sequence[float, float] = (30., 8.),
                           **kwargs) -> Figure:
+        """
+
+        :param time_axis:
+        :param index:
+        :param figsize:
+        :param kwargs:
+        :return figh:
+        """
 
         if index is None:
             index = (0,) * (self.nextra_dims - 1)
@@ -3781,6 +3777,7 @@ def map_blocks_joblib(fn,
         else:
             return a
 
+    # todo: tqdm only prints out when chunks start processing
     inds = range(nchunks)
     if verbose:
         inds = tqdm(inds)
@@ -3802,13 +3799,16 @@ def map_blocks_joblib(fn,
         raise ValueError("detected special key 'block_info' in kwargs. This is not allowed.")
 
     if "block_info" in spec.args:
-        def binfo(ind): return {"block_info": {0: {"shape": fullsize,
-                                                  "num-chunks": nchunks_dims,
-                                                  "chunk-location": get_block_ind(ind),
-                                                  "array-location": None # todo
-                                                  }
-                                              }
-                               }
+        def binfo(ind):
+            block_id = get_block_ind(ind)
+            array_loc = [(b * s // n, (b + 1) * s // n) for b, n, s in zip(block_id, nchunks_dims, fullsize)]
+            return {"block_info": {0: {"shape": fullsize,
+                                       "num-chunks": nchunks_dims,
+                                       "chunk-location": block_id,
+                                       "array-location": array_loc
+                                       }
+                                    }
+                    }
     else:
         def binfo(ind): return {}
 
