@@ -390,7 +390,7 @@ class Tomography:
                               shape=self.imgs_raw.shape,
                               chunks=(1,) * (self.imgs_raw.ndim - 2) + (self.ny, self.nx),
                               compressor=self.compressor,
-                              dtype=complex)
+                              dtype=np.complex64 if self.save_float32 else complex)
 
         if not hasattr(self.store, "escatt"):
             self.store.create("escatt",
@@ -405,12 +405,12 @@ class Tomography:
                                   shape=self.imgs_raw.shape[:-3] + self.n_shape,
                                   chunks=(1,) * self.nextra_dims + self.n_shape,
                                   compressor=self.compressor,
-                                  dtype=complex)
+                                  dtype=np.complex64 if self.save_float32 else complex)
             else:
                 self.store.array("n_start",
                                  np.expand_dims(self.n_guess, axis=list(range(self.nextra_dims))),
                                  compressor=self.compressor,
-                                 dtype=complex)
+                                 dtype=np.complex64 if self.save_float32 else complex)
 
         if "max_iterations" not in self.reconstruction_settings.keys():
             raise ValueError()
