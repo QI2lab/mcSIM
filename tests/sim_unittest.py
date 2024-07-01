@@ -156,7 +156,10 @@ class TestSIM(unittest.TestCase):
                                                  freq,
                                                  nbin * dxy,
                                                  use_fft_origin=True)
-            self.assertAlmostEqual(phi, float(phases_fit), places=3)
+            self.assertAlmostEqual(phi,
+                                   phases_fit[0],
+                                   places=3,
+                                   msg=f"phase comparison failed for nbin={nbin:d}, nxy={nx:d}")
 
             # test frequency
             fx = fftshift(fftfreq(gt_ft.shape[0], nbin * dxy))
@@ -167,7 +170,10 @@ class TestSIM(unittest.TestCase):
                                                          nbin * dxy,
                                                          frq_guess=frq_guess,
                                                          max_frq_shift=5 * dfx)
-            np.testing.assert_allclose(frqs_fit, freq, atol=1e-5)
+            np.testing.assert_allclose(frqs_fit,
+                                       freq,
+                                       atol=1e-5,
+                                       err_msg=f"frequency comparison failed for nbin={nbin:d}, nxy={nx:d}")
 
     def test_get_band_mixing_matrix(self):
         """
