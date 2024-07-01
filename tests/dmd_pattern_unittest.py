@@ -209,7 +209,7 @@ class TestPatterns(unittest.TestCase):
         nphases = 3
         phase_index = 0
         nmax = 40
-        nx = 500
+        nx = 502
         ny = 500
         roi = get_centered_rois([1024, 1024], [ny, nx])[0]
 
@@ -264,13 +264,24 @@ class TestPatterns(unittest.TestCase):
         ###########################################
         # estimate phases/intensity after affine transformation numerically
         ###########################################
+        # todo: why does this still work? Expect second option to work instead
         # transform pattern to image space
-        img_coords = np.meshgrid(range(nx), range(ny))
+        xx, yy = np.meshgrid(range(nx), range(ny))
         # interpolation preserves phases but can distort Fourier components
         pattern_xform = xform_mat(pattern,
                                   affine_xform_roi,
-                                  img_coords,
+                                  (xx, yy),
                                   mode="interp")
+
+        # swap_xy = np.array([[0, 1, 0],
+        #                     [1, 0, 0],
+        #                     [0, 0, 1]])
+        # affine_xform_roi_yx = swap_xy.dot(affine_xform_roi.dot(swap_xy))
+        # pattern_xform2 = xform_mat(pattern,
+        #                            affine_xform_roi_yx,
+        #                           (yy, xx),
+        #                            mode="interp")
+
         # taking nearest pixel (i.e. mode = "nearest") does a better job with amplitudes,
         # but can introduce fourier components that did not exist before
 

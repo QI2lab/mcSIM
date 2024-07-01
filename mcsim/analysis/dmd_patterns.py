@@ -1152,13 +1152,19 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
 
     # todo: generate roi directly instead of cropping
+    # todo: should be roi[0], not roi[1]?
     xform_roi = params2xform([1, 0, -roi[2], 1, 0, -roi[1]]).dot(affine_xform)
     nx_roi = roi[3] - roi[2]
     ny_roi = roi[1] - roi[0]
-    img_coords_roi = np.meshgrid(range(nx_roi), range(ny_roi))
+    xxi_roi, yyi_roi = np.meshgrid(range(nx_roi), range(ny_roi))
+    # todo: need to test this after swapping order of coordinates for xform_mat
+    swap_xy = np.array([[0, 1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
+    xform_roi_yx = swap_xy.dot(xform_roi.dot(swap_xy))
     pattern_xformed = xform_mat(pattern,
-                                xform_roi,
-                                img_coords_roi,
+                                xform_roi_yx,
+                                (yyi_roi, xxi_roi),
                                 mode="interp")
     pattern_xformed_ft = ft2(pattern_xformed)
 

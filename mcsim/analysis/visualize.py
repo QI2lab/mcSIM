@@ -61,18 +61,22 @@ def assemble_2d_projections(p_xy: array,
     img[:ny, :nx] = p_xy
 
     # xz slice (max-y)
-    xform_xz = params2xform([1, 0, 0, z_to_xy_ratio, 0, ny + n_pix_sep])
+    xform_xz = params2xform([z_to_xy_ratio, 0, ny + n_pix_sep,
+                             1, 0, 0])
     n_xz = xform_mat(p_xz,
                      xform_xz,
-                     (xx[ny + n_pix_sep:, :nx],
-                     yy[ny + n_pix_sep:, :nx]))
+                     (yy[ny + n_pix_sep:, :nx],
+                      xx[ny + n_pix_sep:, :nx])
+                     )
     img[ny + n_pix_sep:, :nx] = n_xz
 
     # yz slice (max-x)
-    xform_yz = params2xform([z_to_xy_ratio, 0, nx + n_pix_sep, 1, 0, 0])
+    xform_yz = params2xform([1, 0, 0,
+                             z_to_xy_ratio, 0, nx + n_pix_sep])
     n_yz = xform_mat(p_yz.transpose(),
-                            xform_yz,
-                            (xx[:ny, nx + n_pix_sep:], yy[:ny, nx + n_pix_sep:]))
+                     xform_yz,
+                     (yy[:ny, nx + n_pix_sep:],
+                     xx[:ny, nx + n_pix_sep:]))
     img[:ny, nx + n_pix_sep:] = n_yz
 
     # remove NaNs
@@ -206,7 +210,8 @@ def export_mips_movie(mips: Sequence[np.ndarray],
     :param trajectory_memory_frames:
     :param draw_calibration_bar: whether to draw the calibration bar
     :param cbar_position: (left, bottom, width, height) axes position on figure
-    :param out_fname: full path ending in .mp4
+    :param out_fname: full path ending in .mp4. If none is provided, then no movie will be exported. But handles to
+     the animate function, figure, and axis will still be returned.
     :param fig: figure to use
     :param ax: axis to use
     :param kwargs: passed through to writer

@@ -447,8 +447,16 @@ def plot_affine_summary(img: np.ndarray,
     residual_dist_err[succesful_fits] = np.sqrt((xdmd_xform - xcam)**2 + (ydmd_xform - ycam)**2)
 
     # get mask transformed to image space
-    img_coords = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
-    mask_xformed = xform_mat(mask, affine_xform, img_coords, mode='nearest')
+    swap_xy = np.array([[0, 1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
+    affine_xform_yx = swap_xy.dot(affine_xform.dot(swap_xy))
+
+    xx, yy = np.meshgrid(range(img.shape[0]), range(img.shape[1]))
+    mask_xformed = xform_mat(mask,
+                             affine_xform_yx,
+                             (yy, xx),
+                             mode='nearest')
 
     # #####################################
     # plot results

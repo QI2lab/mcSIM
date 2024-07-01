@@ -520,8 +520,14 @@ def plot_pattern(img: np.ndarray,
 
     # transform pattern using affine transformation
     xform_roi = params2xform([1, 0, -roi[2], 1, 0, -roi[1]]).dot(affine_xform)
-    img_coords = np.meshgrid(range(nx), range(ny))
-    pattern_xformed = xform_mat(pattern, xform_roi, img_coords, mode="interp")
+    # todo: need to verify this still works after changing order of coordinates for xform_mat
+    # xform_mat prefers affine transformation use order (y, x)
+    swap_xy = np.array([[0, 1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
+    xform_roi_yx = swap_xy.dot(xform_roi.dot(swap_xy))
+    xx, yy = np.meshgrid(range(nx), range(ny))
+    pattern_xformed = xform_mat(pattern, xform_roi_yx, (yy, xx), mode="interp")
 
     # get fourier transform of image
     fxs = fftshift(fftfreq(nx, pixel_size_um))
