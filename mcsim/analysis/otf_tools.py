@@ -527,7 +527,7 @@ def plot_pattern(img: np.ndarray,
                         [0, 0, 1]])
     xform_roi_yx = swap_xy.dot(xform_roi.dot(swap_xy))
     xx, yy = np.meshgrid(range(nx), range(ny))
-    pattern_xformed = xform_mat(pattern, xform_roi_yx, (yy, xx), mode="interp")
+    pattern_xformed = xform_mat(pattern, xform_roi_yx, (yy, xx), mode="linear")
 
     # get fourier transform of image
     fxs = fftshift(fftfreq(nx, pixel_size_um))

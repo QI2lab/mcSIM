@@ -271,7 +271,7 @@ class TestPatterns(unittest.TestCase):
         pattern_xform = xform_mat(pattern,
                                   affine_xform_roi,
                                   (xx, yy),
-                                  mode="interp")
+                                  mode="linear")
 
         # swap_xy = np.array([[0, 1, 0],
         #                     [1, 0, 0],

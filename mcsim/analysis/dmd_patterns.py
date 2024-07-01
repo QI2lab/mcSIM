@@ -1165,7 +1165,7 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
     pattern_xformed = xform_mat(pattern,
                                 xform_roi_yx,
                                 (yyi_roi, xxi_roi),
-                                mode="interp")
+                                mode="linear")
     pattern_xformed_ft = ft2(pattern_xformed)
 
     fxs = fftshift(fftfreq(pattern_xformed.shape[1], 1))
