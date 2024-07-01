@@ -301,11 +301,12 @@ def translate_ft(img_ft: array,
       frequency origin centered as if using fftshift. Shape n1 x n2 x ... x n_{-3} x ny x nx
       Shifting is done along the last two axes. If this is a CuPy array, routine will be run on the GPU
     :param fx: array of x-shift frequencies
-      fx and fy should either be broadcastable to the same size as img_ft, or they should be of size
-      n_{-m} x ... x n_{-3} where images along dimensions -m, ..., -3 are shifted in parallel
+      fx and fy should be broadcastable to the same size as img_ft. When shifting many arrays in parallel using
+      different shift vectors, this requires adding two trailing singleton dimensions. So for example, the shape should
+      be n_{-m} x ... x n_{-3} x 1 x 1.
     :param fy: array of y-shift frequencies
     :param drs: (dy, dx) pixel size (sampling rate) of real space image in directions.
-    :return: shifted images, same size as img_ft
+    :return imgs_ft_shifted: same size as img_ft
     """
 
     if cp and isinstance(img_ft, cp.ndarray):
@@ -313,51 +314,31 @@ def translate_ft(img_ft: array,
     else:
         xp = np
 
+    if drs is None:
+        drs = (1, 1)
+    dy, dx = drs
+
     if img_ft.ndim < 2:
         raise ValueError("img_ft must be at least 2D")
 
-    n_extra_dims = img_ft.ndim - 2
     ny, nx = img_ft.shape[-2:]
-
     fx = xp.asarray(fx)
     fy = xp.asarray(fy)
 
-    if fx.shape != fy.shape:
-        raise ValueError(f"fx and fy must have same shape, but had shapes {fx.shape} and {fy.shape}")
-
-    shapes_broadcastable = True
     try:
-        _ = xp.broadcast(fx, img_ft)
+        _ = xp.broadcast_shapes(fx.shape, fy.shape)
+        _ = xp.broadcast_shapes(fx.shape, img_ft.shape)
+        _ = xp.broadcast_shapes(fy.shape, img_ft.shape)
     except ValueError:
-        shapes_broadcastable = False
-
-    # otherwise make shapes broadcastable if possible
-    if not shapes_broadcastable:
-        ndim_extra_frq = fx.ndim
-        if fx.shape != img_ft.shape[-2 - ndim_extra_frq:-2]:
-            raise ValueError(f"fx and shift_frq have incompatible shapes {fx.shape} and {img_ft.shape}")
-
-        axis_expand_frq = tuple(list(range(n_extra_dims - fx.ndim)) + [-2, -1])
-        fx = xp.expand_dims(fx, axis=axis_expand_frq)
-        fy = xp.expand_dims(fy, axis=axis_expand_frq)
+        raise ValueError("fx and fy shapes should be broadcast compatible with img_ft, but shapes were"
+                         f"{fx.shape}, {fy.shape}, {img_ft.shape}")
 
     if xp.all(fx == 0) and xp.all(fy == 0):
         return xp.array(img_ft, copy=True)
     else:
-        if drs is None:
-            drs = (1, 1)
-        dy, dx = drs
-
-        # must use symmetric frequency representation to do shifting correctly AND only works perfectly is size off
-        x = xp.expand_dims(xp.fft.fftfreq(nx) * nx * dx,
-                           axis=tuple(range(n_extra_dims + 1)))
-        # todo: replace with this second option which is more intuitive
-        # x = xp.expand_dims(xp.fft.ifftshift(np.arange(nx) - nx // 2) * dx, axis=axis_expand_x)
-
-        y = xp.expand_dims(xp.fft.fftfreq(ny) * ny * dy,
-                           axis=tuple(range(n_extra_dims)) + (-1,))
-        # y = xp.expand_dims(xp.fft.ifftshift(np.arange(ny) - ny // 2) * dy, axis=axis_expand_y)
-
+        # must use symmetric frequency representation to do shifting correctly AND only works perfectly if size is odd
+        x = xp.fft.fftfreq(nx) * nx * dx
+        y = xp.expand_dims(xp.fft.fftfreq(ny) * ny * dy, axis=-1)
         exp_factor = xp.exp(-1j * 2 * np.pi * (fx * x + fy * y))
 
         # FT shift theorem to approximate the Whittaker-Shannon interpolation formula,
