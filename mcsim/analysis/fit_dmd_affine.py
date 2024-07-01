@@ -368,6 +368,7 @@ def plot_affine_summary(img: np.ndarray,
                         vmin_percentile: float = 5,
                         vmax_percentile: float = 99.9,
                         gamma: float = 1.,
+                        cmap: str = "inferno",
                         **kwargs) -> Figure:
     """
     Plot results of DMD affine transformation fitting using results of fit_pattern_peaks()
@@ -413,12 +414,15 @@ def plot_affine_summary(img: np.ndarray,
         # angles differing by pi represent same ellipse
         angles = np.mod(fps[:, :, 6], np.pi)
 
+    # convert fits to DMD space
+    xform_inv = np.linalg.inv(affine_xform)
+    centers_fit_xform = xform_points(np.stack((xcam.ravel(), ycam.ravel()), axis=1), xform_inv)
+    xcam_xform = centers_fit_xform[:, 0]
+    ycam_xform = centers_fit_xform[:, 1]
+
     # extract parameters from options
     pixel_correction_factor = options['cam_pix'] / options['dmd_pix']
     expected_mag = options['dmd2cam_mag_expected']
-
-    # get affine parematers from xform
-    affine_params = xform2params(affine_xform)
 
     # transform DMD points and mask to image space
     dmd_coords_xform = xform_points(dmd_centers[succesful_fits, :], affine_xform)
@@ -451,8 +455,7 @@ def plot_affine_summary(img: np.ndarray,
     # #####################################
     fig = plt.figure(**kwargs)
     grid = fig.add_gridspec(nrows=6,
-                            ncols=5, width_ratios=[1, 1, 1, 1, 1])
-    cmap = "inferno"
+                            ncols=6, width_ratios=[1.5, 1.5, 1, 1, 1, 1])
 
     # chi squareds
     ax = fig.add_subplot(grid[:2, 0])
@@ -481,9 +484,10 @@ def plot_affine_summary(img: np.ndarray,
     im = ax.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax, cmap=cmap)
 
     sigma_m = sigma_mean_median * options["cam_pix"] / options["cam_mag"]
-    ax.set_title('$\sqrt{\sigma_x \sigma_y}$, median=%0.2f pix'
-                 '\n$\sigma$=%0.1fnm, FWHM=%0.1fnm' %
-                 (sigma_mean_median, sigma_m * 1e9, sigma_m * 2 * np.sqrt(2 * np.log(2)) * 1e9))
+    ax.set_title("$\sqrt{\sigma_x \sigma_y}$, "
+                 f"median={sigma_mean_median:.2f} pix\n"
+                 f"$\sigma$={sigma_m * 1e9:.1f}nm, "
+                 f"FWHM={sigma_m * 2 * np.sqrt(2 * np.log(2)) * 1e9:.1f}nm")
     plt.colorbar(im)
 
     # amplitudes
@@ -493,7 +497,7 @@ def plot_affine_summary(img: np.ndarray,
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
     im = ax.imshow(amps, vmin=vmin, vmax=vmax, cmap=cmap)
-    ax.set_title('amps median=%0.0f' % amp_median)
+    ax.set_title(f'amps median={amp_median:.0f}')
     plt.colorbar(im)
 
     # sigma asymmetry
@@ -501,7 +505,7 @@ def plot_affine_summary(img: np.ndarray,
     no_nans = sigma_asymmetry_cam.ravel()[np.logical_not(np.isnan(sigma_asymmetry_cam.ravel()))]
     sigma_asym_median = np.median(no_nans)
     im = ax.imshow(sigma_asymmetry_cam, vmin=0, vmax=1, cmap=cmap)
-    ax.set_title('$\sigma$ asym median=%0.2f' % sigma_asym_median)
+    ax.set_title(f'$\sigma$ asym median={sigma_asym_median:.2f}')
     plt.colorbar(im)
 
     # angles
@@ -509,7 +513,7 @@ def plot_affine_summary(img: np.ndarray,
     no_nans = angles.ravel()[np.logical_not(np.isnan(angles.ravel()))]
     median_angle = np.median(no_nans * 180 / np.pi)
     im = ax.imshow(angles * 180 / np.pi, vmin=0, vmax=180, cmap=cmap)
-    ax.set_title('angle, median=%0.1f$^\deg$' % median_angle)
+    ax.set_title(f'angle, median={median_angle:.1f}$^\deg$')
     plt.colorbar(im)
 
     # raw image with fit points overlayed
@@ -523,9 +527,6 @@ def plot_affine_summary(img: np.ndarray,
                    cmap="bone")
     ax.plot(xcam, ycam, 'rx', label="fit points")
     ax.plot(xdmd_xform, ydmd_xform, 'y1', label="affine xform")
-    # ax.plot(xc_dmd_cam, yc_dmd_cam, 'mx')
-    # ax.plot([xc_dmd_cam, x_xvec], [yc_dmd_cam, y_xvec], 'm', label="dmd axes")
-    # ax.plot([xc_dmd_cam, x_yvec], [yc_dmd_cam, y_yvec], 'm')
     ax.plot(dmd_axes_cam[:2, 0], dmd_axes_cam[:2, 1], 'm', label="dmd axes")
     ax.plot(dmd_axes_cam[2:, 0], dmd_axes_cam[2:, 1], 'm')
     ax.legend()
@@ -533,14 +534,11 @@ def plot_affine_summary(img: np.ndarray,
     ax.set_yticks([])
     plt.colorbar(im)
 
-    # ax = fig.add_subplot(grid[:3, 4])
-    # plt.colorbar(im, cax=ax)
-
     # dmd image transformed
-    ax = fig.add_subplot(grid[3:, 2:4])
+    ax = fig.add_subplot(grid[:3, 4:])
     ax.set_title('DMD pattern (camera space)')
     im = ax.imshow(mask_xformed, cmap="bone")
-    # ax.plot(xc_dmd_cam, yc_dmd_cam, c='m', marker='x')
+    ax.plot(xcam, ycam, 'rx', label="fit points")
     ax.plot(dmd_axes_cam[:2, 0], dmd_axes_cam[:2, 1], 'm')
     ax.plot(dmd_axes_cam[2:, 0], dmd_axes_cam[2:, 1], 'm')
     ax.set_xticks([])
@@ -548,9 +546,10 @@ def plot_affine_summary(img: np.ndarray,
     plt.colorbar(im)
 
     # dmd image
-    ax = fig.add_subplot(grid[3:, 4])
+    ax = fig.add_subplot(grid[3:, 2:])
     ax.set_title("DMD pattern (DMD space)")
     im = ax.imshow(mask, cmap="bone")
+    ax.plot(xcam_xform, ycam_xform, 'rx', label="fit points")
     ax.plot(dmd_axes[:2, 0], dmd_axes[:2, 1], 'm')
     ax.plot(dmd_axes[2:, 0], dmd_axes[2:, 1], 'm')
     if indices_init is not None:
@@ -560,14 +559,17 @@ def plot_affine_summary(img: np.ndarray,
     ax.set_xticks([])
     ax.set_yticks([])
 
-    fig.suptitle('theta_x=%.2fdeg, mx=%0.3f, cx=%0.1f, pixel corrected mx=%.3f\n'
-                 'theta_y=%.2fdeg, my=%0.3f, cy=%0.1f, pixel corrected my=%0.3f\n'
-                 'expected mag=%0.3f'
-                 % (affine_params[1] * 180 / np.pi, affine_params[0], affine_params[2],
-                    affine_params[0] * pixel_correction_factor,
-                    affine_params[4] * 180 / np.pi, affine_params[3], affine_params[5],
-                    affine_params[3] * pixel_correction_factor,
-                    expected_mag))
+    affine_params = xform2params(affine_xform)
+    fig.suptitle(f'theta_x={affine_params[1] * 180 / np.pi:.2f}deg, '
+                 f'mx={affine_params[0]:.3f}, '
+                 f'cx={affine_params[2]:.1f}, '
+                 f'pixel corrected mx={affine_params[0] * pixel_correction_factor:.3f}\n'
+                 f'theta_y={affine_params[4] * 180 / np.pi:.2f}deg, '
+                 f'my={affine_params[3]:.3f}, '
+                 f'cy={affine_params[5]:.1f}, '
+                 f'pixel corrected my={affine_params[3] * pixel_correction_factor:.3f}\n'
+                 f'expected mag={expected_mag:.3f}'
+                 )
 
     return fig
 
