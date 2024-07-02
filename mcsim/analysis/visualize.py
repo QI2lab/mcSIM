@@ -22,6 +22,52 @@ if cp:
 else:
     array = np.ndarray
 
+def make_color_image(imgs: Sequence[np.ndarray],
+                     colors: Sequence[np.ndarray],
+                     vmins: Optional[Sequence[float]] = None,
+                     vmaxs: Optional[Sequence[float]] = None,
+                     min_percentile: float = 0.,
+                     max_percentile: float = 99.9,
+                     invert_first: bool = False):
+    """
+
+    :param imgs:
+    :param colors:
+    :param vmins:
+    :param vmaxs:
+    :param min_percentile:
+    :param max_percentile:
+    :param invert_first: whether to invert colors before adding, and then invert again at the end. This option
+      is useful for plotting on a white background. Since white is represented by [1, 1, 1], normally it overcomes any
+      other color. But if we invert the color before adding, and then invert again at the end, we can avoid this.
+    :return:
+    """
+    # todo: add ability to use colormaps instead of colors
+
+    img_color = np.zeros(imgs[0].shape + (3,))
+    for ii, img in enumerate(imgs):
+        if vmins is not None:
+            mn = vmins[ii]
+        else:
+            mn = np.percentile(img, min_percentile)
+
+        if vmaxs is not None:
+            mx = vmaxs[ii]
+        else:
+            mx = np.percentile(img, max_percentile)
+
+        if invert_first:
+            cnow = 1 - colors[ii]
+        else:
+            cnow = colors[ii]
+
+        img_color += (np.expand_dims(img, axis=-1) - mn) / (mx - mn) * np.expand_dims(cnow, axis=(0, 1))
+
+    if invert_first:
+        img_color = 1 - img_color
+
+    return np.clip(img_color, a_min=0, a_max=1)
+
 
 def assemble_2d_projections(p_xy: array,
                             p_xz: array,
@@ -29,6 +75,7 @@ def assemble_2d_projections(p_xy: array,
                             z_to_xy_ratio: float = 1,
                             n_pix_sep: int = 5,
                             boundary_value: float = 0.,
+                            interp_method: str = "nearest",
                             ) -> array:
     """
     Assemble 2D projections into one image
@@ -66,7 +113,8 @@ def assemble_2d_projections(p_xy: array,
     n_xz = xform_mat(p_xz,
                      xform_xz,
                      (yy[ny + n_pix_sep:, :nx],
-                      xx[ny + n_pix_sep:, :nx])
+                      xx[ny + n_pix_sep:, :nx]),
+                     mode=interp_method
                      )
     img[ny + n_pix_sep:, :nx] = n_xz
 
@@ -76,7 +124,9 @@ def assemble_2d_projections(p_xy: array,
     n_yz = xform_mat(p_yz.transpose(),
                      xform_yz,
                      (yy[:ny, nx + n_pix_sep:],
-                     xx[:ny, nx + n_pix_sep:]))
+                     xx[:ny, nx + n_pix_sep:]),
+                     mode=interp_method
+                     )
     img[:ny, nx + n_pix_sep:] = n_yz
 
     # remove NaNs
