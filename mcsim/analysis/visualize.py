@@ -28,7 +28,7 @@ def make_color_image(imgs: Sequence[np.ndarray],
                      vmaxs: Optional[Sequence[float]] = None,
                      min_percentile: float = 0.,
                      max_percentile: float = 99.9,
-                     invert_first: bool = False):
+                     white_background: bool = False):
     """
 
     :param imgs:
@@ -37,7 +37,7 @@ def make_color_image(imgs: Sequence[np.ndarray],
     :param vmaxs:
     :param min_percentile:
     :param max_percentile:
-    :param invert_first: whether to invert colors before adding, and then invert again at the end. This option
+    :param white_background: whether to invert colors before adding, and then invert again at the end. This option
       is useful for plotting on a white background. Since white is represented by [1, 1, 1], normally it overcomes any
       other color. But if we invert the color before adding, and then invert again at the end, we can avoid this.
     :return:
@@ -56,14 +56,14 @@ def make_color_image(imgs: Sequence[np.ndarray],
         else:
             mx = np.percentile(img, max_percentile)
 
-        if invert_first:
+        if white_background:
             cnow = 1 - colors[ii]
         else:
             cnow = colors[ii]
 
         img_color += (np.expand_dims(img, axis=-1) - mn) / (mx - mn) * np.expand_dims(cnow, axis=(0, 1))
 
-    if invert_first:
+    if white_background:
         img_color = 1 - img_color
 
     return np.clip(img_color, a_min=0, a_max=1)
