@@ -76,7 +76,7 @@ def assemble_2d_projections(p_xy: array,
                             n_pix_sep: int = 5,
                             boundary_value: float = 0.,
                             interp_method: str = "nearest",
-                            ) -> array:
+                            ) -> (array, dict):
     """
     Assemble 2D projections into one image
 
@@ -86,7 +86,8 @@ def assemble_2d_projections(p_xy: array,
     :param z_to_xy_ratio: pixel size ratio dz/dxy
     :param n_pix_sep: number of blank pixels between projections
     :param boundary_value:
-    :return img: 2D image showing projections
+    :return img, affines: 2D image showing projections and dictionary of affine matrices
+      which can be used to help plot points or etc.
     """
 
     if cp and isinstance(p_xy, cp.ndarray):
@@ -136,7 +137,15 @@ def assemble_2d_projections(p_xy: array,
     img[ny:ny + n_pix_sep, :] = boundary_value
     img[:, nx:nx + n_pix_sep] = boundary_value
 
-    return img
+    affines = {"maxz": {"xform": params2xform([1, 0, 0, 1, 0, 0]),
+                        "coordinate_order": "yx"},
+               "maxy": {"xform": xform_xz,
+                        "coordinate_order": "zx"},
+               "maxx": {"xform": xform_yz,
+                        "coordinate_order": "yz"},
+               }
+
+    return img, affines
 
 
 def get_2d_projections(n: array,
@@ -309,7 +318,7 @@ def export_mips_movie(mips: Sequence[np.ndarray],
                                 f"{frame * dt:.3f}s",
                                 transform=ax.transAxes)
 
-        projs = assemble_2d_projections(n_maxz[frame],
+        projs, _ = assemble_2d_projections(n_maxz[frame],
                                         n_maxy[frame],
                                         n_maxx[frame],
                                         dz / dxy,
@@ -436,12 +445,12 @@ def export_mips_movie(mips: Sequence[np.ndarray],
 
         ax.axis('off')
 
-    proj_sample = assemble_2d_projections(n_maxz[0],
-                                          n_maxy[0],
-                                          n_maxx[0],
-                                          dz / dxy,
-                                          n_pix_sep=boundary_pix,
-                                          boundary_value=np.nan)
+    proj_sample, _ = assemble_2d_projections(n_maxz[0],
+                                             n_maxy[0],
+                                             n_maxx[0],
+                                             dz / dxy,
+                                             n_pix_sep=boundary_pix,
+                                             boundary_value=np.nan)
 
     # ############################
     # movie
