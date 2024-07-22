@@ -11,6 +11,7 @@ import ctypes as ct
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 from warnings import warn
 
 try:
@@ -778,9 +779,9 @@ def plot_daq_program(arr: np.ndarray,
         if ind.size > 1:
             raise ValueError()
         elif ind.size == 1:
-            ticks.append(matplotlib.text.Text(float(ii), 0, k[ind[0][0]]))
+            ticks.append(Text(float(ii), 0, k[ind[0][0]]))
         else:
-            ticks.append(matplotlib.text.Text(float(ii), 0, ""))
+            ticks.append(Text(float(ii), 0, ""))
 
     figh = plt.figure(**kwargs)
     ax = figh.add_subplot(1, 1, 1)
