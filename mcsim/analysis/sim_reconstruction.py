@@ -562,8 +562,8 @@ class SimImageSet:
                            "affine_xform_recon_2_raw_data_roi": np.asarray(xform_recon2raw).tolist(),
                            "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_recon2cam_roi).tolist(),
                            "affine_xform_recon_2_raw_camera": np.asarray(xform_recon2cam).tolist(),
-                           "data_roi": np.asarray(data_roi).tolist(),
-                           "camera_roi": np.asarray(cam_roi).tolist(),
+                           "data_roi": np.array(data_roi).tolist(),
+                           "camera_roi": np.array(cam_roi).tolist(),
                            "coordinate_order": "yx"
                            }
 
@@ -731,6 +731,9 @@ class SimImageSet:
         """
         Estimate SIM parameters from chosen slice
 
+        :param slices:
+        :param frq_max_shift:
+        :param frq_search_bounds:
         :return:
         """
 
@@ -962,7 +965,6 @@ class SimImageSet:
         # #############################################
         # check if phase fit was too bad, and default to guess values
         # #############################################
-        # if self.phases_guess is not None and self.phase_estimation_mode != "fixed":
         if self.phases_guess is not None and self._recon_settings["phase_estimation_mode"] != "fixed":
             phase_guess_diffs = np.mod(self.phases_guess - self.phases_guess[:, 0][:, None], 2 * np.pi)
             phase_diffs = np.mod(self.phases - self.phases[:, 0][:, None], 2 * np.pi)
@@ -1165,8 +1167,6 @@ class SimImageSet:
         # get optically sectioned image
         # #############################################
         if compute_os:
-            tstart = perf_counter()
-
             os_imgs = da.stack([da.map_blocks(sim_optical_section,
                                               self.imgs[..., ii, :, :, :],
                                               phase_differences=self.phases[ii],
@@ -1176,7 +1176,6 @@ class SimImageSet:
                                               meta=xp.array((), dtype=self.imgs.dtype))
                                 for ii in range(self.nangles)], axis=-3)
             self.sim_os = da.mean(os_imgs, axis=-3)
-            self.print_log(f"Computing SIM-OS image took {perf_counter() - tstart:.2f}s")
 
         # #############################################
         # estimate spatial-resolved MCNR
@@ -2557,9 +2556,7 @@ def show_sim_napari(fname_zarr: Union[str, Path],
         dxy = 1
 
     dxy_sim = dxy / imgz.attrs["upsample_factor"]
-
-    # translate to put FFT zero coordinates at origin
-    # translate_wf = (-(wf.shape[-2] // 2) * dxy, -(wf.shape[-1] // 2) * dxy)
+    # todo: use affine transformations instead of these
     translate_wf = (0, 0)
     translate_sim = (-((2 * wf.shape[-2]) // 2) * dxy_sim + (wf.shape[-2] // 2) * dxy,
                      -((2 * wf.shape[-1]) // 2) * dxy_sim + (wf.shape[-2] // 2) * dxy)
@@ -3716,7 +3713,8 @@ def shift_bands(bands_unmixed_ft: array,
     dy, dx = drs
 
     # zero-pad bands (interpolate in realspace)
-    # Only do this to one of the shifted bands. don't need to loop over m*O(f + f_o)H(f), since it is conjugate of m*O(f - f_o)H(f)
+    # Only do this to one of the shifted bands. don't need to loop over m*O(f + f_o)H(f),
+    # since it is conjugate of m*O(f - f_o)H(f)
     expanded = resample_bandlimited_ft(bands_unmixed_ft[..., :2, :, :],
                                        (upsample_factor, upsample_factor),
                                        axes=(-1, -2))
@@ -4328,11 +4326,7 @@ class FistaSim(Optimizer):
         self.patterns = patterns
         self.psf = psf
 
-        if cp and isinstance(imgs, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
-
+        xp = cp if cp and isinstance(imgs, cp.ndarray) else np
         self.psf_reversed = xp.roll(xp.flip(psf, axis=(0, 1)), shift=(1, 1), axis=(0, 1))
         self.apodization = apodization
 

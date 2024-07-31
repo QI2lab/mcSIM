@@ -280,11 +280,11 @@ def get_sim_unit_cell(vec_a: np.ndarray,
     cell_sub[np.logical_not(np.isnan(cell_sub))] = 1
 
     iy_start, = np.where(np.array(y_cell) == np.min(y_cell_sub))
-    iy_start = int(iy_start)
+    iy_start = int(iy_start[0])
     iy_end = iy_start + cell_sub.shape[0]
 
     ix_start, = np.where(np.array(x_cell) == np.min(x_cell_sub))
-    ix_start = int(ix_start)
+    ix_start = int(ix_start[0])
     ix_end = ix_start + cell_sub.shape[1]
 
     # line up origins of the two cells
@@ -851,7 +851,7 @@ def get_pattern_fourier_component(unit_cell: np.ndarray,
             raise ValueError("dmd_size was None, but must be specified when use_fft_origin is True")
 
         # now correct for DMD size
-        # todo: is the assumption that the cell zero coordinate is placed at DMD[0, 0]?
+        # todo: relies on assumption that the cell zero coordinate is placed at DMD[0, 0]
         nx, ny = dmd_size
         x_pattern = np.arange(nx) - (nx // 2)
         y_pattern = np.arange(ny) - (ny // 2)
@@ -862,7 +862,7 @@ def get_pattern_fourier_component(unit_cell: np.ndarray,
 
     fcomponent = np.abs(fcomponent) * np.exp(1j * phase)
 
-    return fcomponent, frq_vector
+    return fcomponent[0], frq_vector
 
 
 def get_efield_fourier_components(unit_cell: np.ndarray,
@@ -892,7 +892,7 @@ def get_efield_fourier_components(unit_cell: np.ndarray,
     :param ctf: coherent transfer function to apply
     :return efield, ns, ms, vecs: evaluated at the frequencyes vecs = ns * recp_va + ms * recp_vb
     """
-    warn("get_efield_fourier_components() is depcrecated in favor of ldft2()")
+    warn("get_efield_fourier_components() is deprecated in favor of ldft2()")
 
     if ctf is None:
         def ctf(fx, fy): return 1
@@ -1152,14 +1152,20 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
 
     # todo: generate roi directly instead of cropping
+    # todo: should be roi[0], not roi[1]?
     xform_roi = params2xform([1, 0, -roi[2], 1, 0, -roi[1]]).dot(affine_xform)
     nx_roi = roi[3] - roi[2]
     ny_roi = roi[1] - roi[0]
-    img_coords_roi = np.meshgrid(range(nx_roi), range(ny_roi))
+    xxi_roi, yyi_roi = np.meshgrid(range(nx_roi), range(ny_roi))
+    # todo: need to test this after swapping order of coordinates for xform_mat
+    swap_xy = np.array([[0, 1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
+    xform_roi_yx = swap_xy.dot(xform_roi.dot(swap_xy))
     pattern_xformed = xform_mat(pattern,
-                                xform_roi,
-                                img_coords_roi,
-                                mode="interp")
+                                xform_roi_yx,
+                                (yyi_roi, xxi_roi),
+                                mode="linear")
     pattern_xformed_ft = ft2(pattern_xformed)
 
     fxs = fftshift(fftfreq(pattern_xformed.shape[1], 1))

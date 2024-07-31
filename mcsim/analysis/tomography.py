@@ -6,7 +6,6 @@ reconstruction tasks are carried out with the tomography class
 from time import perf_counter
 import datetime
 from warnings import catch_warnings, simplefilter
-from copy import deepcopy
 from typing import Union, Optional
 from collections.abc import Sequence
 from inspect import getfullargspec
@@ -16,9 +15,13 @@ from numpy.linalg import norm, inv
 from numpy.fft import fftshift, fftfreq
 from scipy.signal.windows import tukey, hann
 # parallelization
+from tqdm import tqdm
+import joblib
+from joblib.externals.loky import get_reusable_executor
+from multiprocessing import Semaphore
 from dask.config import set as dask_cfg_set
 from dask import delayed
-from dask import compute as dcompute
+import dask
 import dask.array as da
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster
@@ -113,6 +116,7 @@ class Tomography:
                  fit_translations: bool = False,
                  translation_thresh: float = 1 / 30,
                  fit_phase_profile: bool = False,
+                 phase_profile_l1: float = 1e3,
                  apodization: Optional[np.ndarray] = None,
                  save_auxiliary_fields: bool = False,
                  compressor: Codec = Zlib(),
@@ -163,7 +167,10 @@ class Tomography:
           For better compression, use bz2.BZ2(), although this is much slower.
         :param save_float32:
         :param step:
-        :param reconstruction_kwargs: settings passed through to RI reconstructor
+        :param reconstruction_kwargs: Additional keyword arguments are passed through to both the constructor
+          and the run() method of the optimizer. These are used to e.g. set the strength of TV regularization,
+          the number of iterations, etc. See Optimizer, RIOptimizer, and classes inheriting from RIOptimizer
+          for more details.
         """
         self.verbose = verbose
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
@@ -174,13 +181,22 @@ class Tomography:
         if save_dir is not None:
             self.save_dir = Path(save_dir)
             self.save_dir.mkdir(exist_ok=True, parents=True)
-
+            self.dask_tmp_dir = self.save_dir
             self.store = zarr.open(self.save_dir / self.store_name, "a")
         else:
             self.save_dir = None
             self.store = zarr.open()
+            self.dask_tmp_dir = None
+
         self.compressor = compressor
         self.save_float32 = bool(save_float32)
+
+        self.timing = {"fit_frequency_time": None,
+                       "unmix_hologram_time": None,
+                       "plot_diagnostics_time": None,
+                       "reconstruction_time": None,
+                       "mips_processing_time": None
+                       }
 
         # ########################
         # physical parameters
@@ -205,25 +221,19 @@ class Tomography:
         self.model = model
 
         # ########################
-        # ROI and transformation info
-        # ########################
-        self.xform_dict = None
-        self.data_roi = data_roi
-        self.cam_roi = cam_roi
-
-        # ########################
         # images
         # ########################
         if not isinstance(imgs_raw, da.core.Array):
             raise ValueError(f"imgs_raw should be a dask array, but was {type(imgs_raw)}")
 
-        if imgs_raw.chunksize[-3:] != imgs_raw.shape[-3:]:
-            raise ValueError(f"imgs_raw chunksize along last three dimensions should match array size, but"
-                             f"{imgs_raw.chunksize[-3:]} != {imgs_raw.shape[-3:]}")
+        if imgs_raw.chunksize[-2:] != imgs_raw.shape[-2:]:
+            raise ValueError(f"imgs_raw chunksize along last two dimensions should match array size, but"
+                             f"{imgs_raw.chunksize[-2:]} != {imgs_raw.shape[-2:]}")
 
         # convert to photons
         self.imgs_raw = (imgs_raw.astype(float) - offset) / gain
         self.npatterns, self.ny, self.nx = imgs_raw.shape[-3:]
+        self.extra_shape = imgs_raw.shape[:-3]
         self.nextra_dims = imgs_raw.ndim - 3
 
         # ########################
@@ -234,9 +244,9 @@ class Tomography:
             if not isinstance(imgs_raw_bg, da.core.Array):
                 raise ValueError(f"imgs_raw_bg should be a dask array, but was {type(imgs_raw)}")
 
-            if imgs_raw_bg.chunksize[-3:] != imgs_raw_bg.shape[-3:]:
+            if imgs_raw_bg.chunksize[-2:] != imgs_raw_bg.shape[-2:]:
                 raise ValueError(f"imgs_raw_bg chunksize along last three dimensions should match array size, but"
-                                 f"{imgs_raw_bg.chunksize[-3:]} != {imgs_raw_bg.shape[-3:]}")
+                                 f"{imgs_raw_bg.chunksize[-2:]} != {imgs_raw_bg.shape[-2:]}")
 
             try:
                 np.broadcast_shapes(self.imgs_raw.shape, imgs_raw_bg.shape)
@@ -255,7 +265,7 @@ class Tomography:
 
         self.use_average_as_background = self.imgs_raw_bg is None
 
-        if bg_average_axes is None:
+        if bg_average_axes is None or not self.use_average_as_background:
             bg_average_axes = ()
         self.bg_average_axes = bg_average_axes
 
@@ -263,12 +273,13 @@ class Tomography:
         # beam frequencies
         # ########################
         # reference frequency
-        # shape = n0 x ... x nm x 2 where
+        # shape = n0 x ... x nm x 1 x 1 x 1 x 2 so either component is broadcastable with imgs
         # todo: check shape
         if reference_frq is None:
             self.reference_frq = None
             self.use_fixed_ref = False
         else:
+            # todo: coerce to correct shape
             self.reference_frq = np.array(reference_frq) + np.zeros(self.imgs_raw.shape[:-3] + (2,))
             self.use_fixed_ref = True
         self.reference_frq_bg = self.reference_frq
@@ -283,24 +294,27 @@ class Tomography:
         if self.hologram_frqs is None:
             self.nmax_multiplex = 1
         else:
-            self.nmax_multiplex = np.max([f.shape[0] for f in self.hologram_frqs])
+            self.nmax_multiplex = int(np.max([f.shape[0] for f in self.hologram_frqs]))
 
         self.hologram_frqs_bg = None
 
         # ########################
         # correction parameters
+        # parameter arrays should be broadcastable to same size as image arrays
         # ########################
         # self.phase_offsets = phase_offsets
+        # logic
         self.fit_phases = fit_phases
         self.fit_translations = fit_translations
         self.translation_thresh = translation_thresh
+        self.fit_phase_profile = fit_phase_profile
+        self.phase_profile_l1 = phase_profile_l1
+        self.save_auxiliary_fields = save_auxiliary_fields
+        # arrays
         self.translations = np.zeros((1,) * self.nextra_dims + (self.npatterns, 1, 1, 2), dtype=float)
         self.translations_bg = np.zeros_like(self.translations)
         self.phase_params = np.ones((1,) * self.nextra_dims + (self.npatterns, 1, 1), dtype=complex)
         self.phase_params_bg = np.ones_like(self.phase_params)
-        self.fit_phase_profile = fit_phase_profile
-
-        self.save_auxiliary_fields = save_auxiliary_fields
 
         # electric fields
         self.efields_ft = None
@@ -330,9 +344,7 @@ class Tomography:
                                    tukey(self.nx, alpha=0.1))
         self.apodization = apodization
 
-        self.ctf = np.expand_dims(np.sqrt(self.fxs[None, :] ** 2 +
-                                          self.fys[:, None] ** 2) <= self.fmax,
-                                  axis=tuple(range(self.nextra_dims)) + (-3,))
+        self.ctf = (np.sqrt(self.fxs[None, :] ** 2 + self.fys[:, None] ** 2) <= self.fmax).astype(complex)
 
         # ########################
         # values passed through to RI reconstruction
@@ -341,22 +353,96 @@ class Tomography:
         self.reconstruction_settings = reconstruction_kwargs
 
         # ########################
-        # affine transformation from reconstruction coordinates to pixel indices
+        # prepare zarr arrays to store results
+        # ########################
+        # todo: define this here once can figure out how to write into it with to_zarr()
+        self.store.create("efields_ft",
+                          shape=self.imgs_raw.shape,
+                          chunks=(1,) * self.nextra_dims + self.imgs_raw.shape[-3:],
+                          compressor=self.compressor,
+                          dtype=np.complex64 if self.save_float32 else complex)
+
+        self.store.create("efield_bg_ft",
+                          shape=tuple([s if ii not in self.bg_average_axes
+                                       else 1
+                                       for ii, s in enumerate(self.imgs_raw.shape)]),
+                          chunks=(1,) * self.nextra_dims + self.imgs_raw.shape[-3:],
+                          compressor=self.compressor,
+                          dtype=np.complex64 if self.save_float32 else complex)
+
+        self.store.create("phase_correction_profile",
+                          shape=self.imgs_raw.shape[:-3] + (1, self.ny, self.nx),
+                          chunks=(1,) * self.nextra_dims + (1, self.ny, self.nx),
+                          compressor=self.compressor,
+                          dtype=np.complex64 if self.save_float32 else complex)
+
+
+        if not hasattr(self.store, "n"):
+            self.store.create("n",
+                              shape=self.imgs_raw.shape[:-3] + self.n_shape,
+                              chunks=(1,) * self.nextra_dims + self.n_shape,
+                              compressor=self.compressor,
+                              dtype=np.complex64 if self.save_float32 else complex
+                              )
+
+        if not hasattr(self.store, "efwd"):
+            self.store.create("efwd",
+                              shape=self.imgs_raw.shape,
+                              chunks=(1,) * (self.imgs_raw.ndim - 2) + (self.ny, self.nx),
+                              compressor=self.compressor,
+                              dtype=np.complex64 if self.save_float32 else complex)
+
+        if not hasattr(self.store, "escatt"):
+            self.store.create("escatt",
+                              shape=self.imgs_raw.shape[:-3] + (self.nmax_multiplex, self.ny, self.nx),
+                              chunks=(1,) * (self.imgs_raw.ndim - 2) + (self.ny, self.nx),
+                              compressor=self.compressor,
+                              dtype=complex)
+
+        if not hasattr(self.store, "n_start"):
+            if self.n_guess is None:
+                self.store.create("n_start",
+                                  shape=self.imgs_raw.shape[:-3] + self.n_shape,
+                                  chunks=(1,) * self.nextra_dims + self.n_shape,
+                                  compressor=self.compressor,
+                                  dtype=np.complex64 if self.save_float32 else complex)
+            else:
+                self.store.array("n_start",
+                                 np.expand_dims(self.n_guess, axis=list(range(self.nextra_dims))),
+                                 compressor=self.compressor,
+                                 dtype=np.complex64 if self.save_float32 else complex)
+
+        if "max_iterations" not in self.reconstruction_settings.keys():
+            raise ValueError()
+
+        if not hasattr(self.store, "costs"):
+            self.store.create("costs",
+                              shape=self.imgs_raw.shape[:-3] +
+                                    (self.reconstruction_settings["max_iterations"] + 1, self.npatterns),
+                              chunks=(1,) * (self.imgs_raw.ndim - 3) +
+                                     (self.reconstruction_settings["max_iterations"] + 1, self.npatterns),
+                              compressor=self.compressor,
+                              dtype=float)
+
+        if not hasattr(self.store, "steps"):
+            self.store.create("steps",
+                              shape=self.imgs_raw.shape[:-3] +
+                                    (self.reconstruction_settings["max_iterations"],),
+                              chunks=(1,) * (self.imgs_raw.ndim - 3) +
+                                     (self.reconstruction_settings["max_iterations"],),
+                              compressor=self.compressor,
+                              dtype=float)
+
+        # ########################
+        # ROI and affine transformations
         # ########################
         # for reconstruction, using FFT induced coordinates, i.e. zero is at array index (ny // 2, nx // 2)
         # for matrix, using image coordinates (0, 1, ..., N - 1)
         # note, due to order of operations -n//2 =/= - (n//2) when nx is odd
         if self.model in ["born", "rytov"]:
-            affine_xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1],
-                                                          self.drs_n[-2], 0, -(self.n_shape[-2] // 2) * self.drs_n[-2]])
+            affine_xform_recon_pix2coords = params2xform([self.drs_n[-2], 0, -(self.n_shape[-2] // 2) * self.drs_n[-2],
+                                                          self.drs_n[-1], 0, -(self.n_shape[-1] // 2) * self.drs_n[-1]])
         else:
-            # if not (self.ny / self.n_shape[1]).is_integer():
-            #     raise ValueError()
-            # if not (self.nx / self.n_shape[2]).is_integer():
-            #     raise ValueError()
-            #
-            # nbin_y = int(self.ny // self.n_shape[1])
-            # nbin_x = int(self.nx // self.n_shape[2])
             nbin_y = 1
             nbin_x = 1
 
@@ -369,53 +455,52 @@ class Tomography:
             xb = bin(self.x, [nbin_x], mode="mean")
             yb = bin(self.y, [nbin_y], mode="mean")
 
-            affine_xform_recon_pix2coords = params2xform([self.drs_n[-1], 0, float(xb[0]),
-                                                          self.drs_n[-2], 0, float(yb[0])])
+            affine_xform_recon_pix2coords = params2xform([self.drs_n[-2], 0, float(yb[0]),
+                                                          self.drs_n[-1], 0, float(xb[0])])
 
         # ############################
-        # construct affine tranforms between reconstructed data and camera pixels
+        # construct affine tranformations
         # ############################
-        # affine transformation from camera ROI coordinates in um to pixel indices
-        xform_raw_roi_pix2coords = params2xform([self.dxy, 0, -(self.n_shape[-1] // 2) * self.dxy,
-                                                 self.dxy, 0, -(self.n_shape[-2] // 2) * self.dxy])
+        # transform from reconstruction coordinates in um to pixel indices
+        xform_raw_roi_pix2coords = params2xform([self.dxy, 0, -(self.n_shape[-2] // 2) * self.dxy,
+                                                 self.dxy, 0, -(self.n_shape[-1] // 2) * self.dxy])
 
-        # composing these two transforms gives affine from recon pixel indices to
-        # recon pix inds -> recon coords = ROI coordinates -> ROI pix inds
+        # transform from recon pixels to data roi pixels
         xform_recon2raw_roi = inv(xform_raw_roi_pix2coords).dot(affine_xform_recon_pix2coords)
 
         xform_odt_recon_to_cam_roi = None
         xform_odt_recon_to_full = None
-        if self.data_roi is not None:
-            # transform from reconstruction processing roi to camera roi
-            odt_recon_roi = deepcopy(self.data_roi)
-            xform_process_roi_to_cam_roi = params2xform([1, 0, odt_recon_roi[2],
-                                                         1, 0, odt_recon_roi[0]])
+        if data_roi is not None:
+            # transform from data roi pixels to camera roi pixels
+            xform_process_roi_to_cam_roi = params2xform([1, 0, data_roi[0],
+                                                         1, 0, data_roi[2]])
             xform_odt_recon_to_cam_roi = xform_process_roi_to_cam_roi.dot(xform_recon2raw_roi)
 
-            if self.cam_roi is not None:
-                # todo: is there a problem with this transform?
-                # transform from camera roi to uncropped chip
-                xform_cam_roi_to_full = params2xform([1, 0, self.cam_roi[2],
-                                                      1, 0, self.cam_roi[0]])
+            if cam_roi is not None:
+                # transform from camera roi to full camera chip
+                xform_cam_roi_to_full = params2xform([1, 0, cam_roi[0],
+                                                      1, 0, cam_roi[2]])
                 xform_odt_recon_to_full = xform_cam_roi_to_full.dot(xform_process_roi_to_cam_roi)
 
         # store all transforms in JSON serializable form
         self.xform_dict = {"affine_xform_recon_pix2coords": np.asarray(affine_xform_recon_pix2coords).tolist(),
-                           "affine_xform_recon_2_raw_process_roi": np.asarray(xform_recon2raw_roi).tolist(),
+                           "affine_xform_recon_2_raw_data_roi": np.asarray(xform_recon2raw_roi).tolist(),
                            "affine_xform_recon_2_raw_camera_roi": np.asarray(xform_odt_recon_to_cam_roi).tolist(),
                            "affine_xform_recon_2_raw_camera": np.asarray(xform_odt_recon_to_full).tolist(),
-                           "processing roi": np.asarray(self.data_roi).tolist(),
-                           "camera roi": np.asarray(self.cam_roi).tolist()
+                           "data_roi": np.array(data_roi).tolist(),
+                           "camera_roi": np.array(cam_roi).tolist(),
+                           "coordinate_order": "yx"
                            }
+
 
     @classmethod
     def load_file(cls,
                   location: Union[str, Path, zarr.hierarchy.Group]):
         """
-        Instantiated class from zarr store
+        Instantiate class from zarr store
 
         :param location:
-        :return:
+        :return instance:
         """
 
         if isinstance(location, (Path, str)):
@@ -438,8 +523,16 @@ class Tomography:
                 kwargs[k] = np.array(z[k])
 
         # correct any attributes that were not saved
-        kwargs["imgs_raw"] = da.zeros((1,) * z.attrs["nextra_dims"] +
-                                      (z.attrs["npatterns"], z.attrs["ny"], z.attrs["nx"]))
+        if hasattr(z, "efields_ft"):
+            kwargs["imgs_raw"] = da.zeros(z.efields_ft.shape,
+                                          chunks=z.efields_ft.chunks,
+                                          dtype=float)
+        else:
+            kwargs["imgs_raw"] = da.zeros((1,) * z.attrs["nextra_dims"] +
+                                          (z.attrs["npatterns"], z.attrs["ny"], z.attrs["nx"]),
+                                          chunks=(1,) * z.attrs["nextra_dims"] +
+                                          (z.attrs["npatterns"], z.attrs["ny"], z.attrs["nx"])
+                                          )
 
         # load kwargs passed through to other functions
         kwargs.update(z.attrs["reconstruction_settings"])
@@ -482,7 +575,8 @@ class Tomography:
                          slice_axis: Optional[int] = None,
                          n_every: int = 1,
                          bg_axis: Optional[int] = None,
-                         bg_index: Optional[int] = None
+                         bg_index: Optional[int] = None,
+                         one_chunk_per_volume: bool = True,
                          ):
         """
 
@@ -513,7 +607,10 @@ class Tomography:
         slices = tuple(slices)
 
         # load and crop images
-        imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 3) + zc.shape[-3:])[slices]
+        if one_chunk_per_volume:
+            imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 3) + zc.shape[-3:])[slices]
+        else:
+            imgs = da.from_zarr(zc, chunks=(1,) * (zc.ndim - 2) + zc.shape[-2:])[slices]
 
         # if background is a position slice of imgs use slice so preserve shape of array
         if bg_axis is not None:
@@ -545,30 +642,17 @@ class Tomography:
     def save(self,
              attributes: Optional[dict] = None):
         """
-        Save information from instance to zarr file
+        Save information from instance to zarr file, except for dask arrays. NumPy arrays are
+        stored as new zarr arrays. Other data types are stored as zarr attributes
 
-        :param attributes:
+        :param attributes: dictionary of additional items to be saved as zarr arrays or attributes
         :return:
         """
 
         if attributes is None:
             attributes = {}
 
-        # handle lists of arrays
-        stackable_keys = ["hologram_frqs",
-                          "hologram_frqs_bg"
-                          ]
-        for k in stackable_keys:
-            try:
-                stack = np.stack(getattr(self, k), axis=-3)
-            except TypeError:
-                stack = None
-
-            self.store.array(k,
-                             stack,
-                             compressor=self.compressor,
-                             dtype=float)
-
+        # store beam frequencies
         try:
             stack = np.stack(self.get_beam_frqs(), axis=-3)
         except np.AxisError:
@@ -579,23 +663,27 @@ class Tomography:
                          compressor=self.compressor,
                          dtype=float)
 
-        # save everything else
+        # store everything else
         for dictionary in [self.__dict__, attributes]:
             for k, v in dictionary.items():
-                if k in stackable_keys:
-                    continue
+                if k in ["hologram_frqs", "hologram_frqs_bg"]:
+                    try:
+                        stack = np.stack(getattr(self, k), axis=-3)
+                    except TypeError:
+                        stack = None
+
+                    self.store.array(k,
+                                     stack,
+                                     compressor=self.compressor,
+                                     dtype=float)
+
                 try:
                     if isinstance(v, array):
                         if v.size > 10:
-                            if v.dtype == bool:
-                                c = packbits.PackBits()
-                            else:
-                                c = self.compressor
-
                             # todo: ensure reasonable chunk size
                             self.store.array(k,
                                              to_cpu(v),
-                                             compressor=c,
+                                             compressor=packbits.PackBits() if v.dtype == bool else self.compressor,
                                              dtype=v.dtype)
                         else:
                             self.store.attrs[k] = to_cpu(v).tolist()
@@ -608,22 +696,27 @@ class Tomography:
                         if len(v) > 30:  # don't store long lists
                             raise TypeError()
                         self.store.attrs[k] = v
-                    else:
+                    elif isinstance(v, (dask.array.Array, Codec, zarr.hierarchy.Group)):
                         pass
+                    else:
+                        if self.verbose:
+                            print(f"did not save key {k:s} of unsupported type {type(v)}")
 
                 except TypeError as e:
                     print(f"{k:s} {e}")
 
     def save_projections(self,
-                         compressor: Codec = Zlib(),
+                         overwrite: bool = True,
                          **kwargs
                          ):
         """
         Store orthogonal projections of the refractive index
 
-        :param compressor:
+        :param overwrite: whether to overwrite max-z projections if they already exist
         :return:
         """
+
+        tstart_proj = perf_counter()
 
         future = []
         for axis, label in zip([-3, -2, -1],
@@ -631,19 +724,27 @@ class Tomography:
             future.append(da.max(da.real(da.from_zarr(self.store.n)), axis=axis).to_zarr(self.store.store.path,
                                                                                          component=f"n_max{label:s}",
                                                                                          compute=False,
-                                                                                         compressor=compressor)
+                                                                                         compressor=self.compressor,
+                                                                                         overwrite=overwrite)
                           )
 
-        with LocalCluster(**kwargs) as cluster, Client(cluster) as client:
-            dcompute(*future)
+        cluster = LocalCluster(**kwargs)
+        client = Client(cluster)
+        dask.compute(*future)
+        del client
+        del cluster
+
+        self.timing["mips_processing_time"] = perf_counter() - tstart_proj
+        if self.verbose:
+            print(f"MIPs time: {parse_time(self.timing['mips_processing_time'])[1]:s}")
+
 
     def estimate_hologram_frqs(self,
                                save: bool = False,
-                               fit_on_gpu: bool = False,
                                processes: bool = True,
-                               n_workers: int = 3,
-                               threads_per_worker: int = 1,
-                               worker_saturation: float = 1.0) -> None:
+                               n_workers: int = -1,
+                               use_gpu: bool=cp is not None,
+                               ) -> None:
         """
         Estimate hologram frequencies from raw images. The current value of self.hologram_frqs() is used as the guess.
         Guess values usually need to be within a few pixels for fitting to succeed. This accuracy is usually
@@ -651,299 +752,212 @@ class Tomography:
         use the function plot_image()
 
         :param save:
-        :param fit_on_gpu: do fitting on GPU with gpufit. Otherwise, use CPU.
         :param processes:
         :param n_workers:
-        :param threads_per_worker:
-        :param worker_saturation:
+        :param use_gpu:
         :return:
         """
+
+        if save and self.save_dir is not None:
+            frq_dir = self.save_dir / f"frq_fits"
+            frq_dir.mkdir(exist_ok=True)
+
+        tstart_est_frqs = perf_counter()
+
         # todo: why not combine this function with unmix_holograms()?
-        # todo: can I set this in cluster?
-        with dask_cfg_set({"distributed.scheduler.worker-saturation": worker_saturation,
-                           "logging.distributed": "error"}):
-            with LocalCluster(n_workers=n_workers,
-                              processes=processes,
-                              threads_per_worker=threads_per_worker,
-                              silence_logs=True) as cluster, Client(cluster) as client:
-                if self.verbose:
-                    print(cluster.dashboard_link)
-
-                fit_data_imgs = not self.use_fixed_holo_frequencies or self.use_average_as_background
-
-                # create array for ref frqs. NOTE only works for equal multiplex for all images!
-                hologram_frqs_guess = np.stack(self.hologram_frqs, axis=0)
-                c_guess = np.stack((np.round((hologram_frqs_guess[..., 1] - self.fys[0]) / self.dfy).astype(int),
-                                    np.round((hologram_frqs_guess[..., 0] - self.fxs[0]) / self.dfx).astype(int)
-                                    ),
-                                   axis=-1)
-
-                rois_all = get_centered_rois(c_guess,
-                                             [self.freq_roi_size_pix, self.freq_roi_size_pix],
-                                             min_vals=(0, 0),
-                                             max_vals=(self.ny, self.nx)
-                                             )
-
-                def cut_rois(img: array,
-                             roi_size_pix: int,
-                             block_id=None,):
-
-                    npatt, ny, nx = img.shape[-3:]
-                    img_ft = ft2(img * hann(ny)[:, None] * hann(nx)[None, :])
-
-                    nroi = rois_all.shape[1]
-                    roi_out = np.zeros(img_ft.shape[:-3] + (npatt, nroi, roi_size_pix, roi_size_pix))
-                    for ii in range(npatt):
-                        roi_out[..., ii, :, :, :] = abs(np.stack(cut_roi(rois_all[ii],
-                                                                         img_ft[..., ii, :, :]), axis=-3))
-
-                    return roi_out
-
-                rois_cut = None
-                if fit_data_imgs:
-                    rois_cut = da.map_blocks(cut_rois,
-                                             self.imgs_raw,
-                                             self.freq_roi_size_pix,
-                                             drop_axis=(-1, -2),
-                                             new_axis=(-1, -2, -3),
-                                             chunks=self.imgs_raw.chunksize[:-2] +
-                                                    (self.nmax_multiplex,
-                                                     self.freq_roi_size_pix,
-                                                     self.freq_roi_size_pix),
-                                             dtype=float,
-                                             meta=np.array((), dtype=float))
-
-                rois_cut_bg = None
-                if not self.use_average_as_background:
-                    if not self.use_fixed_holo_frequencies:
-                        slices_bg = tuple([slice(None) for _ in range(self.nextra_dims)])
-                    else:
-                        slices_bg = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
-
-                    rois_cut_bg = da.map_blocks(cut_rois,
-                                                self.imgs_raw_bg,
-                                                self.freq_roi_size_pix,
-                                                drop_axis=(-1, -2),
-                                                new_axis=(-1, -2, -3),
-                                                chunks=self.imgs_raw_bg.chunksize[:-2] +
-                                                       (self.nmax_multiplex,
-                                                        self.freq_roi_size_pix,
-                                                        self.freq_roi_size_pix),
-                                                dtype=float,
-                                                meta=np.array((), dtype=float))[slices_bg]
-
-                def fit_rois_cpu(img_rois,
-                                 model=gauss2d_symm(),
-                                 ):
-
-                    xx, yy = np.meshgrid(range(img_rois.shape[-1]),
-                                         range(img_rois.shape[-2]))
-
-                    centers = np.zeros(img_rois.shape[:-2] + (2,))
-
-                    n_loop = np.prod(img_rois.shape[:-2])
-                    for ii in range(n_loop):
-                        ind = np.unravel_index(ii, img_rois.shape[:-2])
-                        rgauss = model.fit(img_rois[ind],
-                                           (yy, xx),
-                                           init_params=None,
-                                           guess_bounds=True)
-                        centers[ind] = rgauss["fit_params"][1:3]
-
-                    return centers
-
-                def fit_rois_gpu(rois_cut,
-                                 roi_size_pix: int):
-                    data_shape = (np.prod(rois_cut.shape[:-2]), roi_size_pix ** 2)
-                    data = rois_cut.astype(np.float32).compute().reshape(data_shape)
-
-                    init_params = np.zeros((data_shape[0], 5), dtype=np.float32)
-
-                    # todo: can I use model to do this?
-                    # amplitude
-                    init_params[:, 0] = data.max(axis=-1)
-
-                    # center
-                    imax = np.argmax(data, axis=-1)
-                    iy_max, ix_max = np.unravel_index(imax, (roi_size_pix, roi_size_pix))
-                    init_params[:, 1] = ix_max
-                    init_params[:, 2] = iy_max
-
-                    # size
-                    init_params[:, 3] = 1
-                    init_params[:, 4] = data.min(axis=-1)
-
-                    fit_params, fit_states, chi_sqrs, niters, fit_t = gf.fit(data,
-                                                                             None,
-                                                                             gf.ModelID.GAUSS_2D,
-                                                                             init_params,
-                                                                             tolerance=1e-8,
-                                                                             max_number_iterations=100,
-                                                                             estimator_id=gf.EstimatorID.LSE)
-                    cx = fit_params[:, 1].reshape(rois_cut.shape[:-2])
-                    cy = fit_params[:, 2].reshape(rois_cut.shape[:-2])
-
-                    return cx, cy, fit_params, init_params, fit_states
-
-                if not fit_on_gpu:
-                    if fit_data_imgs:
-                        centers = da.map_blocks(fit_rois_cpu,
-                                                rois_cut,
-                                                drop_axis=(-1, -2),
-                                                new_axis=(-1),
-                                                chunks=(rois_cut.chunksize[:-2] + (2,)),
-                                                dtype=float,
-                                                meta=np.array((), dtype=float)).compute()
-                        cx = centers[..., 0]
-                        cy = centers[..., 1]
-
-                    if not self.use_average_as_background:
-                        centers_bg = da.map_blocks(fit_rois_cpu,
-                                                   rois_cut_bg,
-                                                   drop_axis=(-1, -2),
-                                                   new_axis=(-1),
-                                                   chunks=(rois_cut_bg.chunksize[:-2] + (2,)),
-                                                   dtype=float,
-                                                   meta=np.array((), dtype=float)).compute()
-                        cx_bg = centers_bg[..., 0]
-                        cy_bg = centers_bg[..., 1]
-
-                else:
-                    if fit_data_imgs:
-                        cx, cy, fit_params, init_params, fit_states = fit_rois_gpu(rois_cut,
-                                                                                   self.freq_roi_size_pix)
-
-                    if not self.use_average_as_background:
-                        cx_bg, cy_bg, _, _, _ = fit_rois_gpu(rois_cut_bg,
-                                                             self.freq_roi_size_pix)
-
-                # final frequencies
-                if fit_data_imgs:
-                    frqs_hologram = np.stack((cx * self.dfx + self.fxs[rois_all[..., 2]],
-                                              cy * self.dfy + self.fys[rois_all[..., 0]]), axis=-1)
-                else:
-                    frqs_hologram = None
-
-                if not self.use_average_as_background:
-                    frqs_hologram_bg = np.stack((cx_bg * self.dfx + self.fxs[rois_all[..., 2]],
-                                                 cy_bg * self.dfy + self.fys[rois_all[..., 0]]), axis=-1)
-                else:
-                    frqs_hologram_bg = None
-
-                if self.use_average_as_background:
-                    frqs_hologram_bg = frqs_hologram
-
-                if self.use_fixed_holo_frequencies:
-                    frqs_hologram = frqs_hologram_bg
-
-                self.hologram_frqs = [frqs_hologram[..., ii, :, :] for ii in range(self.npatterns)]
-                self.hologram_frqs_bg = [frqs_hologram_bg[..., ii, :, :] for ii in range(self.npatterns)]
-                if not self.use_fixed_ref:
-                    self.reference_frq = np.mean(np.concatenate(self.hologram_frqs, axis=-2), axis=-2)
-                    self.reference_frq_bg = np.mean(np.concatenate(self.hologram_frqs_bg, axis=-2), axis=-2)
-
-                # #########################
-                # optionally plot
-                # #########################
-                def plot(img,
-                         frqs_holo,
-                         fx,
-                         fy,
-                         frqs_guess=None,
-                         rois_all=None,
+        def fit_rois_cpu(img: array,
+                         frqs_guess: array,
+                         roi_size_pix,
+                         fx: array,
+                         fy: array,
+                         fmax: float,
+                         model=gauss2d_symm(),
                          save_dir=None,
-                         prefix="",
-                         figsize=(20, 10),
-                         block_id=None):
+                         prefix: str = "",
+                         figsize: Sequence[float, float] = (20., 10.),
+                         gamma: float = 0.2,
+                         use_gpu: bool = True,
+                         block_id=None,
+                         block_info=None,
+                         **fig_kwargs,
+                         ):
 
-                    dfx = fx[1] - fx[0]
-                    dfy = fy[1] - fy[0]
+            if isinstance(img, dask.array.Array):
+                img = img.compute()
 
-                    img_ft = ft2(img).squeeze()
-                    if img_ft.ndim != 2:
-                        raise ValueError()
+            # grab info about dimensions
+            nextra_dims = img.ndim - 3
+            pattern_offset = block_id[-3]
+            nmulti = frqs_guess.shape[-2]
+            npatterns, ny, nx = img.shape[-3:]
 
-                    with catch_warnings():
-                        simplefilter("ignore")
-                        figh = plt.figure(figsize=figsize)
+            # fourier transform image
+            xp = cp if use_gpu and cp else np
+            img_ft = to_cpu(ft2(xp.asarray(img) *
+                                xp.asarray(hann(ny)[:, None]) *
+                                xp.asarray(hann(nx)[None, :])))
 
-                    ax = figh.add_subplot(1, 2, 1)
-                    ax.set_title("$|I(f)|$")
-                    ax.imshow(np.abs(img_ft),
-                              extent=[fx[0] - 0.5 * dfx,
-                                      fx[-1] + 0.5 * dfx,
-                                      fy[-1] + 0.5 * dfy,
-                                      fy[0] - 0.5 * dfy],
-                              norm=PowerNorm(gamma=0.1),
-                              cmap="bone")
-                    if frqs_guess is not None:
-                        ax.plot(frqs_guess[:, 0], frqs_guess[:, 1], 'gx')
-                    ax.plot(frqs_holo[..., 0], frqs_holo[..., 1], 'rx')
+            # get ROIs
+            dfx = fx[1] - fx[0]
+            dfy = fy[1] - fy[0]
+            c_guess = np.stack((np.round((frqs_guess[..., 1] - fy[0]) / dfy),
+                                np.round((frqs_guess[..., 0] - fx[0]) / dfx)
+                                ),
+                               axis=-1).astype(int)
 
-                    if rois_all is not None:
-                        for roi in rois_all:
-                            ax.add_artist(Rectangle((fx[roi[2]] - 0.5*dfx, fy[roi[0]] - 0.5*dfy),
-                                                    fx[roi[3] - 1] - fx[roi[2]],
-                                                    fy[roi[1] - 1] - fy[roi[0]],
-                                                    edgecolor='k',
-                                                    fill=False))
+            rois_all = get_centered_rois(c_guess,
+                                         [roi_size_pix, roi_size_pix],
+                                         min_vals=(0, 0),
+                                         max_vals=(self.ny, self.nx)
+                                         )
 
-                    ax.set_xlabel("$f_x$ (1/$\mu m$)")
-                    ax.set_ylabel("$f_y$ (1/$\mu m$)")
+            # fit centers
+            centers = np.zeros(img.shape[:-2] + (nmulti, 2,), dtype=float)
+            for ii in range(np.prod(centers.shape[:-1])):
+                ind = np.unravel_index(ii, centers.shape[:-1])
+                ind_img = ind[:-1]
+                roi = rois_all[ind[-2:]]
 
-                    ax = figh.add_subplot(1, 2, 2)
-                    roi = rois_all[0]
-                    iroi = cut_roi(roi, img_ft)[0]
+                img_roi = abs(np.stack(cut_roi(roi, img_ft[ind_img]), axis=-3))[0]
 
-                    ax.imshow(np.abs(iroi),
-                              extent=[fx[roi[2]] - 0.5 * dfx,
-                                      fx[roi[3] - 1] + 0.5 * dfx,
-                                      fy[roi[1] - 1] + 0.5 * dfy,
-                                      fy[roi[0]] - 0.5 * dfy],
-                              cmap="bone")
+                fxfx, fyfy = np.meshgrid(fx[roi[2]:roi[3]], fy[roi[0]:roi[1]])
 
-                    if frqs_guess is not None:
-                        ax.plot(frqs_guess[0, 0],
-                                frqs_guess[0, 1], 'gx')
-                    ax.plot(frqs_holo[0, 0],
-                            frqs_holo[0, 1], 'rx')
+                rgauss = model.fit(img_roi,
+                                   (fyfy, fxfx),
+                                   init_params=None,
+                                   guess_bounds=True)
+                centers[ind] = rgauss["fit_params"][1:3]
 
-                    ax.set_xlabel("$f_x$ (1/$\mu m$)")
-                    ax.set_ylabel("$f_y$ (1/$\mu m$)")
-
-                    if save_dir is not None:
-                        figh.savefig(Path(save_dir, f"{prefix:s}=hologram_frq_diagnostic.png"))
-                        plt.close(figh)
-
-                if save and self.save_dir is not None:
-                    frq_dir = self.save_dir / f"frq_fits"
-                    frq_dir.mkdir(exist_ok=True)
-
+            # plot centers
+            if save_dir is not None and np.all(np.array(block_id[:-3]) == 0):
+                with catch_warnings():
+                    simplefilter("ignore")
                     with rc_context({'interactive': False,
                                      'backend': "agg"}):
 
-                        slice_start = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
-                        axes_start = tuple(range(self.nextra_dims))
+                        for aa in range(npatterns):
+                            figh = plt.figure(figsize=figsize, **fig_kwargs)
+                            ax = figh.add_subplot(1, 1, 1)
+                            ax.set_title("$|I(f)|$")
+                            im = ax.imshow(np.abs(img_ft).squeeze(axis=tuple(range(nextra_dims)))[aa],
+                                           extent=[fx[0] - 0.5 * dfx,
+                                                   fx[-1] + 0.5 * dfx,
+                                                   fy[-1] + 0.5 * dfy,
+                                                   fy[0] - 0.5 * dfy],
+                                           norm=PowerNorm(gamma=gamma),
+                                           cmap="bone")
+                            plt.colorbar(im)
 
-                        if not self.use_average_as_background:
-                            iraw = self.imgs_raw_bg[slice_start].squeeze(axis=axes_start)
-                            h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs_bg]
-                        else:
-                            iraw = self.imgs_raw[slice_start].squeeze(axis=axes_start)
-                            h = [f[slice_start].squeeze(axis=axes_start) for f in self.hologram_frqs]
+                            fy_min = fy[rois_all[aa, :, 0].min()] - fmax
+                            fy_max = fy[rois_all[aa, :, 1].max()] + fmax
+                            fx_min = fx[rois_all[aa, :, 2].min()] - fmax
+                            fx_max = fx[rois_all[aa, :, 3].max()] + fmax
+                            ax.set_xlim([fx_min, fx_max])
+                            ax.set_ylim([fy_max, fy_min])
 
-                        dcompute([delayed(plot)(iraw[ii],
-                                                h[ii],
-                                                self.fxs,
-                                                self.fys,
-                                                save_dir=frq_dir,
-                                                frqs_guess=hologram_frqs_guess[ii],
-                                                prefix=f"{ii:d}",
-                                                rois_all=rois_all[ii])
-                                  for ii in range(self.npatterns)]
-                                 )
+                            # plot fit and guess frqs
+                            ax.plot(frqs_guess[aa, :, 0].squeeze(),
+                                    frqs_guess[aa, :, 1].squeeze(),
+                                    'gx')
+                            ax.plot(centers.squeeze(axis=tuple(range(nextra_dims)))[aa, :, 0],
+                                    centers.squeeze(axis=tuple(range(nextra_dims)))[aa, :, 1],
+                                    'rx')
 
-                    client.profile(filename=frq_dir / f"frequency_fitting_dask_profile.html")
+                            for bb in range(nmulti):
+                                roi = rois_all[aa, bb]
+                                ax.add_artist(Rectangle((fx[roi[2]] - 0.5 * dfx, fy[roi[0]] - 0.5 * dfy),
+                                                        fx[roi[3] - 1] - fx[roi[2]],
+                                                        fy[roi[1] - 1] - fy[roi[0]],
+                                                        edgecolor='k',
+                                                        fill=False))
+
+                            ax.set_xlabel("$f_x$ (1/$\mu m$)")
+                            ax.set_ylabel("$f_y$ (1/$\mu m$)")
+
+                            if save_dir is not None:
+                                figh.savefig(Path(save_dir, f"{prefix:s}pattern={aa + pattern_offset:d}=hologram_frq_diagnostic.png"))
+                                plt.close(figh)
+
+            del img_ft
+
+            return centers
+
+        # #####################################
+        # calibrate frequencies
+        # #####################################
+        hologram_frqs_guess = np.stack(self.hologram_frqs, axis=0)
+
+        if self.use_fixed_holo_frequencies:
+            slices_fit = tuple([slice(0, 1) for _ in range(self.nextra_dims)])
+        else:
+            slices_fit = tuple([slice(None) for _ in range(self.nextra_dims)])
+
+        frqs_hologram = None
+        if not self.use_fixed_holo_frequencies or self.use_average_as_background:
+            print("fitting foreground frequencies")
+            r = map_blocks_joblib(fit_rois_cpu,
+                                  self.imgs_raw[slices_fit],
+                                  hologram_frqs_guess,
+                                  self.freq_roi_size_pix,
+                                  self.fxs,
+                                  self.fys,
+                                  self.fmax,
+                                  use_gpu=use_gpu,
+                                  save_dir=frq_dir if save and self.use_average_as_background else None,
+                                  n_workers=n_workers,
+                                  processes=processes,
+                                  chunks=self.imgs_raw.chunksize[:-2] + (None, None),
+                                  )
+            frqs_hologram = np.stack(r, axis=0).reshape(self.imgs_raw.shape[:-2] + (self.nmax_multiplex, 2))
+
+        frqs_hologram_bg = None
+        if not self.use_average_as_background:
+            print("fitting background frequencies")
+            r = map_blocks_joblib(fit_rois_cpu,
+                                  self.imgs_raw_bg[slices_fit],
+                                  hologram_frqs_guess,
+                                  self.freq_roi_size_pix,
+                                  self.fxs,
+                                  self.fys,
+                                  self.fmax,
+                                  use_gpu=use_gpu,
+                                  prefix="bg_",
+                                  save_dir=frq_dir if save else None,
+                                  n_workers=n_workers,
+                                  processes=processes,
+                                  chunks=self.imgs_raw_bg.chunksize[:-2] + (None, None),
+                                  )
+            frqs_hologram_bg = np.stack(r, axis=0).reshape(self.imgs_raw_bg.shape[:-2] + (self.nmax_multiplex, 2))
+
+        get_reusable_executor().shutdown(wait=True)
+
+        if self.use_average_as_background:
+            frqs_hologram_bg = frqs_hologram
+
+        if self.use_fixed_holo_frequencies:
+            frqs_hologram = frqs_hologram_bg
+
+        # self.hologram_frqs = frqs_hologram
+        # self.hologram_frqs_bg = frqs_hologram_bg
+        # if not self.use_fixed_ref:
+        #     self.reference_frq = np.mean(self.hologram_frqs, axis=(-2, -3))
+        #     self.reference_frq_bg = np.mean(self.hologram_frqs_bg, axis=(-2, -3))
+        self.hologram_frqs = [frqs_hologram[..., ii, :, :] for ii in range(self.npatterns)]
+        self.hologram_frqs_bg = [frqs_hologram_bg[..., ii, :, :] for ii in range(self.npatterns)]
+        if not self.use_fixed_ref:
+            self.reference_frq = np.expand_dims(np.mean(np.concatenate(self.hologram_frqs,
+                                                                       axis=-2),
+                                                        axis=-2),
+                                                axis=(-2, -3, -4))
+            self.reference_frq_bg = np.expand_dims(np.mean(np.concatenate(self.hologram_frqs_bg,
+                                                                          axis=-2),
+                                                           axis=-2),
+                                                   axis=(-2, -3, -4))
+
+        # store and print timing information
+        self.timing["fit_frequency_time"] = perf_counter() - tstart_est_frqs
+        if self.verbose:
+            print(f"calibration time: {parse_time(self.timing['fit_frequency_time'])[1]:s}")
 
     def get_beam_frqs(self) -> list[np.ndarray]:
         """
@@ -952,7 +966,7 @@ class Tomography:
         :return beam_frqs: list (length n_patterns) with each element an array of size N1 x N2 ... x Nm x 3
         """
 
-        bxys = [f - np.expand_dims(self.reference_frq, axis=-2) for f in self.hologram_frqs]
+        bxys = [f - self.reference_frq.squeeze(axis=(-2, -3)) for f in self.hologram_frqs]
         bzs = [get_fzs(bxy[..., 0], bxy[..., 1], self.no, self.wavelength) for bxy in bxys]
         beam_frqs = [np.stack((bxy[..., 0], bxy[..., 1], bz), axis=-1) for bxy, bz in zip(bxys, bzs)]
 
@@ -985,7 +999,7 @@ class Tomography:
         # mean_hologram_frqs = np.mean(self.hologram_frqs, axis=tuple(range(self.nextra_dims)))
         # mean_hologram_frqs = np.concatenate([hf for hf in mean_hologram_frqs], axis=0)
 
-        mean_ref_frq = np.mean(self.reference_frq, axis=tuple(range(self.nextra_dims)))
+        mean_ref_frq = np.mean(self.reference_frq.squeeze(axis=(-2, -3, -4)), axis=tuple(range(self.nextra_dims)))
 
         beam_frqs = np.concatenate([np.mean(f, axis=tuple(range(self.nextra_dims)))
                                     for f in self.get_beam_frqs()], axis=0)
@@ -1064,7 +1078,7 @@ class Tomography:
                           f"$1/M_x$ = {1 / xform_params[0]:.2f} mirror/$\mu m^{-1}$,"
                           f" $\\theta x$ = {xform_params[1] * 180 / np.pi:.2f} deg,"
                           f" $c_x$ = {xform_params[2]:.3f} $1/\mu m$\n"
-                          f"$1/M_y$ = {1 / xform_params[3]:.2f} mirror/$\mu m^{-1}$,"
+                          f"$1/M_y$ = {1 / xform_params[3]:.2f}" + "mirror/$\mu m^{-1}$,"
                           f" $\\theta y$ = {xform_params[4] * 180 / np.pi:.2f} deg,"
                           f" $c_y$ = {xform_params[5]:.3f} $1/\mu m$")
 
@@ -1146,332 +1160,453 @@ class Tomography:
 
         return xform_dmd2frq
 
+    def unmix_holograms_v2(self,
+                           processes: bool = False,
+                           n_workers: int = -1,
+                           use_gpu: bool = False,
+                           ):
+
+        tstart_holos = perf_counter()
+
+        def calibrate(imgs,
+                      hft_ref,
+                      fx_ref,
+                      fy_ref,
+                      dxy,
+                      fmax,
+                      threshold,
+                      apodization=None,
+                      eft_out=None,
+                      phase_corr_out=None,
+                      fit_phases=True,
+                      fit_translations=True,
+                      average_axes=None,
+                      use_gpu=False,
+                      semaphore=None,
+                      block_id=None,
+                      block_info=None,
+                      phase_corr_kwargs=None,
+                      ):
+
+            xp = cp if use_gpu and cp else np
+            n_used_dims = imgs.ndim - np.min([ii for ii, s in enumerate(imgs.shape) if s!=1])
+            if n_used_dims != 2 and n_used_dims != 3:
+                raise ValueError("calibrate only supports arrays with 2 or 3 non-singleton dimensions")
+
+            squeeze_ax = tuple(range(imgs.ndim - n_used_dims))
+
+            imgs = xp.asarray(imgs.squeeze(axis=squeeze_ax))
+            hft_ref = xp.asarray(hft_ref.squeeze(axis=squeeze_ax))
+            fx_ref = fx_ref.squeeze(axis=squeeze_ax)
+            fy_ref = fy_ref.squeeze(axis=squeeze_ax)
+
+            # unmix holograms
+            hft = unmix_hologram(imgs, dxy, 2*fmax, fx_ref, fy_ref, apodization)
+
+            # translation correction
+            if fit_translations:
+                translations = fit_phase_ramp(ft2(abs(ift2(hft))),
+                                              ft2(abs(ift2(hft_ref))),
+                                              dxy,
+                                              threshold)
+
+                ny, nx = hft.shape[-2:]
+                fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
+                fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
+                fx_bcastable = xp.expand_dims(fxs, axis=-2)
+                fy_bcastable = xp.expand_dims(fys, axis=-1)
+
+                hft *= np.exp(2 * np.pi * 1j * (fx_bcastable * translations[..., 0] +
+                                                fy_bcastable * translations[..., 1]))
+            else:
+                translations = np.zeros(hft.shape[:-2] + (1, 1, 2))
+
+            # global phase correction
+            if fit_phases:
+                phase_params = get_global_phase_shifts(hft, hft_ref)
+                hft *= phase_params
+            else:
+                phase_params = np.ones(hft.shape[:-2] + (1, 1), dtype=complex)
+
+            # other phase correction
+            if phase_corr_out is not None:
+                if n_used_dims != 3:
+                    raise ValueError("Can only run PhaseCorr if each chunk includes all angles")
+
+                pc = PhaseCorr(ift2(hft),
+                               ift2(hft_ref),
+                               **phase_corr_kwargs)
+                rpc = pc.run(xp.ones(hft.shape[-2:], dtype=complex),
+                             **phase_corr_kwargs
+                             )
+                phase_prof = rpc["x"]
+                phase_corr_out[block_id[:-n_used_dims] + (0,)] = to_cpu(phase_prof)
+            else:
+                phase_prof = 1
+
+            if average_axes is None:
+                eft_out[block_id[:-n_used_dims]] = to_cpu(ft2(phase_prof * ift2(hft)))
+            else:
+                # save portion of average to block
+                arr_full_size = block_info[0]["shape"]
+                if arr_full_size is None or semaphore is None:
+                    raise ValueError("average not supported unless arr_full_size and semaphore are provided")
+
+                navg = np.prod([a if ii in average_axes else 1
+                                for ii, a in enumerate(arr_full_size)])
+
+                block_id_out = tuple([b if ii not in average_axes else 0 for ii, b in enumerate(block_id)])
+
+                with semaphore:
+                    eft_out[block_id_out[:-n_used_dims]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
+
+            return to_cpu(translations), to_cpu(phase_params)
+
+        # choose background image
+        if self.use_average_as_background:
+            imgs_raw_bg = self.imgs_raw
+        else:
+            imgs_raw_bg = self.imgs_raw_bg
+
+        # get reference holograms
+        ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes
+                           else slice(None)
+                           for a in range(self.nextra_dims)])
+
+        hft_ref = unmix_hologram(imgs_raw_bg[ref_slice].compute(),
+                                 self.dxy,
+                                 2*self.fmax,
+                                 self.reference_frq_bg[..., 0][ref_slice],
+                                 self.reference_frq_bg[..., 1][ref_slice],
+                                 self.apodization)
+
+        # correct background
+        print("correcting background")
+        semaphore = Semaphore(1)
+        rbg = map_blocks_joblib(calibrate,
+                                imgs_raw_bg,
+                                hft_ref,
+                                self.reference_frq_bg[..., 0],
+                                self.reference_frq_bg[..., 1],
+                                self.dxy,
+                                self.fmax,
+                                threshold=self.translation_thresh,
+                                apodization=self.apodization,
+                                eft_out=self.store.efield_bg_ft,
+                                fit_phases=self.fit_phases,
+                                fit_translations=self.fit_translations,
+                                average_axes=self.bg_average_axes,
+                                semaphore=semaphore,
+                                use_gpu=use_gpu,
+                                chunks=imgs_raw_bg.chunksize,
+                                n_workers=n_workers,
+                                processes=processes
+                                )
+
+        t, p = zip(*rbg)
+        self.translations_bg = np.stack(t, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1, 2))
+        self.phase_params_bg = np.stack(p, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1))
+
+        # correct foreground
+        print("correcting foreground")
+        # todo: more logic for using average as own background?
+        r = map_blocks_joblib(calibrate,
+                              self.imgs_raw,
+                              da.from_zarr(self.store.efield_bg_ft),
+                              self.reference_frq[..., 0],
+                              self.reference_frq[..., 1],
+                              self.dxy,
+                              self.fmax,
+                              threshold=self.translation_thresh,
+                              apodization=self.apodization,
+                              eft_out=self.store.efields_ft,
+                              phase_corr_out=self.store.phase_correction_profile if self.fit_phase_profile else None,
+                              fit_phases=self.fit_phases,
+                              fit_translations=self.fit_translations,
+                              use_gpu=use_gpu,
+                              phase_corr_kwargs={"tau_l1": self.phase_profile_l1,
+                                                 "escale": 40.,
+                                                 "fit_magnitude": True,
+                                                 "step": 1e5,
+                                                 "max_iterations": 10,
+                                                 "line_search_iter_limit": 3,
+                                                 "n_batch": self.reconstruction_settings["n_batch"],
+                                                 "compute_batch_grad_parallel": True,
+                                                 },
+                              chunks=((1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
+                                      if self.fit_phase_profile else imgs_raw_bg.chunksize,
+                              n_workers=n_workers,
+                              processes=processes
+                              )
+
+        t, p = zip(*r)
+        self.translations = np.stack(t, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1, 2))
+        self.phase_params = np.stack(p, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1))
+
+        get_reusable_executor().shutdown(wait=True)
+
+        self.timing["unmix_hologram_time"] = perf_counter() - tstart_holos
+        if self.verbose:
+            print(f"unmixed holograms and fit phases in {parse_time(self.timing['unmix_hologram_time'])[1]}")
+
     def unmix_holograms(self,
                         use_gpu: bool = False,
                         processes: bool = False,
-                        compressor: Codec = Zlib(),
                         **kwargs):
         """
         Unmix and preprocess holograms. Additional kwargs are passed through to dask LocalCluster()
 
         :param use_gpu:
         :param processes:
-        :param compressor:
         :return:
         """
+        tstart_holos = perf_counter()
 
-        if use_gpu and cp:
-            xp = cp
-        else:
-            xp = np
+        def _ft_abs(m: array) -> array:
+            return ft2(abs(ift2(m)))
+
+        def translate(e_ft, dxs, dys, fxs, fys):
+            e_ft_out = xp.array(e_ft, copy=True)
+
+            fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
+            fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
+
+            e_ft_out *= np.exp(2 * np.pi * 1j * (fx_bcastable * dxs +
+                                                 fy_bcastable * dys))
+
+            return e_ft_out
+
+        def correct_phase_profile(eft, ebg_ft, block_id=None):
+            nextra_dims = eft.ndim - 3
+            extra_dims = tuple(range(eft.ndim - 3))
+
+            phase_corr_kwargs = {"tau_l1": self.phase_profile_l1,
+                                 "escale": 40.,
+                                 "fit_magnitude": True,
+                                 "step": 1e5,
+                                 "max_iterations": 10,
+                                 "line_search_iter_limit": self.reconstruction_settings["n_batch"],
+                                 "n_batch": 3,
+                                 "compute_batch_grad_parallel": True,
+                                 }
+
+            pc = PhaseCorr(ift2(eft.squeeze(extra_dims)),
+                           ift2(ebg_ft.squeeze(extra_dims)),
+                           **phase_corr_kwargs)
+            rpc = pc.run(xp.ones(eft.shape[-2:], dtype=complex),
+                         **phase_corr_kwargs
+                         )
+
+            return rpc["x"].reshape((1,) * nextra_dims + (1,) + eft.shape[-2:])
+
+        xp = cp if use_gpu and cp else np
 
         with LocalCluster(processes=processes, **kwargs) as cluster, Client(cluster) as client:
             if self.verbose:
                 print(cluster.dashboard_link)
 
+            if self.use_average_as_background:
+                imgs_raw_bg = self.imgs_raw
+            else:
+                imgs_raw_bg = self.imgs_raw_bg
+
+
+            # get electric field from holograms
+            ref_frq_bg_da = da.from_array(self.reference_frq_bg,
+                                          chunks=imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
+                                          )
+
+            hft_bg = da.map_blocks(unmix_hologram,
+                                            imgs_raw_bg,
+                                            self.dxy,
+                                            2*self.fmax,
+                                            ref_frq_bg_da[..., 0],
+                                            ref_frq_bg_da[..., 1],
+                                            apodization=self.apodization,
+                                            dtype=complex)
+
             # slice used as reference for computing phase shifts/translations/etc.
             # if we are going to average along a dimension (i.e. if it is in bg_average_axes) then need to use
             # single slice as background for that dimension.
-            ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes else slice(None)
-                               for a in range(self.nextra_dims)] +
-                              [slice(None)] * 3)
+            ref_slice = tuple([slice(0, 1) if a in self.bg_average_axes
+                               else slice(None)
+                               for a in range(self.nextra_dims)])
 
             # #########################
-            # get electric field from holograms
-            # #########################
-            apodization = xp.asarray(self.apodization)
-
-            # make broadcastable to same size as raw images so can use with dask array
-            ref_frq_da = da.from_array(np.expand_dims(self.reference_frq, axis=(-2, -3, -4)),
-                                       chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
-                                       )
-            holograms_ft = da.map_blocks(unmix_hologram,
-                                         self.imgs_raw,
-                                         self.dxy,
-                                         2*self.fmax,
-                                         ref_frq_da[..., 0],
-                                         ref_frq_da[..., 1],
-                                         apodization=apodization,
-                                         dtype=complex)
-
-            # #########################
-            # get background electric field from holograms
-            # #########################
-            if self.use_average_as_background:
-                holograms_ft_bg = holograms_ft
-            else:
-                ref_frq_bg_da = da.from_array(np.expand_dims(self.reference_frq_bg, axis=(-2, -3, -4)),
-                                              chunks=self.imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
-                                              )
-                holograms_ft_bg = da.map_blocks(unmix_hologram,
-                                                self.imgs_raw_bg,
-                                                self.dxy,
-                                                2*self.fmax,
-                                                ref_frq_bg_da[..., 0],
-                                                ref_frq_bg_da[..., 1],
-                                                apodization=apodization,
-                                                dtype=complex)
-
-            # #########################
-            # fit translations between signal and background electric fields
+            # compute background
             # #########################
             if self.fit_translations:
-                print("computing translations")
+                # fit translations between signal and background electric fields
+                holograms_abs_ft_bg = da.map_blocks(_ft_abs, hft_bg, dtype=complex)
+                self.translations_bg = da.map_blocks(fit_phase_ramp,
+                                                     holograms_abs_ft_bg,
+                                                     holograms_abs_ft_bg[ref_slice],
+                                                     self.dxy,
+                                                     thresh=self.translation_thresh,
+                                                     dtype=float,
+                                                     new_axis=-1,
+                                                     chunks=holograms_abs_ft_bg.chunksize[:-2] + (1, 1, 2)).compute()
 
-                def _ft_abs(m: array) -> array: return ft2(abs(ift2(m)))
+                hft_bg = da.map_blocks(translate,
+                                       hft_bg,
+                                       da.from_array(self.translations_bg[..., 0], chunks=hft_bg.chunksize[:-2] + (1, 1)),
+                                       da.from_array(self.translations_bg[..., 1], chunks=hft_bg.chunksize[:-2] + (1, 1)),
+                                       self.fxs,
+                                       self.fys,
+                                       dtype=complex,
+                                       meta=xp.array((), dtype=complex))
 
-                holograms_abs_ft = da.map_blocks(_ft_abs,
-                                                 holograms_ft,
-                                                 dtype=complex)
-
-                if self.use_average_as_background:
-                    holograms_abs_ft_bg = holograms_abs_ft
-                else:
-                    holograms_abs_ft_bg = da.map_blocks(_ft_abs,
-                                                        holograms_ft_bg,
-                                                        dtype=complex)
-
-                # fit phase ramp in holograms ft
-                self.translations = da.map_blocks(fit_phase_ramp,
-                                                  holograms_abs_ft,
-                                                  holograms_abs_ft_bg[ref_slice],
-                                                  self.dxy,
-                                                  thresh=self.translation_thresh,
-                                                  dtype=float,
-                                                  new_axis=-1,
-                                                  chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
-
-                # correct translations
-                def translate(e_ft, dxs, dys, fxs, fys):
-                    e_ft_out = xp.array(e_ft, copy=True)
-
-                    fx_bcastable = xp.expand_dims(fxs, axis=(-3, -2))
-                    fy_bcastable = xp.expand_dims(fys, axis=(-3, -1))
-
-                    e_ft_out *= np.exp(2*np.pi * 1j * (fx_bcastable * dxs +
-                                                       fy_bcastable * dys))
-
-                    return e_ft_out
-
-                dr_chunks = holograms_ft.chunksize[:-2] + (1, 1)
-                holograms_ft = da.map_blocks(translate,
-                                             holograms_ft,
-                                             da.from_array(self.translations[..., 0], chunks=dr_chunks),
-                                             da.from_array(self.translations[..., 1], chunks=dr_chunks),
-                                             self.fxs,
-                                             self.fys,
-                                             dtype=complex,
-                                             meta=xp.array((), dtype=complex))
-
-                if self.use_average_as_background:
-                    self.translations_bg = self.translations
-                    holograms_ft_bg = holograms_ft
-                else:
-                    self.translations_bg = da.map_blocks(fit_phase_ramp,
-                                                         holograms_abs_ft_bg,
-                                                         holograms_abs_ft_bg[ref_slice],
-                                                         self.dxy,
-                                                         thresh=self.translation_thresh,
-                                                         dtype=float,
-                                                         new_axis=-1,
-                                                         chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
-
-                    holograms_ft_bg = da.map_blocks(translate,
-                                                    holograms_ft_bg,
-                                                    da.from_array(self.translations_bg[..., 0], chunks=dr_chunks),
-                                                    da.from_array(self.translations_bg[..., 1], chunks=dr_chunks),
-                                                    self.fxs,
-                                                    self.fys,
-                                                    dtype=complex,
-                                                    meta=xp.array((), dtype=complex))
-
-            # #########################
             # determine phase offsets for background electric field, relative to initial slice
             # for each angle, so we can average this together to produce a single "background" image
-            # #########################
-            print("computing background phase shifts")
             if self.fit_phases:
                 self.phase_params_bg = da.map_blocks(get_global_phase_shifts,
-                                                     holograms_ft_bg,
-                                                     holograms_ft_bg[ref_slice],  # reference slices
+                                                     hft_bg,
+                                                     hft_bg[ref_slice],  # reference slices
                                                      dtype=complex,
-                                                     chunks=holograms_ft_bg.chunksize[:-2] + (1, 1)
+                                                     chunks=hft_bg.chunksize[:-2] + (1, 1)
                                                      ).compute()
+                hft_bg = hft_bg * self.phase_params_bg
 
-            # #########################
             # determine background electric field
-            # #########################
             print("computing background electric field")
-            holograms_ft_bg_comp = da.mean(holograms_ft_bg * self.phase_params_bg,
-                                           axis=self.bg_average_axes,
-                                           keepdims=True)
+            hft_bg_comp = da.mean(hft_bg,
+                                  axis=self.bg_average_axes,
+                                  keepdims=True)
 
-            holograms_ft_bg = da.from_array(holograms_ft_bg_comp.compute(),
-                                            chunks=holograms_ft_bg.chunksize)
+            print("computing background")
+            hft_bg_arr = hft_bg_comp.compute()
+            self.store.efield_bg_ft[:] = hft_bg_arr
+            hft_bg_avg = da.from_array(hft_bg_arr,
+                                       chunks=hft_bg_comp.chunksize)
+
 
             # #########################
-            # determine phase offsets between electric field and background
+            # compute foreground
             # #########################
-            print("computing phase offsets")
             if self.use_average_as_background:
+                hft = hft_bg
+                self.translations = self.translations_bg
                 self.phase_params = self.phase_params_bg
             else:
+                ref_frq_da = da.from_array(self.reference_frq,
+                                           chunks=self.imgs_raw.chunksize[:-2] + (1, 1, 2)
+                                           )
+                hft = da.map_blocks(unmix_hologram,
+                                             self.imgs_raw,
+                                             self.dxy,
+                                             2*self.fmax,
+                                             ref_frq_da[..., 0],
+                                             ref_frq_da[..., 1],
+                                             apodization=self.apodization,
+                                             dtype=complex)
+
+                if self.fit_translations:
+                    # fit phase ramp in holograms ft
+                    holograms_abs_ft = da.map_blocks(_ft_abs, hft, dtype=complex)
+                    self.translations = da.map_blocks(fit_phase_ramp,
+                                                      holograms_abs_ft,
+                                                      _ft_abs(hft_bg_avg),
+                                                      # holograms_abs_ft_bg[ref_slice],
+                                                      self.dxy,
+                                                      thresh=self.translation_thresh,
+                                                      dtype=float,
+                                                      new_axis=-1,
+                                                      chunks=holograms_abs_ft.chunksize[:-2] + (1, 1, 2)).compute()
+
+                    # correct translations
+                    hft = da.map_blocks(translate,
+                                        hft,
+                                        da.from_array(self.translations[..., 0],
+                                                      chunks=hft.chunksize[:-2] + (1, 1)),
+                                        da.from_array(self.translations[..., 1],
+                                                      chunks=hft.chunksize[:-2] + (1, 1)),
+                                        self.fxs,
+                                        self.fys,
+                                        dtype=complex,
+                                        meta=xp.array((), dtype=complex))
+
                 if self.fit_phases:
                     self.phase_params = da.map_blocks(get_global_phase_shifts,
-                                                      holograms_ft,
-                                                      holograms_ft_bg,
+                                                      hft,
+                                                      hft_bg_avg,
                                                       dtype=complex,
-                                                      chunks=holograms_ft.chunksize[:-2] + (1, 1),
+                                                      chunks=hft.chunksize[:-2] + (1, 1),
                                                       ).compute()
+                    hft = hft * self.phase_params
 
-            holograms_ft = holograms_ft * self.phase_params
-
-            # #########################
-            # compute
-            # #########################
-            def correct_phase_profile(eft, ebg_ft, block_id=None):
-                nextra_dims = eft.ndim - 3
-                extra_dims = tuple(range(eft.ndim - 3))
-
-                pc = PhaseCorr(ift2(eft.squeeze(extra_dims)),
-                               ift2(ebg_ft.squeeze(extra_dims)),
-                               tau_l1=1e3,
-                               escale=40.)
-                rpc = pc.run(xp.ones(eft.shape[-2:], dtype=complex),
-                             step=1e5,
-                             max_iterations=10,
-                             line_search=True,
-                             line_search_iter_limit=3,
-                             n_batch=3,
-                             compute_batch_grad_parallel=True,
-                             compute_cost=False,
-                             verbose=False,
-                             print_newline=False,
-                             )
-
-                return rpc["x"].reshape((1,) * nextra_dims + (1,) + eft.shape[-2:])
 
             if self.fit_phase_profile:
                 phase_prof = da.map_blocks(correct_phase_profile,
-                                           holograms_ft,
-                                           holograms_ft_bg,
+                                           hft,
+                                           hft_bg_avg,
                                            drop_axis=(-3),
                                            new_axis=(-3),
                                            dtype=complex,
                                            meta=xp.array((), dtype=complex),
                                            )
-                holograms_ft = ft2(phase_prof * ift2(holograms_ft))
+                hft = ft2(phase_prof * ift2(hft))
             else:
                 phase_prof = da.ones(1)
 
             # #########################
             # compute
             # #########################
+            # todo: want to define these arrays in init ... but can't get to_zarr() to work then
             future = [da.map_blocks(to_cpu,
-                              holograms_ft,
-                                    dtype=complex).to_zarr(self.store.store.path,
-                                                           component="efields_ft",
-                                                           compute=False,
-                                                           compressor=compressor),
-                      da.map_blocks(to_cpu,
-                              holograms_ft_bg,
-                                    dtype=complex).to_zarr(self.store.store.path,
-                                                           component="efield_bg_ft",
-                                                           compute=False,
-                                                           compressor=compressor),
+                              hft,
+                                    dtype=np.complex64 if self.save_float32 else complex,
+                                    ).to_zarr(self.store.store.path,
+                                              component="efields_ft",
+                                              compute=False,
+                                              compressor=self.compressor,
+                                              overwrite=True),
                       da.map_blocks(to_cpu,
                                     phase_prof,
-                                    dtype=complex).to_zarr(self.store.store.path,
-                                                           component="phase_correction_profile",
-                                                           compute=False,
-                                                           compressor=compressor)
+                                    dtype=np.complex64 if self.save_float32 else complex,
+                                    ).to_zarr(self.store.store.path,
+                                              component="phase_correction_profile",
+                                              compute=False,
+                                              compressor=self.compressor,
+                                              overwrite=True)
                       ]
-            dcompute(*future)
-
-            self.efields_ft = da.from_zarr(self.store["efields_ft"])
-            self.efield_bg_ft = da.from_zarr(self.store["efield_bg_ft"])
+            dask.compute(*future)
 
             if self.save_dir is not None:
+                save_dask_logs(client, self.save_dir, prefix="preprocessing_")
                 client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
+
+            self.timing["unmix_hologram_time"] = perf_counter() - tstart_holos
+            if self.verbose:
+                print(f"unmixed holograms and fit phases in {parse_time(self.timing['unmix_hologram_time'])[1]}")
 
     def reconstruct_n(self,
                       use_gpu: bool = False,
                       print_fft_cache: bool = False,
                       processes: bool = False,
                       n_workers: int = 1,
-                      threads_per_worker: int = 1) -> (array, tuple, dict):
+                      **kwargs) -> (array, tuple, dict):
 
         """
-        Reconstruct refractive index using one of a several different models
-
-        Additional keyword arguments are passed through to both the constructor and the run() method of
-        the optimizer. These are used to e.g. set the strength of TV regularization, the number of iterations, etc.
-        See Optimizer, RIOptimizer, and classes inheriting from RIOptimizer for more details.
+        Reconstruct refractive index using one of a several different models Additional keyword arguments are
+        passed through to the dask scheduler
 
         :param use_gpu:
         :param print_fft_cache: optionally print memory usage of GPU FFT cache at each iteration
         :param processes:
         :param n_workers:
-        :param threads_per_worker:
         """
+
+        tstart_recon = perf_counter()
+
         if use_gpu and cp:
             xp = cp
         else:
             xp = np
 
-        if self.save_auxiliary_fields:
-            chunk_shape = (1,) * (self.efields_ft.ndim - 2) + self.efields_ft.shape[-2:]
-            e_fwd_out = self.store.create("efwd",
-                                          shape=self.efields_ft.shape,
-                                          chunks=chunk_shape,
-                                          compressor=self.compressor,
-                                          dtype=complex)
-
-            e_scatt_out_shape = list(self.efields_ft.shape)
-            e_scatt_out_shape[-3] *= self.nmax_multiplex
-            e_scatt_out = self.store.create("escatt",
-                                            shape=e_scatt_out_shape,
-                                            chunks=chunk_shape,
-                                            compressor=self.compressor,
-                                            dtype=complex)
-
-            if self.n_guess is None:
-                n_start_out = self.store.create("n_start",
-                                                shape=self.efields_ft.shape[:-3] + self.n_shape,
-                                                compressor=self.compressor,
-                                                dtype=complex)
-            else:
-                n_start_out = None
-                self.store.array("n_start",
-                                 np.expand_dims(self.n_guess, axis=list(range(self.nextra_dims))),
-                                 compressor=self.compressor,
-                                 dtype=complex)
-
-        else:
-            e_fwd_out = None
-            e_scatt_out = None
-            n_start_out = None
-
-        if self.save_auxiliary_fields and "max_iterations" in self.reconstruction_settings.keys():
-            cost_shape = (self.efields_ft.shape[:-3] +
-                          (self.reconstruction_settings["max_iterations"] + 1, self.npatterns))
-            cost_chunk = (1,) * (self.efields_ft.ndim - 3) + cost_shape[-2:]
-            costs_out = self.store.create("costs",
-                                          shape=cost_shape,
-                                          chunks=cost_chunk,
-                                          compressor=self.compressor,
-                                          dtype=float)
-
-            step_shape = self.efields_ft.shape[:-3] + (self.reconstruction_settings["max_iterations"],)
-            step_chunk = (1,) * (self.efields_ft.ndim - 3) + step_shape[-1:]
-            steps_out = self.store.create("steps",
-                                          shape=step_shape,
-                                          chunks=step_chunk,
-                                          compressor=self.compressor,
-                                          dtype=float)
-        else:
-            costs_out = None
-            steps_out = None
+        self.efields_ft = da.from_zarr(self.store.efields_ft,
+                                       chunks=(1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
+        self.efield_bg_ft = da.from_zarr(self.store.efield_bg_ft,
+                                         chunks=(1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
 
         # ############################
         # get beam frequencies
@@ -1480,29 +1615,18 @@ class Tomography:
         mean_beam_frqs = [np.mean(f, axis=tuple(range(self.nextra_dims))) for f in beam_frqs]
 
         # convert to array ... for images which don't have enough multiplexed frequencies, replaced by inf
-        nmax_multiplex = np.max([len(f) for f in mean_beam_frqs])
-        mean_beam_frqs_arr = np.ones((nmax_multiplex, self.npatterns, 3), dtype=float) * np.inf
+        mean_beam_frqs_arr = np.ones((self.nmax_multiplex, self.npatterns, 3), dtype=float) * np.inf
         for aaa in range(self.npatterns):
             mean_beam_frqs_arr[:, aaa, :] = mean_beam_frqs[aaa]
 
         # beam frequencies with multiplexed freqs raveled
-        mean_beam_frqs_no_multi = np.zeros([self.npatterns * nmax_multiplex, 3])
+        mean_beam_frqs_no_multi = np.zeros([self.npatterns * self.nmax_multiplex, 3])
         for ii in range(self.npatterns):
-            for jj in range(nmax_multiplex):
-                mean_beam_frqs_no_multi[ii * nmax_multiplex + jj, :] = mean_beam_frqs_arr[jj, ii]
+            for jj in range(self.nmax_multiplex):
+                mean_beam_frqs_no_multi[ii * self.nmax_multiplex + jj, :] = mean_beam_frqs_arr[jj, ii]
 
         # ############################
-        # check arrays are chunked by volume
-        # ############################
-        # todo: rechunk here if necessary ...
-        if self.efields_ft.chunksize[-3] != self.npatterns:
-            raise ValueError("")
-
-        if self.efield_bg_ft.chunksize[-3] != self.npatterns:
-            raise ValueError("")
-
-        # ############################
-        # compute information we need for reconstructions e.g. linear models and dz_final
+        # compute information we need for reconstructions
         # ############################
         # todo: want this based on pupil function defined in init
         fx_atf = xp.fft.fftfreq(self.n_shape[-1], self.drs_n[-1])
@@ -1534,7 +1658,7 @@ class Tomography:
         if self.verbose:
             print(f"computing index of refraction for {int(np.prod(self.imgs_raw.shape[:-3])):d} images "
                   f"using model {self.model:s}.\n"
-                  f"Image size = {self.npatterns} x {self.ny:d} x {self.nx:d},\n"
+                  f"image size = {self.npatterns} x {self.ny:d} x {self.nx:d},\n"
                   f"reconstruction size = {self.n_shape[0]:d} x {self.n_shape[1]:d} x {self.n_shape[2]:d}")
 
         # #############################
@@ -1565,12 +1689,6 @@ class Tomography:
         # #############################
         # reconstruction
         # #############################
-        n_size = self.n_shape
-        drs_n = self.drs_n
-        scattered_field_regularization = self.scattered_field_regularization
-        use_weighted_phase_unwrap = self.use_weighted_phase_unwrap
-        reconstruction_kwargs = self.reconstruction_settings
-
         def recon(efields_ft,
                   efields_bg_ft,
                   beam_frqs,
@@ -1585,15 +1703,30 @@ class Tomography:
                   optimizer,
                   verbose,
                   print_fft_cache,
+                  n_size,
+                  drs_n,
+                  scattered_field_regularization,
+                  use_weighted_phase_unwrap,
+                  reconstruction_kwargs,
                   n_guess=None,
                   e_fwd_out=None,
                   e_scatt_out=None,
                   n_start_out=None,
+                  n_out=None,
+                  costs_out=None,
+                  steps_out=None,
                   block_id=None):
 
             nextra_dims = efields_ft.ndim - 3
             dims = tuple(range(nextra_dims))
             nimgs, ny, nx = efields_ft.shape[-3:]
+
+            nmax_multiplex = np.max([len(f) for f in beam_frqs])
+
+            if isinstance(efields_ft, dask.array.Array):
+                efields_ft = efields_ft.compute()
+            if isinstance(efields_bg_ft, dask.array.Array):
+                efields_bg_ft = efields_bg_ft.compute()
 
             efields_ft = xp.asarray(efields_ft.squeeze(axis=dims))
             efields_bg_ft = xp.asarray(efields_bg_ft.squeeze(axis=dims))
@@ -1764,32 +1897,35 @@ class Tomography:
             # ################
             if e_fwd_out is not None:
                 tstart_efwd = perf_counter()
-                if verbose:
-                    print("computing forward model")
 
                 if optimizer == "born" or optimizer == "rytov":
                     e_fwd_out[block_ind] = to_cpu(ift2(model.fwd_model(ft3(get_v(n, no, wavelength)))))
                 else:
                     slices = (slice(0, 1), slice(-1, None), slice(None), slice(None))  # [0, -1, :, :]
-
-                    tstart_efwd = perf_counter()
                     for ii in range(nimgs):
                         ind_now = block_ind + (ii,)
                         e_fwd_out[ind_now] = to_cpu(model.fwd_model(n.squeeze(), inds=[ii])[slices]).squeeze()
 
                 if verbose:
-                    print(f"computed forward model in {perf_counter() - tstart_efwd:.2f}s")
+                    print(f"stored forward model in {perf_counter() - tstart_efwd:.2f}s")
 
             if use_gpu and print_fft_cache:
                 print(f"gpu memory usage after inference = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
                 print(cp.fft.config.get_plan_cache())
 
-            return to_cpu(n).reshape((1,) * nextra_dims + n_size)
+
+            # ################
+            # store n
+            # ################
+            if n_out is not None:
+                n_out[block_ind] = to_cpu(n)
+            else:
+                return to_cpu(n).reshape((1,) * nextra_dims + n_size)
 
         # #######################
         # get refractive index
         # #######################
-        n = da.map_blocks(recon,
+        map_blocks_joblib(recon,
                           self.efields_ft,  # data
                           self.efield_bg_ft,  # background
                           mean_beam_frqs_arr,
@@ -1804,32 +1940,44 @@ class Tomography:
                           optimizer,
                           self.verbose,
                           print_fft_cache,
+                          self.n_shape,
+                          self.drs_n,
+                          self.scattered_field_regularization,
+                          self.use_weighted_phase_unwrap,
+                          self.reconstruction_settings,
                           n_guess=self.n_guess,
-                          e_fwd_out=e_fwd_out,
-                          e_scatt_out=e_scatt_out,
-                          n_start_out=n_start_out,
-                          chunks=(1,) * self.nextra_dims + self.n_shape,
-                          dtype=np.complex64 if self.save_float32 else complex,
+                          e_fwd_out=self.store.efwd if self.save_auxiliary_fields else None,
+                          e_scatt_out=self.store.escatt if self.save_auxiliary_fields else None,
+                          n_start_out=self.store.n_start if self.save_auxiliary_fields and
+                                                            self.n_guess is None else None,
+                          costs_out=self.store.costs,
+                          steps_out=self.store.steps,
+                          n_out=self.store.n,
+                          chunks=(1,) * self.nextra_dims + (None, None, None),
+                          n_workers=n_workers,
+                          processes=processes,
+                          verbose=False,
                           )
 
-        with LocalCluster(processes=processes,
-                          n_workers=n_workers,
-                          threads_per_worker=threads_per_worker) as cluster, Client(cluster) as client:
-            if self.verbose:
-                print(cluster.dashboard_link)
+        get_reusable_executor().shutdown(wait=True)
+        self.timing["reconstruction_time"] = perf_counter() - tstart_recon
+        if self.verbose:
+            print(f"recon time: {parse_time(self.timing['reconstruction_time'])[1]:s}")
 
-            dcompute([n.to_zarr(self.store.store.path,
-                                component="n",
-                                compute=False,
-                                compressor=self.compressor)])
-            # save profile
-            client.profile(filename=self.save_dir / f"{self.tstamp:s}_reconstruction_profile.html")
 
     def plot_translations(self,
                           time_axis: int = 1,
                           index: Optional[tuple[int]] = None,
                           figsize: Sequence[float, float] = (30., 8.),
                           **kwargs) -> Figure:
+        """
+
+        :param time_axis:
+        :param index:
+        :param figsize:
+        :param kwargs:
+        :return figh:
+        """
 
         if index is None:
             index = (0,) * (self.nextra_dims - 1)
@@ -1862,32 +2010,32 @@ class Tomography:
 
         # plot frequency differences
         ax = figh.add_subplot(1, 2, 1)
-        ax.plot(translations[..., 0], '.-', label="sig")
-        ax.plot(translations_bg[..., 0], label="bg")
+        ax.plot(translations[..., 0] / self.dxy, '.-', label="sig")
+        ax.plot(translations_bg[..., 0] / self.dxy, label="bg")
         ax.set_xlabel("time step")
-        ax.set_ylabel("x-position (um)")
+        ax.set_ylabel("x-position / dxy")
         ax.set_title("x-position")
 
         ax = figh.add_subplot(1, 2, 2)
-        ax.plot(translations[..., 1], '.-', label="sig")
-        ax.plot(translations_bg[..., 1], label="bg")
+        ax.plot(translations[..., 1] / self.dxy, '.-', label="sig")
+        ax.plot(translations_bg[..., 1] / self.dxy, label="bg")
         ax.set_xlabel("time step")
-        ax.set_ylabel("y-position (um)")
+        ax.set_ylabel("y-position / dxy")
         ax.set_title("y-position")
 
         return figh
 
     def plot_frqs(self,
-                  time_axis: int = 1,
+                  time_axis: int,
                   index: Optional[Sequence[int]] = None,
                   figsize: Sequence[float, float] = (30., 8.),
                   **kwargs) -> Figure:
         """
 
+        :param time_axis:
         :param index: should be of length self.nextra_dims - 1. Index along these axes, but ignoring whichever
           axes is the time axis. So e.g. if the axis are position x time x z x parameter then time_axis = 1 and
           the index could be (2, 1, 0) which would selection position 2, z 1, parameter 0.
-        :param time_axis:
         :param figsize:
         :param kwargs: passed through to matplotlib.pyplot.figure
         :return:
@@ -1917,45 +2065,36 @@ class Tomography:
         # ####################################
         # hologram frequencies
         # ####################################
-
         # each element of list should have shape ntimes x nmultiplex x 2
-        hologram_frqs_mean = [np.mean(f, axis=1, keepdims=True) for f in self.hologram_frqs]
+        hologram_frqs_mean = [np.mean(f, axis=time_axis, keepdims=True) for f in self.hologram_frqs]
         hgram_frq_diffs = [(f - g)[slices].squeeze(axis=squeeze_axes)
                            for f, g in zip(self.hologram_frqs, hologram_frqs_mean)]
         # stack all hologram frqs
         hgram_frq_diffs = np.concatenate(hgram_frq_diffs, axis=1)
 
         # shape = ntimes x 2
-        ref_frq_diffs = (self.reference_frq - np.mean(self.reference_frq,
-                                                      axis=1,
-                                                      keepdims=True))[ref_slices].squeeze(squeeze_axes)
+        rfrq_sq = self.reference_frq.squeeze(axis=(-2, -3, -4))
+        ref_frq_diffs = (rfrq_sq - np.mean(rfrq_sq,
+                                           axis=time_axis,
+                                           keepdims=True))[ref_slices].squeeze(squeeze_axes)
 
         # plot
         figh = plt.figure(figsize=figsize, **kwargs)
         figh.suptitle(f"index={index}\nfrequency variation versus time")
 
         # plot frequency differences
-        ax = figh.add_subplot(1, 3, 1)
+        ax = figh.add_subplot(1, 2, 1)
         ax.plot(norm(hgram_frq_diffs, axis=-1) / self.dfx, '.-')
         ax.set_xlabel("time step")
-        ax.set_ylabel("(frequency - mean) / dfx")
+        ax.set_ylabel("|f - f_mean| / dfx")
         ax.set_title("hologram frequency deviation amplitude")
         ax.legend([f"{ii:d}" for ii in range(self.npatterns)])
 
-        # plot angles
-        angles_unwrapped = np.unwrap(np.angle(hgram_frq_diffs[..., 0] + 1j * hgram_frq_diffs[..., 1]))
-
-        ax = figh.add_subplot(1, 3, 2)
-        ax.plot(angles_unwrapped, '.-')
-        ax.set_xlabel("time step")
-        ax.set_ylabel("angle (rad)")
-        ax.set_title("hologram frequency deviation rotation")
-
         # plot mean frequency differences
-        ax = figh.add_subplot(1, 3, 3)
+        ax = figh.add_subplot(1, 2, 2)
         ax.plot(norm(ref_frq_diffs, axis=-1) / self.dfx, '.-')
         ax.set_xlabel("time step")
-        ax.set_ylabel("(frequency norm - mean) / dfx")
+        ax.set_ylabel("|fref - fref_mean| / dfx")
         ax.set_title("reference frequency deviation amplitude")
 
         return figh
@@ -2035,6 +2174,8 @@ class Tomography:
         :return:
         """
 
+        tstart_plot = perf_counter()
+
         context = {}
         if not interactive:
             context['interactive'] = False
@@ -2056,22 +2197,19 @@ class Tomography:
                                              index=index,
                                              **kwargs)
 
-            # plot sampling
-            figh_sampling = self.plot_odt_sampling(index=index,
-                                                   figsize=(15, 5),
-                                                   **kwargs)
-
         if save:
             figh_frq.savefig(self.save_dir / "hologram_frequency_stability.png")
             figh_ph.savefig(self.save_dir / "phase_stability.png")
             figh_xl.savefig(self.save_dir / "registration.png")
-            figh_sampling.savefig(self.save_dir / "fourier_sampling.png")
 
         if not interactive:
             plt.close(figh_frq)
             plt.close(figh_ph)
             plt.close(figh_xl)
-            plt.close(figh_sampling)
+
+        self.timing["plot_diagnostics_time"] = perf_counter() - tstart_plot
+        if self.verbose:
+            print(f"plotted diagnostics in: {parse_time(self.timing['plot_diagnostics_time'])[1]:s}")
 
     def plot_odt_sampling(self,
                           index: Optional[tuple[int]] = None,
@@ -2499,6 +2637,16 @@ class Tomography:
 
         return figh
 
+    def display_tomography_recon(self, **kwargs):
+        """
+        Display reconstruction in napari
+
+        :param kwargs:
+        :return:
+        """
+        return display_tomography_recon(self.store,
+                                        **kwargs)
+
 
 def cut_mask(img: array,
              mask: array,
@@ -2619,10 +2767,11 @@ def fit_phase_ramp(imgs_ft: array,
         ref_val = np.max(np.abs(ref_imgs_ft)) * thresh
         mask = xp.abs(imgs_ft[ind]) >= ref_val
 
-        imgs_ft_mask = imgs_ft[ind][mask]
-        fxfx_mask = fxfx[mask]
-        fyfy_mask = fyfy[mask]
-        ref_imgs_ft_mask = ref_imgs_ft[ind][mask]
+        # must be on CPU to run
+        imgs_ft_mask = to_cpu(imgs_ft[ind][mask])
+        fxfx_mask = to_cpu(fxfx[mask])
+        fyfy_mask = to_cpu(fyfy[mask])
+        ref_imgs_ft_mask = to_cpu(ref_imgs_ft[ind][mask])
 
         def fnh(p): return ref_imgs_ft_mask * np.exp(-2 * np.pi * 1j * (fxfx_mask * p[0] + fyfy_mask * p[1]))
 
@@ -2637,7 +2786,7 @@ def fit_phase_ramp(imgs_ft: array,
                             function_is_complex=True
                             )
 
-        fit_params[ind] = results["fit_params"]
+        fit_params[ind] = xp.asarray(results["fit_params"])
 
     return fit_params
 
@@ -2837,7 +2986,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              show_n3d: bool = True,
                              show_n_aux: bool = False,
                              show_mips: bool = False,
-                             mip_separation_pix: int = 0,
                              show_raw: bool = False,
                              show_scattered_fields: bool = False,
                              show_efields: bool = False,
@@ -2853,9 +3001,8 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              n_cmap="gray_r",
                              real_cmap="bone",
                              phase_cmap="RdBu",
-                             scale_z: bool = True,
-                             xshift_pix: int = 0,
-                             yshift_pix: int = 0,
+                             xshift_pix: Optional[int] = None,
+                             yshift_pix: Optional[int] = None,
                              prefix: str = "",
                              viewer=None,
                              block_while_display: bool = True,
@@ -2869,7 +3016,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     :param show_n3d:
     :param show_n_aux:
     :param show_mips:
-    :param mip_separation_pix:
     :param show_raw:
     :param show_scattered_fields:
     :param show_efields:
@@ -2883,7 +3029,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     :param escatt_lim: (emin, emax)
     :param real_cmap: color map to use for intensity-like images
     :param phase_cmap: color map to use for phase-like images
-    :param scale_z: whether to scale the z-direction realistically so 3D displays are not distorted
     :param xshift_pix: shift images laterally to view electric fields and n simultaneously by this many pixels
     :param yshift_pix:
     :param prefix:
@@ -2929,6 +3074,12 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     n_extra_dims = img_z.n.ndim - 3
     nz, ny, nx = img_z.n.shape[-3:]
     npatterns = img_z.attrs["npatterns"]
+
+    if yshift_pix is None:
+        yshift_pix = ny
+
+    if xshift_pix is None:
+        xshift_pix = nx
 
     # NOTE: do not operate on these arrays after broadcasting otherwise memory use will explode
     # broadcasting does not cause memory size expansion, but in-place operations later will
@@ -2976,24 +3127,29 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     # ##############################
     # load affine xforms
     # ##############################
-    # Napari uses convention (y, x) whereas I'm using (x, y),
-    # so need to swap these dimensions in affine xforms
-    swap_xy = np.array([[0, 1, 0],
-                        [1, 0, 0],
-                        [0, 0, 1]])
-    try:
-        affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
-    except KeyError:
+    order_is_yx = (hasattr(img_z.attrs["xform_dict"], "coordinate_order") and
+                   img_z.attrs["xform_dict"]["coordinate_order"] == "yx")
+
+    if order_is_yx:
+        affine_recon2cam = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
+    else:
+        # Napari uses convention (y, x) whereas I'm using (x, y),
+        # so need to swap these dimensions in affine xforms
+        swap_xy = np.array([[0, 1, 0],
+                            [1, 0, 0],
+                            [0, 0, 1]])
         try:
             affine_recon2cam_xy = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
         except KeyError:
-            affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
+            try:
+                affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
+            except KeyError:
+                affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
 
-    try:
-        affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
-        # affine_cam2recon = inv(affine_recon2cam)
-    except TypeError:
-        affine_recon2cam = params2xform([1, 0, 0, 1, 0, 0])
+        try:
+            affine_recon2cam = swap_xy.dot(affine_recon2cam_xy.dot(swap_xy))
+        except TypeError:
+            affine_recon2cam = params2xform([1, 0, 0, 1, 0, 0])
 
     # with dask_cfg_set(scheduler='threads',
     #                   **{'array.slicing.split_large_chunks': False}):
@@ -3020,8 +3176,8 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
         if compute:
             with ProgressBar():
-                n_real, n_imag = dcompute([n_real, n_imag])[0]
-                n_start_real, n_start_imag = dcompute([n_start_real, n_start_imag])[0]
+                n_real, n_imag = dask.compute([n_real, n_imag])[0]
+                n_start_real, n_start_imag = dask.compute([n_start_real, n_start_imag])[0]
 
             # broadcast
             bcast_shape_n = np.broadcast_shapes(n_real.shape, bcast_shape)
@@ -3052,7 +3208,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
         if compute:
             with ProgressBar():
-                n_maxz, n_maxy, n_maxx = dcompute([n_maxz, n_maxy, n_maxx])[0]
+                n_maxz, n_maxy, n_maxx = dask.compute([n_maxz, n_maxy, n_maxx])[0]
 
             n_maxz = np.broadcast_to(n_maxz,
                                      np.broadcast_shapes(n_maxz.shape, bcast_shape))
@@ -3076,7 +3232,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
         if compute:
             with ProgressBar():
-                imgs = dcompute(imgs)[0]
+                imgs = dask.compute(imgs)[0]
 
             # broadcast raw images
             bcast_shape_raw = np.broadcast_shapes(imgs.shape, bcast_shape)
@@ -3119,7 +3275,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         if compute:
             with ProgressBar():
                 e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff = \
-                    dcompute([e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff])[0]
+                    dask.compute([e_abs, e_angle, ebg_abs, ebg_angle, e_ebg_abs_diff, e_ebg_phase_diff])[0]
 
             # broadcast electric fields
             bcast_shape_e = np.broadcast_shapes(e_abs.shape, bcast_shape)
@@ -3144,7 +3300,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
         if compute:
             with ProgressBar():
-                escatt_real, escatt_imag = dcompute([escatt_real, escatt_imag])[0]
+                escatt_real, escatt_imag = dask.compute([escatt_real, escatt_imag])[0]
 
             # this can be a different size due to multiplexing
             bcast_root_scatt = (1,) * n_extra_dims + (1, nz, 1, 1)
@@ -3174,7 +3330,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         if compute:
             with ProgressBar():
                 e_fwd_abs, e_fwd_angle, efwd_ebg_abs_diff, efwd_ebg_phase_diff = \
-                dcompute([e_fwd_abs, e_fwd_angle, efwd_ebg_abs_diff, efwd_ebg_phase_diff])[0]
+                dask.compute([e_fwd_abs, e_fwd_angle, efwd_ebg_abs_diff, efwd_ebg_phase_diff])[0]
 
             # broadcast
             bcast_shape_efwd = np.broadcast_shapes(e_fwd_abs.shape, bcast_shape)
@@ -3197,7 +3353,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             pcorr_angle = np.ones_like(pcorr_abs)
 
         if compute:
-            pcorr_abs, pcorr_angle = dcompute([pcorr_abs, pcorr_angle])[0]
+            pcorr_abs, pcorr_angle = dask.compute([pcorr_abs, pcorr_angle])[0]
 
             bcast_shape_pcorr = np.broadcast_shapes(pcorr_abs.shape, bcast_shape)
             pcorr_abs = np.broadcast_to(pcorr_abs, bcast_shape_pcorr)
@@ -3211,12 +3367,8 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                                    **kwargs)
 
         # for convenience of affine xforms, keep xy scale in pixels
-        if scale_z:
-            scale = (drs_n[0] / drs_n[1], 1, 1)
-            zoffset /= drs_n[1]
-        else:
-            scale = (1, 1, 1)
-            zoffset /= drs_n[0]
+        scale = (drs_n[0] / drs_n[1], 1, 1)
+        zoffset /= drs_n[1]
 
         # ######################
         # raw data
@@ -3226,7 +3378,6 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              scale=scale,
                              translate=(zoffset, 0, 0),
                              colormap=real_cmap,
-                             # affine=affine_cam2recon,
                              contrast_limits=[0, 4096],
                              name=f"{prefix:s}raw images",
                              )
@@ -3432,7 +3583,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             viewer.add_image(n_maxy,
                              scale=(scale[0], drs_n[0] / drs_n[1], scale[2]),
                              affine=affine_recon2cam,
-                             translate=(zoffset, ny + mip_separation_pix, 0),
+                             translate=(zoffset, ny, 0),
                              contrast_limits=n_lim,
                              colormap=n_cmap,
                              name=f"{prefix:s}n max y"
@@ -3442,7 +3593,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             viewer.add_image(n_maxx,
                              scale=(scale[0], scale[1], drs_n[0] / drs_n[1]),
                              affine=affine_recon2cam,
-                             translate=(zoffset, 0, -nz * drs_n[0] / drs_n[1] - mip_separation_pix),
+                             translate=(zoffset, 0, -nz * drs_n[0] / drs_n[1]),
                              contrast_limits=n_lim,
                              colormap=n_cmap,
                              name=f"{prefix:s}n max x"
@@ -3498,22 +3649,6 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
     return v
 
 
-def display_mips(location: Union[str, Path, zarr.hierarchy.Group],
-                 **kwargs
-                 ):
-    """
-    Display maximum intensity projections from saved RI reconstruction data
-
-    :param location:
-    :param kwargs:
-    :return viewer:
-    """
-    return display_tomography_recon(location,
-                                    show_n3d=False,
-                                    show_mips=True,
-                                    **kwargs)
-
-
 def parse_time(dt: float) -> (tuple, str):
     """
     Parse a time difference in seconds into days, hours, minutes and seconds
@@ -3536,14 +3671,15 @@ class PhaseCorr(Optimizer):
                  ebg,
                  tau_l1: float = 0,
                  escale: float = 40.,
-                 fit_magnitude: bool = True):
+                 fit_magnitude: bool = True,
+                 **kwargs):
         super(PhaseCorr, self).__init__(e.shape[-3],
-                                        prox_parameters={"tau_l1": float(tau_l1)})
+                                        prox_parameters={"tau_l1": float(tau_l1),
+                                                         "fit_magnitude": bool(fit_magnitude)})
 
         self.e = e
         self.ebg = ebg
         self.escale = float(escale)
-        self.fit_magnitude = bool(fit_magnitude)
 
     def gradient(self,
                  x: array,
@@ -3584,10 +3720,137 @@ class PhaseCorr(Optimizer):
                        xp.exp(1j * xp.angle(ft_x)))
 
             y = ift2(ft_prox)
-            if not self.fit_magnitude:
+            if not self.prox_parameters["fit_magnitude"]:
                 y = xp.exp(1j * xp.angle(y))
 
         else:
             y = xp.array(x, copy=True)
 
         return y
+
+def map_blocks_joblib(fn,
+                      *args,
+                      n_workers=-1,
+                      processes=True,
+                      chunks=None,
+                      verbose=True,
+                      **kwargs) -> list:
+    """
+    Processes function along blocks of a chunked array with joblib. This is intended to be a replacement for
+    dask.array.map_blocks()
+
+    :param fn: function to call on blocks
+    :param args: first argument should be the main array to map blocks over. Will also map over subsequent arrays, if
+    they are broadcastable with args[0]
+    :param n_workers: number of joblib workers
+    :param processes: whether to use processes or threads
+    :param chunks: size of chunks
+    :param verbose: whether to display a progress bar
+    :param kwargs: should not be arrays
+    :return results:
+    """
+
+    fullsize = args[0].shape
+    nchunks_dims = np.array([f / c if c is not None
+                             else 1
+                             for c, f in zip(chunks, fullsize)]).astype(int)
+    nchunks = np.prod(nchunks_dims)
+
+    def get_block_ind(chunk_ind): return np.unravel_index(chunk_ind, nchunks_dims)
+
+    def slicer(a, chunk_ind):
+        if isinstance(a, (np.ndarray, dask.array.Array)) or (cp and isinstance(a, cp.ndarray)):
+            block_ind = get_block_ind(chunk_ind)
+            slices = [slice(c * s, (c + 1) * s) if s is not None
+                      else slice(None)
+                      for c, s in zip(block_ind, chunks)]
+
+            # if a is not full dimensionality, only slice last dimensions
+            slices_dim = slices[-a.ndim:]
+
+            # don't slice along dimension if we can broadcast
+            slices_dim = [s if d != 1
+                          else slice(None)
+                          for s, d in zip(slices_dim, a.shape)]
+
+            return a[tuple(slices_dim)]
+        else:
+            return a
+
+    # todo: tqdm only prints out when chunks start processing
+    inds = range(nchunks)
+    if verbose:
+        inds = tqdm(inds)
+
+    # ########################
+    # detect and pass special keyword arguments for block logic
+    # ########################
+    spec = getfullargspec(fn)
+    # add block id
+    if "block_id" in kwargs.keys():
+        raise ValueError("detected special key 'block_id' in kwargs. This is not allowed.")
+
+    if "block_id" in spec.args:
+        def bid(ind): return {"block_id": get_block_ind(ind)}
+    else:
+        def bid(ind): return {}
+
+    if "block_info" in kwargs.keys():
+        raise ValueError("detected special key 'block_info' in kwargs. This is not allowed.")
+
+    if "block_info" in spec.args:
+        def binfo(ind):
+            block_id = get_block_ind(ind)
+            array_loc = [(b * s // n, (b + 1) * s // n) for b, n, s in zip(block_id, nchunks_dims, fullsize)]
+            return {"block_info": {0: {"shape": fullsize,
+                                       "num-chunks": nchunks_dims,
+                                       "chunk-location": block_id,
+                                       "array-location": array_loc
+                                       }
+                                    }
+                    }
+    else:
+        def binfo(ind): return {}
+
+    # todo: pass input_chunks or derive from array (through chunksize attribute?) and separately (output) chunks?
+    results = (joblib.Parallel(n_jobs=n_workers, prefer="processes" if processes else "threads")
+                 (joblib.delayed(fn)(*[slicer(a, ind) for a in args],
+                                     **bid(ind), # pass block id if function accepts it
+                                     **binfo(ind), # pass block info
+                                     **kwargs)
+                                     for ind in inds)
+              )
+
+    return results
+
+
+def save_dask_logs(client,
+                   root_dir: Union[str, Path],
+                   prefix: str = ""):
+    """
+    Save logs from dask workers and scheduler to text file
+
+    :param client:
+    :param root_dir:
+    :param prefix:
+    :return:
+    """
+    l = client.get_worker_logs()
+    for aa, (k, v) in enumerate(l.items()):
+        fname_log = root_dir / f"{prefix:s}worker_{aa:d}_log.txt"
+        with open(fname_log, "w") as flog:
+            flog.write(f"{k:s}\n")
+            flog.write("\n".join(p[1] for p in v))
+
+    # save nanny log
+    ln = client.get_worker_logs(nanny=True)
+    for aa, (k, v) in enumerate(ln.items()):
+        fname_log = root_dir / f"{prefix:s}nanny_{aa:d}_log.txt"
+        with open(fname_log, "w") as flog:
+            flog.write(f"{k:s}\n")
+            flog.write("\n".join(p[1] for p in v))
+
+    s = client.get_scheduler_logs()
+    fname_log = root_dir / f"{prefix:s}scheduler_log.txt"
+    with open(fname_log, "w") as flog:
+        flog.write("\n".join(p[1] for p in s))

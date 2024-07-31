@@ -11,6 +11,7 @@ import ctypes as ct
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 from warnings import warn
 
 try:
@@ -401,6 +402,56 @@ class nidaq(daq):
             a_lines, a_arr = list(zip(*a.items()))
             self.set_analog_lines_by_name(np.array(a_arr), a_lines)
 
+    def set_sine_wave(self,
+                      amps: np.ndarray,
+                      offs: np.ndarray,
+                      frq: float,
+                      lines: Optional[list] = None,
+                      nsamples: int = 100):
+        """
+        Generate sine waves on selected analog channels. After setting, start with start_sequence() and stop with
+        stop_sequence()
+
+        :param amps:
+        :param offs:
+        :param frq:
+        :param lines:
+        :param nsamples:
+        :return:
+        """
+
+        if lines is None:
+            lines = list(range(self.n_analog_lines))
+
+        amps = np.atleast_1d(amps)
+        offs = np.atleast_1d(offs)
+
+        ts = np.linspace(0, 1, nsamples)
+        analog_array = amps[None, :] * np.sin(2 * np.pi * ts[:, None]) + offs[None, :]
+
+        self._task_ao = daqmx.Task()
+        self._task_ao.CreateAOVoltageChan(", ".join([d for ii, d in enumerate(self.analog_lines) if ii in lines]),
+                                         "",
+                                         -5.0,
+                                         5.0,
+                                         daqmx.DAQmx_Val_Volts,
+                                         None)
+
+        self._task_ao.CfgSampClkTiming("",
+                                      frq * len(ts),
+                                      daqmx.DAQmx_Val_Rising,
+                                      daqmx.DAQmx_Val_ContSamps,
+                                      analog_array.shape[0])
+
+        samples_per_ch_ct = ct.c_int32()
+        self._task_ao.WriteAnalogF64(analog_array.shape[0],
+                                    False,
+                                    10.0,
+                                    daqmx.DAQmx_Val_GroupByScanNumber,
+                                    analog_array,
+                                    ct.byref(samples_per_ch_ct),
+                                    None)
+
     def set_sequence(self,
                      digital_array: np.ndarray,
                      analog_array: np.ndarray,
@@ -663,14 +714,34 @@ class nidaq(daq):
         :return:
         """
         if self._task_ct is not None:
-            self._task_ct.StartTask()
+            try:
+                self._task_ct.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
+
         if self._task_di is not None:
-            self._task_di.StartTask()
+            try:
+                self._task_di.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
+
         if self._task_ao is not None:
-            self._task_ao.StartTask()
+            try:
+                self._task_ao.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
+
         if self._task_ai is not None:
-            self._task_ai.StartTask()
-        self._task_do.StartTask()
+            try:
+                self._task_ai.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
+
+        if self._task_do is not None:
+            try:
+                self._task_do.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
 
     def stop_sequence(self):
         """
@@ -778,9 +849,9 @@ def plot_daq_program(arr: np.ndarray,
         if ind.size > 1:
             raise ValueError()
         elif ind.size == 1:
-            ticks.append(matplotlib.text.Text(float(ii), 0, k[ind[0][0]]))
+            ticks.append(Text(float(ii), 0, k[ind[0][0]]))
         else:
-            ticks.append(matplotlib.text.Text(float(ii), 0, ""))
+            ticks.append(Text(float(ii), 0, ""))
 
     figh = plt.figure(**kwargs)
     ax = figh.add_subplot(1, 1, 1)

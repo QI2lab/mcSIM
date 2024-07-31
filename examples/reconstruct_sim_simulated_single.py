@@ -176,4 +176,4 @@ print(f"reconstructing images, plotting diagnostics, and saving results took "
       f"{time.perf_counter() - tstart:.2f}s")
 
 # display results in napari
-show_sim_napari(fname_out)
+show_sim_napari(fname_out, clims=(0., 300.))
