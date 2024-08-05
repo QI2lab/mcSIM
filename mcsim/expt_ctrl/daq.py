@@ -63,6 +63,7 @@ class nidaq(daq):
                  analog_line_names: Optional[dict] = None,
                  presets: Optional[dict] = None,
                  config_file: str = None,
+                 component: str = Optional[None],
                  initialize: bool = True):
         """
         Initialize DAQ. Note that DAQ can be instantiated before the actual DAQ is present
@@ -76,6 +77,8 @@ class nidaq(daq):
         :param presets: dictionary of presets
         :param config_file: alternative method of provided digital_line_names, analog_line_names, and presets.
           If config_file is supplied, these other keyword arguments should not be supplied
+        :param component: component in json file to load configuration from
+        :param initialize:
         """
         super().__init__()
 
@@ -86,7 +89,7 @@ class nidaq(daq):
                              " were both provided. If config_file is provided, do not also provide this other info")
 
         if config_file is not None:
-            digital_line_names, analog_line_names, presets, _ = load_config_file(config_file)
+            digital_line_names, analog_line_names, presets, _ = load_config_file(config_file, component)
 
         self.dev_name = dev_name
 
@@ -937,6 +940,27 @@ def preset_to_array(preset: dict,
 
     return digital_array, analog_array
 
+def format_config_data(digital_map: dict,
+                       analog_map: dict,
+                       presets: dict):
+    """
+    Prepare data to be saved in configuration file. This helper function is useful if you want to save this data
+    as one entry in a larger configuration file
+
+    :param digital_map:
+    :param analog_map:
+    :param presets:
+    :return:
+    """
+
+    now = datetime.datetime.now()
+    tstamp = f"{now.year:04d}_{now.month:02d}_{now.day:02d}_{now.hour:02d};{now.minute:02d};{now.second:02d}"
+    data = {"timestamp": tstamp,
+            "analog_map": analog_map,
+            "digital_map": digital_map,
+            "presets": presets}
+    return data
+
 
 def save_config_file(fname: str,
                      digital_map: dict,
@@ -951,27 +975,26 @@ def save_config_file(fname: str,
     :param presets:
     :return:
     """
-    now = datetime.datetime.now()
-    tstamp = f"{now.year:04d}_{now.month:02d}_{now.day:02d}_{now.hour:02d};{now.minute:02d};{now.second:02d}"
 
+    data = format_config_data(digital_map, analog_map, presets)
     with open(fname, "w") as f:
-        json.dump({"timestamp": tstamp,
-                   "analog_map": analog_map,
-                   "digital_map": digital_map,
-                   "presets": presets},
-                  f,
-                  indent="\t")
+        json.dump(data, f, indent="\t")
 
 
-def load_config_file(fname: str) -> (dict, dict, dict, str):
+def load_config_file(fname: str,
+                     component: Optional[str] = None) -> (dict, dict, dict, str):
     """
     load configuration data from json file
 
     :param fname:
+    :param component:
     :return analog_map, digital_map, presets, tstamp:
     """
     with open(fname, "r") as f:
         data = json.load(f)
+
+    if component is not None:
+        data = data[component]
 
     tstamp = data["timestamp"]
     analog_map = data["analog_map"]
