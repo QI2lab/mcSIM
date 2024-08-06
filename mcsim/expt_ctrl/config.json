@@ -106,7 +106,7 @@
 		"file_name": "G:\\2022_09_07\\02_fluorescence_affine_ref\\2022_09_08_11;45;05_affine_xform.json",
 		"data_time_stamp": ""
 	},
-	"timestamp": "2024_08_05_11;45;38",
+	"timestamp": "2024_08_05_17;43;07",
 	"sim_odt_program_defaults": {
 		"sx": 801,
 		"cx": 1024,
@@ -138,7 +138,7 @@
 		"odt": 0.785
 	},
 	"daq_configuration": {
-		"timestamp": "2024_08_05_11;42;56",
+		"timestamp": "2024_08_05_17;43;07",
 		"analog_map": {
 			"vc_mirror_x": 0,
 			"vc_mirror_y": 1,
@@ -159,7 +159,9 @@
 			"dmd_advance": 3,
 			"signal_monitor": 11,
 			"analog_trigger": 12,
-			"camera_trigger_monitor": 14
+			"camera_trigger_monitor": 14,
+			"dmd2_enable": 13,
+			"dmd2_advance": 15
 		},
 		"presets": {
 			"off": {
