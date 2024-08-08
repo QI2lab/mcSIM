@@ -12,10 +12,11 @@ Welcome to mcSIM's documentation!
 
    sim
    tomography
-   field_prop
    optimize
    fft
+   field_prop
    mie_fields
+   gauss_beam
    phase_unwrap
    dmd_patterns
    dmd_simulation
