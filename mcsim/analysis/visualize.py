@@ -148,32 +148,30 @@ def assemble_2d_projections(p_xy: array,
     return img, affines
 
 
-def get_2d_projections(n: array,
-                       use_slice: bool = False,
+def get_2d_projections(img: array,
+                       inds: Optional[Sequence[int]] = None,
                        **kwargs
                        ) -> array:
     """
     Generate an image showing 3 orthogonal projections from a 3D array.
     Additional keyword arguments are passed through to assemble_2d_projections()
 
-    :param n: 3D array
-    :param use_slice: use the central slice. If False, max project
+    :param img: 3D array
+    :param inds: indices to use to generate crop. If not provided, max project
     :return img: 2D image showing projections
     """
-    nz, ny, nx = n.shape
+    xp = cp if cp and isinstance(img, cp.ndarray) else np
 
-    if use_slice:
-        iz = nz // 2
-        iy = ny // 2
-        ix = nx // 2
-        n_xy = n[iz]
-        n_yz_before_xform = n[:, :, ix]
-        n_xz_before_xform = n[:, iy, :]
+    if inds is not None:
+        iz, iy, ix = inds
+        n_xy = img[..., iz, :, :]
+        n_yz_before_xform = img[..., :, :, ix]
+        n_xz_before_xform = img[..., :, iy, :]
     else:
         # max projection
-        n_xy = n.max(axis=0)
-        n_yz_before_xform = n.max(axis=2)
-        n_xz_before_xform = n.max(axis=1)
+        n_xy = xp.nanmax(img, axis=-3)
+        n_yz_before_xform = xp.nanmax(img, axis=-1)
+        n_xz_before_xform = xp.nanmax(img, axis=-2)
 
     return assemble_2d_projections(n_xy, n_xz_before_xform, n_yz_before_xform, **kwargs)
 
