@@ -26,7 +26,7 @@ tout_offsets = np.linspace(-10, 10, 4800) * np.pi / 180
 wlens = [0.465, 0.635, 0.532, 0.785]  # must be in um to match default DMD models
 diff_orders = [4, 3, -4, -3]  # todo: find closest orders instead of presetting
 inverted = [False, False, True, True]
-display_colors = ['b', 'r', 'g', 'k']
+display_colors = ['b', 'r', 'g', 'pink']
 
 # set up pattern information
 base_period = 5  # period of pattern at the first wavelength listed above
@@ -105,6 +105,16 @@ for ii in range(len(wlens)):
                                  tm_out_offsets=tout_offsets,
                                  inverted=inverted[ii])
     simulation_data.append(data_temp)
+
+# ##################################
+# plot DMD geometry
+# ##################################
+figh3d, ax3d = dmd.plot([uvec_out] + [v for v in uvecs_in_exact],
+                        colors=['k'] + display_colors,
+                        labels=["output"] + [f"{w * 1e3:.1f}" for w in wlens],
+                        plot_on_mirror_normal=True,
+                        plot_off_mirror_normal=True,
+                        table="mz")
 
 # ##################################
 # plot results of 1D simulations
