@@ -82,6 +82,8 @@ import numpy as np
 from dask import delayed, compute
 from dask.diagnostics import ProgressBar
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.figure import Figure
 from matplotlib.colors import PowerNorm
 from matplotlib.patches import Circle
@@ -553,6 +555,148 @@ class DMD:
         ns = np.stack((nxnx, nyny), axis=-1)
 
         return ns, allowed_dc, allowed_any
+
+    def plot(self,
+             vects: Sequence[np.ndarray],
+             colors: Optional[Sequence[str]] = None,
+             labels: Optional[Sequence[str]] = None,
+             figh: Figure = None,
+             ax=None,
+             plot_on_mirror_normal: bool = True,
+             plot_off_mirror_normal: bool = False,
+             table: Optional[str] = None,
+             azimuth: float = -135.,
+             elevation: float = 115.,
+             **kwargs):
+        """
+        Plot 3D DMD geometry
+
+        :param vects: sequence of arrays of length 3. Incoming and outgoing directions on DMD
+        :param colors: sequence of colors used when plotting vects
+        :param labels: labels for each vect
+        :param figh:
+        :param ax:
+        :param plot_on_mirror_normal:
+        :param plot_off_mirror_normal:
+        :param table: None, "xz" or "mz"
+        :param kwargs: passed through to figure
+        :return figh, ax:
+        """
+
+        if isinstance(vects, np.ndarray):
+            if vects.ndim == 1:
+                vects = (vects,)
+
+        if figh is None:
+            figh = plt.figure(**kwargs)
+            figh.suptitle("DMD geometry")
+
+        if ax is None:
+            ax = figh.add_subplot(1, 1, 1, projection="3d")
+
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+
+        # set initial view
+        ax.azim = azimuth
+        ax.elev = elevation
+
+        # draw DMD outline
+        ny, nx = self.size
+        if ny is not None and nx is not None:
+            aspect = ny / nx
+        else:
+            aspect = 1
+
+        # draw table
+        if table == "xz":
+            ax.add_collection3d(Poly3DCollection([[(0, 0, 0),
+                                                   (1, 0, 0),
+                                                   (1, 0, 0.5),
+                                                   (0, 0, 0.5)
+                                                   ]],
+                                                 alpha=0.25,
+                                                 color='k'))
+        elif table == "mz":
+            ax.add_collection3d(Poly3DCollection([[(-0.5 / np.sqrt(2), 0.5 / np.sqrt(2), 0),
+                                                   (0.5 / np.sqrt(2), -0.5 / np.sqrt(2), 0),
+                                                   (0.5 / np.sqrt(2), -0.5 / np.sqrt(2), 0.5),
+                                                   (-0.5 / np.sqrt(2), 0.5 / np.sqrt(2), 0.5),
+                                                   ]],
+                                                 alpha=0.25,
+                                                 color='k'))
+        else:
+            pass
+
+        # draw DMD
+        ax.add_collection3d(Poly3DCollection([[(0, 0, 0),
+                                               (1, 0, 0),
+                                               (1, aspect, 0),
+                                               (0, aspect, 0)
+                                               ]],
+                                             alpha=0.5,
+                                             color='k'))
+
+        # ax.plot([0, 1, 1, 0, 0],
+        #         [0, 0, aspect, aspect, 0],
+        #         [0, 0, 0, 0, 0],
+        #         'k',
+        #         label="DMD")
+        ax.plot([0, .1],
+                [0, .1],
+                [0, 0],
+                'sandybrown',
+                label="$e_p$")
+        ax.plot([0, .1],
+                [0, -.1],
+                [0, 0],
+                'darkseagreen',
+                label="$e_m$")
+        ax.plot([0, 0],
+                [0, 0],
+                [0, np.sqrt(2) * 0.1],
+                'steelblue',
+                label="$e_z$")
+
+        if plot_on_mirror_normal:
+            on_normal = get_rot_mat(self.rot_axis_on, self.gamma_on).dot(np.array([[0], [0], [1]])).ravel()
+            ax.plot([0.5, 0.5 + on_normal[0]],
+                    [0.5 * aspect, 0.5 * aspect + on_normal[1]],
+                    [0, on_normal[2]],
+                    'turquoise',
+                    label="'+' mirror normal")
+
+        if plot_off_mirror_normal:
+            off_normal = get_rot_mat(self.rot_axis_off, self.gamma_off).dot(np.array([[0], [0], [1]])).ravel()
+            ax.plot([0.5, 0.5 + off_normal[0]],
+                    [0.5 * aspect, 0.5 * aspect + off_normal[1]],
+                    [0, off_normal[2]],
+                    'mediumspringgreen',
+                    label="'-' mirror normal")
+
+        # draw incoming/outgoing vectors
+        for ii, v in enumerate(vects):
+            if v[2] >= 0:
+                coords = ([0.5, 0.5 + v[0]],
+                          [0.5 * aspect, 0.5 * aspect + v[1]],
+                          [0, v[2]])
+            else:
+                coords = ([0.5, 0.5 + -v[0]],
+                          [0.5 * aspect, 0.5 * aspect + -v[1]],
+                          [0, -v[2]])
+
+            ax.plot(*coords,
+                    c=None if colors is None else colors[ii],
+                    label=None if labels is None else labels[ii])
+
+        ax.axis('equal')
+        ax.legend()
+
+
+        return figh, ax
+
+
 
 
 class DLP7000(DMD):
