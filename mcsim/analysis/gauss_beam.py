@@ -103,15 +103,13 @@ def q2beam_params(qz,
     :return R(z), w(z)^2, w(o)^2, z, zr:
     """
 
-    # qz = np.asarray(qz)
     qz = np.atleast_1d(qz)
-
     z = np.real(qz)
     zr = -np.imag(qz)
     with np.errstate(all="ignore"):
         r = 1 / (1 / qz).real
         w_sqr = 1 / (1 / qz).imag * wavelength / np.pi / n
-        wo_sqr = -z * (r / w_sqr) * wavelength**2 / np.pi**2
+        wo_sqr = np.abs(z * (r / w_sqr) * wavelength**2 / np.pi**2)
         wo_sqr[np.isinf(r)] = w_sqr[np.isinf(r)]
 
     return r, w_sqr, wo_sqr, z, zr
