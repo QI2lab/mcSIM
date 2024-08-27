@@ -106,7 +106,11 @@
 		"file_name": "G:\\2022_09_07\\02_fluorescence_affine_ref\\2022_09_08_11;45;05_affine_xform.json",
 		"data_time_stamp": ""
 	},
+<<<<<<< Updated upstream
 	"timestamp": "2023_11_01_14;02;13",
+=======
+	"timestamp": "2024_08_19_14;24;56",
+>>>>>>> Stashed changes
 	"sim_odt_program_defaults": {
 		"sx": 801,
 		"cx": 1024,
@@ -136,5 +140,109 @@
 		"green": 0.532,
 		"blue": 0.465,
 		"odt": 0.785
+<<<<<<< Updated upstream
+=======
+	},
+	"daq_configuration": {
+		"timestamp": "2024_08_19_14;24;56",
+		"analog_map": {
+			"vc_mirror_x": 0,
+			"vc_mirror_y": 1,
+			"z_stage": 2,
+			"z_stage_monitor": 3
+		},
+		"digital_map": {
+			"odt_cam_sync": 0,
+			"odt_cam_enable": 10,
+			"odt_shutter": 9,
+			"odt_laser": 2,
+			"sim_cam_sync": 5,
+			"sim_shutter": 6,
+			"blue_laser": 8,
+			"green_laser": 7,
+			"red_laser": 1,
+			"dmd_enable": 4,
+			"dmd_advance": 3,
+			"signal_monitor": 11,
+			"analog_trigger": 12,
+			"camera_trigger_monitor": 14,
+			"dmd2_enable": 13,
+			"dmd2_advance": 15
+		},
+		"presets": {
+			"off": {
+				"digital": {
+					"odt_cam_sync": 0,
+					"odt_shutter": 0,
+					"odt_laser": 0,
+					"sim_cam_sync": 0,
+					"sim_shutter": 0,
+					"blue_laser": 0,
+					"green_laser": 0,
+					"red_laser": 0,
+					"dmd_enable": 0,
+					"dmd_advance": 0,
+					"odt_cam_enable": 0,
+					"signal_monitor": 0,
+					"analog_trigger": 0,
+					"camera_trigger_monitor": 0
+				},
+				"analog": {}
+			},
+			"blue": {
+				"digital": {
+					"odt_shutter": 0,
+					"odt_laser": 0,
+					"sim_shutter": 1,
+					"blue_laser": 1,
+					"green_laser": 0,
+					"red_laser": 0
+				},
+				"analog": {
+					"vc_mirror_x": 0.039,
+					"vc_mirror_y": 0.33
+				}
+			},
+			"green": {
+				"digital": {
+					"odt_shutter": 0,
+					"odt_laser": 0,
+					"sim_shutter": 1,
+					"blue_laser": 0,
+					"green_laser": 1,
+					"red_laser": 0
+				},
+				"analog": {
+					"vc_mirror_x": -4.6,
+					"vc_mirror_y": 0.0
+				}
+			},
+			"red": {
+				"digital": {
+					"odt_shutter": 0,
+					"odt_laser": 0,
+					"sim_shutter": 1,
+					"blue_laser": 0,
+					"green_laser": 0,
+					"red_laser": 1
+				},
+				"analog": {
+					"vc_mirror_x": -0.186,
+					"vc_mirror_y": 0.236
+				}
+			},
+			"odt": {
+				"digital": {
+					"odt_shutter": 1,
+					"odt_laser": 1,
+					"sim_shutter": 0,
+					"blue_laser": 0,
+					"green_laser": 0,
+					"red_laser": 0
+				},
+				"analog": {}
+			}
+		}
+>>>>>>> Stashed changes
 	}
 }
