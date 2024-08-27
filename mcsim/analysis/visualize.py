@@ -22,6 +22,52 @@ if cp:
 else:
     array = np.ndarray
 
+def make_color_image(imgs: Sequence[np.ndarray],
+                     colors: Sequence[np.ndarray],
+                     vmins: Optional[Sequence[float]] = None,
+                     vmaxs: Optional[Sequence[float]] = None,
+                     min_percentile: float = 0.,
+                     max_percentile: float = 99.9,
+                     white_background: bool = False):
+    """
+
+    :param imgs:
+    :param colors:
+    :param vmins:
+    :param vmaxs:
+    :param min_percentile:
+    :param max_percentile:
+    :param white_background: whether to invert colors before adding, and then invert again at the end. This option
+      is useful for plotting on a white background. Since white is represented by [1, 1, 1], normally it overcomes any
+      other color. But if we invert the color before adding, and then invert again at the end, we can avoid this.
+    :return:
+    """
+    # todo: add ability to use colormaps instead of colors
+
+    img_color = np.zeros(imgs[0].shape + (3,))
+    for ii, img in enumerate(imgs):
+        if vmins is not None:
+            mn = vmins[ii]
+        else:
+            mn = np.percentile(img, min_percentile)
+
+        if vmaxs is not None:
+            mx = vmaxs[ii]
+        else:
+            mx = np.percentile(img, max_percentile)
+
+        if white_background:
+            cnow = 1 - colors[ii]
+        else:
+            cnow = colors[ii]
+
+        img_color += (np.expand_dims(img, axis=-1) - mn) / (mx - mn) * np.expand_dims(cnow, axis=(0, 1))
+
+    if white_background:
+        img_color = 1 - img_color
+
+    return np.clip(img_color, a_min=0, a_max=1)
+
 
 def assemble_2d_projections(p_xy: array,
                             p_xz: array,
@@ -29,7 +75,8 @@ def assemble_2d_projections(p_xy: array,
                             z_to_xy_ratio: float = 1,
                             n_pix_sep: int = 5,
                             boundary_value: float = 0.,
-                            ) -> array:
+                            interp_method: str = "nearest",
+                            ) -> (array, dict):
     """
     Assemble 2D projections into one image
 
@@ -39,7 +86,8 @@ def assemble_2d_projections(p_xy: array,
     :param z_to_xy_ratio: pixel size ratio dz/dxy
     :param n_pix_sep: number of blank pixels between projections
     :param boundary_value:
-    :return img: 2D image showing projections
+    :return img, affines: 2D image showing projections and dictionary of affine matrices
+      which can be used to help plot points or etc.
     """
 
     if cp and isinstance(p_xy, cp.ndarray):
@@ -61,18 +109,25 @@ def assemble_2d_projections(p_xy: array,
     img[:ny, :nx] = p_xy
 
     # xz slice (max-y)
-    xform_xz = params2xform([1, 0, 0, z_to_xy_ratio, 0, ny + n_pix_sep])
+    xform_xz = params2xform([z_to_xy_ratio, 0, ny + n_pix_sep,
+                             1, 0, 0])
     n_xz = xform_mat(p_xz,
                      xform_xz,
-                     (xx[ny + n_pix_sep:, :nx],
-                     yy[ny + n_pix_sep:, :nx]))
+                     (yy[ny + n_pix_sep:, :nx],
+                      xx[ny + n_pix_sep:, :nx]),
+                     mode=interp_method
+                     )
     img[ny + n_pix_sep:, :nx] = n_xz
 
     # yz slice (max-x)
-    xform_yz = params2xform([z_to_xy_ratio, 0, nx + n_pix_sep, 1, 0, 0])
+    xform_yz = params2xform([1, 0, 0,
+                             z_to_xy_ratio, 0, nx + n_pix_sep])
     n_yz = xform_mat(p_yz.transpose(),
-                            xform_yz,
-                            (xx[:ny, nx + n_pix_sep:], yy[:ny, nx + n_pix_sep:]))
+                     xform_yz,
+                     (yy[:ny, nx + n_pix_sep:],
+                     xx[:ny, nx + n_pix_sep:]),
+                     mode=interp_method
+                     )
     img[:ny, nx + n_pix_sep:] = n_yz
 
     # remove NaNs
@@ -82,35 +137,41 @@ def assemble_2d_projections(p_xy: array,
     img[ny:ny + n_pix_sep, :] = boundary_value
     img[:, nx:nx + n_pix_sep] = boundary_value
 
-    return img
+    affines = {"maxz": {"xform": params2xform([1, 0, 0, 1, 0, 0]),
+                        "coordinate_order": "yx"},
+               "maxy": {"xform": xform_xz,
+                        "coordinate_order": "zx"},
+               "maxx": {"xform": xform_yz,
+                        "coordinate_order": "yz"},
+               }
+
+    return img, affines
 
 
-def get_2d_projections(n: array,
-                       use_slice: bool = False,
+def get_2d_projections(img: array,
+                       inds: Optional[Sequence[int]] = None,
                        **kwargs
                        ) -> array:
     """
     Generate an image showing 3 orthogonal projections from a 3D array.
     Additional keyword arguments are passed through to assemble_2d_projections()
 
-    :param n: 3D array
-    :param use_slice: use the central slice. If False, max project
+    :param img: 3D array
+    :param inds: indices to use to generate crop. If not provided, max project
     :return img: 2D image showing projections
     """
-    nz, ny, nx = n.shape
+    xp = cp if cp and isinstance(img, cp.ndarray) else np
 
-    if use_slice:
-        iz = nz // 2
-        iy = ny // 2
-        ix = nx // 2
-        n_xy = n[iz]
-        n_yz_before_xform = n[:, :, ix]
-        n_xz_before_xform = n[:, iy, :]
+    if inds is not None:
+        iz, iy, ix = inds
+        n_xy = img[..., iz, :, :]
+        n_yz_before_xform = img[..., :, :, ix]
+        n_xz_before_xform = img[..., :, iy, :]
     else:
         # max projection
-        n_xy = n.max(axis=0)
-        n_yz_before_xform = n.max(axis=2)
-        n_xz_before_xform = n.max(axis=1)
+        n_xy = xp.nanmax(img, axis=-3)
+        n_yz_before_xform = xp.nanmax(img, axis=-1)
+        n_xz_before_xform = xp.nanmax(img, axis=-2)
 
     return assemble_2d_projections(n_xy, n_xz_before_xform, n_yz_before_xform, **kwargs)
 
@@ -206,7 +267,8 @@ def export_mips_movie(mips: Sequence[np.ndarray],
     :param trajectory_memory_frames:
     :param draw_calibration_bar: whether to draw the calibration bar
     :param cbar_position: (left, bottom, width, height) axes position on figure
-    :param out_fname: full path ending in .mp4
+    :param out_fname: full path ending in .mp4. If none is provided, then no movie will be exported. But handles to
+     the animate function, figure, and axis will still be returned.
     :param fig: figure to use
     :param ax: axis to use
     :param kwargs: passed through to writer
@@ -254,7 +316,7 @@ def export_mips_movie(mips: Sequence[np.ndarray],
                                 f"{frame * dt:.3f}s",
                                 transform=ax.transAxes)
 
-        projs = assemble_2d_projections(n_maxz[frame],
+        projs, _ = assemble_2d_projections(n_maxz[frame],
                                         n_maxy[frame],
                                         n_maxx[frame],
                                         dz / dxy,
@@ -381,12 +443,12 @@ def export_mips_movie(mips: Sequence[np.ndarray],
 
         ax.axis('off')
 
-    proj_sample = assemble_2d_projections(n_maxz[0],
-                                          n_maxy[0],
-                                          n_maxx[0],
-                                          dz / dxy,
-                                          n_pix_sep=boundary_pix,
-                                          boundary_value=np.nan)
+    proj_sample, _ = assemble_2d_projections(n_maxz[0],
+                                             n_maxy[0],
+                                             n_maxx[0],
+                                             dz / dxy,
+                                             n_pix_sep=boundary_pix,
+                                             boundary_value=np.nan)
 
     # ############################
     # movie

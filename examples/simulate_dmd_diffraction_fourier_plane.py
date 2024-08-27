@@ -67,9 +67,9 @@ fmax_efield = na / wavelength
 offsets = np.array([[0, 0], [0, 30]])
 phase = 0
 rad = 10
-ang = -45 * np.pi/180
+ang = 135 * np.pi/180
 
-f1 = np.array([np.sin(-45 * np.pi / 180), np.cos(-45 * np.pi / 180)]) * 1/4 * np.sqrt(2)
+f1 = np.array([np.sin(ang), np.cos(ang)]) * 1/4 * np.sqrt(2)
 frqs = np.expand_dims(f1, axis=0)
 
 frqs, offsets = np.broadcast_arrays(frqs, offsets)
@@ -111,6 +111,11 @@ _, uvecs_out = sdmd.solve_1color_1d(0.465, dmd.dx, dmd.gamma_on, 4)
 optical_axis = uvecs_out[1]
 tp_oa, tm_oa = sdmd.uvector2tmtp(*optical_axis)
 
+print("Optical axis")
+print("theta_p = %0.2fdeg" % (tp_oa * 180/np.pi))
+print("theta_m = %0.2fdeg" % (tm_oa * 180/np.pi))
+print("unit vector = (%0.3f, %0.3f, %0.3f)" % tuple(optical_axis.ravel()))
+
 # find input angle for IR
 order_ir = (-3, 3)
 # calculate b_out so that the main diffraction order of our pattern lines up with the optical axis
@@ -128,6 +133,13 @@ main_ir_order_out = sdmd.solve_diffraction_output(uvec_in_ir,
                                                   wavelength,
                                                   order_ir[0],
                                                   order_ir[1])
+
+zero_ir_order_out = sdmd.solve_diffraction_output(uvec_in_ir,
+                                                  dmd.dx,
+                                                  dmd.dy,
+                                                  wavelength,
+                                                  0,
+                                                  0)
 
 tp, tm = sdmd.uvector2tmtp(*uvec_in_ir.ravel())
 print("%.0fnm input angles:" % (wavelength * 1e3))
@@ -158,13 +170,25 @@ bf_x, bf_y, bf_z = sdmd.dmd_frq2uvec(main_ir_order_out,
                                      wavelength,
                                      dmd.dx,
                                      dmd.dy)
-bf_xp, bf_yp, bf_zp = sdmd.dmd_uvec2opt_axis_uvec(np.stack((bf_x, bf_y, bf_z), axis=-1),
+uvec_out_frq = np.stack((bf_x, bf_y, bf_z), axis=-1)
+bf_xp, bf_yp, bf_zp = sdmd.dmd_uvec2opt_axis_uvec(uvec_out_frq,
                                                   optical_axis,
                                                   )
 uvec_opt_axis_carrier = np.stack((bf_xp, bf_yp, bf_zp)).ravel()
 
 xc_carrier = uvec_opt_axis_carrier[0] * fl
 yc_carrier = uvec_opt_axis_carrier[1] * fl
+
+# ############################
+# other diffracted order
+# ############################
+uvec_out_neg_frq = np.stack(sdmd.dmd_frq2uvec(main_ir_order_out,
+                                              -frqs[0][0],
+                                              -frqs[0][1],
+                                              wavelength,
+                                              dmd.dx,
+                                              dmd.dy),
+                            axis=-1)
 
 # ############################
 # get DFT positions
@@ -261,6 +285,20 @@ if use_gpu and cp:
     efield_broad = efield_broad.get()
     pattern = pattern.get()
     beam = beam.get()
+
+# ############################
+# DMD geometry
+# ############################
+f, a = dmd.plot([2*optical_axis, 1.5*uvec_blaze_off[0], uvec_in_ir[0],
+                 main_ir_order_out[0], uvec_out_frq[0], uvec_out_neg_frq[0]],
+                colors=['m', 'slategray', 'r',
+                        'pink', 'goldenrod', 'mediumpurple'],
+                labels=["optical axis", "blazed direction ('-' mirrors)", "IR in",
+                        f"{order_ir} diffracted order", "carrier freq", "-carrier freq"],
+                plot_on_mirror_normal=False,
+                plot_off_mirror_normal=True,
+                table="mz",
+                figsize=(16, 9))
 
 # ############################
 # plot results

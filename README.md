@@ -64,6 +64,14 @@ git clone https://github.com/QI2lab/mcSIM.git
 cd mcSIM
 pip install .[gpu]
 ```
+Alternatively, installing CuPy first should pull in the cudatoolkit dependencies
+```commandline
+conda install -c conda-forge cupy cuda-version=11.8
+git clone https://github.com/QI2lab/mcSIM.git
+cd mcSIM
+pip install .[gpu]
+```
+
 This will install the appropriate version of [CuPy](https://cupy.dev/) and the scikit-image portion of [cuCIM](https://pypi.org/project/cucim/).
 Note that the entire RAPIDS/cuCIM package cannot be installed on Windows, but the scikit-image portion can. 
 Alternatively, to isntall the scikit-image portion of cuCIM manually run

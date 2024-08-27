@@ -106,11 +106,7 @@
 		"file_name": "G:\\2022_09_07\\02_fluorescence_affine_ref\\2022_09_08_11;45;05_affine_xform.json",
 		"data_time_stamp": ""
 	},
-<<<<<<< Updated upstream
-	"timestamp": "2023_11_01_14;02;13",
-=======
 	"timestamp": "2024_08_19_14;24;56",
->>>>>>> Stashed changes
 	"sim_odt_program_defaults": {
 		"sx": 801,
 		"cx": 1024,
@@ -124,7 +120,7 @@
 		"odt_warmup_time_ms": 1000.0,
 		"shutter_delay_ms": 50,
 		"sim_readout_time_ms": 10,
-		"stage_delay_ms": 50.0
+		"stage_delay_ms": 200
 	},
 	"camera_settings_phantom": {
 		"dxy": 0.1,
@@ -140,8 +136,6 @@
 		"green": 0.532,
 		"blue": 0.465,
 		"odt": 0.785
-<<<<<<< Updated upstream
-=======
 	},
 	"daq_configuration": {
 		"timestamp": "2024_08_19_14;24;56",
@@ -243,6 +237,5 @@
 				"analog": {}
 			}
 		}
->>>>>>> Stashed changes
 	}
 }

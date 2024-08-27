@@ -32,6 +32,8 @@ autoclass_content = "both"
 
 autodoc_typehints = "description"
 
+autodoc_member_order = 'bysource'
+
 add_module_names = False
 
 # -- Options for HTML output -------------------------------------------------

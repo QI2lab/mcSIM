@@ -43,11 +43,8 @@ def get_n(v: array,
     :param wavelength: wavelength
     :return n: refractive index
     """
-    if cp and isinstance(v, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
 
+    xp = cp if cp and isinstance(v, cp.ndarray) else np
     k = 2 * np.pi / wavelength
     n = xp.sqrt(-v / k ** 2 + no ** 2)
     return n
@@ -81,13 +78,9 @@ def frqs2angles(frqs: array,
     :return: theta, phi
     """
 
-    if cp and isinstance(frqs, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
+    xp = cp if cp and isinstance(frqs, cp.ndarray) else np
 
     frqs = xp.atleast_2d(frqs)
-
     # magnitude = (no / wavelength)
     with np.errstate(invalid="ignore"):
         theta = xp.array(np.arccos(xp.dot(frqs, xp.array([0, 0, 1])) / magnitude))
@@ -110,13 +103,9 @@ def angles2frqs(theta: array,
     :return frqs:
     """
 
-    if cp and isinstance(theta, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
+    xp = cp if cp and isinstance(theta, cp.ndarray) else np
 
     phi = xp.asarray(phi)
-
     # magnitude = no / wavelength
     fz = magnitude * xp.cos(theta)
     fy = magnitude * xp.sin(theta) * xp.sin(phi)
@@ -141,12 +130,8 @@ def get_fzs(fx: array,
     :return fzs:
     """
 
-    if cp and isinstance(fx, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
+    xp = cp if cp and isinstance(fx, cp.ndarray) else np
     fy = xp.asarray(fy)
-
     with np.errstate(invalid="ignore"):
         fzs = xp.sqrt(no**2 / wavelength ** 2 - fx**2 - fy**2)
 
@@ -180,13 +165,9 @@ def get_angular_spectrum_kernel(fx: array,
     :return kernel:
     """
 
-    if cp and isinstance(fx, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
-    fy = xp.asarray(fy)
-
+    xp = cp if cp and isinstance(fx, cp.ndarray) else np
     # todo: test fastest way
+    fy = xp.asarray(fy)
     fzs = get_fzs(fx, fy, no, wavelength)
     kernel = xp.exp(1j * dz * 2 * np.pi * fzs)
     xp.nan_to_num(kernel, copy=False)
@@ -211,10 +192,7 @@ def propagation_kernel(fx: array,
     :return kernel:
     """
 
-    if cp and isinstance(fx, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
+    xp = cp if cp and isinstance(fx, cp.ndarray) else np
 
     kzs = 2*np.pi*get_fzs(fx, fy, no, wavelength)
     allowed = xp.logical_not(xp.isnan(kzs))
@@ -242,10 +220,7 @@ def forward_backward_proj(fx: array,
     :param no:
     :return kernel:
     """
-    if cp and isinstance(fx, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
+    xp = cp if cp and isinstance(fx, cp.ndarray) else np
 
     kzs = 2*np.pi*get_fzs(fx, fy, no, wavelength)
     allowed = xp.logical_not(xp.isnan(kzs))
@@ -274,10 +249,7 @@ def field_deriv_proj(fx: array,
     :param no:
     :return projector:
     """
-    if cp and isinstance(fx, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
+    xp = cp if cp and isinstance(fx, cp.ndarray) else np
 
     kzs = 2*np.pi*get_fzs(fx, fy, no, wavelength)
     allowed = xp.logical_not(xp.isnan(kzs))
@@ -312,10 +284,7 @@ def propagate_homogeneous(efield_start: array,
     :return efield_prop: propagated electric field of shape no x ... x nm x nz x ny x nx
     """
 
-    if cp and isinstance(efield_start, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
+    xp = cp if cp and isinstance(efield_start, cp.ndarray) else np
 
     zs = np.atleast_1d(zs)
     dy, dx = drs
@@ -659,10 +628,7 @@ def inverse_model_linear(efield_fts: array,
     :return v_ft:
     """
 
-    if cp and isinstance(efield_fts, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
+    xp = cp if cp and isinstance(efield_fts, cp.ndarray) else np
 
     efield_fts = xp.asarray(efield_fts)
 
@@ -1110,11 +1076,13 @@ class BPM(RIOptimizer):
         :param apodization: apodization used during FFTs
         :param mask: 2D array. Where true, these spatial pixels will be included in the cost function. Where false,
           they will not
-        :param e_measured: measured electric fields
+        :param e_measured: measured electric fields. If these are CuPy arrays, then calculation will be done on GPU
         :param e_measured_bg: measured background electric fields
         :param beam_frqs: n_pattern x 3 array. If provided, modified BPM with extra cosine obliquity factor.
           will be used
         """
+
+        xp = cp if cp and isinstance(e_measured, cp.ndarray) else np
 
         super(BPM, self).__init__(no,
                                   wavelength,
@@ -1122,7 +1090,7 @@ class BPM(RIOptimizer):
                                   drs_n,
                                   shape_n,
                                   e_measured,
-                                  e_measured_bg,
+                                  xp.asarray(e_measured_bg),
                                   **kwargs)
 
         # include cosine obliquity factor
@@ -1141,7 +1109,6 @@ class BPM(RIOptimizer):
         self.dz_back = -float(self.dz_final) - float(self.drs_n[0]) * self.shape_n[0]
 
         # precompute propagation kernels we will need
-        xp = cp if cp else np
         self.fx = xp.expand_dims(xp.fft.fftfreq(self.shape_n[2], self.drs_n[2]), axis=0)
         self.fy = xp.expand_dims(xp.fft.fftfreq(self.shape_n[1], self.drs_n[1]), axis=1)
 
@@ -1181,10 +1148,7 @@ class BPM(RIOptimizer):
           there are nz + 2 planes
         """
 
-        if cp and isinstance(efield_start, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
+        xp = cp if cp and isinstance(efield_start, cp.ndarray) else np
 
         # ensure arrays of correct type
         efield_start = xp.asarray(efield_start)
@@ -1220,16 +1184,14 @@ class BPM(RIOptimizer):
         e_start = self.get_estart(inds=inds)
         return self.propagate(e_start, x, thetas=self.thetas[inds])
 
+    #@line_profiler.profile
     def gradient(self,
                  x: array,
                  inds: Optional[Sequence[int]] = None) -> array:
         if inds is None:
             inds = list(range(self.n_samples))
 
-        if cp and isinstance(x, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
+        xp = cp if cp and isinstance(x, cp.ndarray) else np
 
         # arrays we will need
         thetas = xp.expand_dims(xp.asarray(self.thetas[inds]), axis=(-1, -2))
@@ -1325,7 +1287,6 @@ class SSNP(RIOptimizer):
                                    e_measured_bg,
                                    **kwargs)
 
-        # todo: maybe get rid of dz_final and dz_back and only have dz_refocus?
         # distance to propagate beam after last RI voxel
         # if dz_refocus=0, this is the center of the volume
         self.dz_final = (-float(self.drs_n[0] * ((self.shape_n[0] - 1) - self.shape_n[0] // 2 + 0.5)) -
@@ -1336,10 +1297,7 @@ class SSNP(RIOptimizer):
                                  float(self.drs_n[0]) * self.shape_n[0]])
 
         # compute kzs, which need to get starting field derivative
-        if cp and isinstance(self.e_measured, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
+        xp = cp if cp and isinstance(self.e_measured, cp.ndarray) else np
 
         dz, dy, dx = self.drs_n
         ny, nx = self.e_measured.shape[-2:]
@@ -1365,10 +1323,7 @@ class SSNP(RIOptimizer):
         :return phi:
         """
 
-        if cp and isinstance(efield_start, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
+        xp = cp if cp and isinstance(efield_start, cp.ndarray) else np
 
         n = xp.asarray(n)
         # expand over phi dims + extra dim
@@ -1443,10 +1398,8 @@ class SSNP(RIOptimizer):
     def gradient(self,
                  x: array,
                  inds: Optional[Sequence[int]] = None) -> array:
-        if cp and isinstance(x, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
+
+        xp = cp if cp and isinstance(x, cp.ndarray) else np
 
         if inds is None:
             inds = list(range(self.n_samples))

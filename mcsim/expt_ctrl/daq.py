@@ -11,6 +11,7 @@ import ctypes as ct
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 from warnings import warn
 
 try:
@@ -62,6 +63,7 @@ class nidaq(daq):
                  analog_line_names: Optional[dict] = None,
                  presets: Optional[dict] = None,
                  config_file: str = None,
+                 component: str = Optional[None],
                  initialize: bool = True):
         """
         Initialize DAQ. Note that DAQ can be instantiated before the actual DAQ is present
@@ -75,6 +77,8 @@ class nidaq(daq):
         :param presets: dictionary of presets
         :param config_file: alternative method of provided digital_line_names, analog_line_names, and presets.
           If config_file is supplied, these other keyword arguments should not be supplied
+        :param component: component in json file to load configuration from
+        :param initialize:
         """
         super().__init__()
 
@@ -85,7 +89,7 @@ class nidaq(daq):
                              " were both provided. If config_file is provided, do not also provide this other info")
 
         if config_file is not None:
-            digital_line_names, analog_line_names, presets, _ = load_config_file(config_file)
+            digital_line_names, analog_line_names, presets, _ = load_config_file(config_file, component)
 
         self.dev_name = dev_name
 
@@ -401,6 +405,56 @@ class nidaq(daq):
             a_lines, a_arr = list(zip(*a.items()))
             self.set_analog_lines_by_name(np.array(a_arr), a_lines)
 
+    def set_sine_wave(self,
+                      amps: np.ndarray,
+                      offs: np.ndarray,
+                      frq: float,
+                      lines: Optional[list] = None,
+                      nsamples: int = 100):
+        """
+        Generate sine waves on selected analog channels. After setting, start with start_sequence() and stop with
+        stop_sequence()
+
+        :param amps:
+        :param offs:
+        :param frq:
+        :param lines:
+        :param nsamples:
+        :return:
+        """
+
+        if lines is None:
+            lines = list(range(self.n_analog_lines))
+
+        amps = np.atleast_1d(amps)
+        offs = np.atleast_1d(offs)
+
+        ts = np.linspace(0, 1, nsamples)
+        analog_array = amps[None, :] * np.sin(2 * np.pi * ts[:, None]) + offs[None, :]
+
+        self._task_ao = daqmx.Task()
+        self._task_ao.CreateAOVoltageChan(", ".join([d for ii, d in enumerate(self.analog_lines) if ii in lines]),
+                                         "",
+                                         -5.0,
+                                         5.0,
+                                         daqmx.DAQmx_Val_Volts,
+                                         None)
+
+        self._task_ao.CfgSampClkTiming("",
+                                      frq * len(ts),
+                                      daqmx.DAQmx_Val_Rising,
+                                      daqmx.DAQmx_Val_ContSamps,
+                                      analog_array.shape[0])
+
+        samples_per_ch_ct = ct.c_int32()
+        self._task_ao.WriteAnalogF64(analog_array.shape[0],
+                                    False,
+                                    10.0,
+                                    daqmx.DAQmx_Val_GroupByScanNumber,
+                                    analog_array,
+                                    ct.byref(samples_per_ch_ct),
+                                    None)
+
     def set_sequence(self,
                      digital_array: np.ndarray,
                      analog_array: np.ndarray,
@@ -663,14 +717,34 @@ class nidaq(daq):
         :return:
         """
         if self._task_ct is not None:
-            self._task_ct.StartTask()
+            try:
+                self._task_ct.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
+
         if self._task_di is not None:
-            self._task_di.StartTask()
+            try:
+                self._task_di.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
+
         if self._task_ao is not None:
-            self._task_ao.StartTask()
+            try:
+                self._task_ao.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
+
         if self._task_ai is not None:
-            self._task_ai.StartTask()
-        self._task_do.StartTask()
+            try:
+                self._task_ai.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
+
+        if self._task_do is not None:
+            try:
+                self._task_do.StartTask()
+            except daqmx.DAQmxFunctions.InvalidTaskError:
+                pass
 
     def stop_sequence(self):
         """
@@ -778,9 +852,9 @@ def plot_daq_program(arr: np.ndarray,
         if ind.size > 1:
             raise ValueError()
         elif ind.size == 1:
-            ticks.append(matplotlib.text.Text(float(ii), 0, k[ind[0][0]]))
+            ticks.append(Text(float(ii), 0, k[ind[0][0]]))
         else:
-            ticks.append(matplotlib.text.Text(float(ii), 0, ""))
+            ticks.append(Text(float(ii), 0, ""))
 
     figh = plt.figure(**kwargs)
     ax = figh.add_subplot(1, 1, 1)
@@ -866,6 +940,27 @@ def preset_to_array(preset: dict,
 
     return digital_array, analog_array
 
+def format_config_data(digital_map: dict,
+                       analog_map: dict,
+                       presets: dict):
+    """
+    Prepare data to be saved in configuration file. This helper function is useful if you want to save this data
+    as one entry in a larger configuration file
+
+    :param digital_map:
+    :param analog_map:
+    :param presets:
+    :return:
+    """
+
+    now = datetime.datetime.now()
+    tstamp = f"{now.year:04d}_{now.month:02d}_{now.day:02d}_{now.hour:02d};{now.minute:02d};{now.second:02d}"
+    data = {"timestamp": tstamp,
+            "analog_map": analog_map,
+            "digital_map": digital_map,
+            "presets": presets}
+    return data
+
 
 def save_config_file(fname: str,
                      digital_map: dict,
@@ -880,27 +975,26 @@ def save_config_file(fname: str,
     :param presets:
     :return:
     """
-    now = datetime.datetime.now()
-    tstamp = f"{now.year:04d}_{now.month:02d}_{now.day:02d}_{now.hour:02d};{now.minute:02d};{now.second:02d}"
 
+    data = format_config_data(digital_map, analog_map, presets)
     with open(fname, "w") as f:
-        json.dump({"timestamp": tstamp,
-                   "analog_map": analog_map,
-                   "digital_map": digital_map,
-                   "presets": presets},
-                  f,
-                  indent="\t")
+        json.dump(data, f, indent="\t")
 
 
-def load_config_file(fname: str) -> (dict, dict, dict, str):
+def load_config_file(fname: str,
+                     component: Optional[str] = None) -> (dict, dict, dict, str):
     """
     load configuration data from json file
 
     :param fname:
+    :param component:
     :return analog_map, digital_map, presets, tstamp:
     """
     with open(fname, "r") as f:
         data = json.load(f)
+
+    if component is not None:
+        data = data[component]
 
     tstamp = data["timestamp"]
     analog_map = data["analog_map"]
