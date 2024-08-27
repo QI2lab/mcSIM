@@ -355,7 +355,6 @@ class Tomography:
         # ########################
         # prepare zarr arrays to store results
         # ########################
-        # todo: define this here once can figure out how to write into it with to_zarr()
         self.store.create("efields_ft",
                           shape=self.imgs_raw.shape,
                           chunks=(1,) * self.nextra_dims + self.imgs_raw.shape[-3:],
@@ -1188,6 +1187,9 @@ class Tomography:
                       phase_corr_kwargs=None,
                       ):
 
+            if isinstance(imgs, dask.array.Array):
+                imgs = imgs.compute()
+
             xp = cp if use_gpu and cp else np
             n_used_dims = imgs.ndim - np.min([ii for ii, s in enumerate(imgs.shape) if s!=1])
             if n_used_dims != 2 and n_used_dims != 3:
@@ -1195,13 +1197,15 @@ class Tomography:
 
             squeeze_ax = tuple(range(imgs.ndim - n_used_dims))
 
-            imgs = xp.asarray(imgs.squeeze(axis=squeeze_ax))
             hft_ref = xp.asarray(hft_ref.squeeze(axis=squeeze_ax))
-            fx_ref = fx_ref.squeeze(axis=squeeze_ax)
-            fy_ref = fy_ref.squeeze(axis=squeeze_ax)
 
             # unmix holograms
-            hft = unmix_hologram(imgs, dxy, 2*fmax, fx_ref, fy_ref, apodization)
+            hft = unmix_hologram(xp.asarray(imgs.squeeze(axis=squeeze_ax)),
+                                 dxy,
+                                 2*fmax,
+                                 fx_ref.squeeze(axis=squeeze_ax),
+                                 fy_ref.squeeze(axis=squeeze_ax),
+                                 apodization)
 
             # translation correction
             if fit_translations:
@@ -1210,12 +1214,8 @@ class Tomography:
                                               dxy,
                                               threshold)
 
-                ny, nx = hft.shape[-2:]
-                fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
-                fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
-                fx_bcastable = xp.expand_dims(fxs, axis=-2)
-                fy_bcastable = xp.expand_dims(fys, axis=-1)
-
+                fx_bcastable = xp.expand_dims(xp.fft.fftshift(xp.fft.fftfreq(hft.shape[-1], dxy)), axis=-2)
+                fy_bcastable = xp.expand_dims(xp.fft.fftshift(xp.fft.fftfreq(hft.shape[-2], dxy)), axis=-1)
                 hft *= np.exp(2 * np.pi * 1j * (fx_bcastable * translations[..., 0] +
                                                 fy_bcastable * translations[..., 1]))
             else:
@@ -1244,6 +1244,7 @@ class Tomography:
             else:
                 phase_prof = 1
 
+            # save results
             if average_axes is None:
                 eft_out[block_id[:-n_used_dims]] = to_cpu(ft2(phase_prof * ift2(hft)))
             else:
@@ -1259,6 +1260,9 @@ class Tomography:
 
                 with semaphore:
                     eft_out[block_id_out[:-n_used_dims]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
+
+            if use_gpu:
+                cp.fft.config.get_plan_cache().clear()
 
             return to_cpu(translations), to_cpu(phase_params)
 
@@ -1572,7 +1576,6 @@ class Tomography:
             dask.compute(*future)
 
             if self.save_dir is not None:
-                save_dask_logs(client, self.save_dir, prefix="preprocessing_")
                 client.profile(filename=self.save_dir / f"{self.tstamp:s}_preprocessing_dask_profile.html")
 
             self.timing["unmix_hologram_time"] = perf_counter() - tstart_holos
@@ -1880,23 +1883,16 @@ class Tomography:
                 n = results["x"]
 
             # ################
-            # optionally store costs
+            # store auxilliary info
             # ################
+            tstart_aux = perf_counter()
             if costs_out is not None:
-                if verbose:
-                    print("storing costs")
                 costs_out[block_ind] = to_cpu(results["costs"])
 
             if steps_out is not None:
-                if verbose:
-                    print("storing steps")
                 steps_out[block_ind] = to_cpu(results["steps"])
 
-            # ################
-            # optionally compute predicated e_field based on n
-            # ################
             if e_fwd_out is not None:
-                tstart_efwd = perf_counter()
 
                 if optimizer == "born" or optimizer == "rytov":
                     e_fwd_out[block_ind] = to_cpu(ift2(model.fwd_model(ft3(get_v(n, no, wavelength)))))
@@ -1906,8 +1902,8 @@ class Tomography:
                         ind_now = block_ind + (ii,)
                         e_fwd_out[ind_now] = to_cpu(model.fwd_model(n.squeeze(), inds=[ii])[slices]).squeeze()
 
-                if verbose:
-                    print(f"stored forward model in {perf_counter() - tstart_efwd:.2f}s")
+            if verbose:
+                print(f"stored auxilliary info in {perf_counter() - tstart_aux:.2f}s")
 
             if use_gpu and print_fft_cache:
                 print(f"gpu memory usage after inference = {cp.get_default_memory_pool().used_bytes() / 1e9:.2f}GB")
@@ -2869,8 +2865,7 @@ def unmix_hologram(img: array,
                    fmax_int: float,
                    fx_ref: np.ndarray,
                    fy_ref: np.ndarray,
-                   apodization: Optional[array] = None,
-                   mask: Optional[array] = None) -> array:
+                   apodization: Optional[array] = None) -> array:
     """
     Given an off-axis hologram image, determine the electric field.
     (1) Fourier transform the raw hologram
@@ -2883,7 +2878,6 @@ def unmix_hologram(img: array,
     :param fx_ref: x-component of hologram reference frequency
     :param fy_ref: y-component of hologram reference frequency
     :param apodization: apodization window applied to real-space image before Fourier transformation
-    :param mask: set regions of hologram where mask is True to zero, even if they are within the bandpass
     :return efield_ft: hologram electric field in Fourier space
     """
 
@@ -2896,20 +2890,18 @@ def unmix_hologram(img: array,
         apodization = 1.
     apodization = xp.asarray(apodization)
 
-    # get frequency data
+    # compute efield
+    efield_ft = translate_ft(ft2(img * apodization),
+                             fx_ref,
+                             fy_ref,
+                             drs=(dxy, dxy))
+
+    # clear frequencies beyond bandpass
     ny, nx = img.shape[-2:]
     fxs = xp.fft.fftshift(xp.fft.fftfreq(nx, dxy))
     fys = xp.fft.fftshift(xp.fft.fftfreq(ny, dxy))
     ff_perp = np.sqrt(fxs[None, :] ** 2 + fys[:, None] ** 2)
-
-    # compute efield
-    img_ft = ft2(img * apodization)
-    efield_ft = translate_ft(img_ft, fx_ref, fy_ref, drs=(dxy, dxy))
     efield_ft[..., ff_perp > fmax_int / 2] = 0.
-
-    # optionally cut mask
-    if mask is not None:
-        efield_ft = cut_mask(efield_ft, mask, mask_val=0.)
 
     return efield_ft
 
@@ -3151,9 +3143,10 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         except TypeError:
             affine_recon2cam = params2xform([1, 0, 0, 1, 0, 0])
 
-    # with dask_cfg_set(scheduler='threads',
-    #                   **{'array.slicing.split_large_chunks': False}):
-    with (LocalCluster(processes=False) as cluster, Client(cluster) as client):
+    with dask_cfg_set(scheduler='threads',
+                      **{'array.slicing.split_large_chunks': False}):
+        cluster = LocalCluster(processes=False)
+        client = Client(cluster)
         # ######################
         # prepare n
         # ######################
@@ -3600,18 +3593,19 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                              )
 
     # processed ROI
-    viewer.add_shapes(np.array([[
-                                [0 - 1, 0 - 1],
-                                [0 - 1, nx],
-                                [ny, nx],
-                                [ny, 0 - 1]
-                                ]]),
-                      shape_type="polygon",
-                      affine=affine_recon2cam,
-                      name=f"{prefix:s}processing ROI",
-                      edge_width=3,
-                      edge_color=[1, 0, 0, 1],
-                      face_color=[0, 0, 0, 0])
+    if show_raw:
+        viewer.add_shapes(np.array([[
+                                    [0 - 1, 0 - 1],
+                                    [0 - 1, nx],
+                                    [ny, nx],
+                                    [ny, 0 - 1]
+                                    ]]),
+                          shape_type="polygon",
+                          affine=affine_recon2cam,
+                          name=f"{prefix:s}processing ROI",
+                          edge_width=3,
+                          edge_color=[1, 0, 0, 1],
+                          face_color=[0, 0, 0, 0])
 
     # correct labels for broadcasting
     viewer.dims.axis_labels = n_axis_names[:-3] + ["pattern", "z", "y", "x"]
@@ -3626,10 +3620,14 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
 
 
 def compare_recons(fnames: Sequence[Union[str, Path]],
+                   labels: Optional[Sequence] = None,
+                   verbose: bool = True,
                    **kwargs):
     """
 
-    :param fnames:
+    :param fnames: sequence of file paths
+    :param labels: sequence of names to identify the files
+    :param verbose: whether to print information as load files
     :return viewer:
     """
     import napari
@@ -3638,11 +3636,20 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
     if isinstance(fnames, (Path, str)):
         fnames = [fnames]
 
+    if labels is None:
+        labels = [f"{ii:d} " for ii in range(len(fnames))]
+
+    if len(labels) != len(fnames):
+        raise ValueError(f"len(labels) = {len(labels):d} not equal to "
+                         f"len(fnames) = {len(fnames):d}")
+
     for ii, fn in enumerate(fnames):
-        print(fn)
+        if verbose:
+            print(fn)
+
         display_tomography_recon(fn,
                                  viewer=v,
-                                 prefix=f"{ii:d} ",
+                                 prefix=labels[ii],
                                  block_while_display=ii == (len(fnames) - 1),
                                  **kwargs)
 
@@ -3822,35 +3829,3 @@ def map_blocks_joblib(fn,
               )
 
     return results
-
-
-def save_dask_logs(client,
-                   root_dir: Union[str, Path],
-                   prefix: str = ""):
-    """
-    Save logs from dask workers and scheduler to text file
-
-    :param client:
-    :param root_dir:
-    :param prefix:
-    :return:
-    """
-    l = client.get_worker_logs()
-    for aa, (k, v) in enumerate(l.items()):
-        fname_log = root_dir / f"{prefix:s}worker_{aa:d}_log.txt"
-        with open(fname_log, "w") as flog:
-            flog.write(f"{k:s}\n")
-            flog.write("\n".join(p[1] for p in v))
-
-    # save nanny log
-    ln = client.get_worker_logs(nanny=True)
-    for aa, (k, v) in enumerate(ln.items()):
-        fname_log = root_dir / f"{prefix:s}nanny_{aa:d}_log.txt"
-        with open(fname_log, "w") as flog:
-            flog.write(f"{k:s}\n")
-            flog.write("\n".join(p[1] for p in v))
-
-    s = client.get_scheduler_logs()
-    fname_log = root_dir / f"{prefix:s}scheduler_log.txt"
-    with open(fname_log, "w") as flog:
-        flog.write("\n".join(p[1] for p in s))
