@@ -327,7 +327,8 @@ def get_unit_cell(vec_a: np.ndarray,
     vec_b = np.array(vec_b, copy=True, dtype=int)
 
     # check vectors are linearly independent
-    if np.cross(vec_a, vec_b) == 0:
+    # if np.cross(vec_a, vec_b) == 0:
+    if (vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0]) == 0:
         raise ValueError("vec_a and vec_b are linearly dependent.")
 
     # square array containing unit cell, with points not in unit cell nans
@@ -608,7 +609,8 @@ def get_reciprocal_vects(vec_a: np.ndarray,
 
     # check this directly, as sometimes due to numerical precision np.linalg.inv() will not throw error
     err_msg = "vec_a and vec_b are linearly dependent, so their reciprocal vectors could not be computed."
-    if np.cross(vec_a, vec_b) == 0:
+    # if np.cross(vec_a, vec_b) == 0:
+    if (vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0]) == 0:
         raise ValueError(err_msg)
 
     a_mat = np.stack((vec_a, vec_b), axis=0)
@@ -1899,7 +1901,7 @@ def find_closest_multicolor_set(period: float,
                 for jj, (a, vb) in enumerate(zip(angles_opt[ii], vec_bs_proposed[ii])):
                     xsh, ysh, vec_a_seq = find_rational_approx_angle(a, avec_max_size)
                     vec_as_accepted[jj] = [va for va in vec_a_seq
-                                           if np.cross(va, vb) != 0 and
+                                           if (va[0] * vb[1] - va[1] * vb[0]) != 0 and
                                            min_angle_diff(get_sim_angle(va, vb), a, mode='half') < atol and
                                            np.abs((get_sim_period(va, vb) - periods[ii]) / periods[ii]) < ptol_relative]
 

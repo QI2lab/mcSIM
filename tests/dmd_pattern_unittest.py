@@ -59,18 +59,13 @@ class TestPatterns(unittest.TestCase):
         :return:
         """
 
-        # dmd_size = [1920, 1080]
         dmd_size = [192, 108]
         nphases = 3
         phase_index = 0
         nx, ny = dmd_size
 
-        # va_comps = np.arange(-15, 15)
-        # vb_comps = np.arange(-30, 30, 3)
         va_comps = np.array([-15, -7, -3, 0, 4, 8, 17])
         vb_comps = np.array([-30, -15, -6, -3, 12, 18])
-        # va_comps = np.array([1, 3, 10])
-        # vb_comps = np.array([-3, 0, 3])
 
         # generate all lattice vectors
         vas_x, vas_y = np.meshgrid(va_comps, va_comps)
@@ -84,8 +79,10 @@ class TestPatterns(unittest.TestCase):
         tstart = perf_counter()
         for ii in range(len(vas)):
             for jj in range(len(vbs)):
-                print(f"pattern {len(vbs) * ii + jj + 1:d}/{len(vas) * len(vbs):d},"
-                      f" elapsed time = {perf_counter() - tstart:.2f}s")
+                both_index = len(vbs) * ii + jj
+                if both_index % 100 == 0:
+                    print(f"pattern {both_index + 1:d}/{len(vas) * len(vbs):d},"
+                          f" elapsed time = {perf_counter() - tstart:.2f}s")
 
                 vec_a = vas[ii]
                 vec_b = vbs[jj]
@@ -268,22 +265,12 @@ class TestPatterns(unittest.TestCase):
         # transform pattern to image space
         xx, yy = np.meshgrid(range(nx), range(ny))
         # interpolation preserves phases but can distort Fourier components
+        # taking nearest pixel (i.e. mode = "nearest") does a better job with amplitudes,
+        # but can introduce fourier components that did not exist before
         pattern_xform = xform_mat(pattern,
                                   affine_xform_roi,
                                   (xx, yy),
                                   mode="linear")
-
-        # swap_xy = np.array([[0, 1, 0],
-        #                     [1, 0, 0],
-        #                     [0, 0, 1]])
-        # affine_xform_roi_yx = swap_xy.dot(affine_xform_roi.dot(swap_xy))
-        # pattern_xform2 = xform_mat(pattern,
-        #                            affine_xform_roi_yx,
-        #                           (yy, xx),
-        #                            mode="interp")
-
-        # taking nearest pixel (i.e. mode = "nearest") does a better job with amplitudes,
-        # but can introduce fourier components that did not exist before
 
         window = np.outer(hann(ny), hann(nx))
         pattern_ft = ft2(pattern_xform * window)
