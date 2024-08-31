@@ -485,6 +485,7 @@ def save_config_file(fname: str,
                      pattern_data: Sequence[dict],
                      channel_map: Optional[dict] = None,
                      firmware_patterns: Optional[np.ndarray] = None,
+                     hid_path: Optional[str] = None,
                      use_zarr: bool = True):
     """
     Save DMD firmware configuration data to zarr or json file
@@ -547,6 +548,7 @@ def save_config_file(fname: str,
                     chunks=(1, firmware_patterns.shape[-2], firmware_patterns.shape[-1]))
 
         z.attrs["timestamp"] = tstamp
+        z.attrs["hid_path"] = hid_path
         z.attrs["firmware_pattern_data"] = pattern_data_list
         z.attrs["channel_map"] = channel_map_list
 
@@ -558,7 +560,8 @@ def save_config_file(fname: str,
         with open(fname, "w") as f:
             json.dump({"timestamp": tstamp,
                        "firmware_pattern_data": pattern_data_list,
-                       "channel_map": channel_map_list}, f, indent="\t")
+                       "channel_map": channel_map_list,
+                       "hid_path": hid_path}, f, indent="\t")
 
 
 def load_config_file(fname: Union[str, Path]):
@@ -580,11 +583,21 @@ def load_config_file(fname: Union[str, Path]):
         channel_map = data["channel_map"]
         firmware_patterns = None
 
+        try:
+            hid_path = data["hid_path"]
+        except KeyError:
+            hid_path = None
+
     elif fname.suffix == ".zarr":
         z = zarr.open(fname, "r")
         tstamp = z.attrs["timestamp"]
         pattern_data = z.attrs["firmware_pattern_data"]
         channel_map = z.attrs["channel_map"]
+
+        try:
+            hid_path = z.attrs["hid_path"]
+        except KeyError:
+            hid_path = None
 
         try:
             firmware_patterns = z["firmware_patterns"]
@@ -613,7 +626,7 @@ def load_config_file(fname: Union[str, Path]):
                     if isinstance(v, list):
                         m[k] = np.atleast_1d(v)
 
-    return pattern_data, channel_map, firmware_patterns, tstamp
+    return pattern_data, channel_map, firmware_patterns, hid_path, tstamp
 
 
 def get_preset_info(preset: dict,
@@ -763,6 +776,7 @@ class dlpc900_dmd:
                  firmware_patterns: Optional[np.ndarray] = None,
                  initialize: bool = True,
                  dmd_index: int = 0,
+                 hid_path: Optional[str] = None,
                  platform: Optional[str] = None):
         """
         Get instance of DLP LightCrafter evaluation module (DLP6500 or DLP9000). This is the base class which os
@@ -784,6 +798,10 @@ class dlpc900_dmd:
           before connecting to the DMD, if e.g. we want to pass the DMD to another class, but we don't know what
           DMD index we want yet
         :param dmd_index: If multiple DMD's are attached, choose this one. Indexing starts at zero
+        :param hid_path: for more stable identification of a single DMD on multi-DMD systems, provide the hid path.
+          This can be obtained from a winusb.hid HIDDevice using the device_path attribute. If an HID path is provided,
+          it overrides the dmd_index argument.
+        :param platform:
         """
 
         if config_file is not None and (firmware_pattern_info is not None or
@@ -795,7 +813,13 @@ class dlpc900_dmd:
 
         # load configuration file
         if config_file is not None:
-            firmware_pattern_info, presets, firmware_patterns, _ = load_config_file(config_file)
+            firmware_pattern_info, presets, firmware_patterns, hid_path_config, _ = load_config_file(config_file)
+
+            if hid_path_config is not None:
+                if hid_path is not None:
+                    warn("hid_path was provided as argument, so value loaded from configuration file will be ignored")
+                else:
+                    hid_path = hid_path_config
 
         if firmware_pattern_info is None:
             firmware_pattern_info = []
@@ -825,6 +849,7 @@ class dlpc900_dmd:
         self.vendor_id = vendor_id
         self.product_id = product_id
         self.dmd_index = dmd_index
+        self._hid_path = hid_path
 
         # get platform
         if platform is None:
@@ -855,17 +880,19 @@ class dlpc900_dmd:
         """
 
         if self.platform == "win32":
-            filter = pyhid.HidDeviceFilter(vendor_id=self.vendor_id,
-                                           product_id=self.product_id)
-            devices = filter.get_devices()
 
-            dmd_indices = [ii for ii, d in enumerate(devices) if d.product_name == "DLPC900"]
+            if self._hid_path is None:
+                devices = pyhid.HidDeviceFilter(vendor_id=self.vendor_id,
+                                               product_id=self.product_id).get_devices()
+                devices = [d for d in devices if d.product_name == "DLPC900"]
 
-            if len(dmd_indices) <= self.dmd_index:
-                raise ValueError(f"Not enough DMD's detected for dmd_index={self.dmd_index:d}."
-                                 f"Only {len(dmd_indices):d} DMD's were detected.")
+                if len(devices) <= self.dmd_index:
+                    raise ValueError(f"Not enough DMD's detected for dmd_index={self.dmd_index:d}."
+                                     f"Only {len(devices):d} DMD's were detected.")
+                self._dmd = devices[self.dmd_index]
+            else:
+                self._dmd = pyhid.HidDevice(self._hid_path)
 
-            self._dmd = devices[dmd_indices[self.dmd_index]]
             self._dmd.open()
 
             # strip off first return byte and add rest to self._response
@@ -2265,7 +2292,7 @@ if __name__ == "__main__":
 
     fname = "dmd_config.zarr"
     try:
-        pattern_data, presets, _, _ = load_config_file(fname)
+        pattern_data, presets, _, _, _ = load_config_file(fname)
     except FileNotFoundError:
         raise FileNotFoundError(f"configuration file `{fname:s}` was not found. For the command line parser to work,"
                                 f"create this file using save_config_file(), and place it in the same"
