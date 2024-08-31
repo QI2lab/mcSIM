@@ -833,7 +833,7 @@ class dlpc900_dmd:
             self.platform = platform
 
         self.initialized = initialize
-        if self.initialize:
+        if self.initialized:
             self._get_device()
 
     def __del__(self):
