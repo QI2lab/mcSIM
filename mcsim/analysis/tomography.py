@@ -675,6 +675,7 @@ class Tomography:
                                      stack,
                                      compressor=self.compressor,
                                      dtype=float)
+                    continue
 
                 try:
                     if isinstance(v, array):
@@ -1191,7 +1192,7 @@ class Tomography:
                 imgs = imgs.compute()
 
             xp = cp if use_gpu and cp else np
-            n_used_dims = imgs.ndim - np.min([ii for ii, s in enumerate(imgs.shape) if s!=1])
+            n_used_dims = imgs.ndim - np.min([ii for ii, s in enumerate(imgs.shape) if s != 1])
             if n_used_dims != 2 and n_used_dims != 3:
                 raise ValueError("calibrate only supports arrays with 2 or 3 non-singleton dimensions")
 
@@ -1414,7 +1415,6 @@ class Tomography:
             else:
                 imgs_raw_bg = self.imgs_raw_bg
 
-
             # get electric field from holograms
             ref_frq_bg_da = da.from_array(self.reference_frq_bg,
                                           chunks=imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
@@ -1537,7 +1537,6 @@ class Tomography:
                                                       chunks=hft.chunksize[:-2] + (1, 1),
                                                       ).compute()
                     hft = hft * self.phase_params
-
 
             if self.fit_phase_profile:
                 phase_prof = da.map_blocks(correct_phase_profile,
@@ -1742,7 +1741,7 @@ class Tomography:
                 label = ""
             else:
                 block_ind = block_id[:nextra_dims]
-                label = f"{block_id} "
+                label = f"{np.stack(block_id).tolist()} "
 
             # #######################
             # get initial guess
@@ -3095,9 +3094,9 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     zs = (np.arange(nz) - nz // 2) * drs_n[0] + dz_refocus
 
     if show_n3d:
-        zoffset = zs[0]
+        zoffset = float(zs[0])
     else:
-        zoffset = 0
+        zoffset = 0.
 
     # ##############################
     # raw data slice corresponding to reconstructed data
