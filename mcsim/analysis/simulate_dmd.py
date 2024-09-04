@@ -1877,7 +1877,7 @@ def plot_1d_sim(data: dict,
         ax.set_ylim(ylim)
         ax.set_xlim([tms_blaze_on * 180 / np.pi - 7.5,
                      tms_blaze_on * 180 / np.pi + 7.5])
-        ax.set_xlabel(r'$\theta_m$ (deg)')
+        ax.set_xlabel(r'$\\theta_m$ (deg)')
         ax.set_ylabel('intensity (arb)')
         ax.set_title('diffraction pattern')
 
@@ -1916,7 +1916,7 @@ def plot_1d_sim(data: dict,
                    label="0th diffraction order")
 
         ax.legend()
-        ax.set_xlabel(r'$\theta_m$ (deg)')
+        ax.set_xlabel(r'$\\theta_m$ (deg)')
         ax.set_ylabel('intensity (arb)')
         ax.set_title('blaze envelopes')
 
@@ -2175,8 +2175,8 @@ def plot_2d_sim(data: dict,
             # intensity patterns, angular space
             # ##################
             ax = fig.add_subplot(grid[0, 0])
-            ax.set_xlabel(r'$\theta_x$ outgoing (deg)')
-            ax.set_ylabel(r'$\theta_y$ outgoing (deg)')
+            ax.set_xlabel(r'$\\theta_x$ outgoing (deg)')
+            ax.set_ylabel(r'$\\theta_y$ outgoing (deg)')
             ax.set_title('I / (wx*wy*nx*ny)**2 vs. output angle')
 
             ax.imshow(intensity[kk][input_ind] / (dx*dy*nx*ny)**2, extent=extent, norm=PowerNorm(gamma=gamma),
@@ -2243,8 +2243,8 @@ def plot_2d_sim(data: dict,
             # blaze envelopes
             # ##################
             ax = fig.add_subplot(grid[0, 1])
-            ax.set_xlabel(r'$\theta_x$ outgoing')
-            ax.set_ylabel(r'$\theta_y$ outgoing')
+            ax.set_xlabel(r'$\\theta_x$ outgoing')
+            ax.set_ylabel(r'$\\theta_y$ outgoing')
             ax.set_title('blaze condition sinc envelope (angular)')
 
             ax.imshow(sinc_on[kk][input_ind] / (wx*wy)**2,

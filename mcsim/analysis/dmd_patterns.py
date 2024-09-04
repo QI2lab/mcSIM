@@ -728,7 +728,7 @@ def ldftfreq(vec_a: np.ndarray,
     matrix with rows or columns given by the periodicity vectors a1, a2.
 
     LDFT = lattice DFT
-    LDFT[g](f1, f2) = \sum_{nx, ny} exp[-2*np.pi*1j * [f1 * b1 * (nx, ny) + f2 * b2 * (nx, ny)]] * g(n_x, n_y)
+    LDFT[g](f1, f2) = \\sum_{nx, ny} exp[-2*np.pi*1j * [f1 * b1 * (nx, ny) + f2 * b2 * (nx, ny)]] * g(n_x, n_y)
     Instead of (nx, ny), one can also work with coefficients d1, d2 for the vectors a1 and a2.
     i.e. (nx, ny) = d1(nx, ny) * a1 + d2(nx, ny) * a2
 
@@ -815,7 +815,7 @@ def get_pattern_fourier_component(unit_cell: np.ndarray,
     """
     Get fourier component at f = n * recp_vec_a + m * recp_vec_b.
 
-    ft(f) = \sum_r f(r) * exp(-1j * 2*pi * f * r)
+    ft(f) = \\sum_r f(r) * exp(-1j * 2*pi * f * r)
 
     :param np.array unit_cell: unit cell, as produced by get_sim_unit_cell()
     :param x: x-coordinates of unit cell
@@ -989,11 +989,11 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
     # todo: instead of setting nmax, just generate all e-field components that do not get blocked
     # todo: debating moving this function to simulate_dmd.py instead
 
-    Given an electric field in fourier space E(k), the intensity I(k) = \sum_q E(q) E^*(q-k).
-    For a pattern where P(r)^2 = P(r), these must be equal, giving P(k) = \sum_q P(q) P(q-k).
+    Given an electric field in fourier space E(k), the intensity I(k) = \\sum_q E(q) E^*(q-k).
+    For a pattern where P(r)^2 = P(r), these must be equal, giving P(k) = \\sum_q P(q) P(q-k).
     But the relevant quantity after passing through the microscope is P(k) * bandlimit(k), where bandlimit(k) = 1 for
     k <= fmax, and 0 otherwise. Then the intensity pattern should be
-    \sum_q P(q) P(q-k) * bandlimit(q) * bandlimit(q-k)
+    \\sum_q P(q) P(q-k) * bandlimit(q) * bandlimit(q-k)
 
     :param unit_cell: unit cell
     :param x: x-coordinates of unit cell
@@ -1118,11 +1118,11 @@ def get_intensity_fourier_components_xform(pattern: np.ndarray,
     # todo: instead of setting nmax, just generate all e-field components that do not get blocked
     # todo: debating moving this function to simulate_dmd.py instead
 
-    Given an electric field in fourier space E(k), the intensity I(k) = \sum_q E(q) E^*(q-k).
-    For a pattern where P(r)^2 = P(r), these must be equal, giving P(k) = \sum_q P(q) P(q-k).
+    Given an electric field in fourier space E(k), the intensity I(k) =\\sum_q E(q) E^*(q-k).
+    For a pattern where P(r)^2 = P(r), these must be equal, giving P(k) = \\sum_q P(q) P(q-k).
     But the relevant quantity after passing through the microscope is P(k) * bandlimit(k), where bandlimit(k) = 1 for
     k <= fmax, and 0 otherwise. Then the intensity pattern should be
-    \sum_q P(q) P(q-k) * bandlimit(q) * bandlimit(q-k)
+    \\sum_q P(q) P(q-k) * bandlimit(q) * bandlimit(q-k)
 
     :param pattern:
     :param affine_xform:

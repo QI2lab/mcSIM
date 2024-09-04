@@ -467,7 +467,7 @@ def plot_affine_summary(img: np.ndarray,
 
     # chi squareds
     ax = fig.add_subplot(grid[:2, 0])
-    ax.set_title('$\chi^2$')
+    ax.set_title('$\\chi^2$')
     no_nans = chisqs.ravel()[np.logical_not(np.isnan(chisqs.ravel()))]
     vmin = np.percentile(no_nans, 1)
     vmax = np.percentile(no_nans, 90)
@@ -492,9 +492,9 @@ def plot_affine_summary(img: np.ndarray,
     im = ax.imshow(sigma_mean_cam, vmin=vmin, vmax=vmax, cmap=cmap)
 
     sigma_m = sigma_mean_median * options["cam_pix"] / options["cam_mag"]
-    ax.set_title("$\sqrt{\sigma_x \sigma_y}$, "
+    ax.set_title("$\\sqrt{\\sigma_x \\sigma_y}$, "
                  f"median={sigma_mean_median:.2f} pix\n"
-                 f"$\sigma$={sigma_m * 1e9:.1f}nm, "
+                 f"$\\sigma$={sigma_m * 1e9:.1f}nm, "
                  f"FWHM={sigma_m * 2 * np.sqrt(2 * np.log(2)) * 1e9:.1f}nm")
     plt.colorbar(im)
 
@@ -513,7 +513,7 @@ def plot_affine_summary(img: np.ndarray,
     no_nans = sigma_asymmetry_cam.ravel()[np.logical_not(np.isnan(sigma_asymmetry_cam.ravel()))]
     sigma_asym_median = np.median(no_nans)
     im = ax.imshow(sigma_asymmetry_cam, vmin=0, vmax=1, cmap=cmap)
-    ax.set_title(f'$\sigma$ asym median={sigma_asym_median:.2f}')
+    ax.set_title(f'$\\sigma$ asym median={sigma_asym_median:.2f}')
     plt.colorbar(im)
 
     # angles
@@ -521,7 +521,7 @@ def plot_affine_summary(img: np.ndarray,
     no_nans = angles.ravel()[np.logical_not(np.isnan(angles.ravel()))]
     median_angle = np.median(no_nans * 180 / np.pi)
     im = ax.imshow(angles * 180 / np.pi, vmin=0, vmax=180, cmap=cmap)
-    ax.set_title(f'angle, median={median_angle:.1f}$^\deg$')
+    ax.set_title(f'angle, median={median_angle:.1f}$^\\deg$')
     plt.colorbar(im)
 
     # raw image with fit points overlayed

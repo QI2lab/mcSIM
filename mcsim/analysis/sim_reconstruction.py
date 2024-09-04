@@ -1783,8 +1783,8 @@ class SimImageSet:
                       cmap="bone",
                       extent=extent_wf_real)
             ax.set_title('widefield')
-            ax.set_xlabel('x-position ($\mu m$)')
-            ax.set_ylabel('y-position ($\mu m$)')
+            ax.set_xlabel('x-position ($\\mu m$)')
+            ax.set_ylabel('y-position ($\\mu m$)')
 
             # fourier space
             ax = figh.add_subplot(grid[1, 0])
@@ -1806,8 +1806,8 @@ class SimImageSet:
 
             ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
             ax.set_ylim([2 * self.fmax, -2 * self.fmax])
-            ax.set_xlabel("$f_x (1/\mu m)$")
-            ax.set_ylabel("$f_y (1/\mu m)$")
+            ax.set_xlabel("$f_x (1/\\mu m)$")
+            ax.set_ylabel("$f_y (1/\\mu m)$")
 
         # deconvolved
         if self.widefield_deconvolution is not None:
@@ -1826,7 +1826,7 @@ class SimImageSet:
                       cmap="bone",
                       extent=extent_us_real)
             ax.set_title('widefield deconvolved')
-            ax.set_xlabel('x-position ($\mu m$)')
+            ax.set_xlabel('x-position ($\\mu m$)')
 
             # deconvolution Fourier space
             ax = figh.add_subplot(grid[1, 2])
@@ -1848,7 +1848,7 @@ class SimImageSet:
 
             ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
             ax.set_ylim([2 * self.fmax, -2 * self.fmax])
-            ax.set_xlabel("$f_x (1/\mu m)$")
+            ax.set_xlabel("$f_x (1/\\mu m)$")
 
         # SIM
         if self.sim_sr is not None:
@@ -1867,7 +1867,7 @@ class SimImageSet:
                       cmap="bone",
                       extent=extent_us_real)
             ax.set_title('SR-SIM')
-            ax.set_xlabel('x-position ($\mu m$)')
+            ax.set_xlabel('x-position ($\\mu m$)')
 
             # SIM fourier space
             ax = figh.add_subplot(grid[1, 1])
@@ -1898,7 +1898,7 @@ class SimImageSet:
 
             ax.set_xlim([-2 * self.fmax, 2 * self.fmax])
             ax.set_ylim([2 * self.fmax, -2 * self.fmax])
-            ax.set_xlabel("$f_x (1/\mu m)$")
+            ax.set_xlabel("$f_x (1/\\mu m)$")
 
         return figh
 
@@ -1970,7 +1970,7 @@ class SimImageSet:
 
                 ttl_str += f'f=({self.frqs[ii, 0]:.3f},{self.frqs[ii, 1]:.3f}) 1/um\n' \
                            f'modulation contrast={self.mod_depths[ii]:.3f}, ' \
-                           f'$\eta$={self._recon_settings["wiener_parameter"]:.2f},' \
+                           f'$\\eta$={self._recon_settings["wiener_parameter"]:.2f},' \
                            f' phases (deg) = {0 * 180 / np.pi:.2f},' \
                                          f' {dp1 * 180 / np.pi:.2f},' \
                                          f' {dp2 * 180 / np.pi:.2f}; offset = {p0_corr * 180 / np.pi:.2f}deg'
@@ -2115,7 +2115,7 @@ class SimImageSet:
                     # ####################
                     ax = fig.add_subplot(grid[jj, 2])
                     if jj == 0:
-                        ax.set_title(r"$\frac{w_i(k)}{\sum_j |w_j(k)|^2 + \eta^2}$")
+                        ax.set_title(r"$\\frac{w_i(k)}{\\sum_j |w_j(k)|^2 + \\eta^2}$")
 
                     im2 = ax.imshow(np.abs(weights[ii, jj] / weights_norm),
                                     norm=PowerNorm(gamma=0.1, vmin=1e-5, vmax=10),
@@ -2191,7 +2191,7 @@ class SimImageSet:
                           extent=extent_upsampled_real)
                 ax.yaxis.tick_right()
                 ax.yaxis.set_label_position("right")
-                ax.set_ylabel("y-position ($\mu m$)")
+                ax.set_ylabel("y-position ($\\mu m$)")
 
             figs.append(fig)
             fig_names.append(f"band_diagnostic_angle={ii:d}")
@@ -2329,8 +2329,8 @@ class SimImageSet:
                              # edgecolor=colors[-1]
                              )
                       )
-        ax.set_xlabel("$f_x (1/\mu m)$")
-        ax.set_ylabel("$f_y (1/\mu m)$")
+        ax.set_xlabel("$f_x (1/\\mu m)$")
+        ax.set_ylabel("$f_y (1/\\mu m)$")
         ax.set_xlim([-fmax_disp, fmax_disp])
         ax.set_ylim([fmax_disp, -fmax_disp])
 
@@ -3076,8 +3076,8 @@ def plot_correlation_fit(img1_ft: np.ndarray,
                              fill=False,
                              ls='--'))
 
-    ax.set_xlabel('$f_x (1/\mu m)$')
-    ax.set_ylabel('$f_y (1/\mu m)$')
+    ax.set_xlabel('$f_x (1/\\mu m)$')
+    ax.set_ylabel('$f_y (1/\\mu m)$')
 
     # colorbar
     cbar_ax = figh.add_subplot(gspec[0, 1])
@@ -3110,9 +3110,9 @@ def plot_correlation_fit(img1_ft: np.ndarray,
                              fill=False)
                    )
 
-    ax2.set_title(r"$C(f_o) = \sum_f g_1(f) \times g^*_2(f+f_o)$")
-    ax2.set_xlabel('$f_x (1/\mu m)$')
-    ax2.set_ylabel('$f_y (1/\mu m)$')
+    ax2.set_title(r"$C(f_o) = \\sum_f g_1(f) \\times g^*_2(f+f_o)$")
+    ax2.set_xlabel('$f_x (1/\\mu m)$')
+    ax2.set_ylabel('$f_y (1/\\mu m)$')
 
     # colorbar
     cbar_ax = figh.add_subplot(gspec[0, 3])
@@ -3125,8 +3125,8 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0)=$" +
                   f"{np.abs(peak1_dc):.3g} and "
                   f"{np.angle(peak1_dc) * 180/np.pi:.2f}deg")
-    ax3.set_xlabel('$f_x (1/\mu m)$')
-    ax3.set_ylabel('$f_y (1/\mu m)$')
+    ax3.set_xlabel('$f_x (1/\\mu m)$')
+    ax3.set_ylabel('$f_y (1/\\mu m)$')
 
     cx_c = np.argmin(np.abs(fxs))
     cy_c = np.argmin(np.abs(fys))
@@ -3165,7 +3165,7 @@ def plot_correlation_fit(img1_ft: np.ndarray,
         title += (f"\nguess peak = {np.abs(peak2_g):.3g} and "
                   f"{np.angle(peak2_g) * 180 / np.pi:.2f}deg")
     ax4.set_title(title)
-    ax4.set_xlabel('$f_x (1/\mu m)$')
+    ax4.set_xlabel('$f_x (1/\\mu m)$')
 
     im4 = ax4.imshow(cut_roi(roi, np.abs(img2_ft)**2)[0],
                      interpolation=None,

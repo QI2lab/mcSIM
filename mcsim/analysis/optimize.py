@@ -80,7 +80,7 @@ def tv_prox(x: array,
 
       \\text{prox}_t(x) &= \\text{argmin}_y \\left\\{ \\frac{1}{2} \\left|x - y \\right|_2^2 + t  \\text{TV}(y) \\right\\}
 
-      \\text{TV}(y) &= \sum_{ij} \\sqrt{ \\left(y_{i+1,j} - y_{i,j}\\right)^2 + \\left(y_{i, j+1} - y_{i, j}\\right)^2}
+      \\text{TV}(y) &= \\sum_{ij} \\sqrt{ \\left(y_{i+1,j} - y_{i,j}\\right)^2 + \\left(y_{i, j+1} - y_{i, j}\\right)^2}
 
     :param x: array to be denoised
     :param tau: strength of TV term compared with data fidelity term
