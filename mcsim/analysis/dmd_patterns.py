@@ -249,20 +249,17 @@ def double_cell(cell: np.ndarray,
 def get_sim_unit_cell(vec_a: np.ndarray,
                       vec_b: np.ndarray,
                       nphases: int,
-                      phase_index: Optional[int] = None) -> (np.ndarray, np.ndarray, np.ndarray):
+                      phase_index: int = 0) -> (np.ndarray, np.ndarray, np.ndarray):
     """
     Get unit cell, which can be repeated to form SIM pattern.
 
-    :param vec_a:
-    :param vec_b:
+    :param vec_a: first lattice vector
+    :param vec_b: second lattice vector
     :param nphases: number of phase shifts. Required to determine the on and off pixels in cell.
+    :param phase_index:
     :return cell, x, y: square array representing cell. Ones and zeroes give on and off points, and nans are
       points that are not part of the unit cell, but are necessary to pad the array to make it squares
     """
-
-    # todo: implement phase index here, rather than outside this function
-    if phase_index is not None:
-        raise NotImplementedError("")
 
     vec_a = np.asarray(vec_a)
     vec_b = np.asarray(vec_b)
@@ -275,23 +272,18 @@ def get_sim_unit_cell(vec_a: np.ndarray,
     cell, x_cell, y_cell = get_unit_cell(vec_a, vec_b)
     # get reduced unit cell from vec_a, vec_b/nphases. If we set all of these positions to 1,
     # then we get perfect tiling.
-    vec_b_sub = np.array(vec_b) / nphases
+    vec_b_sub = vec_b // nphases
     cell_sub, x_cell_sub, y_cell_sub = get_unit_cell(vec_a, vec_b_sub)
-    cell_sub[np.logical_not(np.isnan(cell_sub))] = 1
+    to_use = np.logical_not(np.isnan(cell_sub))
 
-    iy_start, = np.where(np.array(y_cell) == np.min(y_cell_sub))
-    iy_start = int(iy_start[0])
-    iy_end = iy_start + cell_sub.shape[0]
-
-    ix_start, = np.where(np.array(x_cell) == np.min(x_cell_sub))
-    ix_start = int(ix_start[0])
-    ix_end = ix_start + cell_sub.shape[1]
-
-    # line up origins of the two cells
-    cell[iy_start:iy_end, ix_start:ix_end] += np.nansum(np.concatenate((cell_sub[:, :, None],
-                                                                        cell[iy_start:iy_end, ix_start:ix_end, None]),
-                                                                       axis=2),
-                                                        axis=2)
+    # get coordinates in main cell
+    xx_cs, yy_cs = np.meshgrid(x_cell_sub, y_cell_sub)
+    xx_cs += vec_b_sub[0] * phase_index
+    yy_cs += vec_b_sub[1] * phase_index
+    xinds = (xx_cs - x_cell[0])[to_use]
+    yinds = (yy_cs - y_cell[0])[to_use]
+    # set main cell
+    cell[(yinds, xinds)] = 1
 
     with np.errstate(invalid='ignore'):
         if np.nansum(cell) != np.sum(cell >= 0) / nphases:
@@ -327,7 +319,6 @@ def get_unit_cell(vec_a: np.ndarray,
     vec_b = np.array(vec_b, copy=True, dtype=int)
 
     # check vectors are linearly independent
-    # if np.cross(vec_a, vec_b) == 0:
     if (vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0]) == 0:
         raise ValueError("vec_a and vec_b are linearly dependent.")
 
@@ -355,21 +346,20 @@ def get_unit_cell(vec_a: np.ndarray,
 
     xx, yy = np.meshgrid(x, y)
 
-    # get cell volume from cross product
-    cell_volume = np.abs(vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0])
-
     # generate cell
-    cell = np.array(test_in_cell([xx, yy], vec_a, vec_b), dtype=float)
+    pts = np.stack((xx, yy), axis=-1)
+    cell = np.array(test_in_cell(pts, vec_a, vec_b), dtype=float)
     cell[cell == False] = np.nan
     cell[cell == True] = 0
 
     # check unit cell has correct volume
+    cell_volume = np.abs(vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0])
     assert np.nansum(np.logical_not(np.isnan(cell))) == cell_volume
 
     return cell, x, y
 
 
-def test_in_cell(points,
+def test_in_cell(points: np.ndarray,
                  va: np.ndarray,
                  vb: np.ndarray) -> np.ndarray:
     """
@@ -378,15 +368,17 @@ def test_in_cell(points,
     inside if they are on the lines 0 -> va or 0 ->vb, and outside if they are on the lines va -> va+vb
     or vb -> va + vb
 
-    :param points: [xx, yy]
-    :param va:
-    :param vb:
-    :return in_cell:
+    :param points: array of size n0 x n1 x ... x nm x 2, where points[..., 0] are the
+      x-coordinates and points[..., 1] are the y-coordinates
+    :param va: first lattice vector
+    :param vb: second lattice vector
+    :return in_cell: boolean array of size n0 x n1 x ... x nm indicating if coordinate is in the unit cell or not
     """
 
     va = np.array(va, copy=True).ravel()
     vb = np.array(vb, copy=True).ravel()
-    x, y = points
+    x = points[..., 0]
+    y = points[..., 1]
 
     def line(x, p1, p2): return ((p2[1] - p1[1]) * x + p1[1] * p2[0] - p1[0] * p2[1]) / (p2[0] - p1[0])
 
@@ -407,8 +399,6 @@ def test_in_cell(points,
         gthan_a2 = np.round(x, precision) > np.round(vb[0], precision)
         eq_a2 = np.round(x, precision) == np.round(vb[0], precision)
 
-    in_cell_a = np.logical_and(np.logical_or(gthan_a1 != gthan_a2, eq_a1), np.logical_not(eq_a2))
-
     # same strategy for vb
     if vb[0] != 0:
         gthan_b1 = np.round(line(x, [0, 0], vb), precision) > np.round(y, precision)
@@ -422,8 +412,8 @@ def test_in_cell(points,
         gthan_b2 = np.round(x, precision) > np.round(va[0], precision)
         eq_b2 = np.round(x, precision) == np.round(va[0], precision)
 
+    in_cell_a = np.logical_and(np.logical_or(gthan_a1 != gthan_a2, eq_a1), np.logical_not(eq_a2))
     in_cell_b = np.logical_and(np.logical_or(gthan_b1 != gthan_b2, eq_b1), np.logical_not(eq_b2))
-
     in_cell = np.logical_and(in_cell_a, in_cell_b)
 
     return in_cell
@@ -434,9 +424,10 @@ def reduce2cell(point: np.ndarray,
                 vb: np.ndarray):
     """
     Given a vector, reduce it to coordinates within the unit cell
-    :param point:
-    :param va:
-    :param vb:
+
+    :param point: of size n0 x n1 x ... x nm x 2
+    :param va: first lattice vector, of size 2 x 1
+    :param vb: second lattice vector, of size 2 x 1
     :return point_red, na_out, nb_out:
     """
     if not _verify_int(va) or not _verify_int(vb):
@@ -449,16 +440,11 @@ def reduce2cell(point: np.ndarray,
 
     ra, rb = get_reciprocal_vects(va, vb)
     # need to round to avoid problems with machine precision
-    na_out = int(np.floor(np.round(np.vdot(point, ra), 12)))
-    nb_out = int(np.floor(np.round(np.vdot(point, rb), 12)))
+    na_out = np.floor(np.round(np.dot(point, ra), 12)).astype(int)
+    nb_out = np.floor(np.round(np.dot(point, rb), 12)).astype(int)
     point_red = point - (na_out * va + nb_out * vb)
 
-    if not test_in_cell(point_red, va, vb):
-        print(f"({point_red[0]:d}, {point_red[1]:d}) not in cell,"
-              f" va=({va[0]:d}, {va[1]:d}),"
-              f" vb=({vb[0]:d}, {vb[1]:d})")
-
-    assert test_in_cell(point_red, va, vb)
+    assert np.all(test_in_cell(point_red, va, vb))
 
     return point_red, na_out, nb_out
 
@@ -517,8 +503,8 @@ def get_minimal_cell(cell: np.ndarray,
     :param cell:
     :param x:
     :param y:
-    :param va:
-    :param vb:
+    :param va: first lattice vector
+    :param vb: second lattice vector
     :return cell_m, x_m, y_m, va_m, vb_m:
     """
     va_m, vb_m = reduce_basis(va, vb)
@@ -532,7 +518,8 @@ def show_cell(v1: np.ndarray,
               x: np.ndarray,
               y: np.ndarray,
               aspect_equal: bool = True,
-              **kwargs) -> Figure:
+              ax = None,
+              **kwargs):
     """
     Plot unit cell and periodicity vectors
 
@@ -541,11 +528,17 @@ def show_cell(v1: np.ndarray,
     :param cell: array representing values of pattern in unit cell
     :param x: x-coordinates of cell
     :param y: y-coordinates of cell
-    :return figh: handle to resulting figure
+    :param aspect_equal:
+    :param ax: axes on which to plot cell. If not provided, generate a new figure
+    :return fig, ax: handle to resulting figure and axes
     """
 
-    fig = plt.figure(**kwargs)
-    ax = fig.add_subplot(1, 1, 1)
+    if ax is None:
+        fig = plt.figure(**kwargs)
+        ax = fig.add_subplot(1, 1, 1)
+    else:
+        fig = ax.get_figure()
+
     ax.set_title("Unit cell")
 
     # plot cell
@@ -584,7 +577,7 @@ def show_cell(v1: np.ndarray,
     ax.set_xlabel("x")
     ax.set_ylabel("y")
 
-    return fig
+    return fig, ax
 
 
 # determine parameters of SIM patterns
@@ -2929,11 +2922,6 @@ def _verify_int(m: Union[array, float]) -> bool:
     """
     m = np.asarray(m)
     mint = np.round(m).astype(int)
-
-    # if v1.dtype.kind not in np.typecodes["AllInteger"] or \
-    #    v2.dtype.kind not in np.typecodes["AllInteger"]:
-    #     raise ValueError(f"v1 and v2 had data types '{v1.dtype}' and '{v2.dtype}', "
-    #                      f"but both must be type 'int'")
 
     return np.all(np.abs(m - mint) < 1e-10)
 
