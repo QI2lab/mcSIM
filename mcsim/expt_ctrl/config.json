@@ -106,7 +106,7 @@
 		"file_name": "G:\\2022_09_07\\02_fluorescence_affine_ref\\2022_09_08_11;45;05_affine_xform.json",
 		"data_time_stamp": ""
 	},
-	"timestamp": "2024_08_08_17;10;07",
+	"timestamp": "2024_08_19_14;24;56",
 	"sim_odt_program_defaults": {
 		"sx": 801,
 		"cx": 1024,
@@ -138,7 +138,7 @@
 		"odt": 0.785
 	},
 	"daq_configuration": {
-		"timestamp": "2024_08_08_17;10;07",
+		"timestamp": "2024_08_19_14;24;56",
 		"analog_map": {
 			"vc_mirror_x": 0,
 			"vc_mirror_y": 1,
@@ -193,8 +193,8 @@
 					"red_laser": 0
 				},
 				"analog": {
-					"vc_mirror_x": 0.16,
-					"vc_mirror_y": 0.49
+					"vc_mirror_x": 0.039,
+					"vc_mirror_y": 0.33
 				}
 			},
 			"green": {
@@ -207,7 +207,7 @@
 					"red_laser": 0
 				},
 				"analog": {
-					"vc_mirror_x": -4.2,
+					"vc_mirror_x": -4.6,
 					"vc_mirror_y": 0.0
 				}
 			},
@@ -221,8 +221,8 @@
 					"red_laser": 1
 				},
 				"analog": {
-					"vc_mirror_x": -0.196,
-					"vc_mirror_y": 0.346
+					"vc_mirror_x": -0.186,
+					"vc_mirror_y": 0.236
 				}
 			},
 			"odt": {
