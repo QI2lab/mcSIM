@@ -675,6 +675,7 @@ class Tomography:
                                      stack,
                                      compressor=self.compressor,
                                      dtype=float)
+                    continue
 
                 try:
                     if isinstance(v, array):
@@ -870,8 +871,8 @@ class Tomography:
                                                         edgecolor='k',
                                                         fill=False))
 
-                            ax.set_xlabel("$f_x$ (1/$\mu m$)")
-                            ax.set_ylabel("$f_y$ (1/$\mu m$)")
+                            ax.set_xlabel("$f_x$ (1/$\\mu m$)")
+                            ax.set_ylabel("$f_y$ (1/$\\mu m$)")
 
                             if save_dir is not None:
                                 figh.savefig(Path(save_dir, f"{prefix:s}pattern={aa + pattern_offset:d}=hologram_frq_diagnostic.png"))
@@ -1071,15 +1072,15 @@ class Tomography:
             figh = plt.figure(figsize=(20, 8))
             grid = figh.add_gridspec(1, 3)
             figh.suptitle("Mapping from pupil (DMD surface) to hologram frequencies (in object space)\n"
-                          f"Reference freq = ({mean_ref_frq[0]:.3f}, {mean_ref_frq[1]:.3f}) $1/\mu m$,"
+                          f"Reference freq = ({mean_ref_frq[0]:.3f}, {mean_ref_frq[1]:.3f}) $1/\\mu m$,"
                           f" central mirror = ({center_pupil_frq_ref[0]:.1f}, {center_pupil_frq_ref[1]:.1f})\n"
                           "affine xform from DMD space to frequency space\n"
-                          f"$1/M_x$ = {1 / xform_params[0]:.2f} mirror/$\mu m^{-1}$,"
+                          f"$1/M_x$ = {1 / xform_params[0]:.2f} mirror/$\\mu m^{-1}$,"
                           f" $\\theta x$ = {xform_params[1] * 180 / np.pi:.2f} deg,"
-                          f" $c_x$ = {xform_params[2]:.3f} $1/\mu m$\n"
-                          f"$1/M_y$ = {1 / xform_params[3]:.2f}" + "mirror/$\mu m^{-1}$,"
+                          f" $c_x$ = {xform_params[2]:.3f} $1/\\mu m$\n"
+                          f"$1/M_y$ = {1 / xform_params[3]:.2f}" + "mirror/$\\mu m^{-1}$,"
                           f" $\\theta y$ = {xform_params[4] * 180 / np.pi:.2f} deg,"
-                          f" $c_y$ = {xform_params[5]:.3f} $1/\mu m$")
+                          f" $c_y$ = {xform_params[5]:.3f} $1/\\mu m$")
 
             ax = figh.add_subplot(grid[0, 0])
             ax.axis("scaled")
@@ -1124,8 +1125,8 @@ class Tomography:
                                  edgecolor="k"))
             ax.set_xlim([-self.fmax + mean_ref_frq[0], self.fmax + mean_ref_frq[0]])
             ax.set_ylim([-self.fmax + mean_ref_frq[1], self.fmax + mean_ref_frq[1]])
-            ax.set_xlabel("$f_x$ (1/$\mu m$)")
-            ax.set_ylabel("$f_y$ (1/$\mu m$)")
+            ax.set_xlabel("$f_x$ (1/$\\mu m$)")
+            ax.set_ylabel("$f_y$ (1/$\\mu m$)")
 
             ax = figh.add_subplot(grid[0, 2])
             ax.axis("scaled")
@@ -1150,8 +1151,8 @@ class Tomography:
                                  edgecolor="k"))
             ax.set_xlim([-self.fmax, self.fmax])
             ax.set_ylim([-self.fmax, self.fmax])
-            ax.set_xlabel("$f_x$ (1/$\mu m$)")
-            ax.set_ylabel("$f_y$ (1/$\mu m$)")
+            ax.set_xlabel("$f_x$ (1/$\\mu m$)")
+            ax.set_ylabel("$f_y$ (1/$\\mu m$)")
 
             if save and self.save_dir is not None:
                 figh.savefig(self.save_dir / f"frequency_mapping.png")
@@ -1191,7 +1192,7 @@ class Tomography:
                 imgs = imgs.compute()
 
             xp = cp if use_gpu and cp else np
-            n_used_dims = imgs.ndim - np.min([ii for ii, s in enumerate(imgs.shape) if s!=1])
+            n_used_dims = imgs.ndim - np.min([ii for ii, s in enumerate(imgs.shape) if s != 1])
             if n_used_dims != 2 and n_used_dims != 3:
                 raise ValueError("calibrate only supports arrays with 2 or 3 non-singleton dimensions")
 
@@ -1414,7 +1415,6 @@ class Tomography:
             else:
                 imgs_raw_bg = self.imgs_raw_bg
 
-
             # get electric field from holograms
             ref_frq_bg_da = da.from_array(self.reference_frq_bg,
                                           chunks=imgs_raw_bg.chunksize[:-2] + (1, 1, 2)
@@ -1537,7 +1537,6 @@ class Tomography:
                                                       chunks=hft.chunksize[:-2] + (1, 1),
                                                       ).compute()
                     hft = hft * self.phase_params
-
 
             if self.fit_phase_profile:
                 phase_prof = da.map_blocks(correct_phase_profile,
@@ -1742,7 +1741,7 @@ class Tomography:
                 label = ""
             else:
                 block_ind = block_id[:nextra_dims]
-                label = f"{block_id} "
+                label = f"{np.stack(block_id).tolist()} "
 
             # #######################
             # get initial guess
@@ -2304,8 +2303,8 @@ class Tomography:
 
         ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
         ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
-        ax.set_xlabel("$f_x$ (1/$\mu m$)")
-        ax.set_ylabel("$f_z$ (1/$\mu m$)")
+        ax.set_xlabel("$f_x$ (1/$\\mu m$)")
+        ax.set_ylabel("$f_z$ (1/$\\mu m$)")
 
         plt.legend()
 
@@ -2362,8 +2361,8 @@ class Tomography:
 
         ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
         ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
-        ax.set_xlabel("$f_y$ (1/$\mu m$)")
-        ax.set_ylabel("$f_z$ (1/$\mu m$)")
+        ax.set_xlabel("$f_y$ (1/$\\mu m$)")
+        ax.set_ylabel("$f_z$ (1/$\\mu m$)")
 
         # ########################
         # kx-ky plane
@@ -2390,8 +2389,8 @@ class Tomography:
 
         ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
         ax.set_xlim([-2 * frq_norm, 2 * frq_norm])
-        ax.set_xlabel("$f_x$ (1/$\mu m$)")
-        ax.set_ylabel("$f_y$ (1/$\mu m$)")
+        ax.set_xlabel("$f_x$ (1/$\\mu m$)")
+        ax.set_ylabel("$f_y$ (1/$\\mu m$)")
 
         # ########################
         # 3D
@@ -2421,9 +2420,9 @@ class Tomography:
         ax.set_ylim([-2 * frq_norm, 2 * frq_norm])
         ax.set_zlim([-1, 1])  # todo: set based on na's
 
-        ax.set_xlabel("$f_x$ (1/$\mu m$)")
-        ax.set_ylabel("$f_y$ (1/$\mu m$)")
-        ax.set_zlabel("$f_z$ (1/$\mu m$)")
+        ax.set_xlabel("$f_x$ (1/$\\mu m$)")
+        ax.set_ylabel("$f_y$ (1/$\\mu m$)")
+        ax.set_zlabel("$f_z$ (1/$\\mu m$)")
 
         return figh
 
@@ -2796,7 +2795,7 @@ def get_scattered_field(efields: array,
     Compute estimate of scattered field in real space with regularization. Depending on the mode, this
     will either be an actual estimate of the scattered field, or an estimate of the Rytov phase
 
-    The Rytov phase, \psi_s(r), is defined by
+    The Rytov phase, \\psi_s(r), is defined by
 
     .. math::
 
@@ -3095,9 +3094,9 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     zs = (np.arange(nz) - nz // 2) * drs_n[0] + dz_refocus
 
     if show_n3d:
-        zoffset = zs[0]
+        zoffset = float(zs[0])
     else:
-        zoffset = 0
+        zoffset = 0.
 
     # ##############################
     # raw data slice corresponding to reconstructed data
