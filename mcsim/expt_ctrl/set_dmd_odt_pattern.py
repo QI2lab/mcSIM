@@ -69,7 +69,7 @@ if one_pattern:
     centered_pattern[np.sqrt((xx - cref[1] - offset[1])**2 + (yy - cref[0] - offset[0])**2) > rad] = 1
 
     # centered_pattern = np.ones(dmd_size)
-    img_inds, bit_inds = dmd.upload_pattern_sequence(centered_pattern.astype(np.uint8), 105, 0)
+    dmd.upload_pattern_sequence(centered_pattern.astype(np.uint8), 105, 0)
 else:
     # or, many patterns
     n_phis = 10
@@ -100,4 +100,4 @@ else:
     # exp_time_us = 1000000 # 1s
     # exp_time_us = 100000 # 100ms
     exp_time_us = 105
-    img_inds, bit_inds = dmd.upload_pattern_sequence(patterns, exp_time_us, 0)
+    dmd.upload_pattern_sequence(patterns, exp_time_us, 0)
