@@ -2115,7 +2115,7 @@ class SimImageSet:
                     # ####################
                     ax = fig.add_subplot(grid[jj, 2])
                     if jj == 0:
-                        ax.set_title(r"$\\frac{w_i(k)}{\\sum_j |w_j(k)|^2 + \\eta^2}$")
+                        ax.set_title("$\\frac{w_i(k)}{\\sum_j |w_j(k)|^2 + \\eta^2}$")
 
                     im2 = ax.imshow(np.abs(weights[ii, jj] / weights_norm),
                                     norm=PowerNorm(gamma=0.1, vmin=1e-5, vmax=10),
@@ -3110,7 +3110,7 @@ def plot_correlation_fit(img1_ft: np.ndarray,
                              fill=False)
                    )
 
-    ax2.set_title(r"$C(f_o) = \\sum_f g_1(f) \\times g^*_2(f+f_o)$")
+    ax2.set_title("$C(f_o) = \\sum_f g_1(f) \\times g^*_2(f+f_o)$")
     ax2.set_xlabel('$f_x (1/\\mu m)$')
     ax2.set_ylabel('$f_y (1/\\mu m)$')
 
@@ -3122,7 +3122,7 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # ft 1
     # #######################################
     ax3 = figh.add_subplot(gspec[1, 0])
-    ax3.set_title(r"$|g_1(f)|^2$" + r" near DC, $g_1(0)=$" +
+    ax3.set_title("$|g_1(f)|^2$" + " near DC, $g_1(0)=$" +
                   f"{np.abs(peak1_dc):.3g} and "
                   f"{np.angle(peak1_dc) * 180/np.pi:.2f}deg")
     ax3.set_xlabel('$f_x (1/\\mu m)$')
@@ -3157,7 +3157,7 @@ def plot_correlation_fit(img1_ft: np.ndarray,
     # ft 2
     # #######################################
     ax4 = figh.add_subplot(gspec[1, 2])
-    title = (r"$|g_2(f)|^2$" + r"near $f_o$, $g_2(f_p) =$" +
+    title = ("$|g_2(f)|^2$" + "near $f_o$, $g_2(f_p) =$" +
              f" {np.abs(peak2):.3g} and "
              f"{np.angle(peak2) * 180 / np.pi:.2f}deg")
     if frqs_guess is not None:
