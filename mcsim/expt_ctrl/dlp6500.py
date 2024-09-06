@@ -410,35 +410,6 @@ def erle_bytes2len(byte_list: list) -> int:
 
 
 ##############################################
-# firmware indexing helper functions
-##############################################
-def firmware_index_2pic_bit(firmware_indices: Sequence[int]) -> (np.ndarray, np.ndarray):
-    """
-    convert from single firmware pattern index to picture and bit indices
-
-    :param firmware_indices:
-    :return pic_inds, bit_inds:
-    """
-    pic_inds = np.asarray(firmware_indices) // 24
-    bit_inds = firmware_indices - 24 * np.asarray(pic_inds)
-
-    return pic_inds, bit_inds
-
-
-def pic_bit_ind_2firmware_ind(pic_inds: Sequence[int],
-                              bit_inds: Sequence[int]) -> np.ndarray:
-    """
-    Convert from picture and bit indices to single firmware pattern index
-
-    :param pic_inds:
-    :param bit_inds:
-    :return firmware_inds:
-    """
-    firmware_inds = np.asarray(pic_inds) * 24 + np.asarray(bit_inds)
-    return firmware_inds
-
-
-##############################################
 # firmware configuration
 ##############################################
 def validate_channel_map(cm: dict) -> (bool, str):
@@ -454,29 +425,12 @@ def validate_channel_map(cm: dict) -> (bool, str):
             return False, f"'default' not present in channel '{ch:s}'"
 
         for m in modes:
-            keys = list(cm[ch][m].keys())
+            f_inds = cm[ch][m]
+            if not isinstance(f_inds, (np.ndarray, list)):
+                return False, f"firmware indices wrong type for channel '{ch:s}', mode '{m:s}'"
 
-            # check picture indices
-            if "picture_indices" not in keys:
-                return False, f"'picture_indices' not present in channel '{ch:s}', mode '{m:s}'"
-
-            pi = cm[ch][m]["picture_indices"]
-            if not isinstance(pi, (np.ndarray, list)):
-                return False, f"'picture_indices' wrong type for channel '{ch:s}', mode '{m:s}'"
-
-            if isinstance(pi, np.ndarray) and pi.ndim != 1:
-                return False, f"'picture_indices' array with wrong dimension, '{ch:s}', mode '{m:s}'"
-
-            # check bit indices
-            if "bit_indices" not in keys:
-                return False, f"'bit_indices' not present in channel '{ch:s}', mode '{m:s}'"
-
-            bi = cm[ch][m]["bit_indices"]
-            if not isinstance(bi, (np.ndarray, list)):
-                return False, f"'bit_indices' wrong type for channel '{ch:s}', mode '{m:s}'"
-
-            if isinstance(bi, np.ndarray) and bi.ndim != 1:
-                return False, f"'bit_indices' array with wrong dimension, '{ch:s}', mode '{m:s}'"
+            if isinstance(f_inds, np.ndarray) and f_inds.ndim != 1:
+                return False, f"firmware indices array with wrong dimension, '{ch:s}', mode '{m:s}'"
 
     return True, "array validated"
 
@@ -493,22 +447,17 @@ def save_config_file(fname: str,
     :param fname: file name to save
     :param pattern_data: list of dictionary objects, where each dictionary gives information about the corresponding
       firmware pattern. The structure of these dictionaries is arbitrary, to support different types of user defined
-      patterns. However, it is convenient if they also have "picture_index" and "bit_index" keys, describing
-      the patterns location in the DMD firmware. Note that this information can be obtained from the dictionary's
-      position in the list using firmware_index_2pic_bit()
+      patterns.
     :param channel_map: a dictionary where the top level keys specify a general mode, e.g. "SIM" or "widefield".
       channel_map[mode] is a dictionary with entries corresponding to collections of patterns. For example, mode "SIM"
-      might have pattern collections "blue" and "red". channel_map[mode][channels] is a dictionary with two keys:
-      "picture_indices" and "big_indices" specifying the pattern locations in the firmware
-      >>> channel_map = {"SIM": {"blue": {"picture_indices": np.zeros(10, dtype=int),
-      >>>                                 "bit_indices": np.arange(10).astype(int)
-      >>>                                 },
-      >>>                        "red": {"picture_indices": np.ones(10, dtype=int),
-      >>>                                 "bit_indices": np.arange(10).astype(int)
-      >>>                                 }
+      might have pattern collections "blue" and "red". channel_map[mode][channels] is an array of firmware
+      indices specifying which patterns are displayed using the given mode and channel
+      >>> channel_map = {"SIM": {"blue": np.arange(9).astype(int),
+      >>>                        "red": np.arange(9, 18).astype(int)
       >>>                        }
       >>>                }
     :param firmware_patterns: 3D array of size npatterns x ny x nx
+    :param hid_path: HID device path allowing the user to address a specific DMD
     :param use_zarr: whether to save configuration file as zarr or json
     :return:
     """
@@ -532,10 +481,9 @@ def save_config_file(fname: str,
         # numpy arrays are not seriablizable ... so avoid these
         channel_map_list = deepcopy(channel_map)
         for _, current_ch_dict in channel_map_list.items():
-            for mode in current_ch_dict.keys():
-                for k, v in current_ch_dict[mode].items():
-                    if isinstance(v, np.ndarray):
-                        current_ch_dict[mode][k] = v.tolist()
+            for m, v in current_ch_dict.items():
+                if isinstance(v, np.ndarray):
+                    current_ch_dict[m] = v.tolist()
 
     if use_zarr:
         z = zarr.open(fname, "w")
@@ -622,36 +570,28 @@ def load_config_file(fname: Union[str, Path]):
         # convert entries to numpy arrays
         for ch, presets in channel_map.items():
             for mode_name, m in presets.items():
-                for k, v in m.items():
-                    if isinstance(v, list):
-                        m[k] = np.atleast_1d(v)
+                presets[mode_name] = np.atleast_1d(m)
 
     return pattern_data, channel_map, firmware_patterns, hid_path, tstamp
 
 
-def get_preset_info(preset: dict,
-                    pattern_data: Sequence):
+def get_preset_info(inds: Sequence,
+                    pattern_data: Sequence[dict]) -> dict:
     """
     Get useful data from preset
 
-    :param preset:
-    :param pattern_data:
-    :return pd_all, pd, bi, pi, inds:
+    :param inds: firmware pattern indices
+    :param pattern_data: pattern data for each firmware pattern
+    :return pd_all: pattern data dictionary. Dictionary keys will be the same those in each element of pattern_data,
+      and values will aggregate the information from pattern data
     """
-    # indices of patterns
-    bi = preset["bit_indices"]
-    pi = preset["picture_indices"]
-    inds = pic_bit_ind_2firmware_ind(pi, bi)
 
-    # list of pattern data
     pd = [pattern_data[ii] for ii in inds]
-
-    # single dictionary with all pattern data
     pd_all = {}
     for k in pd[0].keys():
         pd_all[k] = [p[k] for p in pd]
 
-    return pd_all, pd, bi, pi, inds
+    return pd_all
 
 ##############################################
 # dlp6500 DMD
@@ -830,10 +770,9 @@ class dlpc900_dmd:
         # todo: is there a way to read these out from DMD itself?
         if firmware_patterns is not None:
             firmware_patterns = np.array(firmware_patterns)
-            self.picture_indices, self.bit_indices = firmware_index_2pic_bit(np.arange(len(firmware_patterns)))
+            self.firmware_indices = np.arange(len(firmware_patterns))
         else:
-            self.picture_indices = None
-            self.bit_indices = None
+            self.firmware_indices = None
 
         # set firmware pattern info
         self.firmware_pattern_info = firmware_pattern_info
@@ -853,16 +792,16 @@ class dlpc900_dmd:
 
         # get platform
         if platform is None:
-            self.platform = sys.platform
+            self._platform = sys.platform
         else:
-            self.platform = platform
+            self._platform = platform
 
         self.initialized = initialize
         if self.initialized:
             self._get_device()
 
     def __del__(self):
-        if self.platform == "win32":
+        if self._platform == "win32":
             try:
                 self._dmd.close()
             except AttributeError:
@@ -879,7 +818,7 @@ class dlpc900_dmd:
         :return:
         """
 
-        if self.platform == "win32":
+        if self._platform == "win32":
 
             if self._hid_path is None:
                 devices = pyhid.HidDeviceFilter(vendor_id=self.vendor_id,
@@ -897,10 +836,10 @@ class dlpc900_dmd:
 
             # strip off first return byte and add rest to self._response
             self._dmd.set_raw_data_handler(lambda data: self._response.append(data[1:]))
-        elif self.platform == "none":
+        elif self._platform == "none":
             pass
         else:
-            raise NotImplementedError(f"Platform was '{self.platform:s}', "
+            raise NotImplementedError(f"Platform was '{self._platform:s}', "
                                       f"but DMD control is only implemented on 'win32'")
 
     def _send_raw_packet(self,
@@ -919,7 +858,7 @@ class dlpc900_dmd:
         # one interesting issue is it seems on linux the report ID byte is stripped
         # by the driver, so we would not need to worry about it here. For windows, we must handle manually.
 
-        if self.platform == "win32":
+        if self._platform == "win32":
             # ensure packet is correct length
             assert len(buffer) == self._packet_length_bytes
 
@@ -1745,7 +1684,7 @@ class dlpc900_dmd:
                                 clear_pattern_after_trigger: bool = True,
                                 bit_depth: int = 1,
                                 num_repeats: int = 0,
-                                compression_mode: str = 'erle') -> (np.ndarray, np.ndarray):
+                                compression_mode: str = 'erle'):
         """
         Upload on-the-fly pattern sequence to DMD. This command is based on Table 5-3 in the DLP programming manual.
         After loading patterns, the pattern sequence can be configured with set_pattern_sequence().
@@ -1764,7 +1703,6 @@ class dlpc900_dmd:
         :param bit_depth: bit depth of patterns
         :param num_repeats: Number of repeats. 0 means infinite.
         :param compression_mode: 'erle', 'rle', or 'none'
-        :return stored_image_indices, stored_bit_indices: image and bit indices where each image was stored
         """
         # #########################
         # check arguments
@@ -1837,6 +1775,7 @@ class dlpc900_dmd:
         for ii, (p, et, dt) in enumerate(zip(patterns, exp_times, dark_times)):
             stored_image_indices[ii] = ii // 24
             stored_bit_indices[ii] = ii % 24
+            pic_ind, bit_ind = self._firmware_index_2pic_bit(ii)
             buffer = self.pattern_display_lut_definition(ii,
                                                          exposure_time_us=et,
                                                          dark_time_us=dt,
@@ -1896,11 +1835,9 @@ class dlpc900_dmd:
         if triggered:
             self.start_stop_sequence('stop')
 
-        return stored_image_indices, stored_bit_indices
 
     def set_pattern_sequence(self,
-                             image_indices: Sequence[int],
-                             bit_indices: Sequence[int],
+                             pattern_indices: Sequence[int],
                              exp_times: Union[Sequence[int], int],
                              dark_times: Union[Sequence[int], int],
                              triggered: bool = False,
@@ -1913,8 +1850,7 @@ class dlpc900_dmd:
         or in pre-stored pattern mode. If you have uploaded patterns into the firmware and defined modes and channels,
         then, use program_dmd_seq() instead of calling this function directly.
 
-        :param image_indices:
-        :param bit_indices:
+        :param pattern_indices: DMD pattern indices
         :param exp_times:
         :param dark_times:
         :param triggered:
@@ -1927,24 +1863,19 @@ class dlpc900_dmd:
         # #########################
         # check arguments
         # #########################
-        if isinstance(image_indices, int) or np.issubdtype(type(image_indices), np.integer):
-            image_indices = [image_indices]
-        elif isinstance(image_indices, np.ndarray):
-            image_indices = list(image_indices)
+        if isinstance(pattern_indices, int) or np.issubdtype(type(pattern_indices), np.integer):
+            pattern_indices = [pattern_indices]
+        elif isinstance(pattern_indices, np.ndarray):
+            pattern_indices = pattern_indices.tolist()
 
-        if isinstance(bit_indices, int) or np.issubdtype(type(bit_indices), np.integer):
-            bit_indices = [bit_indices]
-        elif isinstance(bit_indices, np.ndarray):
-            bit_indices = list(bit_indices)
-
-        if len(image_indices) != len(bit_indices):
-            raise ValueError("image_indices and bit_indices must be the same length.")
-
-        nimgs = len(image_indices)
+        nimgs = len(pattern_indices)
+        pic_indices, bit_indices = self._firmware_index_2pic_bit(pattern_indices)
+        pic_indices = pic_indices.tolist()
+        bit_indices = bit_indices.tolist()
 
         if mode == 'on-the-fly' and 0 not in bit_indices:
-            raise ValueError("Known issue (not with this code, but with DMD) that if 0 is not included in the bit"
-                             "indices, then the patterns displayed will not correspond with the indices supplied.")
+            raise ValueError("Known issue that if 0 is not included in the bit indices, then the patterns "
+                             "displayed will not correspond with the indices supplied.")
 
         # if only one exp_times, apply to all patterns
         if isinstance(exp_times, int):
@@ -1989,7 +1920,7 @@ class dlpc900_dmd:
                                                          wait_for_trigger=triggered,
                                                          clear_pattern_after_trigger=clear_pattern_after_trigger,
                                                          bit_depth=bit_depth,
-                                                         stored_image_index=image_indices[ii],
+                                                         stored_image_index=pic_indices[ii],
                                                          stored_image_bit_index=bit_indices[ii])
             resp = self.decode_response(buffer)
             if resp['error']:
@@ -2029,8 +1960,8 @@ class dlpc900_dmd:
         """
         Generate DMD patterns from a list of modes and channels
 
-        This function requires that self.presets exists. self.presets[channel][mode] are dictionaries with two keys,
-        "picture_indices" and "bit_indices"
+        This function requires that self.presets exists. self.presets[channel][mode] is an array of firmware pattern
+        indices. These are resolved to picture and bit indices
 
         :param modes: modes, which refers to the keys in self.presets[channel]
         :param channels: channels, which refer to the keys in self.presets
@@ -2040,7 +1971,7 @@ class dlpc900_dmd:
         :param blank: whether to add "off" patterns after each pattern in each mode
         :param mode_pattern_indices: select subset of mode patterns to use. Each nested list contains the indices
           of the patterns in self.presets[channel][mode] to use
-        :return picture_indices, bit_indices:
+        :return firmware_indices:
         """
         if self.presets is None:
             raise ValueError("self.presets was None, but must be a dictionary populated with channels and modes.")
@@ -2071,7 +2002,7 @@ class dlpc900_dmd:
         if mode_pattern_indices is None:
             mode_pattern_indices = []
             for c, m in zip(channels, modes):
-                npatterns = len(self.presets[c][m]["picture_indices"])
+                npatterns = len(self.presets[c][m])
                 mode_pattern_indices.append(np.arange(npatterns, dtype=int))
 
         if isinstance(mode_pattern_indices, int):
@@ -2144,61 +2075,32 @@ class dlpc900_dmd:
         if len(blank) != nmodes:
             raise ValueError(f"len(blank)={len(blank):d} and nmodes={nmodes:d}, but these must be equal")
 
-        # processing
-        pic_inds = []
-        bit_inds = []
+        f_inds = []
         for c, m, ind, nreps in zip(channels, modes, mode_pattern_indices, nrepeats):
-            # need np.array(..., copy=True) to don't get references in arrays
-            pi = np.array(np.atleast_1d(self.presets[c][m]["picture_indices"]), copy=True)
-            bi = np.array(np.atleast_1d(self.presets[c][m]["bit_indices"]), copy=True)
-            # select indices
-            pi = pi[ind]
-            bi = bi[ind]
-            # repeats
-            pi = np.hstack([pi] * nreps)
-            bi = np.hstack([bi] * nreps)
-
-            pic_inds.append(pi)
-            bit_inds.append(bi)
+            fi = np.array(np.atleast_1d(self.presets[c][m]), copy=True)
+            fi = fi[ind]  # select indices
+            fi = np.hstack([fi] * nreps)  # repeats
+            f_inds.append(fi)
 
         # insert off patterns at the start or end of the sequence
         for ii in range(nmodes):
             if noff_before[ii] != 0 or noff_after[ii] != 0:
-                ipic_off_before = self.presets[channels[ii]]["off"]["picture_indices"] * \
-                                  np.ones(noff_before[ii], dtype=int)
-                ibit_off_before = self.presets[channels[ii]]["off"]["bit_indices"] * \
-                                  np.ones(noff_before[ii], dtype=int)
-
-                ipic_off_after = (self.presets[channels[ii]]["off"]["picture_indices"] *
-                                  np.ones(noff_after[ii], dtype=int))
-                ibit_off_after = (self.presets[channels[ii]]["off"]["bit_indices"] *
-                                  np.ones(noff_after[ii], dtype=int))
-
-                pic_inds[ii] = np.concatenate((ipic_off_before, pic_inds[ii], ipic_off_after), axis=0).astype(int)
-                bit_inds[ii] = np.concatenate((ibit_off_before, bit_inds[ii], ibit_off_after), axis=0).astype(int)
+                ioff_before = self.presets[channels[ii]]["off"] * np.ones(noff_before[ii], dtype=int)
+                ioff_after = self.presets[channels[ii]]["off"] * np.ones(noff_after[ii], dtype=int)
+                f_inds[ii] = np.concatenate((ioff_before, f_inds[ii], ioff_after), axis=0).astype(int)
 
         # insert off patterns after each pattern to "blank"
         for ii in range(nmodes):
             if blank[ii]:
-                npatterns = len(pic_inds[ii])
-                ipic_off = self.presets[channels[ii]]["off"]["picture_indices"]
-                ibit_off = self.presets[channels[ii]]["off"]["bit_indices"]
+                npatterns = len(f_inds[ii])
+                ioff = self.presets[channels[ii]]["off"]
+                ioff_new = np.zeros((2 * npatterns), dtype=int)
+                ioff_new[::2] = f_inds[ii]
+                ioff_new[1::2] = ioff
+                f_inds[ii] = ioff_new
 
-                ipic_new = np.zeros((2 * npatterns), dtype=int)
-                ipic_new[::2] = pic_inds[ii]
-                ipic_new[1::2] = ipic_off
 
-                ibit_new = np.zeros((2 * npatterns), dtype=int)
-                ibit_new[::2] = bit_inds[ii]
-                ibit_new[1::2] = ibit_off
-
-                pic_inds[ii] = ipic_new
-                bit_inds[ii] = ibit_new
-
-        pic_inds = np.hstack(pic_inds)
-        bit_inds = np.hstack(bit_inds)
-
-        return pic_inds, bit_inds
+        return np.hstack(f_inds)
 
     def program_dmd_seq(self,
                         modes: Sequence[str],
@@ -2226,16 +2128,16 @@ class dlpc900_dmd:
         :param exp_time_us:
         :param clear_pattern_after_trigger:
         :param verbose:
-        :return pic_inds, bit_inds:
+        :return firmware_inds:
         """
 
-        pic_inds, bit_inds = self.get_dmd_sequence(modes,
-                                                   channels,
-                                                   nrepeats=nrepeats,
-                                                   noff_before=noff_before,
-                                                   noff_after=noff_after,
-                                                   blank=blank,
-                                                   mode_pattern_indices=mode_pattern_indices)
+        firmware_inds = self.get_dmd_sequence(modes,
+                                              channels,
+                                              nrepeats=nrepeats,
+                                              noff_before=noff_before,
+                                              noff_after=noff_after,
+                                              blank=blank,
+                                              mode_pattern_indices=mode_pattern_indices)
 
         self.debug = verbose
         self.start_stop_sequence('stop')
@@ -2243,8 +2145,7 @@ class dlpc900_dmd:
         delay1_us, mode_trig1 = self.get_trigger_in1()
         mode_trig2 = self.get_trigger_in2()
 
-        self.set_pattern_sequence(pic_inds,
-                                  bit_inds,
+        self.set_pattern_sequence(firmware_inds,
                                   exp_time_us,
                                   0,
                                   triggered=triggered,
@@ -2254,11 +2155,36 @@ class dlpc900_dmd:
                                   mode='pre-stored')
 
         if verbose:
-            print(f"{len(pic_inds):d} picture indices: {pic_inds}")
-            print(f"{len(bit_inds):d}     bit indices: {bit_inds}")
+            print(f"{len(firmware_inds):d} firmware pattern indices: {firmware_inds}")
             print("finished programming DMD")
 
+        return firmware_inds
+
+    @staticmethod
+    def _firmware_index_2pic_bit(firmware_indices: Sequence[int]) -> (np.ndarray, np.ndarray):
+        """
+        convert from single firmware pattern index to picture and bit indices
+
+        :param firmware_indices:
+        :return pic_inds, bit_inds:
+        """
+        pic_inds = np.asarray(firmware_indices) // 24
+        bit_inds = firmware_indices - 24 * np.asarray(pic_inds)
+
         return pic_inds, bit_inds
+
+    @staticmethod
+    def _pic_bit_ind_2firmware_ind(pic_inds: Sequence[int],
+                                  bit_inds: Sequence[int]) -> np.ndarray:
+        """
+        Convert from picture and bit indices to single firmware pattern index
+
+        :param pic_inds:
+        :param bit_inds:
+        :return firmware_inds:
+        """
+        firmware_inds = np.asarray(pic_inds) * 24 + np.asarray(bit_inds)
+        return firmware_inds
 
 
 class dlp6500(dlpc900_dmd):
@@ -2372,14 +2298,14 @@ if __name__ == "__main__":
     if args.verbose:
         print(args)
 
-    pic_inds, bit_inds = dmd.program_dmd_seq(args.modes,
-                                             args.channels,
-                                             nrepeats=args.nrepeats,
-                                             noff_before=args.noff_before,
-                                             noff_after=args.noff_after,
-                                             blank=args.blank,
-                                             mode_pattern_indices=args.pattern_indices,
-                                             triggered=args.triggered,
-                                             exp_time_us=args.illumination_time,
-                                             verbose=args.verbose
-                                             )
+    dmd.program_dmd_seq(args.modes,
+                        args.channels,
+                        nrepeats=args.nrepeats,
+                        noff_before=args.noff_before,
+                        noff_after=args.noff_after,
+                        blank=args.blank,
+                        mode_pattern_indices=args.pattern_indices,
+                        triggered=args.triggered,
+                        exp_time_us=args.illumination_time,
+                        verbose=args.verbose
+                        )

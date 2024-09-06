@@ -12,12 +12,12 @@ def get_odt_spot_locations(nmax: int,
                            fx_max: float = 1.,
                            fy_max: float = 1.) -> np.ndarray:
     """
-    Generate set of spot locations equally spaced in back-pupil plane
+    Generate set of spot locations equally spaced in back-pupil plane. Scale is set by fmax
 
-    :param nmax:
+    :param nmax: maximum number of spots
     :param fmax: maximum radius
     :param fx_max: maximum distance in x-direction
-    :param fy_max: maximum distnace in y-direction
+    :param fy_max: maximum distance in y-direction
     :return centers: ncenters x 2 in order cx x cy
     """
 
@@ -308,9 +308,7 @@ def get_odt_patterns(center_set: Sequence[np.ndarray],
     odt_pattern_data = []
     # loop over patterns
     for ii, centers_now in enumerate(center_set):
-
         drs_now = drs[ii]
-        nr = len(np.unique(drs_now))
 
         if len(centers_now) != len(drs_now):
             raise ValueError("center positions must match size of drs")
@@ -340,7 +338,7 @@ def get_odt_patterns(center_set: Sequence[np.ndarray],
         # record pattern metadata
         odt_pattern_data.append({"type": "odt",
                                  "drs": drs_now.tolist(),
-                                 "nposition_multiplex": nr,
+                                 "nposition_multiplex": len(np.unique(drs_now)),
                                  "offsets": (pupil_rad_mirrors * centers_now).tolist(),
                                  "nangles_multiplex_nominal": len(centers_now),
                                  "spot_frqs_mirrors": frqs_mirrors.tolist(),
