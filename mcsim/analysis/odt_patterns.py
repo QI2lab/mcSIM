@@ -316,7 +316,7 @@ def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
 
         odt_pattern_data.append({"type": "odt",
                                  "spot_frqs_mirrors": frqs_mirrors.tolist(),
-                                 "nposition_multiplex": len(np.unique(frqs_mirrors)),
+                                 "nposition_multiplex": np.unique(frqs_mirrors, axis=0).shape[0],
                                  "spot_positions_mirrors": spot_pos_mirrors.tolist(),
                                  "nangles_multiplex_nominal": len(spot_pos_mirrors),
                                  "phase": phase,
