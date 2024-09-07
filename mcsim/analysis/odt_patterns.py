@@ -2,7 +2,6 @@
 Generate DMD patterns for FS-ODT patterns
 """
 from time import perf_counter
-from typing import Optional
 from collections.abc import Sequence
 import numpy as np
 
@@ -87,7 +86,7 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
     Generate multiplexed spot positions from a list of initial spot positions
     Try and optimize this set so that no spots are near each other
 
-    :param centers: Spot pattern center positions
+    :param centers: Spot pattern center positions in the pupil
     :param n_multiplex: number of centers to multiplex
     :param max_dist: spot distances above this threshold experience the same penalty
     :param n_swap_cycles: number of times to loop through pairs of patterns
@@ -220,8 +219,8 @@ def _nearest_pt_line(pt,
     :param pt: (xo, yo), point of itnerest
     :param slope: slope of line
     :param pt_line: (xl, yl), point the line passes through
-    :return pt: (x_near, y_near), nearest point on line
-    :return d: shortest distance from point to line
+    :return pt: (x_near, y_near), nearest point on the line.
+    :return d: shortest distance from point to line.
     """
     # xo, yo = pt
     xos = pt[..., 0]
@@ -256,73 +255,56 @@ def _nearest_line_pts(pts):
     return slope, pt_line
 
 
-def get_odt_patterns(center_set: Sequence[np.ndarray],
+def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
                      dmd_size: Sequence[int, int],
-                     rad: float,
-                     mag_dmd2bfp: float,
-                     fl_detection: float,
-                     wavelength: float,
-                     na_detection: float,
-                     dm: float,
-                     fc: np.ndarray,
+                     spot_radius: float,
+                     pupil_radius_mirrors: float,
+                     frqs: Sequence[np.ndarray],
                      phase: float = 0.,
-                     drs: Optional[Sequence[np.ndarray]] = None,
                      use_off_mirrors: bool = True) -> (np.ndarray, list[dict]):
     """
     Generate DMD patterns from a list of center positions
 
-    :param center_set: N x 2 array in order (cx, cy)
+    :param pupil_positions: N x 2 array in order (cx, cy)
     :param dmd_size: (ny, nx)
-    :param rad: spot radius in mirrors
-    :param mag_dmd2bfp: magnification factor between DMD and back focal plane of detection objective
-    :param fl_detection: focal length of detection objective in um
-    :param wavelength: in um
-    :param na_detection:
-    :param dm: DMD mirror size in um
-    :param fc: carrier frequency (fx, fy) in 1/mirrors
+    :param spot_radius: spot radius in mirrors
+    :param pupil_radius_mirrors: typically this is calculated using
+      focal_len_detection * na_detection / mag_dmd2bfp / dm
+    :param frqs: carrier frequencies (fx, fy) in 1/mirrors. This should be a list of arrays of the same
+      size as pupil_positions
     :param phase: phase of carrier frequency pattern
-    :param drs: distances (dx, dy) in um for the final beam to be displaced from the center of the field-of-view
-      This should be a list of arrays of the same size as center_set.
     :param use_off_mirrors:
     :return odt_patterns, odt_pattern_data:
     """
 
-    # todo: replace drs with carrier_frqs ... ideally don't use any physical units here
-
-    # pupil size
-    pupil_rad = fl_detection * na_detection / mag_dmd2bfp
-    pupil_rad_mirrors = pupil_rad / dm
-
-    if drs is None:
-        drs = [np.zeros((center_set[ii].shape)) for ii in range(len(center_set))]
+    if len(frqs) != len(pupil_positions):
+        frqs_old = np.array(frqs, copy=True)
+        frqs = [np.zeros(pupil_positions[ii].shape) + frqs_old for ii in range(len(pupil_positions))]
 
     ny, nx = dmd_size
+    npatterns = len(pupil_positions)
     xx, yy = np.meshgrid(range(nx), range(ny))
 
-    npatterns = len(center_set)
     if use_off_mirrors:
         odt_patterns = np.ones((npatterns, ny, nx), dtype=bool)
     else:
         odt_patterns = np.zeros((npatterns, ny, nx), dtype=bool)
 
-    odt_pattern_data = []
     # loop over patterns
-    for ii, centers_now in enumerate(center_set):
-        drs_now = drs[ii]
+    odt_pattern_data = []
+    for ii in range(len(pupil_positions)):
+        frqs_mirrors = frqs[ii]
+        spot_pos_mirrors = pupil_positions[ii] * pupil_radius_mirrors + np.array([[nx // 2, ny // 2]])
 
-        if len(centers_now) != len(drs_now):
-            raise ValueError("center positions must match size of drs")
-
-        frqs_mirrors = drs_now * mag_dmd2bfp / (fl_detection * wavelength) * dm + fc
+        if len(spot_pos_mirrors) != len(frqs_mirrors):
+            raise ValueError("pupil positions must match size of frqs")
 
         # loop over centers and create spots
-        for kk in range(len(centers_now)):
-            to_use = np.sqrt((xx - (nx // 2) - centers_now[kk, 0] * pupil_rad_mirrors) ** 2 +
-                             (yy - (ny // 2) - centers_now[kk, 1] * pupil_rad_mirrors) ** 2) <= rad
+        for kk in range(len(spot_pos_mirrors)):
+            to_use = np.sqrt((xx - spot_pos_mirrors[kk, 0]) ** 2 + (yy - spot_pos_mirrors[kk, 1]) ** 2) <= spot_radius
 
             pnow = np.round(np.cos(2 * np.pi * (xx[to_use] * frqs_mirrors[kk, 0] +
-                                                yy[to_use] * frqs_mirrors[kk, 1]) + phase),
-                            12)
+                                                yy[to_use] * frqs_mirrors[kk, 1]) + phase), 12)
 
             pnow[pnow <= 0] = 0
             pnow[pnow > 0] = 1
@@ -332,21 +314,15 @@ def get_odt_patterns(center_set: Sequence[np.ndarray],
 
             odt_patterns[ii, to_use] = pnow
 
-        pupil_fracs = np.linalg.norm(centers_now, axis=1) / pupil_rad_mirrors
-        pupil_angles = np.arctan2(centers_now[:, 1], centers_now[:, 0])
-
-        # record pattern metadata
         odt_pattern_data.append({"type": "odt",
-                                 "drs": drs_now.tolist(),
-                                 "nposition_multiplex": len(np.unique(drs_now)),
-                                 "offsets": (pupil_rad_mirrors * centers_now).tolist(),
-                                 "nangles_multiplex_nominal": len(centers_now),
                                  "spot_frqs_mirrors": frqs_mirrors.tolist(),
-                                 "carrier frequency": fc.tolist(),
+                                 "nposition_multiplex": len(np.unique(frqs_mirrors)),
+                                 "spot_positions_mirrors": spot_pos_mirrors.tolist(),
+                                 "nangles_multiplex_nominal": len(spot_pos_mirrors),
                                  "phase": phase,
-                                 "radius": rad,  # carrier frequency information
-                                 "pupil_frequency_fraction": pupil_fracs.tolist(),
-                                 "pupil_angle": pupil_angles.tolist()})
+                                 "radius": spot_radius,  # carrier frequency information
+                                 "pupil_frequency_fraction": np.linalg.norm(pupil_positions[ii], axis=1).tolist(),
+                                 "pupil_angle": np.arctan2(spot_pos_mirrors[:, 1], spot_pos_mirrors[:, 0]).tolist()})
 
     return odt_patterns, odt_pattern_data
 
@@ -358,6 +334,7 @@ def get_subset(centers: np.ndarray,
                niters: int = 100):
     """
     Get subset of n_subset patterns which are near radius fraction and roughly equally spaced
+
     :param centers:
     :param n_subset:
     :param fraction:

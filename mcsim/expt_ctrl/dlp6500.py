@@ -829,6 +829,7 @@ class dlpc900_dmd:
                     raise ValueError(f"Not enough DMD's detected for dmd_index={self.dmd_index:d}."
                                      f"Only {len(devices):d} DMD's were detected.")
                 self._dmd = devices[self.dmd_index]
+                self._hid_path = self._dmd.device_path
             else:
                 self._dmd = pyhid.HidDevice(self._hid_path)
 
