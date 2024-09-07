@@ -1,11 +1,12 @@
 {
 	"camera_settings_1": {
-		"dxy": 0.065,
 		"magnification": 100,
 		"na_excitation": 1.3,
 		"na_detection": 1.3,
 		"ni": 1.5,
-		"otf_calibration": {
+		"dx_um": 0.065,
+		"dy_um": 0.065,
+		"otf_model_parameters": {
 			"fit_params": [
 				2.446021509201081
 			],
@@ -17,7 +18,7 @@
 			"file_name": "",
 			"data_time_stamp": "2020_05_19;00;00;00"
 		},
-		"dmd_affine_transforms": {
+		"affine_transformations": {
 			"blue": [
 				[
 					-0.9911149452156005,
@@ -76,11 +77,14 @@
 		}
 	},
 	"camera_settings_2": {
-		"dxy": 0.10833333333333334,
 		"magnification": 60,
 		"na_excitation": 1.3,
 		"na_detection": 1,
-		"ni": 1.333
+		"ni": 1.333,
+		"dx_um": 0.10833333333333334,
+		"dy_um": 0.10833333333333334,
+		"otf_model_parameters": null,
+		"affine_transformations": null
 	},
 	"camera_affine_transforms": {
 		"xform": [
@@ -106,7 +110,7 @@
 		"file_name": "G:\\2022_09_07\\02_fluorescence_affine_ref\\2022_09_08_11;45;05_affine_xform.json",
 		"data_time_stamp": ""
 	},
-	"timestamp": "2024_08_19_14;24;56",
+	"timestamp": "2024_09_06_12;32;20",
 	"sim_odt_program_defaults": {
 		"sx": 801,
 		"cx": 1024,
@@ -123,13 +127,14 @@
 		"stage_delay_ms": 200
 	},
 	"camera_settings_phantom": {
-		"dxy": 0.1,
 		"magnification": 180,
 		"na_excitation": 1.3,
 		"na_detection": 1.0,
 		"ni": 1.333,
-		"otf_calibration": null,
-		"dmd_affine_transforms": null
+		"dx_um": 0.1,
+		"dy_um": 0.1,
+		"otf_model_parameters": null,
+		"affine_transformations": null
 	},
 	"excitation_wavelengths": {
 		"red": 0.635,
@@ -138,7 +143,7 @@
 		"odt": 0.785
 	},
 	"daq_configuration": {
-		"timestamp": "2024_08_19_14;24;56",
+		"timestamp": "2024_09_06_12;22;28",
 		"analog_map": {
 			"vc_mirror_x": 0,
 			"vc_mirror_y": 1,
