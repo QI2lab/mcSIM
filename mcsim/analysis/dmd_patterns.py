@@ -440,8 +440,8 @@ def reduce2cell(point: np.ndarray,
 
     ra, rb = get_reciprocal_vects(va, vb)
     # need to round to avoid problems with machine precision
-    na_out = np.floor(np.round(np.dot(point, ra), 12)).astype(int)
-    nb_out = np.floor(np.round(np.dot(point, rb), 12)).astype(int)
+    na_out = np.floor(np.round(np.dot(point, ra), 10)).astype(int)
+    nb_out = np.floor(np.round(np.dot(point, rb), 10)).astype(int)
     point_red = point - (na_out * va + nb_out * vb)
 
     assert np.all(test_in_cell(point_red, va, vb))
