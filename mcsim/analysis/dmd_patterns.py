@@ -280,9 +280,12 @@ def get_sim_unit_cell(vec_a: np.ndarray,
     xx_cs, yy_cs = np.meshgrid(x_cell_sub, y_cell_sub)
     xx_cs += vec_b_sub[0] * phase_index
     yy_cs += vec_b_sub[1] * phase_index
-    xinds = (xx_cs - x_cell[0])[to_use]
-    yinds = (yy_cs - y_cell[0])[to_use]
-    # set main cell
+    # ensure using coordinates in unit cell
+    pts_cell, _, _ = reduce2cell(np.stack((xx_cs, yy_cs), axis=-1), vec_a, vec_b)
+    pts_cell = np.round(pts_cell, 12).astype(int)
+    # convert to indices and set pattern
+    xinds = (pts_cell[..., 0] - x_cell[0])[to_use]
+    yinds = (pts_cell[..., 1] - y_cell[0])[to_use]
     cell[(yinds, xinds)] = 1
 
     with np.errstate(invalid='ignore'):
