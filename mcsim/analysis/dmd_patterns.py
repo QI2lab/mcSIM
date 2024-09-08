@@ -382,7 +382,7 @@ def test_in_cell(points: np.ndarray,
 
     def line(x, p1, p2): return ((p2[1] - p1[1]) * x + p1[1] * p2[0] - p1[0] * p2[1]) / (p2[0] - p1[0])
 
-    precision = 12
+    precision = 10
 
     # strategy: consider parellel lines from line1 = [0,0] -> va and line2 = vb -> va + vb
     # if point is on opposite sides of line1 and line2, or exactly on line1 then it is inside the cell
