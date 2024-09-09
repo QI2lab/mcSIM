@@ -7,6 +7,7 @@ with get_odt_patterns()
 """
 from time import perf_counter
 from collections.abc import Sequence
+from typing import Union
 import numpy as np
 
 
@@ -299,10 +300,10 @@ def _nearest_line_pts(pts):
 
 def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
                      dmd_size: Sequence[int, int],
-                     spot_radius: float,
+                     spot_radius: Union[Sequence[np.ndarray, float]],
                      pupil_radius_mirrors: float,
                      frqs: Sequence[np.ndarray],
-                     phase: float = 0.,
+                     phase: Union[Sequence[np.ndarray], float] = 0.,
                      use_off_mirrors: bool = True) -> (np.ndarray, list[dict]):
     """
     Generate DMD patterns from a list of center positions
@@ -315,14 +316,22 @@ def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
     :param frqs: list of arrays, where each array is the same size as the corresponding entry in pupil_positions
       carrier frequencies (fx, fy) in 1/mirrors. This should be a list of arrays of the same
       size as pupil_positions
-    :param phase: phase of carrier frequency pattern
+    :param phase: phase of carrier frequency pattern. Either a float or a Sequence of arrays of size N
     :param use_off_mirrors:
     :return odt_patterns, odt_pattern_data:
     """
 
+    if isinstance(spot_radius, (float, int)):
+        spot_radius_old = np.array(spot_radius, copy=True)
+        spot_radius = [np.ones(pupil_positions[ii].shape[0]) * spot_radius_old for ii in range(len(pupil_positions))]
+
     if len(frqs) != len(pupil_positions):
         frqs_old = np.array(frqs, copy=True)
         frqs = [np.zeros(pupil_positions[ii].shape) + frqs_old for ii in range(len(pupil_positions))]
+
+    if isinstance(phase, float):
+        phase_old = np.array(phase, copy=True)
+        phase = [np.ones(pupil_positions[ii].shape[0]) * phase_old for ii in range(len(pupil_positions))]
 
     ny, nx = dmd_size
     npatterns = len(pupil_positions)
@@ -336,18 +345,20 @@ def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
     # loop over patterns
     odt_pattern_data = []
     for ii in range(len(pupil_positions)):
-        frqs_mirrors = frqs[ii]
-        spot_pos_mirrors = pupil_positions[ii] * pupil_radius_mirrors + np.array([[nx // 2, ny // 2]])
+        frqs_mirrors = np.asarray(frqs[ii])
+        spot_pos_mirrors = np.asarray(pupil_positions[ii]) * pupil_radius_mirrors + np.array([[nx // 2, ny // 2]])
+        phase_now = np.asarray(phase[ii])
+        radii_now = np.asarray(spot_radius[ii])
 
         if len(spot_pos_mirrors) != len(frqs_mirrors):
             raise ValueError("pupil positions must match size of frqs")
 
         # loop over centers and create spots
         for kk in range(len(spot_pos_mirrors)):
-            to_use = np.sqrt((xx - spot_pos_mirrors[kk, 0]) ** 2 + (yy - spot_pos_mirrors[kk, 1]) ** 2) <= spot_radius
+            to_use = np.sqrt((xx - spot_pos_mirrors[kk, 0]) ** 2 + (yy - spot_pos_mirrors[kk, 1]) ** 2) <= radii_now[kk]
 
             pnow = np.round(np.cos(2 * np.pi * (xx[to_use] * frqs_mirrors[kk, 0] +
-                                                yy[to_use] * frqs_mirrors[kk, 1]) + phase), 12)
+                                                yy[to_use] * frqs_mirrors[kk, 1]) + phase_now[kk]), 12)
 
             pnow[pnow <= 0] = 0
             pnow[pnow > 0] = 1
@@ -362,10 +373,11 @@ def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
                                  "nposition_multiplex": np.unique(frqs_mirrors, axis=0).shape[0],
                                  "spot_positions_mirrors": spot_pos_mirrors.tolist(),
                                  "nangles_multiplex_nominal": len(spot_pos_mirrors),
-                                 "phase": phase,
+                                 "phase": np.asarray(phase_now).tolist(),
                                  "radius": spot_radius,  # carrier frequency information
-                                 "pupil_frequency_fraction": np.linalg.norm(pupil_positions[ii], axis=1).tolist(),
-                                 "pupil_angle": np.arctan2(spot_pos_mirrors[:, 1], spot_pos_mirrors[:, 0]).tolist()})
+                                 # "pupil_frequency_fraction": np.linalg.norm(pupil_positions[ii], axis=1).tolist(),
+                                 # "pupil_angle": np.arctan2(spot_pos_mirrors[:, 1], spot_pos_mirrors[:, 0]).tolist()
+                                 })
 
     return odt_patterns, odt_pattern_data
 
