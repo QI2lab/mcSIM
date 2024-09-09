@@ -1679,8 +1679,8 @@ class dlpc900_dmd:
 
     def upload_pattern_sequence(self,
                                 patterns: np.ndarray,
-                                exp_times: Union[Sequence[int], int],
-                                dark_times: Union[Sequence[int], int],
+                                exp_times: Optional[Union[Sequence[int], int]] = None,
+                                dark_times: Optional[Union[Sequence[int], int]] = 0,
                                 triggered: bool = False,
                                 clear_pattern_after_trigger: bool = True,
                                 bit_depth: int = 1,
@@ -1715,6 +1715,9 @@ class dlpc900_dmd:
             patterns = np.expand_dims(patterns, axis=0)
 
         npatterns = len(patterns)
+
+        if exp_times is None:
+            exp_times = self.min_time_us
 
         # if only one exp_times, apply to all patterns
         if not isinstance(exp_times, (list, np.ndarray)):
