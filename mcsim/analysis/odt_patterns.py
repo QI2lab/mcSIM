@@ -307,12 +307,13 @@ def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
     """
     Generate DMD patterns from a list of center positions
 
-    :param pupil_positions: N x 2 array in order (cx, cy)
+    :param pupil_positions: list of arrays, where each array is of size N x 2 array in order (cx, cy)
     :param dmd_size: (ny, nx)
     :param spot_radius: spot radius in mirrors
     :param pupil_radius_mirrors: typically this is calculated using
       focal_len_detection * na_detection / mag_dmd2bfp / dm
-    :param frqs: carrier frequencies (fx, fy) in 1/mirrors. This should be a list of arrays of the same
+    :param frqs: list of arrays, where each array is the same size as the corresponding entry in pupil_positions
+      carrier frequencies (fx, fy) in 1/mirrors. This should be a list of arrays of the same
       size as pupil_positions
     :param phase: phase of carrier frequency pattern
     :param use_off_mirrors:
