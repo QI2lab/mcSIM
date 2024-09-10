@@ -39,13 +39,14 @@ def get_sim_odt_sequence(daq_do_map: dict,
     pattern, channel, z-position, analog parameter, times (fast), position, times (slow)
     This program does not know anything about the times (slow) axis
 
-    # todo: maybe should pass around dictionaries with all settings for SIM/ODT separately?
-
     :param daq_do_map: e.g. from daq_map.py
     :param daq_ao_map: e.g. from daq_map.py
     :param presets: dictionary of preset channels
     :param acquisition_modes: list of dictionary. Each dictionary contains the keys "channel", "patterns",
-       "pattern_mode", "camera", and "npatterns", and "dmd_on_time"
+       "pattern_mode", "camera", and "npatterns", and "dmd_on_time". Allowed values of "channel" are the keys
+       of presets. Allowed values of "patterns" are the keys of presets[channel] (these are not used here).
+       Allowed values of "pattern_mode" are "default" or "average". Allowed values of "camera" are
+       "cam1", "cam2" or "both". Values of "npatterns" give the number of images associated with the pattern.
     :param odt_exposure_time: odt exposure time in s
     :param sim_exposure_time: sim exposure time in s
     :param dt: daq time step
@@ -68,7 +69,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
     :param n_analog_ch:
     :param parameter_scan: dictionary defining parameter scan. These values will overwrite the values set in 'channels'
     :param turn_lasers_off_interval:
-    :return:
+    :return digital_pgm_full, analog_pgm_full, info:
     """
 
     if z_voltages is None:
@@ -137,7 +138,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        shutter_delay_time=shutter_delay_time,
                                        n_digital_ch=n_digital_ch,
                                        n_analog_ch=n_analog_ch,
-                                       use_dmd_as_shutter=True,
+                                       use_dmd_as_shutter=am["pattern_mode"] != "from-file",
                                        average_patterns=am["pattern_mode"] == "average",
                                        camera=am["camera"],
                                        dmd_on_time=am["dmd_on_time"])
@@ -561,8 +562,6 @@ def get_sim_sequence(daq_do_map: dict,
     # ######################################
     # trigger camera
     # ######################################
-    # n_cam_trig_width = n_trig_width
-    # n_cam_trig_width = n_cam_all_pixels_exposure
     n_cam_trig_width = n_cam_exposure
 
     if camera in ["cam1", "both"]:
@@ -591,21 +590,17 @@ def get_sim_sequence(daq_do_map: dict,
 
     for ii in range(n_trig_width):
         for jj in range(n_display_patterns_frame):
-
             # display SIM pattern
             # warmup offset time - pretrigger time + offset between sub-frame patterns + offset for trigger display
             on_start_index = n_stabilize + n_readout - n_dmd_pre_trigger
             # id_now = on_start_index + jj * n_pattern_frame + ii
             id_now = on_start_index + jj * n_dmd_on + ii
-
             do[id_now:n_active:n_frame, daq_do_map["dmd_advance"]] = 1
 
             if use_dmd_as_shutter:
                 # display OFF pattern. Only display between frames, i.e. not between sub-frame patterns
                 # off_start_index = on_start_index + (n_cam_exposure - n_readout) + ii
-
                 off_start_index = on_start_index + n_display_patterns_frame * n_dmd_on + ii
-
                 do[off_start_index:n_active:n_frame, daq_do_map["dmd_advance"]] = 1
 
     # ######################################
