@@ -1383,9 +1383,9 @@ class dlpc900_dmd:
     def start_stop_sequence(self,
                             cmd: str):
         """
-        Start, stop, or pause a pattern sequence
-
-        "PAT_START_STOP" according to GUI
+        Start, stop, or pause a pattern sequence. Note that calling "start" will cause whatever state the DMD
+        enable trigger is currently in (HIGH or LOW) to be treated as enabled. While calling "stop" will cause
+        whatever state the enable trigger is currently in to be treated as disabled.
 
         :param cmd: string. 'start', 'stop' or 'pause'
         :return response:
@@ -1400,7 +1400,7 @@ class dlpc900_dmd:
             data = [0x01]
             seq_byte = 0x00  # todo: check this from packet sniffer
         else:
-            raise ValueError("cmd must be 'start', 'stop', or 'pause', but was '%s'" % cmd)
+            raise ValueError(f"cmd must be 'start', 'stop', or 'pause', but was '{cmd:s}'")
 
         return self.send_command('w', False, self.command_dict["PAT_START_STOP"], data, sequence_byte=seq_byte)
 
@@ -1454,9 +1454,9 @@ class dlpc900_dmd:
     #######################################
     # low-level commands for working with patterns and pattern sequences
     #######################################
-    def pattern_display_lut_configuration(self,
-                                          num_patterns: int,
-                                          num_repeat: int = 0):
+    def _pattern_display_lut_configuration(self,
+                                           num_patterns: int,
+                                           num_repeat: int = 0):
         """
         Controls the execution of patterns stored in the lookup table (LUT). Before executing this command,
         stop the current pattern sequence.
@@ -1478,16 +1478,16 @@ class dlpc900_dmd:
                                  self.command_dict["PAT_CONFIG"],
                                  data=num_patterns_bytes + num_repeats_bytes)
 
-    def pattern_display_lut_definition(self,
-                                       sequence_position_index: int,
-                                       exposure_time_us: int = 105,
-                                       dark_time_us: int = 0,
-                                       wait_for_trigger: bool = True,
-                                       clear_pattern_after_trigger: bool = False,
-                                       bit_depth: int = 1,
-                                       disable_trig_2: bool = True,
-                                       stored_image_index: int = 0,
-                                       stored_image_bit_index: int = 0):
+    def _pattern_display_lut_definition(self,
+                                        sequence_position_index: int,
+                                        exposure_time_us: int = 105,
+                                        dark_time_us: int = 0,
+                                        wait_for_trigger: bool = True,
+                                        clear_pattern_after_trigger: bool = False,
+                                        bit_depth: int = 1,
+                                        disable_trig_2: bool = True,
+                                        stored_image_index: int = 0,
+                                        stored_image_bit_index: int = 0):
         """
         Define parameters for pattern used in on-the-fly mode. This command is listed as "MBOX_DATA"
          in the DLPLightcrafter software GUI.
@@ -1688,19 +1688,27 @@ class dlpc900_dmd:
                                 compression_mode: str = 'erle'):
         """
         Upload on-the-fly pattern sequence to DMD. This command is based on Table 5-3 in the DLP programming manual.
-        After loading patterns, the pattern sequence can be configured with set_pattern_sequence().
-        Note that after programming you may need to issue a start command, using start_stop_sequence(), to start the
-        sequence. Note also that the DMD behaves differently depending on the state of the trigger input lines when
-        this command is issued. If the trigger in signals are high, then the patterns will be displayed when the
-        trigger is high. If the trigger in signals are low, then the patterns will be displayed when the trigger is low.
+        After loading patterns, the pattern sequence can be configured with set_pattern_sequence(). If you wish to 
+        run the patterns sequentially exactly as uploaded, it is not necessary to call set_pattern_sequence(). 
+
+        Note that the DMD behaves differently depending on the state of the trigger input lines when
+        a "start" or "stop" command is issued, as it will be at the end of this function. See start_stop_sequence()
+        for more details. When a "start" command is
+        issued, the DMD will treat whatever state the DMD Enable trigger is in (HIGH or LOW) as enabling the pattern
+        sequence. Alternatively, when a stop command is issued, the opposite of the current state of the DMD
+        enable trigger will enable the pattern. If you issue several of these commands, the DMD seems to exhibit
+        some memory of the immediate previous enable trigger. Specifically, if you change which state
+        corresponds to enabled, then the DMD needs to see one falling edge from the
+        Advance trigger before it will respond to a rising edge (assuming the advance trigger is set to rising
+        edge mode). So it is best practice to keep the advance trigger in the HIGH state when programming the DMD.
 
         :param patterns: N x Ny x Nx NumPy array of uint8
         :param exp_times: exposure times in us. Either a uint8, or a sequence the same
           length as the number of patterns. Must be >= self.minimum_time_us
         :param dark_times: dark times in us. Either a uint8, or a sequence the same length as the number of patterns
         :param triggered: Whether the DMD should wait for any advance frame trigger to display the next pattern
-        :param clear_pattern_after_trigger: Whether to keep displaying the pattern at the end of the exposure time,
-          while DMD is waiting for the next trigger.
+        :param clear_pattern_after_trigger: If True, clear the DMD pattern after exp_time and display an OFF pattern
+          while awaiting the next trigger. If False, after exp_time keep displaying the current pattern.
         :param bit_depth: bit depth of patterns
         :param num_repeats: Number of repeats. 0 means infinite.
         :param compression_mode: 'erle', 'rle', or 'none'
@@ -1774,25 +1782,21 @@ class dlpc900_dmd:
         # When uploading 1 bit image, each set of 24 images are first combined to a single 24 bit RGB image.
         # pattern_index refers to which 24 bit RGB image a pattern is in, and pattern_bit_index refers to
         # which bit of that image (i.e. in the RGB bytes, it is stored in.
-        stored_image_indices = np.zeros(npatterns, dtype=int)
-        stored_bit_indices = np.zeros(npatterns, dtype=int)
         for ii, (p, et, dt) in enumerate(zip(patterns, exp_times, dark_times)):
-            stored_image_indices[ii] = ii // 24
-            stored_bit_indices[ii] = ii % 24
-            pic_ind, bit_ind = self._firmware_index_2pic_bit(ii)
-            buffer = self.pattern_display_lut_definition(ii,
-                                                         exposure_time_us=et,
-                                                         dark_time_us=dt,
-                                                         wait_for_trigger=triggered,
-                                                         clear_pattern_after_trigger=clear_pattern_after_trigger,
-                                                         bit_depth=bit_depth,
-                                                         stored_image_index=stored_image_indices[ii],
-                                                         stored_image_bit_index=stored_bit_indices[ii])
+            pic_ind, bit_ind = self._index_2pic_bit(ii)
+            buffer = self._pattern_display_lut_definition(ii,
+                                                          exposure_time_us=et,
+                                                          dark_time_us=dt,
+                                                          wait_for_trigger=triggered,
+                                                          clear_pattern_after_trigger=clear_pattern_after_trigger,
+                                                          bit_depth=bit_depth,
+                                                          stored_image_index=pic_ind,
+                                                          stored_image_bit_index=bit_ind)
             resp = self.decode_response(buffer)
             if resp['error']:
                 print(self.read_error_description())
 
-        buffer = self.pattern_display_lut_configuration(npatterns, num_repeats)
+        buffer = self._pattern_display_lut_configuration(npatterns, num_repeats)
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
@@ -1829,7 +1833,7 @@ class dlpc900_dmd:
                                        primary_controller=True)
 
         # this command is necessary, otherwise subsequent calls to set_pattern_sequence() will not behave as expected
-        buffer = self.pattern_display_lut_configuration(npatterns, num_repeats)
+        buffer = self._pattern_display_lut_configuration(npatterns, num_repeats)
         resp = self.decode_response(buffer)
         if resp['error']:
             print(self.read_error_description())
@@ -1842,8 +1846,8 @@ class dlpc900_dmd:
 
     def set_pattern_sequence(self,
                              pattern_indices: Sequence[int],
-                             exp_times: Union[Sequence[int], int],
-                             dark_times: Union[Sequence[int], int],
+                             exp_times: Optional[Union[Sequence[int], int]] = None,
+                             dark_times: Union[Sequence[int], int] = 0,
                              triggered: bool = False,
                              clear_pattern_after_trigger: bool = True,
                              bit_depth: int = 1,
@@ -1852,7 +1856,9 @@ class dlpc900_dmd:
         """
         Setup pattern sequence from patterns previously stored in DMD memory, either in on-the-fly pattern mode,
         or in pre-stored pattern mode. If you have uploaded patterns into the firmware and defined modes and channels,
-        then, use program_dmd_seq() instead of calling this function directly.
+        then, use program_dmd_seq() instead of calling this function directly. For triggering to function sensibly,
+        you must be careful about what state the DMD enable and advance trigger lines are in when this function is
+        called. See upload_pattern_sequence() and start_stop_sequence() for more detailed discussion.
 
         :param pattern_indices: DMD pattern indices
         :param exp_times:
@@ -1872,8 +1878,11 @@ class dlpc900_dmd:
         elif isinstance(pattern_indices, np.ndarray):
             pattern_indices = pattern_indices.tolist()
 
+        if exp_times is None:
+            exp_times = self.min_time_us
+
         nimgs = len(pattern_indices)
-        pic_indices, bit_indices = self._firmware_index_2pic_bit(pattern_indices)
+        pic_indices, bit_indices = self._index_2pic_bit(pattern_indices)
         pic_indices = pic_indices.tolist()
         bit_indices = bit_indices.tolist()
 
@@ -1918,20 +1927,20 @@ class dlpc900_dmd:
 
         # set image parameters for look up table_
         for ii, (et, dt) in enumerate(zip(exp_times, dark_times)):
-            buffer = self.pattern_display_lut_definition(ii,
-                                                         exposure_time_us=et,
-                                                         dark_time_us=dt,
-                                                         wait_for_trigger=triggered,
-                                                         clear_pattern_after_trigger=clear_pattern_after_trigger,
-                                                         bit_depth=bit_depth,
-                                                         stored_image_index=pic_indices[ii],
-                                                         stored_image_bit_index=bit_indices[ii])
+            buffer = self._pattern_display_lut_definition(ii,
+                                                          exposure_time_us=et,
+                                                          dark_time_us=dt,
+                                                          wait_for_trigger=triggered,
+                                                          clear_pattern_after_trigger=clear_pattern_after_trigger,
+                                                          bit_depth=bit_depth,
+                                                          stored_image_index=pic_indices[ii],
+                                                          stored_image_bit_index=bit_indices[ii])
             resp = self.decode_response(buffer)
             if resp['error']:
                 print(self.read_error_description())
 
         # PAT_CONFIG command
-        buffer = self.pattern_display_lut_configuration(nimgs, num_repeat=num_repeats)
+        buffer = self._pattern_display_lut_configuration(nimgs, num_repeat=num_repeats)
 
         if buffer == []:
             print(self.read_error_description())
@@ -2103,7 +2112,6 @@ class dlpc900_dmd:
                 ioff_new[1::2] = ioff
                 f_inds[ii] = ioff_new
 
-
         return np.hstack(f_inds)
 
     def program_dmd_seq(self,
@@ -2115,7 +2123,7 @@ class dlpc900_dmd:
                         blank: Sequence[bool] = False,
                         mode_pattern_indices: Sequence[Sequence[int]] = None,
                         triggered: bool = False,
-                        exp_time_us: int = 105,
+                        exp_time_us: Optional[int] = None,
                         clear_pattern_after_trigger: bool = False,
                         verbose: bool = False) -> (np.ndarray, np.ndarray):
         """
@@ -2146,16 +2154,14 @@ class dlpc900_dmd:
         self.debug = verbose
         self.start_stop_sequence('stop')
         # check DMD trigger state
+        # todo: do I need this code for the triggers?
         delay1_us, mode_trig1 = self.get_trigger_in1()
         mode_trig2 = self.get_trigger_in2()
 
         self.set_pattern_sequence(firmware_inds,
                                   exp_time_us,
-                                  0,
                                   triggered=triggered,
                                   clear_pattern_after_trigger=clear_pattern_after_trigger,
-                                  bit_depth=1,
-                                  num_repeats=0,
                                   mode='pre-stored')
 
         if verbose:
@@ -2165,7 +2171,7 @@ class dlpc900_dmd:
         return firmware_inds
 
     @staticmethod
-    def _firmware_index_2pic_bit(firmware_indices: Sequence[int]) -> (np.ndarray, np.ndarray):
+    def _index_2pic_bit(firmware_indices: Sequence[int]) -> (np.ndarray, np.ndarray):
         """
         convert from single firmware pattern index to picture and bit indices
 
@@ -2178,8 +2184,8 @@ class dlpc900_dmd:
         return pic_inds, bit_inds
 
     @staticmethod
-    def _pic_bit_ind_2firmware_ind(pic_inds: Sequence[int],
-                                  bit_inds: Sequence[int]) -> np.ndarray:
+    def _pic_bit2index(pic_inds: Sequence[int],
+                       bit_inds: Sequence[int]) -> np.ndarray:
         """
         Convert from picture and bit indices to single firmware pattern index
 
