@@ -1,9 +1,6 @@
 """
 Generate SIM patterns using lattice periodicity vectors Va and Vb, and duplicating roi_size single unit cell.
-See the supplemental material of  https://doi.org/10.1038/nmeth.1734 for more discussion of similar approaches.
-
-Note: we interpret the pattern params(x, y) = M[i_y, i_x], where M is the matrix representing the pattern. matplotlib
-will display the matrix with i_y = 1 on top.
+See the supplemental material of https://doi.org/10.1038/nmeth.1734 for more discussion of similar approaches.
 """
 from typing import Union, Optional
 from collections.abc import Sequence
@@ -27,49 +24,86 @@ from mcsim.analysis.fft import conj_transpose_fft, ft2
 from mcsim.analysis.simulate_dmd import xy2uvector, blaze_envelope, _dlp_1stgen_axis
 from localize_psf.affine import xform_sinusoid_params, xform_mat, params2xform
 
-array = Union[np.ndarray, np.ndarray]
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
+
+if cp:
+    array = Union[np.ndarray, cp.ndarray]
+else:
+    array = np.ndarray
 
 
 def get_sim_pattern(dmd_size: Sequence[int, int],
-                    vec_a: np.ndarray,
-                    vec_b: np.ndarray,
+                    vec_a: array,
+                    vec_b: array,
                     nphases: int,
-                    phase_index: int) -> (np.ndarray, np.ndarray):
+                    phase_index: int,
+                    geometry: str = "orthogonal") -> (array, array):
     """
     Convenience function for generating SIM patterns from the tile_patterns() function.
+    This function can run either on the CPU or the GPU. If vec_a is a NumPy array, it will
+    run on the CPU. If vec_a is a CuPy array it will run on the GPU.
 
     :param dmd_size: [nx, ny]
-    :param vec_a: [dxa, dya]
-    :param vec_b: [dxb, dyb]
+    :param vec_a: first lattice vector, [dxa, dya]
+    :param vec_b: second lattice vector, [dxb, dyb]
     :param nphases: number of phase shifts required. This effects the filling of the pattern
     :param phase_index: integer in range(nphases)
+    :param geometry: "orthogonal" for pixel addressing geometries similar to the DLP6500, or "diamond" for pixel
+      geometries like the DLP4500.
     :return pattern, cell: 'pattern' is an array giving the desired pattern and 'cell' is an array giving
       a single unit cell of the pattern
     """
 
-    vec_a = np.asarray(vec_a)
-    vec_b = np.asarray(vec_b)
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
+
+    vec_a = xp.asarray(vec_a)
+    vec_b = xp.asarray(vec_b)
 
     if not _verify_int(vec_b / nphases):
         raise ValueError("At least one component of vec_b was not divisible by nphases")
 
-    cell, x, y = get_sim_unit_cell(vec_a, vec_b, nphases)
+    cell, x_cell, y_cell = get_sim_unit_cell(vec_a, vec_b, nphases, phase_index)
+    nx, ny = dmd_size
 
-    vec_b_sub = np.array(vec_b) / nphases
-    start_coord = vec_b_sub * phase_index
-    pattern = tile_pattern(dmd_size, vec_a, vec_b, start_coord, cell, x, y)
+    # get indices of pixels
+    jj, ii = np.meshgrid(xp.arange(nx), xp.arange(ny))
+
+    # convert indices to geometry
+    if geometry == "orthogonal":
+        x = jj
+        y = ii
+    elif geometry == "diamond":
+        p = jj * xp.sqrt(2) + xp.mod(ii, 2) / xp.sqrt(2)
+        m = ii / xp.sqrt(2)
+        x = (p + m) / xp.sqrt(2)
+        y = (p - m) / xp.sqrt(2)
+    else:
+        raise ValueError(f"Geometry `{geometry:s}` is not supported.")
+
+    pts = xp.stack((x, y), axis=-1)
+    pts_cell, na, nb = reduce2cell(pts, vec_a, vec_b)
+    pts_cell = xp.round(pts_cell, 12).astype(int)
+
+    # # generate pattern by choosing coordinate in unit cell
+    xinds = pts_cell[..., 0] - x_cell[0]
+    yinds = pts_cell[..., 1] - y_cell[0]
+    pattern = cell[(yinds, xinds)].astype(bool)
+
     return pattern, cell
 
 
 # tool for manipulating unit cells
 def tile_pattern(dmd_size: Sequence[int, int],
-                 vec_a: np.ndarray,
-                 vec_b: np.ndarray,
+                 vec_a: array,
+                 vec_b: array,
                  start_coord: Sequence[int, int],
-                 cell: np.ndarray,
-                 x_cell: np.ndarray,
-                 y_cell: np.ndarray,
-                 do_cell_reduction: bool = True) -> np.ndarray:
+                 cell: array,
+                 x_cell: array,
+                 y_cell: array,
+                 do_cell_reduction: bool = True) -> array:
     """
     Generate SIM patterns using lattice vectors vec_a = [dxa, dya] and vec_b = [dxb, 0],
     and duplicating roi_size single unit cell. See the supplemental material of
@@ -90,18 +124,19 @@ def tile_pattern(dmd_size: Sequence[int, int],
     :param do_cell_reduction: whether to call get_minimal_cell() before tiling
     :return pattern:
     """
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
 
     # todo: much slower than the old function because looping and doing pixel assignment instead of concatenating
-    vec_a = np.array(vec_a, copy=True)
-    vec_b = np.array(vec_b, copy=True)
-    start_coord = np.array(start_coord, copy=True)
+    vec_a = xp.array(vec_a, copy=True)
+    vec_b = xp.array(vec_b, copy=True)
+    start_coord = xp.array(start_coord, copy=True)
     nx, ny = dmd_size
 
     if do_cell_reduction:
         # this will typically make the vectors shorter and more orthogonal, so tiling is easier
         cell, x_cell, y_cell, vec_a, vec_b = get_minimal_cell(cell, x_cell, y_cell, vec_a, vec_b)
 
-    pattern = np.zeros((ny, nx)) * np.nan
+    pattern = xp.zeros((ny, nx)) * xp.nan
 
     dy, dx = cell.shape
 
@@ -109,16 +144,16 @@ def tile_pattern(dmd_size: Sequence[int, int],
     # n * vec_a + m * vec_b + start_coord = corners
     # [[dxa, dxb], [dya, dyb]] * [[n], [m]] = [[cx], [cy]] - [[sx], [sy]]
     sx, sy = start_coord
-    mat = np.linalg.inv(np.array([[vec_a[0], vec_b[0]], [vec_a[1], vec_b[1]]]))
-    n1, m1 = mat.dot(np.array([[pattern.shape[1] - sx], [pattern.shape[0] - sy]], dtype=float))
-    n2, m2 = mat.dot(np.array([[0. - sx], [pattern.shape[0] - sy]], dtype=float))
-    n3, m3 = mat.dot(np.array([[pattern.shape[1] - sx], [0. - sy]], dtype=float))
-    n4, m4 = mat.dot(np.array([[0. - sx], [0. - sy]], dtype=float))
+    mat = xp.linalg.inv(xp.array([[vec_a[0], vec_b[0]], [vec_a[1], vec_b[1]]]))
+    n1, m1 = mat.dot(xp.array([[pattern.shape[1] - sx], [pattern.shape[0] - sy]], dtype=float))
+    n2, m2 = mat.dot(xp.array([[0. - sx], [pattern.shape[0] - sy]], dtype=float))
+    n3, m3 = mat.dot(xp.array([[pattern.shape[1] - sx], [0. - sy]], dtype=float))
+    n4, m4 = mat.dot(xp.array([[0. - sx], [0. - sy]], dtype=float))
 
-    na_min = int(np.floor(np.min([n1, n2, n3, n4])))
-    na_max = int(np.ceil(np.max([n1, n2, n3, n4])))
-    nb_min = int(np.floor(np.min([m1, m2, m3, m4])))
-    nb_max = int(np.ceil(np.max([m1, m2, m3, m4])))
+    na_min = int(xp.floor(xp.array([n1, n2, n3, n4]).min()))
+    na_max = int(xp.ceil(xp.array([n1, n2, n3, n4]).max()))
+    nb_min = int(xp.floor(xp.array([m1, m2, m3, m4]).min()))
+    nb_max = int(xp.ceil(xp.array([m1, m2, m3, m4]).max()))
 
     niterations = (na_max - na_min) * (nb_max - nb_min)
     if niterations > 1e3:
@@ -126,11 +161,17 @@ def tile_pattern(dmd_size: Sequence[int, int],
         # todo: could probably find the optimal number of doublings/tilings. This is important to get this to be fast
         # todo:  in a general case
         # todo: right now pretty fast for 'reasonable' patterns, but still seems to be slow for some sets of patterns.
-        na_max_doublings = np.floor(np.log2((na_max - na_min)))
-        na_doublings = np.max([int(np.round(na_max_doublings / 2)), 1])
-        nb_max_doublings = np.floor(np.log2((nb_max - nb_min)))
-        nb_doublings = np.max([int(np.round(nb_max_doublings / 2)), 1])
-        large_pattern, xp, yp = double_cell(cell, x_cell, y_cell, vec_a, vec_b, na=na_doublings, nb=nb_doublings)
+        na_max_doublings = int(xp.floor(xp.log2((na_max - na_min))))
+        na_doublings = int(xp.array([int(xp.round(na_max_doublings / 2)), 1]).max())
+        nb_max_doublings = int(xp.floor(xp.log2((nb_max - nb_min))))
+        nb_doublings = int(xp.array([int(xp.round(nb_max_doublings / 2)), 1]).max())
+        large_pattern, xpatt, ypatt = double_cell(cell,
+                                                  x_cell,
+                                                  y_cell,
+                                                  vec_a,
+                                                  vec_b,
+                                                  na=na_doublings,
+                                                  nb=nb_doublings)
 
         # finish by tiling
         pattern = tile_pattern(dmd_size,
@@ -138,8 +179,8 @@ def tile_pattern(dmd_size: Sequence[int, int],
                                2 ** nb_doublings * vec_b,
                                start_coord,
                                large_pattern,
-                               xp,
-                               yp,
+                               xpatt,
+                               ypatt,
                                do_cell_reduction=False)
     else:
         # for smaller iteration number, tile directly
@@ -148,8 +189,8 @@ def tile_pattern(dmd_size: Sequence[int, int],
                 # account for fact the origin of the cell may not be at the lower left corner.
                 # (0, 0) position of the cell should be at vec_a * n + vec_b * m + start_coord
                 xzero, yzero = vec_a * n + vec_b * m + start_coord
-                xstart = int(xzero + np.min(x_cell))
-                ystart = int(yzero + np.min(y_cell))
+                xstart = int(xzero + xp.min(x_cell))
+                ystart = int(yzero + xp.min(y_cell))
                 xend = xstart + int(dx)
                 yend = ystart + int(dy)
 
@@ -176,21 +217,21 @@ def tile_pattern(dmd_size: Sequence[int, int],
                     yend = pattern.shape[0]
                 yend_cell = ystart_cell + (yend - ystart)
 
-                pattern[ystart:yend, xstart:xend] = np.nansum(
+                pattern[ystart:yend, xstart:xend] = xp.nansum(
                     np.concatenate((pattern[ystart:yend, xstart:xend, None],
                                     cell[ystart_cell:yend_cell, xstart_cell:xend_cell, None]), axis=2), axis=2)
 
-    assert not np.any(np.isnan(pattern))
-    pattern = np.asarray(pattern, dtype=bool)
+    assert not xp.any(xp.isnan(pattern))
+    pattern = xp.asarray(pattern, dtype=bool)
 
     return pattern
 
 
-def double_cell(cell: np.ndarray,
-                x: np.ndarray,
-                y: np.ndarray,
-                vec_a: np.ndarray,
-                vec_b: np.ndarray,
+def double_cell(cell: array,
+                x: array,
+                y: array,
+                vec_a: array,
+                vec_b: array,
                 na: int = 1,
                 nb: int = 0) -> (np.ndarray, np.ndarray, np.ndarray):
     """
@@ -205,9 +246,11 @@ def double_cell(cell: np.ndarray,
     :param nb: number of times to double cell along vec_b
     :return big_cell, xs, ys: doubled cell and x- and y-coordinates of double cell
     """
-
-    vec_a = np.array(vec_a, copy=True)
-    vec_b = np.array(vec_b, copy=True)
+    xp = cp if cp and isinstance(cell, cp.ndarray) else np
+    x = xp.asarray(x)
+    y = xp.asarray(y)
+    vec_a = xp.array(vec_a, copy=True)
+    vec_b = xp.array(vec_b, copy=True)
 
     if not (na == 1 and nb == 0):
         big_cell = cell
@@ -221,24 +264,22 @@ def double_cell(cell: np.ndarray,
     else:
         dyc, dxc = cell.shape
 
-        v1 = np.array([0, 0])
+        v1 = xp.array([0, 0])
         v2 = 2*vec_a
         v3 = vec_b
         v4 = 2*vec_a + vec_b
 
-        xs = np.arange(np.min([v1[0], v2[0], v3[0], v4[0]]), np.max([v1[0], v2[0], v3[0], v4[0]]) + 1)
-        ys = np.arange(np.min([v1[1], v2[1], v3[1], v4[1]]), np.max([v1[1], v2[1], v3[1], v4[1]]) + 1)
+        xs = xp.arange(int(xp.stack([v1[0], v2[0], v3[0], v4[0]]).min()),
+                       int(xp.stack([v1[0], v2[0], v3[0], v4[0]]).max()) + 1)
+        ys = xp.arange(int(xp.stack([v1[1], v2[1], v3[1], v4[1]]).min()),
+                       int(xp.stack([v1[1], v2[1], v3[1], v4[1]]).max()) + 1)
 
-        dx = len(xs)
-        dy = len(ys)
-
-        big_cell = np.zeros((dy, dx)) * np.nan
-
+        big_cell = xp.zeros((len(ys), len(xs))) * xp.nan
         for n in [0, 1]:
             xzero, yzero = vec_a * n
             # todo: should round or ceil/floor?
-            istart_x = int(xzero - np.min(xs) + np.min(x))
-            istart_y = int(yzero - np.min(ys) + np.min(y))
+            istart_x = int(xzero - xp.min(xs) + xp.min(x))
+            istart_y = int(yzero - xp.min(ys) + xp.min(y))
 
             big_cell[istart_y:istart_y+dyc, istart_x:istart_x+dxc][np.logical_not(np.isnan(cell))] = \
                 cell[np.logical_not(np.isnan(cell))]
@@ -246,10 +287,10 @@ def double_cell(cell: np.ndarray,
     return big_cell, xs, ys
 
 
-def get_sim_unit_cell(vec_a: np.ndarray,
-                      vec_b: np.ndarray,
+def get_sim_unit_cell(vec_a: array,
+                      vec_b: array,
                       nphases: int,
-                      phase_index: int = 0) -> (np.ndarray, np.ndarray, np.ndarray):
+                      phase_index: int = 0) -> (array, array, array):
     """
     Get unit cell, which can be repeated to form SIM pattern.
 
@@ -261,8 +302,10 @@ def get_sim_unit_cell(vec_a: np.ndarray,
       points that are not part of the unit cell, but are necessary to pad the array to make it squares
     """
 
-    vec_a = np.asarray(vec_a)
-    vec_b = np.asarray(vec_b)
+    xp = cp if cp is not None and isinstance(vec_a, cp.ndarray) else np
+
+    vec_a = xp.asarray(vec_a)
+    vec_b = xp.asarray(vec_b)
 
     # ensure both vec_b components are divisible by nphases
     if not _verify_int(vec_b / nphases):
@@ -274,29 +317,29 @@ def get_sim_unit_cell(vec_a: np.ndarray,
     # then we get perfect tiling.
     vec_b_sub = vec_b // nphases
     cell_sub, x_cell_sub, y_cell_sub = get_unit_cell(vec_a, vec_b_sub)
-    to_use = np.logical_not(np.isnan(cell_sub))
+    to_use = xp.logical_not(np.isnan(cell_sub))
 
     # get coordinates in main cell
     xx_cs, yy_cs = np.meshgrid(x_cell_sub, y_cell_sub)
     xx_cs += vec_b_sub[0] * phase_index
     yy_cs += vec_b_sub[1] * phase_index
     # ensure using coordinates in unit cell
-    pts_cell, _, _ = reduce2cell(np.stack((xx_cs, yy_cs), axis=-1), vec_a, vec_b)
-    pts_cell = np.round(pts_cell, 12).astype(int)
+    pts_cell, _, _ = reduce2cell(xp.stack((xx_cs, yy_cs), axis=-1), vec_a, vec_b)
+    pts_cell = xp.round(pts_cell, 12).astype(int)
     # convert to indices and set pattern
     xinds = (pts_cell[..., 0] - x_cell[0])[to_use]
     yinds = (pts_cell[..., 1] - y_cell[0])[to_use]
     cell[(yinds, xinds)] = 1
 
     with np.errstate(invalid='ignore'):
-        if np.nansum(cell) != np.sum(cell >= 0) / nphases:
+        if xp.nansum(cell) != xp.sum(cell >= 0) / nphases:
             raise ValueError("Cell does not have appropriate number of 'on' pixels")
 
     return cell, x_cell, y_cell
 
 
-def get_unit_cell(vec_a: np.ndarray,
-                  vec_b: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray):
+def get_unit_cell(vec_a: array,
+                  vec_b: array) -> (array, array, array):
     """
     Generate a mask which represents one unit cell of a pattern for given vectors.
     This mask is a square array with NaNs at positions outside the unit cell, and
@@ -311,6 +354,7 @@ def get_unit_cell(vec_a: np.ndarray,
     :param vec_b: [dxb, dyb]
     :return cell, x, y: cell values are 0 for valid points and NaN for invalid points. x- and y- coordinates
     """
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
 
     # test that vec_a and vec_b components are integers
     if not _verify_int(vec_a) or not _verify_int(vec_b):
@@ -318,19 +362,19 @@ def get_unit_cell(vec_a: np.ndarray,
                          f"be interpreted as an integer")
 
     # copy vector data, so don't affect inputs
-    vec_a = np.array(vec_a, copy=True, dtype=int)
-    vec_b = np.array(vec_b, copy=True, dtype=int)
+    vec_a = xp.array(vec_a, copy=True, dtype=int)
+    vec_b = xp.array(vec_b, copy=True, dtype=int)
 
     # check vectors are linearly independent
     if (vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0]) == 0:
         raise ValueError("vec_a and vec_b are linearly dependent.")
 
     # square array containing unit cell, with points not in unit cell nans
-    dy = np.abs(vec_a[1]) + np.abs(vec_b[1])
-    dx = np.abs(vec_a[0]) + np.abs(vec_b[0])
+    dy = xp.abs(vec_a[1]) + xp.abs(vec_b[1])
+    dx = xp.abs(vec_a[0]) + xp.abs(vec_b[0])
 
     # x-coordinates massaged so that origin is at x=0
-    x = np.array(range(dx))
+    x = xp.arange(dx)
     if vec_a[0] < 0 and vec_b[0] >= 0:
         x = x + vec_a[0] + 1
     elif vec_a[0] >= 0 and vec_b[0] < 0:
@@ -339,7 +383,7 @@ def get_unit_cell(vec_a: np.ndarray,
         x = x + vec_a[0] + vec_b[0] + 1
 
     # y-coordinates massaged so that origin is at y=0
-    y = np.array(range(dy))
+    y = xp.arange(dy)
     if vec_a[1] < 0 and vec_b[1] >= 0:
         y = y + vec_a[1] + 1
     elif vec_a[1] >= 0 and vec_b[1] < 0:
@@ -347,24 +391,24 @@ def get_unit_cell(vec_a: np.ndarray,
     elif vec_a[1] < 0 and vec_b[1] < 0:
         y = y + vec_a[1] + vec_b[1] + 1
 
-    xx, yy = np.meshgrid(x, y)
+    xx, yy = xp.meshgrid(x, y)
 
     # generate cell
-    pts = np.stack((xx, yy), axis=-1)
-    cell = np.array(test_in_cell(pts, vec_a, vec_b), dtype=float)
+    pts = xp.stack((xx, yy), axis=-1)
+    cell = xp.array(test_in_cell(pts, vec_a, vec_b), dtype=float)
     cell[cell == False] = np.nan
     cell[cell == True] = 0
 
     # check unit cell has correct volume
-    cell_volume = np.abs(vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0])
-    assert np.nansum(np.logical_not(np.isnan(cell))) == cell_volume
+    cell_volume = xp.abs(vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0])
+    assert xp.nansum(xp.logical_not(xp.isnan(cell))) == cell_volume
 
     return cell, x, y
 
 
-def test_in_cell(points: np.ndarray,
-                 va: np.ndarray,
-                 vb: np.ndarray) -> np.ndarray:
+def test_in_cell(points: array,
+                 va: array,
+                 vb: array) -> array:
     """
     Test if points (x, y) are in the unit cell for a given pair of unit vectors. We suppose the
     unit cell is the region enclosed by 0, va, vb, and va + vb. Point on the boundary are considered
@@ -378,8 +422,10 @@ def test_in_cell(points: np.ndarray,
     :return in_cell: boolean array of size n0 x n1 x ... x nm indicating if coordinate is in the unit cell or not
     """
 
-    va = np.array(va, copy=True).ravel()
-    vb = np.array(vb, copy=True).ravel()
+    xp = cp if cp and isinstance(va, cp.ndarray) else np
+
+    va = xp.array(va, copy=True).ravel()
+    vb = xp.array(vb, copy=True).ravel()
     x = points[..., 0]
     y = points[..., 1]
 
@@ -391,74 +437,77 @@ def test_in_cell(points: np.ndarray,
     # if point is on opposite sides of line1 and line2, or exactly on line1 then it is inside the cell
     # if it is one of the same sides of line1 and line2, or exactly on line2, it is outside
     if va[0] != 0:
-        gthan_a1 = np.round(line(x, [0, 0], va), precision) > np.round(y, precision)
-        eq_a1 = np.round(line(x, [0, 0], va), precision) == np.round(y, precision)
-        gthan_a2 = np.round(line(x, vb, va + vb), precision) > np.round(y, precision)
-        eq_a2 = np.round(line(x, vb, va + vb), precision) == np.round(y, precision)
+        gthan_a1 = xp.round(line(x, [0, 0], va), precision) > xp.round(y, precision)
+        eq_a1 = xp.round(line(x, [0, 0], va), precision) == xp.round(y, precision)
+        gthan_a2 = xp.round(line(x, vb, va + vb), precision) > xp.round(y, precision)
+        eq_a2 = xp.round(line(x, vb, va + vb), precision) == xp.round(y, precision)
     else:
         # if x-component of va = 0. Then x-component of vb cannot be zero, else linearly dependent
-        gthan_a1 = np.round(x, precision) > 0
-        eq_a1 = np.round(x, precision) == 0
-        gthan_a2 = np.round(x, precision) > np.round(vb[0], precision)
-        eq_a2 = np.round(x, precision) == np.round(vb[0], precision)
+        gthan_a1 = xp.round(x, precision) > 0
+        eq_a1 = xp.round(x, precision) == 0
+        gthan_a2 = xp.round(x, precision) > xp.round(vb[0], precision)
+        eq_a2 = xp.round(x, precision) == xp.round(vb[0], precision)
 
     # same strategy for vb
     if vb[0] != 0:
-        gthan_b1 = np.round(line(x, [0, 0], vb), precision) > np.round(y, precision)
-        eq_b1 = np.round(line(x, [0, 0], vb), precision) == np.round(y, precision)
-        gthan_b2 = np.round(line(x, va, va + vb), precision) > np.round(y, precision)
-        eq_b2 = np.round(line(x, va, va + vb), precision) == np.round(y, precision)
+        gthan_b1 = xp.round(line(x, [0, 0], vb), precision) > xp.round(y, precision)
+        eq_b1 = xp.round(line(x, [0, 0], vb), precision) == xp.round(y, precision)
+        gthan_b2 = xp.round(line(x, va, va + vb), precision) > xp.round(y, precision)
+        eq_b2 = xp.round(line(x, va, va + vb), precision) == xp.round(y, precision)
     else:
         # if x-component of vb = 0. Then x-component of va cannot be zero, else linearly dependent
-        gthan_b1 = np.round(x, precision) > 0
-        eq_b1 = np.round(x, precision) == 0
-        gthan_b2 = np.round(x, precision) > np.round(va[0], precision)
-        eq_b2 = np.round(x, precision) == np.round(va[0], precision)
+        gthan_b1 = xp.round(x, precision) > 0
+        eq_b1 = xp.round(x, precision) == 0
+        gthan_b2 = xp.round(x, precision) > xp.round(va[0], precision)
+        eq_b2 = xp.round(x, precision) == xp.round(va[0], precision)
 
-    in_cell_a = np.logical_and(np.logical_or(gthan_a1 != gthan_a2, eq_a1), np.logical_not(eq_a2))
-    in_cell_b = np.logical_and(np.logical_or(gthan_b1 != gthan_b2, eq_b1), np.logical_not(eq_b2))
-    in_cell = np.logical_and(in_cell_a, in_cell_b)
+    in_cell_a = xp.logical_and(np.logical_or(gthan_a1 != gthan_a2, eq_a1), xp.logical_not(eq_a2))
+    in_cell_b = xp.logical_and(np.logical_or(gthan_b1 != gthan_b2, eq_b1), xp.logical_not(eq_b2))
+    in_cell = xp.logical_and(in_cell_a, in_cell_b)
 
     return in_cell
 
 
-def reduce2cell(point: np.ndarray,
-                va: np.ndarray,
-                vb: np.ndarray):
+def reduce2cell(point: array,
+                va: array,
+                vb: array) -> (array, array, array):
     """
-    Given a vector, reduce it to coordinates within the unit cell
+    Given a vector, reduce it to coordinates within the unit cell.
+
+    To ensure all reduced points actually lie in the unit cell, run
+    >>> assert np.all(test_in_cell(point, va, vb)[0], va, vb)
 
     :param point: of size n0 x n1 x ... x nm x 2
     :param va: first lattice vector, of size 2 x 1
     :param vb: second lattice vector, of size 2 x 1
     :return point_red, na_out, nb_out:
     """
+    xp = cp if cp is not None and isinstance(point, cp.ndarray) else np
+
     if not _verify_int(va) or not _verify_int(vb):
         raise ValueError(f"At least one component of lattice vectors={va}, {vb} cannot "
                          f"be interpreted as an integer")
 
-    point = np.array(point, copy=True)
-    va = np.array(va, copy=True, dtype=int)
-    vb = np.array(vb, copy=True, dtype=int)
+    point = xp.asarray(point)
+    va = xp.asarray(va)
+    vb = xp.asarray(vb)
 
     ra, rb = get_reciprocal_vects(va, vb)
     # need to round to avoid problems with machine precision
-    na_out = np.floor(np.round(np.dot(point, ra), 10)).astype(int)
-    nb_out = np.floor(np.round(np.dot(point, rb), 10)).astype(int)
+    na_out = xp.floor(xp.round(xp.dot(point, ra), 10)).astype(int)
+    nb_out = xp.floor(xp.round(xp.dot(point, rb), 10)).astype(int)
     point_red = point - (na_out * va + nb_out * vb)
-
-    assert np.all(test_in_cell(point_red, va, vb))
 
     return point_red, na_out, nb_out
 
 
-def convert_cell(cell1: np.ndarray,
-                 x1: np.ndarray,
-                 y1: np.ndarray,
-                 va1: np.ndarray,
-                 vb1: np.ndarray,
-                 va2: np.ndarray,
-                 vb2: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray):
+def convert_cell(cell1: array,
+                 x1: array,
+                 y1: array,
+                 va1: array,
+                 vb1: array,
+                 va2: array,
+                 vb2: array) -> (array, array, array):
     """
     Given a unit cell described by vectors va1 and vb2, convert to equivalent description
     in terms of va2, vb2
@@ -472,11 +521,13 @@ def convert_cell(cell1: np.ndarray,
     :param vb2:
     :return cell2, x2, y2:
     """
-
-    va1 = np.asarray(va1)
-    vb1 = np.asarray(vb1)
-    va2 = np.asarray(va2)
-    vb2 = np.asarray(vb2)
+    xp = cp if cp and isinstance(cell1, cp.ndarray) else np
+    x1 = xp.asarray(x1)
+    y1 = xp.asarray(y1)
+    va1 = xp.asarray(va1)
+    vb1 = xp.asarray(vb1)
+    va2 = xp.asarray(va2)
+    vb2 = xp.asarray(vb2)
 
     # todo: add check that va1/vb1 and va2/vb2 describe same lattice
     for vec in [va1, vb1, va2, vb2]:
@@ -484,22 +535,22 @@ def convert_cell(cell1: np.ndarray,
             raise ValueError(f"At least one component of lattice {vec} cannot "
                              f"be interpreted as an integer")
     cell2, x2, y2 = get_unit_cell(va2, vb2)
-    y1min = y1.min()
-    x1min = x1.min()
-
-    for ii in range(cell2.shape[0]):
-        for jj in range(cell2.shape[1]):
-            p1, _, _ = reduce2cell((x2[jj], y2[ii]), va1, vb1)
-            cell2[ii, jj] += cell1[p1[1] - y1min, p1[0] - x1min]
+    xx2, yy2 = xp.meshgrid(x2, y2)
+    p1, _, _ = reduce2cell(xp.stack((xx2.ravel(), yy2.ravel()), axis=1),
+                           va1,
+                           vb1)
+    xind = p1[:, 0] - x1.min()
+    yind = p1[:, 1] - y1.min()
+    cell2 += cell1[(yind, xind)].reshape(xx2.shape)  # preserver NaNs
 
     return cell2, x2, y2
 
 
-def get_minimal_cell(cell: np.ndarray,
-                     x: np.ndarray,
-                     y: np.ndarray,
-                     va: np.ndarray,
-                     vb: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
+def get_minimal_cell(cell: array,
+                     x: array,
+                     y: array,
+                     va: array,
+                     vb: array) -> (array, array, array, array):
     """
     Convert to cell using the smallest lattice vectors
 
@@ -521,7 +572,7 @@ def show_cell(v1: np.ndarray,
               x: np.ndarray,
               y: np.ndarray,
               aspect_equal: bool = True,
-              ax = None,
+              ax=None,
               **kwargs):
     """
     Plot unit cell and periodicity vectors
@@ -584,35 +635,33 @@ def show_cell(v1: np.ndarray,
 
 
 # determine parameters of SIM patterns
-def get_reciprocal_vects(vec_a: np.ndarray,
-                         vec_b: np.ndarray) -> (np.ndarray, np.ndarray):
+def get_reciprocal_vects(vec_a: array,
+                         vec_b: array) -> (array, array):
     """
     Compute the reciprocal vectors for (real-space) lattice vectors vec_a and vec_b.
     If we call the lattice vectors a_i and the reciprocal vectors b_j, then these should be defined such that
     dot(a_i, b_j) = delta_{ij}, i.e. exp[ i 2*pi*ai * bj] = 1.
     This means the b_j are frequency like (i.e. equivalent of Hz). Note that they are instead sometimes defined
     dot(a_i, b_j) = 2*pi * delta_{ij}, which would make them angular-frequency like (i.e. in radians).
-    Cast this as matrix problem
-    [[Ax, Ay]   *  [[R1_x, R2_x]   =  [[1, 0]
-     [Bx, By]]      [R1_y, R2_y]]      [0, 1]]
 
-    :param vec_a:
-    :param vec_b:
+    :param vec_a: first lattice vector, [vx, vy]
+    :param vec_b: second lattice vector
     :return rv1, rv2: frequency-like reciprocal lattice vectors
     """
-    vec_a = np.asarray(vec_a)
-    vec_b = np.asarray(vec_b)
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
+
+    vec_a = xp.asarray(vec_a)
+    vec_b = xp.asarray(vec_b)
 
     # check this directly, as sometimes due to numerical precision np.linalg.inv() will not throw error
     err_msg = "vec_a and vec_b are linearly dependent, so their reciprocal vectors could not be computed."
-    # if np.cross(vec_a, vec_b) == 0:
     if (vec_a[0] * vec_b[1] - vec_a[1] * vec_b[0]) == 0:
         raise ValueError(err_msg)
 
-    a_mat = np.stack((vec_a, vec_b), axis=0)
+    a_mat = xp.stack((vec_a, vec_b), axis=0)
     try:
-        inv_a = np.linalg.inv(a_mat)
-    except np.linalg.LinAlgError:
+        inv_a = xp.linalg.inv(a_mat)
+    except xp.linalg.LinAlgError:
         raise ValueError(err_msg)
 
     rv1 = inv_a[:, 0][:, None]
@@ -624,23 +673,23 @@ def get_reciprocal_vects(vec_a: np.ndarray,
     return rv1, rv2
 
 
-def get_sim_angle(vec_a: np.ndarray,
-                  vec_b: np.ndarray) -> float:
+def get_sim_angle(vec_a: array,
+                  vec_b: array) -> float:
     """
-    Get angle of SIM pattern in
-    :param vec_a: [vx, vy]
-    :param vec_b: [vx, vy]
+    Get angle of SIM pattern in radians
 
+    :param vec_a: first lattice vector, [vx, vy]
+    :param vec_b: second lattice vector
     :return angle: angle in radians
     """
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
-    angle = np.angle(recp_vb[0, 0] + 1j * recp_vb[1, 0])
+    angle = xp.angle(recp_vb[0, 0] + 1j * recp_vb[1, 0])
+    return float(xp.mod(angle, 2*np.pi))
 
-    return np.mod(angle, 2*np.pi)
 
-
-def get_sim_period(vec_a: np.ndarray,
-                   vec_b: np.ndarray) -> float:
+def get_sim_period(vec_a: array,
+                   vec_b: array) -> float:
     """
     Get period of SIM pattern constructed from periodicity vectors.
 
@@ -648,23 +697,26 @@ def get_sim_period(vec_a: np.ndarray,
     points 0 and vec_b_temp respectively. We construct this by taking the projection of vec_b along the perpendicular to
     vec_a. NOTE: to say this another way, the period is given by the reciprocal lattice vector orthogonal to vec_a.
 
-    :param vec_a: [vx, vy]
-    :param vec_b: [vx, vy]
-    :return period:
+    :param vec_a: first lattice vector, [vx, vy]
+    :param vec_b: second lattice vector
+    :return period: pattern period
     """
-    uvec_perp_a = np.array([vec_a[1], -vec_a[0]]) / np.sqrt(vec_a[0]**2 + vec_a[1]**2)
-    period = np.abs(uvec_perp_a.dot(vec_b))
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
+    vec_b = xp.asarray(vec_b)
 
-    return period
+    uvec_perp_a = xp.array([vec_a[1], -vec_a[0]]) / np.sqrt(vec_a[0]**2 + vec_a[1]**2)
+    period = xp.abs(uvec_perp_a.dot(vec_b))
+
+    return float(period)
 
 
-def get_sim_frqs(vec_a: np.ndarray,
-                 vec_b: np.ndarray) -> (float, float):
+def get_sim_frqs(vec_a: array,
+                 vec_b: array) -> (float, float):
     """
     Get spatial frequency of SIM pattern constructed from periodicity vectors.
 
-    :param vec_a: [vx, vy]
-    :param vec_b: [vx, vy]
+    :param vec_a: first lattice vector, [vx, vy]
+    :param vec_b: second lattice vector
     :return fx, fy:
     """
     recp_va, recp_vb = get_reciprocal_vects(vec_a, vec_b)
@@ -674,8 +726,8 @@ def get_sim_frqs(vec_a: np.ndarray,
     return fx, fy
 
 
-def get_sim_phase(vec_a: np.ndarray,
-                  vec_b: np.ndarray,
+def get_sim_phase(vec_a: array,
+                  vec_b: array,
                   nphases: int,
                   phase_index: int,
                   pattern_size: Sequence[int],
@@ -683,10 +735,12 @@ def get_sim_phase(vec_a: np.ndarray,
     """
     Get phase of dominant frequency component in the SIM pattern.
 
-    :math: `P(x, y) = 0.5 (1 + \\cos(2 \\pi f_x x + 2\\pi f_y y + \\phi)`
+    .. math::
 
-    :param vec_a:
-    :param vec_b:
+       P(x, y) = 0.5 \\left(1 + \\cos(2 \\pi f_x x + 2\\pi f_y y + \\phi \\right)
+
+    :param vec_a: first lattice vector, [vx, vy]
+    :param vec_b: second lattive vector
     :param nphases: number of equal phase shifts for SIM pattern
     :param phase_index: 0, ..., nphases-1
     :param pattern_size: [nx, ny]
@@ -695,6 +749,9 @@ def get_sim_phase(vec_a: np.ndarray,
       suppose the origin is at pattern[0, 0].
     :return phase: phase of the SIM pattern at the dominant frequency component (which is recp_vec_b)
     """
+
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
+    vec_b = xp.asarray(vec_b)
 
     cell, xs, ys = get_sim_unit_cell(vec_a, vec_b, nphases)
     fourier_component, _ = get_pattern_fourier_component(cell,
@@ -709,33 +766,27 @@ def get_sim_phase(vec_a: np.ndarray,
                                                          use_fft_origin=use_fft_origin,
                                                          dmd_size=pattern_size)
 
-    phase = np.angle(fourier_component)
+    phase = xp.angle(fourier_component)
 
-    return np.mod(phase, 2*np.pi)
+    return xp.mod(phase, 2*np.pi)
 
 
 def ldftfreq(vec_a: np.ndarray,
-             vec_b: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
+             vec_b: np.ndarray) -> (array, array, array):
     """
-    Get the Fourier frequencies for the lattice fourier transform (LDFT). Analog of fftfreq()
-    Since the pattern is periodic and binary, it can be described by a generalization of the DFT. Here the indices of
-    the pattern are given by the pixel locations in the unit cell. The frequencies are also defined on a unit cell,
-    but in this case generated by the unit vectors b1 * det(A) and b2 * det(A), where det(A) is the determinant of a
-    matrix with rows or columns given by the periodicity vectors a1, a2.
-
-    LDFT = lattice DFT
-    LDFT[g](f1, f2) = \\sum_{nx, ny} exp[-2*np.pi*1j * [f1 * b1 * (nx, ny) + f2 * b2 * (nx, ny)]] * g(n_x, n_y)
-    Instead of (nx, ny), one can also work with coefficients d1, d2 for the vectors a1 and a2.
-    i.e. (nx, ny) = d1(nx, ny) * a1 + d2(nx, ny) * a2
+    Get the Fourier frequencies for the lattice fourier transform (LDFT). See ldft2() for more details.
+    This function is an analog of fftfreq().
 
     :param vec_a: first lattice vector
     :param vec_b: second lattice vector
-    :return fvecs: fvecs are the frequencies. Return NaNs for values outside the unit cell
-    :return f1, f2: f1 and f2 are integers which define the frequencies as multiplies of the reciprocal
+    :return fvecs, f1, f2: fvecs are the frequencies. Return NaNs for values outside the unit cell.
+      f1 and f2 are integers which define the frequencies as multiplies of the reciprocal
       lattice vectors b1 and b2. fvecs = f1 * b1 + f2 * b2.
     """
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
+
     b1, b2 = get_reciprocal_vects(vec_a, vec_b)
-    det = _convert_int(np.linalg.det(np.stack((vec_a, vec_b), axis=1)))
+    det = _convert_int(xp.linalg.det(xp.stack((vec_a, vec_b), axis=1)))
 
     b1_int_approx = b1.ravel() * det
     b2_int_approx = b2.ravel() * det
@@ -746,29 +797,38 @@ def ldftfreq(vec_a: np.ndarray,
     # todo: don't think this works that way at the moment?
     bcell, f1, f2 = get_unit_cell(b1_int, b2_int)
 
-    fvecs = np.expand_dims(f1, axis=(0, 2)) * np.expand_dims(b1.ravel(), axis=(0, 1)) + \
-            np.expand_dims(f2, axis=(1, 2)) * np.expand_dims(b2.ravel(), axis=(0, 1))
-    fvecs[np.isnan(bcell), :] = np.nan
+    fvecs = xp.expand_dims(f1, axis=(0, 2)) * xp.expand_dims(b1.ravel(), axis=(0, 1)) + \
+            xp.expand_dims(f2, axis=(1, 2)) * xp.expand_dims(b2.ravel(), axis=(0, 1))
+    fvecs[xp.isnan(bcell), :] = np.nan
 
     return fvecs, f1, f2
 
 
-def ldft2(unit_cell: np.ndarray,
-          x: np.ndarray,
-          y: np.ndarray,
-          vec_a: np.ndarray,
-          vec_b: np.ndarray) -> np.ndarray:
+def ldft2(unit_cell: array,
+          x: array,
+          y: array,
+          vec_a: array,
+          vec_b: array) -> array:
     """
-    Compute the 2D lattice DFT of a given pattern (defined on a unit cell)
-    The unit cell and coordinates can be obtained from get_sim_unit_cell()
-    Alternatively, the skeleton of the unit cell can be obtained from get_unit_cell() and then the
-    values on the unit cell may be chosen by the user. Use ldftfreq() to get the corresponding frequencies.
+    Compute the 2D lattice DFT (LDFT) of a given pattern defined on a unit cell. Here the indices of
+    the pattern are given by the pixel locations in the unit cell. The frequencies are also defined on a unit cell,
+    but in this case generated by the unit vectors b1 * det(A) and b2 * det(A), where det(A) is the determinant of a
+    matrix with rows or columns given by the periodicity vectors a1, a2. The unit cell and coordinates can be
+    obtained from get_sim_unit_cell(). Alternatively, the skeleton of the unit cell can be obtained from
+    get_unit_cell() and then the values on the unit cell may be chosen by the user.
+    Use ldftfreq() to get the corresponding frequencies.
 
-    :param unit_cell:
-    :param x: coordinates of the unit cell
-    :param y:
-    :param vec_a: lattice vectors
-    :param vec_b:
+    :math: `LDFT[g](f_1, f_2) = \\sum_{nx, ny} \\exp[-2 \\pi i [f_1 b_1 (n_x, n_y) + f_2 b_2 (n_x, n_y)]] g(n_x, n_y)
+
+    Instead of (nx, ny), one can also work with coefficients d1, d2 for the vectors a1 and a2.
+    i.e. (nx, ny) = d1(nx, ny) * a1 + d2(nx, ny) * a2
+
+    :param unit_cell: array giving values of the unit cell at each coordinate, or NaN's if the position is not
+      in the unit cell
+    :param x: x-coordinates of the unit cell. Same shape as unit_cell
+    :param y: y-coordinates of the unit cell.
+    :param vec_a: first lattice vector
+    :param vec_b: second lattice vector
     :return ldft: points which are not in the frequency unit cell are returned as NaNs
     """
 
@@ -778,30 +838,25 @@ def ldft2(unit_cell: np.ndarray,
     # todo: what is relationship between this and get_efield_fourier_components()?
     # todo: should combine these two functions ...
 
+    xp = cp if cp and isinstance(vec_a, cp.ndarray) else np
+
     fvecs, f1, f2 = ldftfreq(vec_a, vec_b)
 
     xx, yy = np.meshgrid(x, y)
-    # ldft = np.zeros(bcell.shape, dtype=complex) * np.nan
-    # for ii in range(ldft.shape[0]):
-    #     for jj in range(ldft.shape[1]):
-    #         if np.isnan(bcell[ii, jj]):
-    #             continue
-    #         ldft[ii, jj] = np.nansum(unit_cell * np.exp(-1j*2*np.pi * (fvecs[ii, jj, 0] * xx +
-    #                                                                    fvecs[ii, jj, 1] * yy)))
-
-    ldft = np.nansum(unit_cell * np.exp(-1j*2*np.pi * (fvecs[..., 0][..., None, None] * xx +
+    # todo: can I rewrite to do this with an fft on a larger rectangle?
+    ldft = xp.nansum(unit_cell * xp.exp(-1j*2*np.pi * (fvecs[..., 0][..., None, None] * xx +
                                                        fvecs[..., 1][..., None, None] * yy)),
                      axis=(-1, -2))
-    ldft[np.isnan(fvecs[..., 0])] = np.nan + 1j * np.nan
+    ldft[xp.isnan(fvecs[..., 0])] = xp.nan + 1j * xp.nan
 
     return ldft
 
 
-def get_pattern_fourier_component(unit_cell: np.ndarray,
-                                  x: np.ndarray,
-                                  y: np.ndarray,
-                                  vec_a: np.ndarray,
-                                  vec_b: np.ndarray,
+def get_pattern_fourier_component(unit_cell: array,
+                                  x: array,
+                                  y: array,
+                                  vec_a: array,
+                                  vec_b: array,
                                   na: int,
                                   nb: int,
                                   nphases: int = 3,
@@ -811,13 +866,13 @@ def get_pattern_fourier_component(unit_cell: np.ndarray,
     """
     Get fourier component at f = n * recp_vec_a + m * recp_vec_b.
 
-    ft(f) = \\sum_r f(r) * exp(-1j * 2*pi * f * r)
+    :math: `\\mathcal{F}(f) = \\sum_r f(r) * \\exp(-1j 2 \\pi f r)`
 
     :param np.array unit_cell: unit cell, as produced by get_sim_unit_cell()
     :param x: x-coordinates of unit cell
     :param y: y-coordinates of unit cell
-    :param vec_a:
-    :param vec_b:
+    :param vec_a: first lattice vector
+    :param vec_b: second lattice vector
     :param na: integer multiples of recp_vec_a
     :param nb: integer multiples of recp_vec_b
     :param nphases: only relevant for calculating phase
@@ -831,18 +886,24 @@ def get_pattern_fourier_component(unit_cell: np.ndarray,
     # todo: change this to accept frequency instead of index? Then can use this as helper function for ldft2()
     # todo: accept any pattern, not just SIM pattern
 
+    xp = cp if cp and isinstance(unit_cell, cp.ndarray) else np
+    x = xp.asarray(x)
+    y = xp.asarray(y)
+    vec_a = xp.asarray(vec_a)
+    vec_b = xp.asarray(vec_b)
+
     recp_vect_a, recp_vect_b = get_reciprocal_vects(vec_a, vec_b)
     frq_vector = na * recp_vect_a + nb * recp_vect_b
 
     # fourier component is integral over unit cell
-    xxs, yys = np.meshgrid(x, y)
-    fcomponent = np.nansum(unit_cell * np.exp(-1j*2*np.pi * (frq_vector[0] * xxs + frq_vector[1] * yys)))
+    xxs, yys = xp.meshgrid(x, y)
+    fcomponent = xp.nansum(unit_cell * xp.exp(-1j*2*np.pi * (frq_vector[0] * xxs + frq_vector[1] * yys)))
 
     # correct phase for start coord of pattern "on" mirrors
     # todo: better to include this shift in definition fo unit_cell, and make
     # get_sim_unit_cell() accept a phase argument
-    start_coord = np.array(vec_b) / nphases * phase_index
-    phase = np.angle(fcomponent) - 2 * np.pi * start_coord.dot(frq_vector)
+    start_coord = xp.array(vec_b) / nphases * phase_index
+    phase = xp.angle(fcomponent) - 2 * np.pi * start_coord.dot(frq_vector)
 
     if use_fft_origin:
         if dmd_size is None:
@@ -854,11 +915,11 @@ def get_pattern_fourier_component(unit_cell: np.ndarray,
         x_pattern = np.arange(nx) - (nx // 2)
         y_pattern = np.arange(ny) - (ny // 2)
         # center coordinate in the edge coordinate system
-        center_coord = np.array([-x_pattern[0], -y_pattern[0]])
+        center_coord = xp.array([-x_pattern[0], -y_pattern[0]])
 
         phase = phase + 2 * np.pi * center_coord.dot(frq_vector)
 
-    fcomponent = np.abs(fcomponent) * np.exp(1j * phase)
+    fcomponent = xp.abs(fcomponent) * xp.exp(1j * phase)
 
     return fcomponent[0], frq_vector
 
@@ -976,7 +1037,8 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
                                      nmax: int = 20,
                                      use_fft_origin: bool = True,
                                      include_blaze_correction: bool = True,
-                                     dmd_params: Optional[dict] = None) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
+                                     dmd_params: Optional[dict] = None) -> \
+        (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
     Utility function for computing many electric field and intensity components of the Fourier pattern, including the
     effect of the Blaze angle and system numerical aperture
@@ -1064,14 +1126,13 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
                 uvec_out = xy2uvector(tout_x + wavelength * vecs[ii, jj][0] / dx,
                                       tout_y + wavelength * vecs[ii, jj][1] / dy,
                                       False)
-                # amb = uvec_in - uvec_out
                 bma = uvec_out - uvec_in
                 blaze_env[ii, jj] = blaze_envelope(wavelength,
-                                                        gamma,
-                                                        wx,
-                                                        wy,
-                                                        bma,
-                                                        _dlp_1stgen_axis)
+                                                   gamma,
+                                                   wx,
+                                                   wy,
+                                                   bma,
+                                                   _dlp_1stgen_axis)
 
                 efield_fc[ii, jj] = efield_fc[ii, jj] * blaze_env[ii, jj]
 
@@ -1439,25 +1500,27 @@ def show_fourier_components(vec_a: np.ndarray,
 
 
 # Lagrange-Gauss basis reduction
-def reduce_basis(va: np.ndarray,
-                 vb: np.ndarray) -> (np.ndarray, np.ndarray):
+def reduce_basis(va: array,
+                 vb: array) -> (array, array):
     """
     Find the "smallest" set of basis vectors using Lagrange-Gauss basis reduction.
 
-    :param va:
-    :param vb:
+    :param va: first lattice vector
+    :param vb: second lattice vector
     :return va, vb:
     """
-    va = np.array(va, copy=True)
+    xp = cp if cp and isinstance(va, cp.ndarray) else np
+
+    va = xp.array(va, copy=True)
     va = va.reshape([2, ])
 
-    vb = np.array(vb, copy=True)
+    vb = xp.array(vb, copy=True)
     vb = vb.reshape([2, ])
 
-    Ba = np.linalg.norm(va)**2
-    mu = np.vdot(va, vb) / Ba
-    vb = vb - np.round(mu) * va
-    Bb = np.linalg.norm(vb)**2
+    Ba = xp.linalg.norm(va)**2
+    mu = xp.vdot(va, vb) / Ba
+    vb = vb - xp.round(mu) * va
+    Bb = xp.linalg.norm(vb)**2
 
     swapped = -1
     while Bb < Ba:
@@ -1466,9 +1529,9 @@ def reduce_basis(va: np.ndarray,
 
         Ba = Bb
 
-        mu = np.inner(va, vb) / Ba
-        vb = vb - np.round(mu) * va
-        Bb = np.linalg.norm(vb) ** 2
+        mu = xp.inner(va, vb) / Ba
+        vb = vb - xp.round(mu) * va
+        Bb = xp.linalg.norm(vb) ** 2
 
     if swapped == 1:
         va, vb = vb, va
@@ -1480,22 +1543,18 @@ def reduce_basis(va: np.ndarray,
     return va_int, vb_int
 
 
-def reduce_recp_basis(va: np.ndarray,
-                      vb: np.ndarray) -> (np.ndarray, np.ndarray):
+def reduce_recp_basis(va: array,
+                      vb: array) -> (array, array):
     """
     Compute the shortest pair of reciprocal basis vectors. These vectors may not be dual to the lattice vectors
     in the sense that vi * rsj = delta_{ij}, but they do form a basis for the reciprocal lattice vectors.
 
-    :param va: lattice vector
-    :param vb:
-
+    :param va: first lattice vector
+    :param vb: second lattice vector
     :return rsa, rsb: reduced reciprocal vectors
     """
-
     va, vb = reduce_basis(va, vb)
-    rsa, rsb = get_reciprocal_vects(va, vb)
-
-    return rsa, rsb
+    return get_reciprocal_vects(va, vb)
 
 
 def get_closest_lattice_vec(point: np.ndarray,
@@ -1505,8 +1564,8 @@ def get_closest_lattice_vec(point: np.ndarray,
     Find the closest lattice vector to point
 
     :param point:
-    :param va:
-    :param vb:
+    :param va: first lattice vector
+    :param vb: second lattice vector
     :return vec, na_min, nb_min:
     """
     point = np.array(point, copy=True)
@@ -1557,8 +1616,8 @@ def get_closest_recip_vec(recp_point: np.ndarray,
     recp_point.
 
     :param recp_point:
-    :param va:
-    :param vb:
+    :param va: first lattice vector
+    :param vb: second lattice vector
     :return vec, na_min, nb_min: vec = na_min * rva + nb_min * rvb
     """
 
@@ -1583,8 +1642,8 @@ def get_closest_recip_vec(recp_point: np.ndarray,
 
 
 # working with grayscale patterns
-def binarize(pattern_gray: np.ndarray,
-             mode: str = "floyd-steinberg") -> np.ndarray:
+def binarize(pattern_gray: array,
+             mode: str = "floyd-steinberg") -> array:
     """
     Binarize a gray scale pattern
 
@@ -1594,11 +1653,10 @@ def binarize(pattern_gray: np.ndarray,
       "random" to use a random dither, or "round" to round to the nearest value
     :return pattern_binary: binary approximation of pattern_gray
     """
+    xp = cp if cp and isinstance(pattern_gray, cp.ndarray) else np
+    pattern_gray = xp.array(pattern_gray, copy=True)
 
-    # pattern_gray = copy.deepcopy(pattern_gray)
-    pattern_gray = np.array(pattern_gray, copy=True)
-
-    if np.any(pattern_gray) > 1 or np.any(pattern_gray) < 0:
+    if xp.any(pattern_gray) > 1 or xp.any(pattern_gray) < 0:
         raise ValueError("pattern values must be in [0, 1]")
 
     ny, nx = pattern_gray.shape
@@ -1606,11 +1664,11 @@ def binarize(pattern_gray: np.ndarray,
     if mode == "floyd-steinberg":
         # error diffusion Kernel =
         # 1/16 * [[_ # 7], [3, 5, 1]]
-        pattern_bin = np.zeros(pattern_gray.shape, dtype=bool)
+        pattern_bin = xp.zeros(pattern_gray.shape, dtype=bool)
 
         for ii in range(ny):
             for jj in range(nx):
-                pattern_bin[ii, jj] = np.round(pattern_gray[ii, jj])
+                pattern_bin[ii, jj] = xp.round(pattern_gray[ii, jj])
                 err = pattern_gray[ii, jj] - pattern_bin[ii, jj]
 
                 if jj < (nx - 1):
@@ -1625,11 +1683,11 @@ def binarize(pattern_gray: np.ndarray,
     elif mode == "jjn":
         # error diffusion Kernel =
         # 1/48 * [[_, _, #, 7, 5], [3, 5, 7, 5, 3], [1, 3, 5, 3, 1]]
-        pattern_bin = np.zeros(pattern_gray.shape, dtype=bool)
+        pattern_bin = xp.zeros(pattern_gray.shape, dtype=bool)
 
         for ii in range(ny):
             for jj in range(nx):
-                pattern_bin[ii, jj] = np.round(pattern_gray[ii, jj])
+                pattern_bin[ii, jj] = xp.round(pattern_gray[ii, jj])
                 err = pattern_gray[ii, jj] - pattern_bin[ii, jj]
 
                 if jj < (nx - 1):
@@ -1668,19 +1726,19 @@ def binarize(pattern_gray: np.ndarray,
                     pattern_gray[ii + 2, jj + 2] += err * 1/48
 
     elif mode == "random":
-        pattern_bin = np.asarray(np.random.binomial(1, pattern_gray), dtype=bool)
+        pattern_bin = xp.random.binomial(1, pattern_gray).astype(bool)
     elif mode == "round":
-        pattern_bin = np.asarray(np.round(pattern_gray), dtype=bool)
+        pattern_bin = xp.round(pattern_gray).astype(bool)
     else:
-        raise ValueError("mode must be 'floyd-steinberg', 'random', or 'round' but was '%s'" % mode)
+        raise ValueError(f"mode must be 'floyd-steinberg', 'random', or 'round' but was '{mode:s}'")
 
     return pattern_bin
 
 
 # utility functions
-def min_angle_diff(angle1: np.ndarray,
-                   angle2: np.ndarray,
-                   mode: str = 'normal') -> np.ndarray:
+def min_angle_diff(angle1: array,
+                   angle2: array,
+                   mode: str = 'normal') -> array:
     """
     Find minimum magnitude of angular difference between two angles.
 
@@ -1689,9 +1747,11 @@ def min_angle_diff(angle1: np.ndarray,
     :param mode: "normal" or "half"
     :return angle_diff:
     """
+    xp = cp if cp and isinstance(angle1, cp.ndarray) else np
+    angle2 = xp.asarray(angle2)
 
     # take difference modulo 2pi, which gives positive distance
-    angle_diff = np.asarray(np.mod(angle1 - angle2, 2*np.pi))
+    angle_diff = xp.asarray(xp.mod(angle1 - angle2, 2*np.pi))
 
     # still want smallest magnitude difference (negative or positive). If larger than pi, can express as smaller
     # magnitude negative distance
@@ -1703,11 +1763,10 @@ def min_angle_diff(angle1: np.ndarray,
     elif mode == 'half':
         # compute differences allowing theta and theta + pi to be equivalent
         angle_diff_pi = min_angle_diff(angle1, angle2 + np.pi, mode='normal')
-        to_switch = np.abs(angle_diff_pi) < np.abs(angle_diff)
+        to_switch = xp.abs(angle_diff_pi) < xp.abs(angle_diff)
         angle_diff[to_switch] = angle_diff_pi[to_switch]
-
     else:
-        raise ValueError("'mode' must be 'normal' or 'half', but was '%s'" % mode)
+        raise ValueError(f"'mode' must be 'normal' or 'half', but was '{mode:s}'")
 
     return angle_diff
 
@@ -1722,15 +1781,17 @@ def find_closest_pattern(period: float,
     Find pattern vectors for pattern with an approximate period and angle that also satisfies the perfect phase
     shift condition
 
-    :param period:
-    :param angle:
+    :param period: pattern period in pixels
+    :param angle: pattern angle
     :param nphases:
-    :param avec_max_size:
-    :param bvec_max_size:
+    :param avec_max_size: maximum size of first lattice vector
+    :param bvec_max_size: maximum size of second lattice vector
     :return avec, bvec, period_real, angle_real:
     """
 
-    angles_proposed, bvecs_proposed = find_allowed_angles(period, nphases, bvec_max_size,
+    angles_proposed, bvecs_proposed = find_allowed_angles(period,
+                                                          nphases,
+                                                          bvec_max_size,
                                                           restrict_to_coordinate_axes=False)
     ia = np.argmin(np.abs(angle - angles_proposed))
     a = angles_proposed[ia]
@@ -1761,21 +1822,17 @@ def find_closest_multicolor_set(period: float,
                                 minimize_leakage: bool = True) -> (np.ndarray, np.ndarray):
     """
     Generate set of SIM patterns for multiple colors with period close to specified value and maximizing distance
-     between angles. The patterns are determined such that the diffracted orders will pass through the same positions
-     in the Fourier plane of the imaging sytem. i.e. the fractional resolution increase in SIM should be the same
-     for all the colors.
+    between angles. The patterns are determined such that the diffracted orders will pass through the same positions
+    in the Fourier plane of the imaging sytem. i.e. the fractional resolution increase in SIM should be the same
+    for all the colors.
 
-     NOTE: for achieving multicolor SIM with a DMD there is more to the story --- you must first find
-     an input and output angle which match the diffraction output angles and satisfy the Blaze condition
-     for both colors, which is no easy feat!
-
-    :param period: pattern period in mirrors. If using multiple colors, specify this for the shortest wavelength
+    :param period: pattern period in pixels. If using multiple colors, specify this for the shortest wavelength
     :param nangles: number of angles
     :param nphases: number of phases
     :param wavelengths: list of wavelengths in consistent units. If set to None, then will assume only
      one wavelength.
-    :param bvec_max_size: maximum allowed size of b-vectors, in mirrors
-    :param avec_max_size: maximum allowed size of a-vectors, in mirrors
+    :param bvec_max_size: maximum allowed size of second lattice vector, in mirrors
+    :param avec_max_size: maximum allowed size of first lattice vector, in mirrors
     :param atol: maximum allowed deviation between angles for different colors.
     :param ptol_relative: maximum tolerance for period deviations, as a fraction of the period
     :param angle_sep_tol: maximum deviation between adjacent pattern angles from the desired value which
@@ -1941,16 +1998,16 @@ def find_allowed_angles(period: float,
                         nmax: int,
                         restrict_to_coordinate_axes: bool = False):
     """
-     Given a DMD pattern with fixed period of absolute value P, get allowed pattern angles in the range [0, pi] for
+     Given a DMD pattern with fixed period of absolute value p, get allowed pattern angles in the range [0, pi] for
      which the pattern allows perfect phase shifting for nphases.
 
-     P = dxb * cos(theta) + dyb * sin(theta)
+     :math: `p = dxb \\cos \\theta + dyb \\sin \\theta`
 
      For theta in [0, pi] we can take x=cos(theta), and sin(theta) = sqrt(1-x^2). We get a quadratic equation in x,
      x^2 * (dxb**2/dyb**2 + 1) - x * (2*P*dxb/dyb**2) + (P**2/dxb**2 - 1) = 0
 
-    :param period:
-    :param nphases:
+    :param period: period in pixels
+    :param nphases: number of phase shifts
     :param nmax:
     :param restrict_to_coordinate_axes: deprecated...used to allow running old behavior when adding functionality
     :return angles, vbs:
@@ -2020,10 +2077,10 @@ def find_allowed_angles(period: float,
 def find_rational_approx_angle(angle: float,
                                nmax: int):
     """
-    Find the closest allowed a-vector for a given angle and maximum number of mirrors
+    Find the closest allowed vector compatible with the pixel array
 
     :param angle: desired angle in radians
-    :param nmax: maximum size of the x- and y-components of the a-vector, in mirrors.
+    :param nmax: maximum size of the x- and y-components of the lattice vector in pixels.
     :return xshift, yshift, vecs:
     """
 
@@ -2033,13 +2090,13 @@ def find_rational_approx_angle(angle: float,
     if angle_2p <= np.pi/2:
         angle_pos = angle_2p
         case = 1
-    elif angle_2p > np.pi/2 and angle_2p <= np.pi:
+    elif np.pi/2 < angle_2p <= np.pi:
         angle_pos = np.pi - angle_2p
         case = 2
-    elif angle_2p > np.pi and angle_2p <= 3*np.pi/2:
+    elif np.pi < angle_2p <= 3*np.pi/2:
         angle_pos = angle_2p - np.pi
         case = 3
-    elif angle_2p > 3*np.pi/2 and angle_2p <= 2*np.pi:
+    elif 3*np.pi/2 < angle_2p <= 2*np.pi:
         angle_pos = 2*np.pi - angle_2p
         case = 4
     else:
@@ -2119,19 +2176,20 @@ def find_allowed_periods(angle: float,
                          nmax: int) -> (list[float], list[int], list):
     """
     Given a DMD pattern with fixed angle, get allowed pattern periods which allow perfect phase shifting for nphases
-    Recall that for vec_a = [dxa, dya] and vec_b = [dxb, 0], and dxb = l * nphases for perfect phase shifting
-    period = dxb * dya/|vec_a| = dxb * cos(theta)
-    theta = angle(vec_a_perp) = arctan(-dxa / dya)
-    P = np.cos(theta) * l*nphases
-    on the other hand, if vec_b = [0, dyb]
-    period = dyb * -dxa/|vec_a = dyb * sin(theta)
-    P = np.sin(theta) * l*nphases
 
     :param angle:
     :param nphases:
     :param nmax:
     :return periods, ls, is_xlike:
     """
+    # Recall that for vec_a = [dxa, dya] and vec_b = [dxb, 0], and dxb = l * nphases for perfect phase shifting
+    # period = dxb * dya/|vec_a| = dxb * cos(theta)
+    # theta = angle(vec_a_perp) = arctan(-dxa / dya)
+    # P = np.cos(theta) * l*nphases
+    # on the other hand, if vec_b = [0, dyb]
+    # period = dyb * -dxa/|vec_a = dyb * sin(theta)
+    # P = np.sin(theta) * l*nphases
+
     ls = np.arange(1, int(np.floor(nmax / nphases)))
 
     p1 = np.cos(angle) * ls * nphases
@@ -2159,8 +2217,8 @@ def find_nearest_leakage_peaks(vec_as: np.ndarray,
     """
     Find minimum distance between main pattern frequency and leakage frequencies from other patterns in the set
 
-    :param vec_as: list of a vectors
-    :param vec_bs: list of b vectors
+    :param vec_as: list of first lattice vectors
+    :param vec_bs: list of second lattice vectors
     :param nphases:
     :param minimum_relative_peak_size: peaks smaller than this size (compared with the maximum peak,
      i.e. the DC peak) will not be included.
@@ -2236,19 +2294,21 @@ def vects2pattern_data(dmd_size: Sequence[int, int],
                        wavelength: Optional[float] = None,
                        invert: bool = False,
                        pitch: float = 7560,
-                       generate_patterns: bool = True) -> (np.ndarray, dict):
+                       generate_patterns: bool = True,
+                       geometry: str = "orthogonal") -> (np.ndarray, dict):
     """
     Generate pattern and useful data (angles, phases, frequencies, reciprocal vectors, ...) from the lattice
     vectors for a given pattern set.
 
     :param dmd_size: [nx, ny]
-    :param np.array vec_as: NumPy array, size nangles x nphases x 2
-    :param np.array vec_bs:
+    :param vec_as: NumPy array, size nangles x nphases x 2
+    :param vec_bs:
     :param nphases:
     :param wavelength: wavelength in nm
     :param invert: whether pattern is "inverted", i.e. if the roll of "OFF" and "ON" should be flipped
-    :param pitch: DMD micromirror pitch
+    :param pitch: pixel pitch
     :param generate_patterns:
+    :param geometry: see get_sim_pattern()
     :return patterns, data:
     """
 
@@ -2303,7 +2363,8 @@ def vects2pattern_data(dmd_size: Sequence[int, int],
                                                       vec_as[ii],
                                                       vec_bs[ii],
                                                       nphases,
-                                                      jj)
+                                                      jj,
+                                                      geometry=geometry)
 
     if invert:
         patterns = 1 - patterns
@@ -2442,7 +2503,8 @@ def export_pattern_set(dmd_size: Sequence[int, int],
                        pitch: float = 7560.,
                        wavelength: float = 1.,
                        save_dir: Union[str, Path] = 'sim_patterns',
-                       plot_results: bool = False) -> (np.ndarray, dict, Figure):
+                       plot_results: bool = False,
+                       geometry: str = "orthogonal") -> (np.ndarray, dict, Figure):
     """
     Export a single set of SIM patterns, i.e. single wavelength, single period
 
@@ -2455,6 +2517,7 @@ def export_pattern_set(dmd_size: Sequence[int, int],
     :param wavelength:
     :param save_dir:
     :param plot_results:
+    :param geometry: see get_sim_pattern()
     :return patterns, data, figh:
     """
     save_dir = Path(save_dir)
@@ -2467,7 +2530,8 @@ def export_pattern_set(dmd_size: Sequence[int, int],
                                         nphases=nphases,
                                         wavelength=None,
                                         invert=invert,
-                                        pitch=pitch)
+                                        pitch=pitch,
+                                        geometry=geometry)
     periods = data["periods"]
     angles = data["angles"]
     phases = data["phases"]
@@ -2523,6 +2587,7 @@ def export_all_pattern_sets(dmd_size: Sequence[int, int],
                             pitch: float = 7560.,
                             save_dir: Union[str, Path] = 'sim_patterns',
                             plot_results: bool = True,
+                            geometry: str = "orthogonal",
                             **kwargs):
     """
     Generate SIM pattern sets and save results. Additional keyword arguments will be passed through to
@@ -2538,8 +2603,9 @@ def export_all_pattern_sets(dmd_size: Sequence[int, int],
     :param pitch:
     :param save_dir: directory to save results
     :param plot_results:
+    :param geometry: see get_sim_pattern()
     :return data_all: [[dict_period0_wlen0, dict_period0, wlen1, ...], [dict_period1, wlen0, ...]]
-      list of list of dictionary objects. First level sublists are data for different periods, second sublevel is data
+      list of lists of dictionary objects. First level sublists are data for different periods, second sublevel is data
       for different wavelengths.
     """
 
@@ -2590,7 +2656,8 @@ def export_all_pattern_sets(dmd_size: Sequence[int, int],
                                                       invert=invert[kk],
                                                       save_dir=wavlen_savedir,
                                                       pitch=pitch,
-                                                      plot_results=plot_results)
+                                                      plot_results=plot_results,
+                                                      geometry=geometry)
             data_period.append(data)
 
         data_all.append(data_period)
@@ -2783,8 +2850,8 @@ def export_otf_test_set(dmd_size: Sequence[int],
                         nperiods: int = 20,
                         nangles: int = 12,
                         nphases: int = 3,
-                        avec_max_size: float = 40,
-                        bvec_max_size: float = 40,
+                        avec_max_size: int = 40,
+                        bvec_max_size: int = 40,
                         phase_index: int = 0,
                         save_dir: Optional[Union[str, Path]] = None,
                         verbose: bool = True) -> (np.ndarray, dict):
@@ -2906,7 +2973,7 @@ def export_otf_test_set(dmd_size: Sequence[int],
 
         # save patterns as tif
         patterns_reshaped = np.reshape(patterns,
-                              [patterns.shape[0] * patterns.shape[1], patterns.shape[2], patterns.shape[3]])
+                                       [patterns.shape[0] * patterns.shape[1], patterns.shape[2], patterns.shape[3]])
         patterns_reshaped = np.concatenate((patterns_reshaped,
                                             np.expand_dims(pattern_on, axis=0),
                                             np.expand_dims(pattern_off, axis=0)),
@@ -2923,16 +2990,17 @@ def _verify_int(m: Union[array, float]) -> bool:
     :param m:
     :return:
     """
-    m = np.asarray(m)
-    mint = np.round(m).astype(int)
+    xp = cp if cp and isinstance(m, cp.ndarray) else np
 
-    return np.all(np.abs(m - mint) < 1e-10)
+    m = xp.asarray(m)
+    mint = xp.round(m).astype(int)
+
+    return xp.all(xp.abs(m - mint) < 1e-10)
 
 
 def _convert_int(m: array):
     if not _verify_int(m):
         raise ValueError("array could not be converted to integers")
+    xp = cp if cp and isinstance(m, cp.ndarray) else np
 
-    mint = np.round(np.asarray(m)).astype(int)
-
-    return mint
+    return xp.round(xp.asarray(m)).astype(int)

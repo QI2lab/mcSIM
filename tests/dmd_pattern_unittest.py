@@ -8,6 +8,12 @@ from localize_psf.rois import get_centered_rois
 from mcsim.analysis.sim_reconstruction import get_peak_value
 from mcsim.analysis.fft import ft2
 import mcsim.analysis.dmd_patterns as dmd
+from mcsim.analysis.optimize import to_cpu
+
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
 
 
 class TestPatterns(unittest.TestCase):
@@ -26,26 +32,33 @@ class TestPatterns(unittest.TestCase):
         ny = 1080
         nphases = 3
 
-        fx = fftshift(fftfreq(nx))
-        fy = fftshift(fftfreq(ny))
-        window = np.outer(hann(ny), hann(nx))
+        backends = [np]
+        if cp:
+            backends += [cp]
 
-        va = [-3, 11]
-        vb = [3, 12]
-        rva, rvb = dmd.get_reciprocal_vects(va, vb)
-        rva = rva.ravel()
-        rvb = rvb.ravel()
+        for xp in backends:
+            fx = xp.asarray(fftshift(fftfreq(nx)))
+            fy = xp.asarray(fftshift(fftfreq(ny)))
+            window = xp.outer(xp.asarray(hann(ny)), xp.asarray(hann(nx)))
 
-        for jj in range(nphases):
-            phase = dmd.get_sim_phase(va, vb, nphases, jj, [nx, ny], use_fft_origin=True)
-            pattern, _ = dmd.get_sim_pattern([nx, ny], va, vb, nphases, jj)
-            pattern_ft = ft2(pattern * window)
+            va = xp.array([-3, 11])
+            vb = xp.array([3, 12])
+            rva, rvb = dmd.get_reciprocal_vects(va, vb)
+            rva = rva.ravel()
+            rvb = rvb.ravel()
 
-            peak_val = get_peak_value(pattern_ft, fx, fy, rvb, 2)
-            pattern_phase_est = np.mod(np.angle(peak_val), 2 * np.pi)
+            for jj in range(nphases):
+                phase = dmd.get_sim_phase(va, vb, nphases, jj, [nx, ny], use_fft_origin=True)
+                pattern, _ = dmd.get_sim_pattern([nx, ny], va, vb, nphases, jj)
+                pattern_ft = ft2(pattern * window)
 
-            # assert np.round(np.abs(pattern_phase_est - float(phase)), 3) == 0
-            self.assertAlmostEqual(pattern_phase_est, float(phase), 3)
+                peak_val = get_peak_value(pattern_ft, fx, fy, rvb, 2)
+                pattern_phase_est = xp.mod(xp.angle(peak_val), 2 * np.pi)
+
+                np.testing.assert_allclose(to_cpu(pattern_phase_est),
+                                           float(to_cpu(phase)),
+                                           atol=1e-3,
+                                           err_msg=f"failed on phase index={jj:d}")
 
     def test_patterns_main_phase(self):
         """
@@ -64,57 +77,71 @@ class TestPatterns(unittest.TestCase):
         phase_index = 0
         nx, ny = dmd_size
 
-        va_comps = np.array([-15, -7, -3, 0, 4, 8, 17])
-        vb_comps = np.array([-30, -15, -6, -3, 12, 18])
+        backends = [np]
+        if cp:
+            backends += [cp]
 
-        # generate all lattice vectors
-        vas_x, vas_y = np.meshgrid(va_comps, va_comps)
-        vas = np.stack((vas_x.ravel(), vas_y.ravel()), axis=1)
-        vas = vas[np.linalg.norm(vas, axis=1) != 0]
+        for xp in backends:
+            va_comps = xp.array([-15, -7, -3, 0, 4, 8, 17])
+            vb_comps = xp.array([-30, -15, -6, -3, 12, 18])
 
-        vbs_x, vbs_y = np.meshgrid(vb_comps, vb_comps)
-        vbs = np.stack((vbs_x.ravel(), vbs_y.ravel()), axis=1)
-        vbs = vbs[np.linalg.norm(vbs, axis=1) != 0]
+            # generate all lattice vectors
+            vas_x, vas_y = xp.meshgrid(va_comps, va_comps)
+            vas = xp.stack((vas_x.ravel(), vas_y.ravel()), axis=1)
+            vas = vas[xp.linalg.norm(vas, axis=1) != 0]
 
-        tstart = perf_counter()
-        for ii in range(len(vas)):
-            for jj in range(len(vbs)):
-                both_index = len(vbs) * ii + jj
-                if both_index % 100 == 0:
-                    print(f"pattern {both_index + 1:d}/{len(vas) * len(vbs):d},"
-                          f" elapsed time = {perf_counter() - tstart:.2f}s")
+            vbs_x, vbs_y = xp.meshgrid(vb_comps, vb_comps)
+            vbs = xp.stack((vbs_x.ravel(), vbs_y.ravel()), axis=1)
+            vbs = vbs[xp.linalg.norm(vbs, axis=1) != 0]
 
-                vec_a = vas[ii]
-                vec_b = vbs[jj]
+            tstart = perf_counter()
+            for ii in range(len(vas)):
+                for jj in range(len(vbs)):
+                    both_index = len(vbs) * ii + jj
+                    if both_index % 100 == 0:
+                        print(f"pattern {both_index + 1:d}/{len(vas) * len(vbs):d},"
+                              f" elapsed time = {perf_counter() - tstart:.2f}s")
 
-                try:
-                    recp_va, recp_vb = dmd.get_reciprocal_vects(vec_a, vec_b)
-                    recp_va = recp_va.ravel()
-                    recp_vb = recp_vb.ravel()
-                except ValueError:
-                    # linearly dependent vectors
-                    continue
+                    vec_a = vas[ii]
+                    vec_b = vbs[jj]
 
-                # normal phase function
-                phase = dmd.get_sim_phase(vec_a, vec_b, nphases, phase_index, dmd_size, use_fft_origin=True)
+                    try:
+                        recp_va, recp_vb = dmd.get_reciprocal_vects(vec_a, vec_b)
+                        recp_va = recp_va.ravel()
+                        recp_vb = recp_vb.ravel()
+                    except ValueError:
+                        # linearly dependent vectors
+                        continue
 
-                # estimate phase from FFT
-                pattern, _ = dmd.get_sim_pattern(dmd_size, vec_a, vec_b, nphases, phase_index)
+                    # normal phase function
+                    phase = dmd.get_sim_phase(vec_a,
+                                              vec_b,
+                                              nphases,
+                                              phase_index,
+                                              dmd_size,
+                                              use_fft_origin=True)
 
-                window = np.outer(hann(ny), hann(nx))
-                pattern_ft = ft2(pattern * window)
-                fx = fftshift(fftfreq(nx))
-                fy = fftshift(fftfreq(ny))
+                    # estimate phase from FFT
+                    pattern, _ = dmd.get_sim_pattern(dmd_size,
+                                                     vec_a,
+                                                     vec_b,
+                                                     nphases,
+                                                     phase_index)
 
-                try:
-                    phase_direct = np.angle(get_peak_value(pattern_ft, fx, fy, recp_vb, peak_pixel_size=2))
-                except ZeroDivisionError:
-                    # recp_vb too close to edge of pattern
-                    continue
+                    window = xp.outer(xp.asarray(hann(ny)), xp.asarray(hann(nx)))
+                    pattern_ft = xp.asarray(ft2(pattern * window))
+                    fx = xp.asarray(fftshift(fftfreq(nx)))
+                    fy = xp.asarray(fftshift(fftfreq(ny)))
 
-                phase_diff = np.min([np.abs(phase - phase_direct), np.abs(phase - phase_direct - 2*np.pi)])
+                    try:
+                        phase_direct = xp.angle(get_peak_value(pattern_ft, fx, fy, recp_vb, peak_pixel_size=2))
+                    except ZeroDivisionError:
+                        # recp_vb too close to edge of pattern
+                        continue
 
-                self.assertAlmostEqual(phase_diff, 0, 1)
+                    phase_diff = to_cpu(dmd.min_angle_diff(phase, phase_direct))
+
+                    self.assertAlmostEqual(phase_diff, 0, 1)
 
     def test_pattern_all_phases(self):
         """
@@ -310,33 +337,91 @@ class TestPatterns(unittest.TestCase):
                                    rtol=0.25)
 
     def test_reduce_basis(self):
-        v1 = np.array([1, 0], dtype=int)
-        v2 = np.array([1, 1], dtype=int)
 
-        v1_red, v2_red = dmd.reduce_basis(v1, v2)
-        v1_red = v1_red.ravel()
-        v2_red = v2_red.ravel()
+        backends = [np]
+        if cp:
+            backends += [cp]
 
-        v1_red_actual = np.array([1, 0], dtype=int)
-        v2_red_actual = np.array([0, 1], dtype=int)
+        for xp in backends:
+            v1 = xp.array([1, 0], dtype=int)
+            v2 = xp.array([1, 1], dtype=int)
 
-        np.testing.assert_allclose(v1_red_actual, v1_red, atol=1e-12)
-        np.testing.assert_allclose(v2_red_actual, v2_red, atol=1e-12)
+            v1_red, v2_red = dmd.reduce_basis(v1, v2)
+            v1_red = v1_red.ravel()
+            v2_red = v2_red.ravel()
+
+            v1_red_actual = np.array([1, 0], dtype=int)
+            v2_red_actual = np.array([0, 1], dtype=int)
+
+            np.testing.assert_allclose(v1_red_actual, to_cpu(v1_red), atol=1e-12)
+            np.testing.assert_allclose(v2_red_actual, to_cpu(v2_red), atol=1e-12)
 
     def test_get_sim_unitcell(self):
-        v1 = np.array([3, 0], dtype=int)
-        v2 = np.array([0, 3], dtype=int)
-        cell, x, y = dmd.get_sim_unit_cell(v1, v2, 3)
+        backends = [np]
+        if cp:
+            backends += [cp]
 
-        cell_actual = np.array([[1, 1, 1],
-                                [0, 0, 0],
-                                [0, 0, 0]])
-        x_actual = np.array([0, 1, 2])
-        y_actual = np.array([0, 1, 2])
+        for xp in backends:
+            v1 = xp.array([3, 0], dtype=int)
+            v2 = xp.array([0, 3], dtype=int)
+            cell0, x, y = dmd.get_sim_unit_cell(v1, v2, 3, phase_index=0)
+            cell1, _, _ = dmd.get_sim_unit_cell(v1, v2, 3, phase_index=1)
+            cell2, _, _ = dmd.get_sim_unit_cell(v1, v2, 3, phase_index=2)
 
-        np.testing.assert_allclose(cell, cell_actual, atol=1e-12)
-        np.testing.assert_allclose(x, x_actual, atol=1e-12)
-        np.testing.assert_allclose(y, y_actual, atol=1e-12)
+            cell0_actual = np.array([[1, 1, 1],
+                                    [0, 0, 0],
+                                    [0, 0, 0]])
+            cell1_actual = np.array([[0, 0, 0],
+                                     [1, 1, 1],
+                                     [0, 0, 0]])
+            cell2_actual = np.array([[0, 0, 0],
+                                     [0, 0, 0],
+                                     [1, 1, 1]])
+            x_actual = np.array([0, 1, 2])
+            y_actual = np.array([0, 1, 2])
+
+            np.testing.assert_allclose(to_cpu(cell0), cell0_actual, atol=1e-12)
+            np.testing.assert_allclose(to_cpu(cell1), cell1_actual, atol=1e-12)
+            np.testing.assert_allclose(to_cpu(cell2), cell2_actual, atol=1e-12)
+            np.testing.assert_allclose(to_cpu(x), x_actual, atol=1e-12)
+            np.testing.assert_allclose(to_cpu(y), y_actual, atol=1e-12)
+
+
+    def test_cell_reduction(self):
+
+        backends = [np]
+        if cp:
+            backends += [cp]
+
+        for xp in backends:
+            npts = 1000
+            xs = xp.random.rand(npts) * 1000
+            ys = xp.random.rand(npts) * 1000
+            points = xp.stack((xs, ys), axis=1)
+
+            va_comps = xp.array([-15, -7, -3, 0, 4, 8, 17])
+            vb_comps = xp.array([-30, -15, -6, -3, 12, 18])
+
+            # generate all lattice vectors
+            vas_x, vas_y = xp.meshgrid(va_comps, va_comps)
+            vas = xp.stack((vas_x.ravel(), vas_y.ravel()), axis=1)
+            vas = vas[xp.linalg.norm(vas, axis=1) != 0]
+
+            vbs_x, vbs_y = xp.meshgrid(vb_comps, vb_comps)
+            vbs = xp.stack((vbs_x.ravel(), vbs_y.ravel()), axis=1)
+            vbs = vbs[xp.linalg.norm(vbs, axis=1) != 0]
+
+            for va in vas:
+                for vb in vbs:
+                    try:
+                        pts_red, _, _ = dmd.reduce2cell(points, va, vb)
+                        in_cell = dmd.test_in_cell(pts_red, va, vb)
+                    except ValueError:
+                        # if lattice vector are linearly dependent, skip
+                        continue
+
+                    self.assertEqual(xp.all(in_cell), True)
+
 
 
 if __name__ == "__main__":
