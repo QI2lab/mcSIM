@@ -2667,7 +2667,8 @@ def show_sim_napari(fname_zarr: Union[str, Path],
 # compute optical sectioned SIM image
 def sim_optical_section(imgs: array,
                         axis: int = 0,
-                        phase_differences: Sequence[float] = (0, 2*np.pi/3, 4*np.pi/3)) -> array:
+                        phase_differences: Sequence[float] = (0, 2*np.pi/3, 4*np.pi/3),
+                        normalize: bool = False) -> array:
     """
     Optical sectioning reconstruction for three SIM images with arbitrary relative phase
     differences following the approach of https://doi.org/10.1016/s0030-4018(98)00210-7
@@ -2682,9 +2683,26 @@ def sim_optical_section(imgs: array,
 
       I_a(r) &= A \\left[1 + m \\cos(\\phi + \\phi_a) \\right]
 
+    In general, we have the matrix equation
+
+    .. math::
+
+      I_i &= \\sum_j M_{ij} v_j
+
+      v &= \\left(A, A m \\cos \\phi, A m \\sin \\phi \\right)
+
+      M_{i, 0} &= 1
+
+      M_{i, 1} &= \\cos \\phi_i
+
+      M_{i, 2} &= - \\sin \\phi_i
+
+    And we can invert this matrix to solve for the component vector.
+
     :param imgs: images stored as nD array, where one of the dimensions is of size 3.
     :param axis: axis to perform the optical sectioning computation along. imgs.shape[axis] must = 3
     :param phase_differences: three phases
+    :param normalize: if False, return m*A. If True, return m
     :return img_os: optically sectioned image
     """
 
@@ -2712,12 +2730,17 @@ def sim_optical_section(imgs: array,
     # list of slice tuples, where each slice tuple selects a single phase
     slices = [tuple([slice(None) if ii != axis else slice(jj, jj + 1) for ii in range(imgs.ndim)]) for jj in range(3)]
 
+    amp = 0
     i_c = 0
     i_s = 0
     for ii in range(3):
+        amp += inv[0, ii] * imgs[slices[ii]]
         i_c += inv[1, ii] * imgs[slices[ii]]
         i_s += inv[2, ii] * imgs[slices[ii]]
     img_os = xp.squeeze(xp.sqrt(i_c**2 + i_s**2), axis=axis)
+
+    if normalize:
+        img_os /= amp
 
     return img_os
 
