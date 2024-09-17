@@ -2714,26 +2714,26 @@ def sim_optical_section(imgs: array,
     # ensure axis positive
     axis = axis % imgs.ndim
 
-    if imgs.shape[axis] != 3:
-        raise ValueError(f"imgs must be of size 3 along axis {axis:d}")
+    if imgs.shape[axis] < 3:
+        raise ValueError(f"imgs must be of size at least 3 along axis {axis:d}")
 
-    if len(phase_differences) != 3:
-        raise ValueError(f"phases must have length 3, but had length {len(phase_differences):d}")
+    if len(phase_differences) != imgs.shape[axis]:
+        raise ValueError(f"len(phase_differences) was {len(phase_differences):d}, but "
+                         f"must be the same size as imgs.shape[axis] = {imgs.shape[axis]:d}")
 
     # compute inversion matrix
-    p1, p2, p3 = phase_differences
-    mat = np.array([[1, np.cos(p1), -np.sin(p1)],
-                    [1, np.cos(p2), -np.sin(p2)],
-                    [1, np.cos(p3), -np.sin(p3)]])
-    inv = np.linalg.inv(mat)
+    mat = np.array([[1, np.cos(p), -np.sin(p)] for p in phase_differences])
+    inv = np.linalg.pinv(mat)
 
     # list of slice tuples, where each slice tuple selects a single phase
-    slices = [tuple([slice(None) if ii != axis else slice(jj, jj + 1) for ii in range(imgs.ndim)]) for jj in range(3)]
+    slices = [tuple([slice(None) if ii != axis else slice(jj, jj + 1)
+                     for ii in range(imgs.ndim)])
+              for jj in range(len(phase_differences))]
 
     amp = 0
     i_c = 0
     i_s = 0
-    for ii in range(3):
+    for ii in range(len(phase_differences)):
         amp += inv[0, ii] * imgs[slices[ii]]
         i_c += inv[1, ii] * imgs[slices[ii]]
         i_s += inv[2, ii] * imgs[slices[ii]]
