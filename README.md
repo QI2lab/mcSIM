@@ -74,7 +74,7 @@ pip install .[gpu]
 
 This will install the appropriate version of [CuPy](https://cupy.dev/) and the scikit-image portion of [cuCIM](https://pypi.org/project/cucim/).
 Note that the entire RAPIDS/cuCIM package cannot be installed on Windows, but the scikit-image portion can. 
-Alternatively, to isntall the scikit-image portion of cuCIM manually run
+Alternatively, to install the scikit-image portion of cuCIM manually run
 ```
 pip install "git+https://github.com/rapidsai/cucim.git@v22.12.00#egg=cucim&subdirectory=python/cucim"
 ```
@@ -177,7 +177,7 @@ Example scripts which are useful for controlling various instruments during test
 
 # Instrument design
 A [parts list](parts_list.md) is available here. Mechanical drawings and 3D models of custom parts such as the DMD mount 
-are available on [Zenodo](https://doi.org/10.5281/zenodo.10892403). For a more complete description of the optical path, see our BOE paper linked above.
+are available on [Zenodo](https://zenodo.org/doi/10.5281/zenodo.10892402). For a more complete description of the optical path, see our BOE paper linked above.
 
 # Documentation
 Documentation is generated from function docstrings and built with Sphinx. e.g. navigate to [docs](docs) and run
@@ -187,4 +187,6 @@ make html
 Then open `docs/_build/html/index.html` in your browser
 
 # Acknowlegements
-Thank you to Songyun Gu for extending the DMD control code to work with the [DLP9000](https://www.ti.com/product/DLP9000)
+Thank you to Songyun Gu for extending the DMD control code to work with the [DLP9000](https://www.ti.com/product/DLP9000).
+Thank you to [Beibei Gao](https://github.com/Elise-9) for assistance in extending the DMD pattern generation code to work
+with the staggered pixel geometry used by the [DLP4500](https://www.ti.com/product/DLP4500). 

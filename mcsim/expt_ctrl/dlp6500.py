@@ -1,13 +1,10 @@
 """
-Control the Light Crafter 6500DLP evaluation module over USB. The code is based around the dlp6500 class, which builds
-the command packets to be sent to the DMD. However, the details of sending the USB packets is implemented in
-operating system specific subclasses which handle the details of sending these packets. Currently, only support
-for Windows has been written and tested in the dlp6500win() class.
+Control the Light Crafter 6500DLP evaluation module, or other DMD's relying on the DLPC900 controller over USB.
+The code is based around the dlp6500 class, which builds the command packets to be sent to the DMD.
+Currently, this code only supports Windows. Extensions to Linux can be accomplished by implementing two functions,
+_send_raw_packet() and _get_device(). This would likely also require importing a Linux compatible HID module.
 
-Extensions to Linux can be accomplished by implementing only two functions, _send_raw_packet() and _get_device(),
-in the dlp6500ix() class. This would likely also require importing a Linux compatible HID module.
-
-Although Texas Instruments has an SDK for this evaluation module (http://www.ti.com/tool/DLP-ALC-LIGHTCRAFTER-SDK), but
+Although Texas Instruments has an SDK for this evaluation module (http://www.ti.com/tool/DLP-ALC-LIGHTCRAFTER-SDK),
 it is not very well documented, and we had difficulty building it. Further, it is intended to produce a static library
 which cannot be used with e.g. python and the ctypes library as a dll could be.
 
