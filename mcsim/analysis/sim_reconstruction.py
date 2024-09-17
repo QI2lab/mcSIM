@@ -2740,7 +2740,7 @@ def sim_optical_section(imgs: array,
     img_os = xp.squeeze(xp.sqrt(i_c**2 + i_s**2), axis=axis)
 
     if normalize:
-        img_os /= amp
+        img_os /= xp.squeeze(amp, axis=axis)
 
     return img_os
 
