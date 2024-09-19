@@ -2467,6 +2467,9 @@ class Tomography:
         img_now = to_cpu(self.imgs_raw[index].compute())
         img_ft = ft2(img_now)
 
+        ff = np.sqrt(self.fxs[None, :]**2 + self.fys[:, None]**2)
+        max_ind = np.unravel_index(np.argmax(img_ft * (ff > 2*self.fmax)), ff.shape)
+
         figh = plt.figure(figsize=figsize, **kwargs)
         figh.suptitle(f"{index}, {self.dimensions}")
         grid = figh.add_gridspec(nrows=4,
@@ -2479,7 +2482,7 @@ class Tomography:
         # ######################
         ax = figh.add_subplot(grid[0, 0])
         im = ax.imshow(img_now, extent=extent, cmap="bone")
-        ax.set_title("$I(r)$")
+        ax.set_title(f"$I(r)$")
 
         ax = figh.add_subplot(grid[1, 0])
         plt.colorbar(im, cax=ax, location="bottom")
@@ -2490,7 +2493,7 @@ class Tomography:
         ax = figh.add_subplot(grid[2, 0])
         im = ax.imshow(np.abs(img_ft), extent=extent_f,
                        norm=PowerNorm(gamma=gamma), cmap="bone")
-        ax.set_title("$|I(f)|$")
+        ax.set_title(f"$|I(f)|$, guess fx={self.fxs[max_ind[1]]:.3f}, fy={self.fys[max_ind[0]]:.3f}")
         # todo: optionally plot reference frequency and hologram frequencies (if available)
 
         ax = figh.add_subplot(grid[3, 0])
