@@ -23,7 +23,6 @@ from mcsim.analysis.sim_reconstruction import get_peak_value
 from mcsim.analysis.fft import conj_transpose_fft, ft2
 from mcsim.analysis.simulate_dmd import xy2uvector, blaze_envelope, _dlp_1stgen_axis
 from localize_psf.affine import xform_sinusoid_params, xform_mat, params2xform
-from line_profiler import profile
 
 try:
     import cupy as cp
@@ -468,7 +467,7 @@ def test_in_cell(points: array,
 
     return in_cell
 
-@profile
+
 def reduce2cell(point: array,
                 va: array,
                 vb: array) -> (array, array, array):
