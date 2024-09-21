@@ -13,34 +13,47 @@ keywords = ["microscopy", "SIM", "structured illumination", "DMD"]
 description = "A package for simulating and controlling a multicolor structured illumination microscopy (SIM) experiment using a DLP6500 digital micromirror device (DMD) and performing SIM reconstruction."
 readme = "README.md"
 classifiers = [
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
 ]
 requires-python = ">=3.9"
-dependencies = ['numpy',
+dependencies = ['numpy>=1.24',
                 'scipy',
                 'matplotlib',
-                'pandas',
                 'scikit-image',
                 'joblib',
                 'psutil',
                 'tifffile',
+                'pillow',
                 'zarr',
                 'numcodecs',
+                'tqdm',
                 'h5py',
                 'dask',
                 'dask-image',
                 'localize_psf @ git+https://git@github.com/qi2lab/localize-psf@master#egg=localize_psf'
                 ]
 
+[project.optional-dependencies]
+expt_ctrl = ['PyDAQmx ; platform_system == "win32"',
+             'pywinusb>=0.4.2 ; platform_system == "win32"']
+gpu = ['cupy-cuda11x',  # assuming 11.2 <= CUDA version < 12. Otherwise, manually install
+       'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim ; platform_system == "win32"',
+       'cucim ; platform_system != "win32"'
+      ]
+optional = ['napari',
+            'miepython',
+            'psfmodels']
+dev = ['sphinx']
+all = ['mcsim[expt_ctrl, gpu, optional, dev]']
+
 [tool.setuptools]
 packages = ["mcsim", "mcsim.analysis", "mcsim.expt_ctrl"]
 
 [tool.setuptools.dynamic]
 version = {attr = "mcsim.__version__"}
-
-[project.optional-dependencies]
-expt_ctrl = ['PyDAQmx', 'pywinusb>=0.4.2']
-gpu = ['cupy-cuda11x',  # assuming 11.2 <= CUDA version < 12. Otherwise, manually install
-       'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim',
-      ]
-dev = ['sphinx']
