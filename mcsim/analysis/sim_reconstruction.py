@@ -4345,13 +4345,12 @@ class FistaSim(Optimizer):
                                        )
         self.nbin = nbin
         self.imgs = imgs
-        self.ny, self.nx = imgs.shape[-2:]
         self.patterns = patterns
+        self.apodization = apodization
         self.psf = psf
 
         xp = cp if cp and isinstance(imgs, cp.ndarray) else np
         self.psf_reversed = xp.roll(xp.flip(psf, axis=(0, 1)), shift=(1, 1), axis=(0, 1))
-        self.apodization = apodization
 
     def prox(self, x, step):
         # ###########################
@@ -4379,12 +4378,10 @@ class FistaSim(Optimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        if cp and isinstance(x, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
-
-        blurred = xp.stack([blur_img_psf(x * self.patterns[ii], self.psf, apodization=self.apodization).real
+        xp = cp if cp and isinstance(x, cp.ndarray) else np
+        blurred = xp.stack([blur_img_psf(x * self.patterns[ii],
+                                         self.psf,
+                                         apodization=self.apodization).real
                             for ii in inds])
 
         return bin(blurred, (self.nbin, self.nbin), mode="sum")
@@ -4393,22 +4390,14 @@ class FistaSim(Optimizer):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        if cp and isinstance(x, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
-
+        xp = cp if cp and isinstance(x, cp.ndarray) else np
         return 0.5 * xp.sum(xp.abs(self.fwd_model(x, inds=inds) - self.imgs[inds]) ** 2, axis=(1, 2))
 
     def gradient(self, x, inds=None):
         if inds is None:
             inds = list(range(self.n_samples))
 
-        if cp and isinstance(x, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
-
+        xp = cp if cp and isinstance(x, cp.ndarray) else np
         img_model = self.fwd_model(x, inds=inds)
         dc_do = xp.stack([blur_img_psf(bin_adjoint(img_model[ii] - self.imgs[ind], (self.nbin, self.nbin), mode="sum"),
                                      self.psf_reversed, self.apodization).real
