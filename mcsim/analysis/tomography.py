@@ -18,7 +18,6 @@ from scipy.signal.windows import tukey, hann
 from tqdm import tqdm
 import joblib
 from joblib.externals.loky import get_reusable_executor
-from multiprocessing import Semaphore
 from dask.config import set as dask_cfg_set
 from dask import delayed
 import dask
@@ -1182,7 +1181,6 @@ class Tomography:
                       fit_translations=True,
                       average_axes=None,
                       use_gpu=False,
-                      semaphore=None,
                       block_id=None,
                       block_info=None,
                       phase_corr_kwargs=None,
@@ -1246,26 +1244,15 @@ class Tomography:
                 phase_prof = 1
 
             # save results
+            hft_out = to_cpu(ft2(phase_prof * ift2(hft)))
             if average_axes is None:
-                eft_out[block_id[:-n_used_dims]] = to_cpu(ft2(phase_prof * ift2(hft)))
-            else:
-                # save portion of average to block
-                arr_full_size = block_info[0]["shape"]
-                if arr_full_size is None or semaphore is None:
-                    raise ValueError("average not supported unless arr_full_size and semaphore are provided")
-
-                navg = np.prod([a if ii in average_axes else 1
-                                for ii, a in enumerate(arr_full_size)])
-
-                block_id_out = tuple([b if ii not in average_axes else 0 for ii, b in enumerate(block_id)])
-
-                with semaphore:
-                    eft_out[block_id_out[:-n_used_dims]] += to_cpu(ft2(phase_prof * ift2(hft)) / navg).squeeze(axis=tuple(range(hft.ndim - 3)))
+                eft_out[block_id[:-n_used_dims]] = hft_out
+                hft_out = None
 
             if use_gpu:
                 cp.fft.config.get_plan_cache().clear()
 
-            return to_cpu(translations), to_cpu(phase_params)
+            return to_cpu(translations), to_cpu(phase_params), hft_out, block_info
 
         # choose background image
         if self.use_average_as_background:
@@ -1287,7 +1274,6 @@ class Tomography:
 
         # correct background
         print("correcting background")
-        semaphore = Semaphore(1)
         rbg = map_blocks_joblib(calibrate,
                                 imgs_raw_bg,
                                 hft_ref,
@@ -1301,16 +1287,27 @@ class Tomography:
                                 fit_phases=self.fit_phases,
                                 fit_translations=self.fit_translations,
                                 average_axes=self.bg_average_axes,
-                                semaphore=semaphore,
                                 use_gpu=use_gpu,
                                 chunks=imgs_raw_bg.chunksize,
                                 n_workers=n_workers,
-                                processes=processes
+                                processes=processes,
+                                return_generator=True,
                                 )
+        ts = []
+        ps = []
+        ef_bg_ft_temp = np.zeros(self.store.efield_bg_ft.shape, dtype=complex)
+        nbg = np.prod([d for ii, d in enumerate(self.extra_shape) if ii in self.bg_average_axes])
+        for data in rbg:
+            t, p, img, block_info = data
+            ts.append(t)
+            ps.append(p)
+            slice_now = tuple([slice(a[0], a[1]) for a in block_info[0]['array-location']])
+            ef_bg_ft_temp[slice_now] += img / nbg
 
-        t, p = zip(*rbg)
-        self.translations_bg = np.stack(t, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1, 2))
-        self.phase_params_bg = np.stack(p, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1))
+        # t, p = zip(*rbg)
+        self.translations_bg = np.stack(ts, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1, 2))
+        self.phase_params_bg = np.stack(ps, axis=0).reshape(imgs_raw_bg.shape[:-2] + (1, 1))
+        self.store.efield_bg_ft[:] = ef_bg_ft_temp
 
         # correct foreground
         print("correcting foreground")
@@ -1344,7 +1341,7 @@ class Tomography:
                               processes=processes
                               )
 
-        t, p = zip(*r)
+        t, p, _, _ = zip(*r)
         self.translations = np.stack(t, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1, 2))
         self.phase_params = np.stack(p, axis=0).reshape(self.imgs_raw.shape[:-2] + (1, 1))
 
@@ -3739,10 +3736,11 @@ class PhaseCorr(Optimizer):
 
 def map_blocks_joblib(fn,
                       *args,
-                      n_workers=-1,
-                      processes=True,
-                      chunks=None,
-                      verbose=True,
+                      n_workers: int = -1,
+                      processes: bool = True,
+                      chunks: Optional[Sequence[int]] = None,
+                      verbose: bool = True,
+                      return_generator: bool = False,
                       **kwargs) -> list:
     """
     Processes function along blocks of a chunked array with joblib. This is intended to be a replacement for
@@ -3822,7 +3820,9 @@ def map_blocks_joblib(fn,
         def binfo(ind): return {}
 
     # todo: pass input_chunks or derive from array (through chunksize attribute?) and separately (output) chunks?
-    results = (joblib.Parallel(n_jobs=n_workers, prefer="processes" if processes else "threads")
+    results = (joblib.Parallel(n_jobs=n_workers,
+                               prefer="processes" if processes else "threads",
+                               return_as="generator" if return_generator else "list")
                  (joblib.delayed(fn)(*[slicer(a, ind) for a in args],
                                      **bid(ind), # pass block id if function accepts it
                                      **binfo(ind), # pass block info
