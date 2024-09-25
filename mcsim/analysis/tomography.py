@@ -360,10 +360,12 @@ class Tomography:
                           compressor=self.compressor,
                           dtype=np.complex64 if self.save_float32 else complex)
 
+        
+        bg_shape_ref = self.imgs_raw_bg.shape if self.imgs_raw_bg is not None else self.imgs_raw.shape
         self.store.create("efield_bg_ft",
                           shape=tuple([s if ii not in self.bg_average_axes
                                        else 1
-                                       for ii, s in enumerate(self.imgs_raw.shape)]),
+                                       for ii, s in enumerate(bg_shape_ref)]),
                           chunks=(1,) * self.nextra_dims + self.imgs_raw.shape[-3:],
                           compressor=self.compressor,
                           dtype=np.complex64 if self.save_float32 else complex)
@@ -1018,7 +1020,7 @@ class Tomography:
         # map pupil positions to frequency
         frqs_from_pupil = xform_points(centers_dmd, xform_dmd2frq)
         # estimate frequency of reference beam from affine transformation and previous calibration information
-        frq_dmd_center = xform_points(np.array([[0, 0]]), xform_dmd2frq)[0]
+        # frq_dmd_center = xform_points(np.array([[0, 0]]), xform_dmd2frq)[0]
 
         # also get inverse transform and map frequencies to pupil (DMD positions)
         xform_frq2dmd = inv(xform_dmd2frq)
@@ -1030,32 +1032,31 @@ class Tomography:
         circle_thetas = np.linspace(0, 2 * np.pi, 1001)
         frqs_pupil_boundary = self.fmax * np.stack((np.cos(circle_thetas), np.sin(circle_thetas)),
                                                      axis=1) + np.expand_dims(mean_ref_frq, axis=0)
-        centers_dmd_fmax = xform_points(frqs_pupil_boundary, xform_frq2dmd)
-        rmax_dmd_mirrors = np.max(norm(centers_dmd_fmax, axis=1))
+        centers_dmd_fmax = xform_points(frqs_pupil_boundary, xform_frq2dmd)        
 
         # DMD boundary
         if dmd_size is not None:
             south = np.zeros((nx_dmd, 2))
-            south[:, 0] = np.arange(nx_dmd) - (nx_dmd // 2)
-            south[:, 1] = 0 - (ny_dmd // 2)
+            south[:, 0] = np.arange(nx_dmd)
+            south[:, 1] = 0
 
             north = np.zeros((nx_dmd, 2))
-            north[:, 0] = np.arange(nx_dmd) - (nx_dmd // 2)
-            north[:, 1] = ny_dmd - (ny_dmd // 2)
+            north[:, 0] = np.arange(nx_dmd)
+            north[:, 1] = ny_dmd - 1
 
             east = np.zeros((ny_dmd, 2))
-            east[:, 0] = nx_dmd - (nx_dmd // 2)
-            east[:, 1] = np.arange(ny_dmd) - (ny_dmd // 2)
+            east[:, 0] = nx_dmd - 1
+            east[:, 1] = np.arange(ny_dmd)
 
             west = np.zeros((ny_dmd, 2))
-            west[:, 0] = 0 - (nx_dmd // 2)
-            west[:, 1] = np.arange(ny_dmd) - (ny_dmd // 2)
+            west[:, 0] = 0
+            west[:, 1] = np.arange(ny_dmd)
 
             dmd_boundary = np.concatenate((south, north, east, west), axis=0)
             dmd_boundary_freq = xform_points(dmd_boundary, xform_dmd2frq)
 
         # check sign of frequency reference is consistent with affine transform
-        assert norm(frq_dmd_center + mean_ref_frq) >= norm(frq_dmd_center - mean_ref_frq)
+        # assert norm(frq_dmd_center + mean_ref_frq) >= norm(frq_dmd_center - mean_ref_frq)
 
         # ##############################
         # plot data
@@ -1065,22 +1066,14 @@ class Tomography:
             context['interactive'] = False
             context['backend'] = "agg"
 
-        with rc_context(context):
-            xform_params = xform2params(xform_dmd2frq)
-
+        with rc_context(context):            
             figh = plt.figure(figsize=(20, 8))
-            grid = figh.add_gridspec(1, 3)
+            grid = figh.add_gridspec(1, 2)
             figh.suptitle("Mapping from pupil (DMD surface) to hologram frequencies (in object space)\n"
                           f"Reference freq = ({mean_ref_frq[0]:.3f}, {mean_ref_frq[1]:.3f}) $1/\\mu m$,"
-                          f" central mirror = ({center_pupil_frq_ref[0]:.1f}, {center_pupil_frq_ref[1]:.1f})\n"
-                          "affine xform from DMD space to frequency space\n"
-                          f"$1/M_x$ = {1 / xform_params[0]:.2f} mirror/$\\mu m^{-1}$,"
-                          f" $\\theta x$ = {xform_params[1] * 180 / np.pi:.2f} deg,"
-                          f" $c_x$ = {xform_params[2]:.3f} $1/\\mu m$\n"
-                          f"$1/M_y$ = {1 / xform_params[3]:.2f}" + "mirror/$\\mu m^{-1}$,"
-                          f" $\\theta y$ = {xform_params[4] * 180 / np.pi:.2f} deg,"
-                          f" $c_y$ = {xform_params[5]:.3f} $1/\\mu m$")
+                          f" central mirror = ({center_pupil_frq_ref[0]:.1f}, {center_pupil_frq_ref[1]:.1f})")
 
+            # plot in reference space
             ax = figh.add_subplot(grid[0, 0])
             ax.axis("scaled")
             ax.set_title("DMD space")
@@ -1092,7 +1085,6 @@ class Tomography:
                     centers_dmd[:, 1],
                     'b.',
                     label="mirror positions")
-            ax.plot(0, 0, 'g+', label="DMD center")
             ax.plot(center_pupil_frq_ref[0],
                     center_pupil_frq_ref[1],
                     "m3",
@@ -1101,12 +1093,16 @@ class Tomography:
                     centers_dmd_fmax[:, 1],
                     'k',
                     label="pupil")
-            ax.set_xlim([-rmax_dmd_mirrors, rmax_dmd_mirrors])
-            ax.set_ylim([-rmax_dmd_mirrors, rmax_dmd_mirrors])
+            
+            max_bound = max([np.max(centers_dmd), np.max(centers_pupil_from_frq)])
+            min_bound = min([np.min(centers_dmd), np.min(centers_pupil_from_frq)])
+            ax.set_xlim([min_bound, max_bound])
+            ax.set_ylim([min_bound, max_bound])
             ax.legend(bbox_to_anchor=(0.2, 1.1))
             ax.set_xlabel("x-position (mirrors)")
             ax.set_ylabel("y-position (mirrors)")
 
+            # plot in frequency space
             ax = figh.add_subplot(grid[0, 1])
             ax.axis("scaled")
             ax.set_title("Raw frequencies")
@@ -1116,7 +1112,7 @@ class Tomography:
 
             ax.plot(mean_hologram_frqs[..., 0], mean_hologram_frqs[..., 1], 'rx')
             ax.plot(frqs_from_pupil[..., 0], frqs_from_pupil[..., 1], 'b.')
-            ax.plot(frq_dmd_center[0], frq_dmd_center[1], 'g+')
+            # ax.plot(frq_dmd_center[0], frq_dmd_center[1], 'g+')
             ax.plot(mean_ref_frq[0], mean_ref_frq[1], "m3")
             ax.add_artist(Circle(mean_ref_frq,
                                  radius=self.fmax,
@@ -1124,32 +1120,6 @@ class Tomography:
                                  edgecolor="k"))
             ax.set_xlim([-self.fmax + mean_ref_frq[0], self.fmax + mean_ref_frq[0]])
             ax.set_ylim([-self.fmax + mean_ref_frq[1], self.fmax + mean_ref_frq[1]])
-            ax.set_xlabel("$f_x$ (1/$\\mu m$)")
-            ax.set_ylabel("$f_y$ (1/$\\mu m$)")
-
-            ax = figh.add_subplot(grid[0, 2])
-            ax.axis("scaled")
-            ax.set_title("Frequencies - reference frequency")
-
-            if dmd_size is not None:
-                ax.plot(dmd_boundary_freq[:, 0] - mean_ref_frq[0],
-                        dmd_boundary_freq[:, 1] - mean_ref_frq[1],
-                        'k.')
-
-            ax.plot(beam_frqs[..., 0], beam_frqs[..., 1], 'rx')
-            ax.plot(frqs_from_pupil[..., 0] - mean_ref_frq[0],
-                    frqs_from_pupil[..., 1] - mean_ref_frq[1],
-                    'b.')
-            ax.plot(frq_dmd_center[0] - mean_ref_frq[0],
-                    frq_dmd_center[1] - mean_ref_frq[1],
-                    'g+')
-            ax.plot(0, 0, 'm3')
-            ax.add_artist(Circle((0, 0),
-                                 radius=self.fmax,
-                                 facecolor="none",
-                                 edgecolor="k"))
-            ax.set_xlim([-self.fmax, self.fmax])
-            ax.set_ylim([-self.fmax, self.fmax])
             ax.set_xlabel("$f_x$ (1/$\\mu m$)")
             ax.set_ylabel("$f_y$ (1/$\\mu m$)")
 
@@ -3159,7 +3129,8 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
             n_imag = np.zeros_like(n_real)
 
         if show_n3d and hasattr(img_z, "n_start"):
-            n_start = da.expand_dims(da.from_zarr(img_z.n_start)[slices], axis=-4)
+            slices_nstart = tuple([s if img_z.n_start.shape[ii] != 1 else slice(None) for ii, s in enumerate(slices)])
+            n_start = da.expand_dims(da.from_zarr(img_z.n_start)[slices_nstart], axis=-4)
             n_start_real = n_start.real - no
             n_start_imag = n_start.imag
         else:
