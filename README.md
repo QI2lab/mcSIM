@@ -171,7 +171,7 @@ describing the equipment and settings used in the experiment.
 
 ### useful script files
 Example scripts which are useful for controlling various instruments during testing include:
-* [load_dmd_pattern.py](mcsim/expt_ctrl/load_dmd_pattern.py)
+* [load_dmd_pattern.py](examples/load_dmd_pattern.py)
 * [setup_optotune_mre2.py](mcsim/expt_ctrl/setup_optotune_mre2.py)
 * [set_dmd_odt_pattern.py](mcsim/expt_ctrl/set_dmd_odt_pattern.py)
 
