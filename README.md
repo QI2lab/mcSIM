@@ -158,9 +158,10 @@ When run as a script, this file provides a command line interface to programming
 ### [expt_ctrl/daq.py](mcsim/expt_ctrl/daq.py)
 Code for controlling a national instruments DAQ through [PyDAQmx](https://pypi.org/project/PyDAQmx/)
 
-### [expt_ctrl/daq_config.json](mcsim/expt_ctrl/daq_config.json)
-DAQ configuration file describing "modes" and "channels" for the DAQ. This file is used by `nidaq` instances created
-with [daq.py](mcsim/expt_ctrl/daq.py)
+### [expt_ctrl/config.json](mcsim/expt_ctrl/daq_config.json)
+Configuration file describing microscope parameters and DAQ configuration. The DAQ configuration
+file describes "modes" and "channels" for the DAQ. This file is used by `nidaq` instances created
+with [daq.py](mcsim/expt_ctrl/daq.py). This configuration file is used by [napari-micromanager](https://github.com/QI2lab/napari-micromanager)
 
 ### [program_sim_odt.py](mcsim/expt_ctrl/program_sim_odt.py)
 This file is used to create DAQ sequences for SIM and ODT experiments
@@ -173,7 +174,6 @@ describing the equipment and settings used in the experiment.
 Example scripts which are useful for controlling various instruments during testing include:
 * [load_dmd_pattern.py](examples/load_dmd_pattern.py)
 * [setup_optotune_mre2.py](mcsim/expt_ctrl/setup_optotune_mre2.py)
-* [set_dmd_odt_pattern.py](mcsim/expt_ctrl/set_dmd_odt_pattern.py)
 
 # Instrument design
 A [parts list](parts_list.md) is available here. Mechanical drawings and 3D models of custom parts such as the DMD mount 
@@ -188,5 +188,6 @@ Then open `docs/_build/html/index.html` in your browser
 
 # Acknowlegements
 Thank you to Songyun Gu for extending the DMD control code to work with the [DLP9000](https://www.ti.com/product/DLP9000).
+
 Thank you to [Beibei Gao](https://github.com/Elise-9) for assistance in extending the DMD pattern generation code to work
 with the staggered pixel geometry used by the [DLP4500](https://www.ti.com/product/DLP4500). 
