@@ -18,7 +18,8 @@ from localize_psf import affine, localize, fit_psf
 # ################################
 # data files and options
 # ################################
-data_dirs = [Path(r"F:\2024_06_18\004_red_sim_cal")]
+# data_dirs = [Path(r"F:\2024_06_18\004_red_sim_cal")]
+data_dirs = [Path(r"F:\2024_09_20\001_sim_calibration_100nm")]
 
 # channel dependent settings
 
@@ -38,14 +39,14 @@ data_dirs = [Path(r"F:\2024_06_18\004_red_sim_cal")]
 # bead_radii = 0.5 * np.array([0.1, 0.1])
 
 # blue/green
-# ignore_color = [False, False]
-# min_fit_amp = [200, 200]
-# bead_radii = 0.5 * np.array([0.1, 0.1])
+ignore_color = [False, False]
+min_fit_amp = [500, 500]
+bead_radii = 0.5 * np.array([0.1, 0.1])
 
 # red beads
-ignore_color = [False]
-min_fit_amp = [1000]
-bead_radii = 0.5 * np.array([0.2])
+# ignore_color = [False]
+# min_fit_amp = [1000]
+# bead_radii = 0.5 * np.array([0.2])
 
 # blue
 # ignore_color = [False]
@@ -57,7 +58,7 @@ use_gpu = True
 figsize = (30, 9)
 save_results = True
 # nrois_to_plot = 5 # 5
-nrois_to_plot = 0
+nrois_to_plot = 10
 
 # localization filtering parameters
 correct_mod_for_bead_size = True
@@ -104,8 +105,8 @@ for d in data_dirs:
     # get axes sizes and names
     axes_names = arrs[0].attrs["dimensions"]
     nt_fast, npos, ntimes, nz, nparams, npatterns, ny, nx = arrs[0].shape
-    nphases = arrs[0].attrs["nphases"]
-    nangles = arrs[0].attrs["nangles"]
+    nphases = arrs[0].attrs["nphases"][0]
+    nangles = arrs[0].attrs["nangles"][0]
 
     dxy = data.cam1.attrs["dx_um"]
     dz = data.attrs["dz_um"]
@@ -113,14 +114,14 @@ for d in data_dirs:
     exposure_t = data.cam1.attrs["exposure_time_ms"]
 
     # load affine xforms
-    affine_xforms = [np.array(xform) for xform in data.cam1.attrs["affine_transformations"]]
+    affine_xforms = [np.array(data.cam1.attrs["affine_transformations"][c]) for c in channels]
 
     # load pattern data
     frqs = np.zeros((ncolors, nangles, 2))
     phases = np.zeros((ncolors, nangles, nphases))
     for ii in range(ncolors):
-        frqs_raw = np.array(arrs[ii].attrs["frqs"])[::nphases]
-        phases_raw = np.array(arrs[ii].attrs["phases"]).reshape((nangles, nphases))
+        frqs_raw = np.array(arrs[ii].attrs["frq"])[::nphases]
+        phases_raw = np.array(arrs[ii].attrs["phase"]).reshape((nangles, nphases))
         fxt, fyt, phit = affine.xform_sinusoid_params(frqs_raw[:, 0],
                                                       frqs_raw[:, 1],
                                                       phases_raw,
@@ -328,7 +329,7 @@ for d in data_dirs:
 
                     # plot ROI's as diagnostics
                     for aaa in range(np.min([nrois_to_plot, len(fps_start[ic])])):
-                        str = f"ROI={aaa:d}, {id.replace('_', '', ''):s}\n" \
+                        str = f"ROI={aaa:d}, {id.replace('_', ''):s}\n" \
                               f"fit iters={niters[aaa]:d} " \
                               f"with result '{get_key(fit_states[aaa], fit_states_key):s}', and " \
                               f"chi squared = {chi_sqrs[aaa]:.1g}"

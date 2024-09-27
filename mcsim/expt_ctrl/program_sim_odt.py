@@ -114,6 +114,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        n_digital_ch=n_digital_ch,
                                        n_analog_ch=n_analog_ch,
                                        camera=am["camera"],
+                                       dmd=am["dmd"],
                                        average_patterns=am["pattern_mode"] == "average",
                                        use_dmd_as_shutter=use_dmd_as_odt_shutter,
                                        dmd_on_time=am["dmd_on_time"])
@@ -141,6 +142,7 @@ def get_sim_odt_sequence(daq_do_map: dict,
                                        use_dmd_as_shutter=am["pattern_mode"] != "from-file",
                                        average_patterns=am["pattern_mode"] == "average",
                                        camera=am["camera"],
+                                       dmd=am["dmd"],
                                        dmd_on_time=am["dmd_on_time"])
 
             # if there is only one mode, keep SIM shutter open
@@ -249,6 +251,7 @@ def get_odt_sequence(daq_do_map: dict,
                      n_analog_ch: int = 4,
                      average_patterns: bool = False,
                      camera: str = "cam2",
+                     dmd: int = 0,
                      use_dmd_as_shutter: bool = False,
                      dmd_on_time: Optional[float] = None):
     """
@@ -285,6 +288,16 @@ def get_odt_sequence(daq_do_map: dict,
 
     if dmd_on_time:
         raise NotImplementedError("using dmd_on_time not implemented with ODT")
+
+    # todo: probably better to pass which lines I want coded to DMD rather than this hokey method
+    if dmd == 0:
+        dmd_advance = daq_do_map["dmd_advance"]
+        dmd_enable = daq_do_map["dmd_enable"]
+    elif dmd == 1:
+        dmd_advance = daq_do_map["dmd2_advance"]
+        dmd_enable = daq_do_map["dmd2_enable"]
+    else:
+        raise ValueError(f"dmd value must be 0 or 1, but was {dmd}")
 
     # #########################
     # calculate number of clock cycles for different pieces of sequence
@@ -334,7 +347,7 @@ def get_odt_sequence(daq_do_map: dict,
     # laser always on
     do_odt[:, daq_do_map["odt_laser"]] = 1
     # DMD enable trigger always on
-    do_odt[:, daq_do_map["dmd_enable"]] = 1
+    do_odt[:, dmd_enable] = 1
 
     if camera in ["cam2", "both"]:
         # camera enable trigger (must be high for advance trigger)
@@ -357,18 +370,17 @@ def get_odt_sequence(daq_do_map: dict,
             do_odt[n_odt_stabilize + ii:nsteps_active:nsteps_frame, daq_do_map["sim_cam_sync"]] = 1
 
     # DMD advance trigger
-    do_odt[n_odt_stabilize - n_dmd_pre_trigger:nsteps_active-nsteps_frame:nsteps_frame, daq_do_map["dmd_advance"]] = 1
+    do_odt[n_odt_stabilize - n_dmd_pre_trigger:nsteps_active-nsteps_frame:nsteps_frame, dmd_advance] = 1
 
     # ending point is -nsteps_odt_frame to avoid having extra trigger at the end
     # which is really the pretrigger for the next frame
     if use_dmd_as_shutter:
         # extra advance trigger to "turn off" DMD and end exposure
         do_odt[n_odt_stabilize - n_dmd_pre_trigger + nsteps_exposure:nsteps_active:nsteps_frame,
-               daq_do_map["dmd_advance"]] = 1
+               dmd_advance] = 1
 
     # monitor lines
-    do_odt[:, daq_do_map["signal_monitor"]] = do_odt[:, daq_do_map["dmd_advance"]]
-
+    do_odt[:, daq_do_map["signal_monitor"]] = do_odt[:, dmd_advance]
     do_odt[:, daq_do_map["camera_trigger_monitor"]] = np.logical_or(do_odt[:, daq_do_map["sim_cam_sync"]],
                                                                     do_odt[:, daq_do_map["odt_cam_sync"]])
 
@@ -407,6 +419,7 @@ def get_sim_sequence(daq_do_map: dict,
                      use_dmd_as_shutter: bool = True,
                      average_patterns: bool = False,
                      camera: str = "cam1",
+                     dmd: int = 0,
                      force_equal_subpatterns: bool = True,
                      turn_laser_off_during_interval: bool = True,
                      dmd_on_time: Optional[float] = None):
@@ -448,6 +461,16 @@ def get_sim_sequence(daq_do_map: dict,
 
     if min_frame_time != 0:
         raise NotImplementedError("only min_frame_time=0 is implemented")
+
+    # todo: probably better to pass which lines I want coded to DMD rather than this hokey method
+    if dmd == 0:
+        dmd_advance = daq_do_map["dmd_advance"]
+        dmd_enable = daq_do_map["dmd_enable"]
+    elif dmd == 1:
+        dmd_advance = daq_do_map["dmd2_advance"]
+        dmd_enable = daq_do_map["dmd2_enable"]
+    else:
+        raise ValueError(f"dmd value must be 0 or 1, but was {dmd}")
 
     # #################################
     # total frame time
@@ -580,13 +603,13 @@ def get_sim_sequence(daq_do_map: dict,
     # ######################################
     # DMD enable trigger
     # ######################################
-    do[:, daq_do_map["dmd_enable"]] = 1
+    do[:, dmd_enable] = 1
 
     # ######################################
     # DMD advance trigger
     # ######################################
     # number of steps for dmd pre-trigger
-    do[:, daq_do_map["dmd_advance"]] = 0
+    do[:, dmd_advance] = 0
 
     for ii in range(n_trig_width):
         for jj in range(n_display_patterns_frame):
@@ -595,18 +618,18 @@ def get_sim_sequence(daq_do_map: dict,
             on_start_index = n_stabilize + n_readout - n_dmd_pre_trigger
             # id_now = on_start_index + jj * n_pattern_frame + ii
             id_now = on_start_index + jj * n_dmd_on + ii
-            do[id_now:n_active:n_frame, daq_do_map["dmd_advance"]] = 1
+            do[id_now:n_active:n_frame, dmd_advance] = 1
 
             if use_dmd_as_shutter:
                 # display OFF pattern. Only display between frames, i.e. not between sub-frame patterns
                 # off_start_index = on_start_index + (n_cam_exposure - n_readout) + ii
                 off_start_index = on_start_index + n_display_patterns_frame * n_dmd_on + ii
-                do[off_start_index:n_active:n_frame, daq_do_map["dmd_advance"]] = 1
+                do[off_start_index:n_active:n_frame, dmd_advance] = 1
 
     # ######################################
     # monitor lines
     # ######################################
-    do[:, daq_do_map["signal_monitor"]] = do[:, daq_do_map["dmd_advance"]]
+    do[:, daq_do_map["signal_monitor"]] = do[:, dmd_advance]
     do[:, daq_do_map["camera_trigger_monitor"]] = np.logical_or(do[:, daq_do_map["sim_cam_sync"]],
                                                                 do[:, daq_do_map["odt_cam_sync"]])
 
