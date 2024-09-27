@@ -373,10 +373,9 @@ def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
                                  "nposition_multiplex": np.unique(frqs_mirrors, axis=0).shape[0],
                                  "spot_positions_mirrors": spot_pos_mirrors.tolist(),
                                  "nangles_multiplex_nominal": len(spot_pos_mirrors),
-                                 "phase": np.asarray(phase_now).tolist(),
-                                 "radius": spot_radius,  # carrier frequency information
-                                 # "pupil_frequency_fraction": np.linalg.norm(pupil_positions[ii], axis=1).tolist(),
-                                 # "pupil_angle": np.arctan2(spot_pos_mirrors[:, 1], spot_pos_mirrors[:, 0]).tolist()
+                                 "phase": phase_now.tolist(),
+                                 "radius": radii_now.tolist(),  # carrier frequency information
+                                 "inverted": use_off_mirrors
                                  })
 
     return odt_patterns, odt_pattern_data
