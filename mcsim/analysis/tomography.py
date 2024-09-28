@@ -40,7 +40,6 @@ from localize_psf.camera import bin
 from localize_psf.fit import fit_model, gauss2d_symm
 from localize_psf.rois import get_centered_rois, cut_roi
 from localize_psf.affine import (params2xform,
-                                 xform2params,
                                  fit_xform_points_ransac,
                                  fit_xform_points,
                                  xform_points)
@@ -984,7 +983,7 @@ class Tomography:
         This could be between frequencies displayed on DMD and measured frequency space (DMD in imaging plane)
         or between mirror positions on DMD and frequency space (DMD in Fourier plane)
 
-        :param offsets:
+        :param offsets: 
         :param dmd_size: (ny, nx)
         :param save:
         :param interactive:
@@ -1002,9 +1001,6 @@ class Tomography:
 
         mean_ref_frq = np.mean(self.reference_frq.squeeze(axis=(-2, -3, -4)), axis=tuple(range(self.nextra_dims)))
 
-        beam_frqs = np.concatenate([np.mean(f, axis=tuple(range(self.nextra_dims)))
-                                    for f in self.get_beam_frqs()], axis=0)
-
         # fit affine transformation
         if len(mean_hologram_frqs) > 6:
             xform_dmd2frq, _, _, _ = fit_xform_points_ransac(centers_dmd,
@@ -1019,9 +1015,6 @@ class Tomography:
 
         # map pupil positions to frequency
         frqs_from_pupil = xform_points(centers_dmd, xform_dmd2frq)
-        # estimate frequency of reference beam from affine transformation and previous calibration information
-        # frq_dmd_center = xform_points(np.array([[0, 0]]), xform_dmd2frq)[0]
-
         # also get inverse transform and map frequencies to pupil (DMD positions)
         xform_frq2dmd = inv(xform_dmd2frq)
         centers_pupil_from_frq = xform_points(mean_hologram_frqs, xform_frq2dmd)
@@ -1037,8 +1030,7 @@ class Tomography:
         # DMD boundary
         if dmd_size is not None:
             south = np.zeros((nx_dmd, 2))
-            south[:, 0] = np.arange(nx_dmd)
-            south[:, 1] = 0
+            south[:, 0] = np.arange(nx_dmd)            
 
             north = np.zeros((nx_dmd, 2))
             north[:, 0] = np.arange(nx_dmd)
@@ -1048,15 +1040,11 @@ class Tomography:
             east[:, 0] = nx_dmd - 1
             east[:, 1] = np.arange(ny_dmd)
 
-            west = np.zeros((ny_dmd, 2))
-            west[:, 0] = 0
+            west = np.zeros((ny_dmd, 2))            
             west[:, 1] = np.arange(ny_dmd)
 
             dmd_boundary = np.concatenate((south, north, east, west), axis=0)
             dmd_boundary_freq = xform_points(dmd_boundary, xform_dmd2frq)
-
-        # check sign of frequency reference is consistent with affine transform
-        # assert norm(frq_dmd_center + mean_ref_frq) >= norm(frq_dmd_center - mean_ref_frq)
 
         # ##############################
         # plot data
@@ -1094,10 +1082,12 @@ class Tomography:
                     'k',
                     label="pupil")
             
-            max_bound = max([np.max(centers_dmd), np.max(centers_pupil_from_frq)])
-            min_bound = min([np.min(centers_dmd), np.min(centers_pupil_from_frq)])
-            ax.set_xlim([min_bound, max_bound])
-            ax.set_ylim([min_bound, max_bound])
+            xmax_bound = max([np.max(centers_dmd[:, 0]), np.max(centers_pupil_from_frq[..., 0]), np.max(centers_dmd_fmax[:, 0])])
+            xmin_bound = min([np.min(centers_dmd[:, 0]), np.min(centers_pupil_from_frq[..., 0]), np.min(centers_dmd_fmax[:, 0])])
+            ymax_bound = max([np.max(centers_dmd[:, 1]), np.max(centers_pupil_from_frq[..., 1]), np.max(centers_dmd_fmax[:, 1])])
+            ymin_bound = min([np.min(centers_dmd[:, 1]), np.min(centers_pupil_from_frq[..., 1]), np.min(centers_dmd_fmax[:, 1])])
+            ax.set_xlim([xmin_bound, xmax_bound])
+            ax.set_ylim([ymin_bound, ymax_bound])
             ax.legend(bbox_to_anchor=(0.2, 1.1))
             ax.set_xlabel("x-position (mirrors)")
             ax.set_ylabel("y-position (mirrors)")
@@ -1112,14 +1102,13 @@ class Tomography:
 
             ax.plot(mean_hologram_frqs[..., 0], mean_hologram_frqs[..., 1], 'rx')
             ax.plot(frqs_from_pupil[..., 0], frqs_from_pupil[..., 1], 'b.')
-            # ax.plot(frq_dmd_center[0], frq_dmd_center[1], 'g+')
             ax.plot(mean_ref_frq[0], mean_ref_frq[1], "m3")
             ax.add_artist(Circle(mean_ref_frq,
                                  radius=self.fmax,
                                  facecolor="none",
                                  edgecolor="k"))
             ax.set_xlim([-self.fmax + mean_ref_frq[0], self.fmax + mean_ref_frq[0]])
-            ax.set_ylim([-self.fmax + mean_ref_frq[1], self.fmax + mean_ref_frq[1]])
+            ax.set_ylim([self.fmax + mean_ref_frq[1], -self.fmax + mean_ref_frq[1]])
             ax.set_xlabel("$f_x$ (1/$\\mu m$)")
             ax.set_ylabel("$f_y$ (1/$\\mu m$)")
 
