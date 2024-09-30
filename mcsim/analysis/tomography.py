@@ -5,7 +5,7 @@ reconstruction tasks are carried out with the tomography class
 """
 from time import perf_counter
 import datetime
-from warnings import catch_warnings, simplefilter
+from warnings import catch_warnings, simplefilter, warn
 from typing import Union, Optional
 from collections.abc import Sequence
 from inspect import getfullargspec
@@ -54,6 +54,11 @@ from mcsim.analysis.field_prop import (get_n,
                                        LinearScatt,
                                        BPM,
                                        SSNP)
+
+try:
+    import napari
+except ImportError:
+    napari = None
 
 try:
     import cupy as cp
@@ -2987,7 +2992,9 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     :return: viewer
     """
 
-    import napari
+    if napari is None:
+        warn("napari was not successfully imported")
+        return None
 
     # ##############################
     # optionally load raw data
@@ -3589,7 +3596,6 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
     :param verbose: whether to print information as load files
     :return viewer:
     """
-    import napari
     v = napari.Viewer()
 
     if isinstance(fnames, (Path, str)):
