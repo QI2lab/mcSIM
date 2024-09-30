@@ -4399,8 +4399,11 @@ class FistaSim(Optimizer):
 
         xp = cp if cp and isinstance(x, cp.ndarray) else np
         img_model = self.fwd_model(x, inds=inds)
-        dc_do = xp.stack([blur_img_psf(bin_adjoint(img_model[ii] - self.imgs[ind], (self.nbin, self.nbin), mode="sum"),
-                                     self.psf_reversed, self.apodization).real
+        dc_do = xp.stack([blur_img_psf(bin_adjoint(img_model[ii] - self.imgs[ind],
+                                                   (self.nbin, self.nbin),
+                                                   mode="sum"),
+                                       self.psf_reversed,
+                                       self.apodization).real
                         for ii, ind in enumerate(inds)])
         dc_do *= self.patterns[inds]
 
