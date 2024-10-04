@@ -1002,7 +1002,6 @@ class Tomography:
         mean_hologram_frqs = np.concatenate([np.mean(f, axis=tuple(range(self.nextra_dims)))
                                              for f in self.hologram_frqs], axis=0)
         # mean_hologram_frqs = np.mean(self.hologram_frqs, axis=tuple(range(self.nextra_dims)))
-        # mean_hologram_frqs = np.concatenate([hf for hf in mean_hologram_frqs], axis=0)
 
         mean_ref_frq = np.mean(self.reference_frq.squeeze(axis=(-2, -3, -4)), axis=tuple(range(self.nextra_dims)))
 
@@ -1023,8 +1022,10 @@ class Tomography:
         # also get inverse transform and map frequencies to pupil (DMD positions)
         xform_frq2dmd = inv(xform_dmd2frq)
         centers_pupil_from_frq = xform_points(mean_hologram_frqs, xform_frq2dmd)
-        center_pupil_frq_ref = xform_points(mean_hologram_frqs, xform_frq2dmd)[0]
-        # center_pupil_frq_ref = affine.xform_points(np.expand_dims(mean_hologram_frqs, axis=0), xform_frq2dmd)[0]
+
+        # approximate reference frequency
+        index_center = np.argmin(np.linalg.norm(centers_dmd, axis=1))
+        center_pupil_frq_ref = xform_points(mean_hologram_frqs, xform_frq2dmd)[index_center]
 
         # map maximum pupil frequency circle to DMD space
         circle_thetas = np.linspace(0, 2 * np.pi, 1001)
@@ -1080,7 +1081,7 @@ class Tomography:
                     label="mirror positions")
             ax.plot(center_pupil_frq_ref[0],
                     center_pupil_frq_ref[1],
-                    "m3",
+                    "g3",
                     label="reference freq")
             ax.plot(centers_dmd_fmax[:, 0],
                     centers_dmd_fmax[:, 1],
@@ -1107,7 +1108,7 @@ class Tomography:
 
             ax.plot(mean_hologram_frqs[..., 0], mean_hologram_frqs[..., 1], 'rx')
             ax.plot(frqs_from_pupil[..., 0], frqs_from_pupil[..., 1], 'b.')
-            ax.plot(mean_ref_frq[0], mean_ref_frq[1], "m3")
+            ax.plot(mean_ref_frq[0], mean_ref_frq[1], "g3")
             ax.add_artist(Circle(mean_ref_frq,
                                  radius=self.fmax,
                                  facecolor="none",
@@ -1326,6 +1327,8 @@ class Tomography:
         :param processes:
         :return:
         """
+        warn("unmix_holograms() is deprecated. Use unmix_holograms_v2() instead.")
+
         tstart_holos = perf_counter()
 
         def _ft_abs(m: array) -> array:
