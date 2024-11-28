@@ -43,42 +43,125 @@ try:
 
     # spherical bessel functions of the first kind using downward recursion and Miller's algorithm
     # todo: prefer to estimate number of terms for given value x and deal with
+    # for z < l, upward recursion is unstable, so use downward recursion and Miller's algorithm
+    # for z > l, either recursion is stable. Use upward recursion
+    # see discussion in e.g. https://doi.org/10.1007/978-3-642-61010-3 chapter "The Calculation of Spherical Bessel Functions and Coulomb Functions"
+    # upward recursion is stable for z > l
     jn_kernel = cp.RawKernel(r"""
     extern "C" __global__
-    void my_jn(const int n, const double* x, const int xsize, double* out, double* deriv) {
-       int tid = blockDim.x * blockIdx.x + threadIdx.x;
+    void my_jn(const int n, const int nmax, const double* x, const int xsize, double* out, double* deriv) {
+       int tid = blockDim.x * blockIdx.x + threadIdx.x;       
 
        if (tid < xsize) {
-          double j_0 = sin(x[tid]) / x[tid];          
-          double j_1 = (sin(x[tid]) / x[tid] - cos(x[tid])) / x[tid];
-          int ref_seq_pos = n - 3;
+            double j_0, j_1, dj_0;
 
-          out[tid * n + n - 1] = 0.0;
-          out[tid * n + n - 2] = 1.0;
+            // initial values
+            if (x[tid] == 0.0) {
+                j_0 = 1.0;
+                j_1 = 0.0;
+                dj_0 = 0.0;
+            }
+            else {
+                j_0 = sin(x[tid]) / x[tid];          
+                j_1 = (sin(x[tid]) / x[tid] - cos(x[tid])) / x[tid];
+                dj_0 = (cos(x[tid]) - sin(x[tid]) / x[tid]) / x[tid];
+            }
 
-          for (int ii=n-3; ii >= 0; ii--) {
-             out[tid * n + ii] = (2.0 * ii + 3.0) / x[tid] * out[tid * n + ii + 1] - out[tid * n + ii + 2];
-             
-             // avoid numerical issues if started with too large n
-             if (fabs(out[tid * n + ii]) > 1.0E6 * fabs(out[tid * n + ref_seq_pos])) {
-                 ref_seq_pos = ii;
-                 out[tid * n + ii + 1] /= 1.0E6;
-                 out[tid * n + ii] /= 1.0E6;
-             }
-                               
-          }
-          double norm = 0.5 * (out[tid * n] / j_0 + out[tid * n + 1] / j_1);  
+            if (x[tid] == 0.0){
+                out[tid * nmax] = j_0;
+                out[tid * nmax + 1] = j_1;
+                deriv[tid * nmax] = dj_0;
+                deriv[tid * nmax + 1] = 1.0 / 3.0;
+                
+                for (int ii = 2; ii < n; ii++) {
+                    out[tid * nmax + ii] = 0.0; 
+                    deriv[tid * nmax + ii] = 0.0;
+                }                 
+            }
+            else if (fabs(x[tid]) <= 0.1){ // downward recursion doesn't work well here                
+                out[tid * nmax] = j_0;                
+                deriv[tid * nmax] = dj_0;
+                             
+                double double_factorial = 1.0;                
+                double xpow = 1.0; // x^{ii - 1}
+                for (int ii = 1; ii < n; ii++) {
+                    double_factorial = double_factorial * (2.0*ii + 1.0);
+                    xpow = xpow * x[tid];
+                    
+                    if (ii == 1) {
+                        out[tid * nmax + ii] = j_1;
+                    }
+                    else {
+                        out[tid * nmax + ii] = xpow / double_factorial - \
+                                               xpow * x[tid] * x[tid] / double_factorial / (2.0*ii + 3.0) / 2.0 + \
+                                               xpow * x[tid] * x[tid] * x[tid] * x[tid] / double_factorial / (2.0*ii + 3.0) / (2.0*ii + 5.0) / 8.0 -\
+                                               xpow * x[tid] * x[tid] * x[tid] * x[tid] * x[tid] * x[tid] / double_factorial / (2.0*ii + 3.0) / (2.0*ii + 5.0) / (2.0*ii + 7.0) / 48.0;
+                    }
+                    
+                    deriv[tid * nmax + ii] = out[tid * nmax + ii - 1] - (ii + 1.0) / x[tid] * out[tid * nmax + ii];                    
+                }
+                                             
+            }
+            else if (x[tid] > n) { // upward recursion                                                             
+                out[tid * nmax] = j_0;
+                out[tid * nmax + 1] = j_1;
+                deriv[tid * nmax] = dj_0;
+                
+                // first derivative iteration             
+                deriv[tid * nmax + 1] = out[tid * nmax] - (2.0) * out[tid * nmax + 1] / x[tid];
+                             
+                // remaining iterations
+                for (int ii = 2; ii < n; ii++) {
+                    out[tid * nmax + ii] = (2.0 * ii - 1.0) * out[tid * nmax + ii - 1] / x[tid] - out[tid * nmax + ii - 2]; 
+                    deriv[tid * nmax + ii] = out[tid * nmax + ii - 1] - (ii + 1.0) * out[tid * nmax + ii] / x[tid];
+                }
+            }
+            else { // downward recursion using Miller's algorithm
+                // start recursion at different points depending on x value. Choose starting point so any higher bessel functions are negligible here
+                int nstart_miller = (int) x[tid] + (nmax - n);
+                
+                for (int ii=nstart_miller; ii<nmax; ii++) {
+                    out[tid * nmax + ii] = 0.0;
+                }                
+                out[tid * nmax + nstart_miller] = 0.0;
+                out[tid * nmax + nstart_miller - 1] = 1.0;                
+                                             
+                for (int ii=nstart_miller - 2; ii >= 0; ii--) {
+                    out[tid * nmax + ii] = (2.0 * ii + 3.0) / x[tid] * out[tid * nmax + ii + 1] - out[tid * nmax + ii + 2];
+                    
+                    // avoid numerical issues if started with too large n            
+                    //if (fabs(out[tid * nmax + ii]) > 1.0E20) {                                           
+                    //    for (int jj=ii; jj < nmax; jj++) {
+                    //        out[tid * nmax + jj] = 0.0;                            
+                    //    }
+                    //    out[tid * nmax + ii + 5] = 1.0;                        
+                    //    ii += 5;       
+                    //}
+                }                                                             
+                             
+                // compute norm using known values of first few spherical bessel functions
+                double norm;
+                if (j_0 != 0.0 && j_1 != 0.0) {
+                    norm = 0.5 * (out[tid * nmax] / j_0 + out[tid * nmax + 1] / j_1);
+                }
+                else if (j_0 == 0.0 && j_1 != 0.0) {
+                    norm = out[tid * nmax + 1] / j_1;
+                }
+                else {
+                    norm = out[tid * nmax] / j_0;
+                }
 
-          for (int ii = 0; ii < n; ii++) {
-              out[tid * n + ii] /= norm;
-              if (ii == 0) {
-                  deriv[tid * n + ii] = (cos(x[tid]) - sin(x[tid]) / x[tid]) / x[tid];
-              }
-              else {
-                   deriv[tid * n + ii] = out[tid * n + ii - 1] - (ii + 1.0) / x[tid] * out[tid * n + ii];
-              }
-
-          }
+                // normalize and compute derivatives
+                for (int ii = 0; ii < nmax; ii++) {
+                    out[tid * nmax + ii] /= norm;
+                    if (ii == 0) {
+                        deriv[tid * nmax + ii] = dj_0;
+                    }
+                    else {
+                        deriv[tid * nmax + ii] = out[tid * nmax + ii - 1] - (ii + 1.0) / x[tid] * out[tid * nmax + ii];
+                    }
+                }
+            }
        }
     }
     """, "my_jn")
@@ -88,9 +171,11 @@ try:
            z: cp.ndarray,
            threads: int = 256):
         """
+        Generate a sequence of spherical Bessel functions of the 2nd kind and their derivatives at coordinates z
+        using upward recursion
 
-        :param n:
-        :param z:
+        :param n: number of spherical Bessel functions to generate. The maximum function will be bessel_{n-1}(x)
+        :param z: points to evaluate the Bessel functions at
         :param threads:
         :return yn, derivative:
         """
@@ -109,19 +194,22 @@ try:
            threads: int = 256,
            overhead: int = 40,):
         """
+        Generate a sequence of spherical Bessel functions of the 1st kind and their derivatives at coordinates z
+        using downward recursion
 
-        :param n:
+        :param n: number of spherical Bessel functions to generate. The maximum function will be bessel_{n-1}(x)
         :param z:
         :param threads:
-        :param overhead:
+        :param overhead: number of additional Bessel functions to include in calculation for downward recursion
         :return jn, derivative:
         """
-        out = cp.zeros((z.size, n * overhead), dtype=cp.double)
-        derivative = cp.zeros((z.size, n * overhead), dtype=cp.double)
+        nmax = n + overhead
+        out = cp.zeros((z.size, nmax), dtype=cp.double)
+        derivative = cp.zeros((z.size, nmax), dtype=cp.double)
         z = z.astype(cp.double)
 
         blocks = int(np.ceil(z.size / threads))
-        jn_kernel((blocks,), (threads,), (n * overhead, z, z.size, out, derivative))
+        jn_kernel((blocks,), (threads,), (n, nmax, z, z.size, out, derivative))
 
         return out[:, :n], derivative[:, :n]
 
