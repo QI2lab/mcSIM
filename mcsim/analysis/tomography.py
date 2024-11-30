@@ -124,6 +124,7 @@ class Tomography:
                  save_auxiliary_fields: bool = False,
                  compressor: Codec = Zlib(),
                  save_float32: bool = False,
+                 debug: bool = False,
                  step: float = 1.,
                  **reconstruction_kwargs,
                  ):
@@ -176,6 +177,7 @@ class Tomography:
           for more details.
         """
         self.verbose = verbose
+        self.debug = debug
         self.tstamp = datetime.datetime.now().strftime('%Y_%m_%d_%H;%M;%S')
 
         # ########################
@@ -912,6 +914,7 @@ class Tomography:
                                   n_workers=n_workers,
                                   processes=processes,
                                   chunks=self.imgs_raw.chunksize[:-2] + (None, None),
+                                  debug=self.debug
                                   )
             frqs_hologram = np.stack(r, axis=0).reshape(self.imgs_raw.shape[:-2] + (self.nmax_multiplex, 2))
 
@@ -931,6 +934,7 @@ class Tomography:
                                   n_workers=n_workers,
                                   processes=processes,
                                   chunks=self.imgs_raw_bg.chunksize[:-2] + (None, None),
+                                  debug=self.debug
                                   )
             frqs_hologram_bg = np.stack(r, axis=0).reshape(self.imgs_raw_bg.shape[:-2] + (self.nmax_multiplex, 2))
 
@@ -1257,6 +1261,7 @@ class Tomography:
                                 n_workers=n_workers,
                                 processes=processes,
                                 return_generator=True,
+                                debug=self.debug
                                 )
         ts = []
         ps = []
@@ -1303,7 +1308,8 @@ class Tomography:
                               chunks=((1,) * self.nextra_dims + (self.npatterns, self.ny, self.nx))
                                       if self.fit_phase_profile else imgs_raw_bg.chunksize,
                               n_workers=n_workers,
-                              processes=processes
+                              processes=processes,
+                              debug=self.debug
                               )
 
         t, p, _, _ = zip(*r)
@@ -1916,6 +1922,7 @@ class Tomography:
                           n_workers=n_workers,
                           processes=processes,
                           verbose=False,
+                          debug=self.debug
                           )
 
         get_reusable_executor().shutdown(wait=True)
@@ -3710,6 +3717,7 @@ def map_blocks_joblib(fn,
                       chunks: Optional[Sequence[int]] = None,
                       verbose: bool = True,
                       return_generator: bool = False,
+                      debug = False,
                       **kwargs) -> list:
     """
     Processes function along blocks of a chunked array with joblib. This is intended to be a replacement for
@@ -3789,14 +3797,22 @@ def map_blocks_joblib(fn,
         def binfo(ind): return {}
 
     # todo: pass input_chunks or derive from array (through chunksize attribute?) and separately (output) chunks?
-    results = (joblib.Parallel(n_jobs=n_workers,
-                               prefer="processes" if processes else "threads",
-                               return_as="generator" if return_generator else "list")
-                 (joblib.delayed(fn)(*[slicer(a, ind) for a in args],
-                                     **bid(ind), # pass block id if function accepts it
-                                     **binfo(ind), # pass block info
-                                     **kwargs)
-                                     for ind in inds)
-              )
+    if debug:
+        results = [fn(*[slicer(a, ind) for a in args],
+                      **bid(ind), # pass block id if function accepts it
+                      **binfo(ind), # pass block info
+                      **kwargs)
+                   for ind in inds]
+    else:
+        results = (joblib.Parallel(n_jobs=n_workers,
+                                   prefer="processes" if processes else "threads",
+                                   return_as="generator" if return_generator else "list")
+                     (joblib.delayed(fn)(*[slicer(a, ind) for a in args],
+                                         **bid(ind), # pass block id if function accepts it
+                                         **binfo(ind), # pass block info
+                                         **kwargs)
+                                         for ind in inds)
+                  )
+
 
     return results
