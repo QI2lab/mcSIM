@@ -12,8 +12,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import svds
 from mcsim.analysis.fft import ft2, ift2, ft3, ift3
-from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, median_prox
-from mcsim.analysis.prox_tv import parallel_proximal_tv as parallel_tv_prox
+from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, median_prox, parallel_tv_prox
 
 try:
     import cupy as cp
