@@ -264,7 +264,7 @@ class Optimizer:
         cy = xp.mean(self.cost(y, inds=inds), axis=0)
         return (cy > cx + xp.sum(gx.real * (y - x).real +
                                  gx.imag * (y - x).imag) +
-                0.5 / step * xp.linalg.norm(y - x)**2)
+                0.5 / step * xp.linalg.norm(y - x)**2) or xp.isnan(cy)
 
     def run(self,
             x_start: array,
@@ -359,6 +359,8 @@ class Optimizer:
             if stop_on_nan:
                 if xp.any(xp.isnan(x)):
                     results["stop_condition"] = "stopped on NaN"
+                    if verbose:
+                        print("\nstopped on NaN")
                     break
 
             # ###################################
