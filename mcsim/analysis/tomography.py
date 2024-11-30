@@ -3099,7 +3099,10 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                    img_z.attrs["xform_dict"]["coordinate_order"] == "yx")
 
     if order_is_yx:
-        affine_recon2cam = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
+        try:
+            affine_recon2cam = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
+        except (KeyError, TypeError):
+            affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
     else:
         # Napari uses convention (y, x) whereas I'm using (x, y),
         # so need to swap these dimensions in affine xforms
@@ -3108,10 +3111,10 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                             [0, 0, 1]])
         try:
             affine_recon2cam_xy = np.array(img_z.attrs["xform_dict"]["affine_xform_recon_2_raw_camera_roi"])
-        except KeyError:
+        except (KeyError, TypeError):
             try:
                 affine_recon2cam_xy = np.array(img_z.attrs["affine_xform_recon_2_raw_camera_roi"])
-            except KeyError:
+            except (KeyError, TypeError):
                 affine_recon2cam_xy = params2xform([1, 0, 0, 1, 0, 0])
 
         try:
