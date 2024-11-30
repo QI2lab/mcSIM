@@ -30,19 +30,8 @@ if cp:
 else:
     array = np.ndarray
 
-DEBUG_PLOT = True
-
-
 def shrinkage(y: array, tau: float, use_gpu: bool = True) -> array:
     """Shrinkage function.
-
-    .. math::
-
-        T(y; \\tau) = \\max(|y| - \\tau, 0) \\cdot \\frac{y}{|y|},
-
-    where :math:`\\max` operates element-wise, and :math:`\\frac{y}{|y|}`
-    represents the sign of :math:`y`.
-
 
     Parameters
     ----------
@@ -219,10 +208,10 @@ def parallel_proximal_tv(img: array, lambda_reg: float, use_gpu: bool = True) ->
 
     return x
 
-
 # Example usage
 if __name__ == "__main__":
     from skimage import data
+    import napari
 
     # generate noisy data
     image = np.squeeze(data.cells3d()[:, 0, :, :])
@@ -232,16 +221,13 @@ if __name__ == "__main__":
     noisy_img = image + noise_level * np.random.rand(*image.shape)
     noisy_img[noisy_img < 0.0] = 0.0
 
+    # run denoising
     lambda_reg = 0.1
-    max_iter = 1
+    img_denoised = parallel_proximal_tv(cp.asarray(noisy_img), lambda_reg)
 
-    # Run simplified FPPA
-    img_denoised = parallel_proximal_tv(cp.asarray(noisy_img), max_iter, lambda_reg)
-    if DEBUG_PLOT:
-        import napari
-
-        viewer = napari.Viewer()
-        viewer.add_image(cp.asnumpy(img_denoised), name="fppa")
-        viewer.add_image(noisy_img, name="noisy image")
-        viewer.add_image(image, name="original image")
-        napari.run()
+    # visualize results
+    viewer = napari.Viewer()
+    viewer.add_image(cp.asnumpy(img_denoised), name="fppa")
+    viewer.add_image(noisy_img, name="noisy image")
+    viewer.add_image(image, name="original image")
+    napari.run()
