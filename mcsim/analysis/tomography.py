@@ -400,8 +400,8 @@ class Tomography:
 
         if not hasattr(self.store, "escatt"):
             self.store.create("escatt",
-                              shape=self.imgs_raw.shape[:-3] + (self.nmax_multiplex, self.ny, self.nx),
-                              chunks=(1,) * (self.imgs_raw.ndim - 2) + (self.ny, self.nx),
+                              shape=self.imgs_raw.shape[:-2] + (self.nmax_multiplex, self.ny, self.nx),
+                              chunks=(1,) * (self.imgs_raw.ndim - 2) + (1, self.ny, self.nx),
                               compressor=self.compressor,
                               dtype=complex)
 
@@ -1693,7 +1693,8 @@ class Tomography:
             dims = tuple(range(nextra_dims))
             nimgs, ny, nx = efields_ft.shape[-3:]
 
-            nmax_multiplex = np.max([len(f) for f in beam_frqs])
+            # nmax_multiplex = np.max([len(f) for f in beam_frqs])
+            nmax_multiplex = beam_frqs.shape[0]
 
             if isinstance(efields_ft, dask.array.Array):
                 efields_ft = efields_ft.compute()
@@ -1761,7 +1762,7 @@ class Tomography:
                 # optionally export scattered field
                 try:
                     if e_scatt_out is not None:
-                        e_scatt_out[block_ind] = to_cpu(efield_scattered)
+                        e_scatt_out[block_ind] = to_cpu(efield_scattered).reshape((nimgs, nmax_multiplex, ny, nx))
                     del efield_scattered
                 except NameError:
                     pass
