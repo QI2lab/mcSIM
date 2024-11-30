@@ -836,11 +836,11 @@ class RIOptimizer(Optimizer):
                 
             if self.prox_parameters["fast_tau_tv_real"] != 0:
                 x_real = parallel_proximal_tv(x_real,
-                                 self.prox_parameters["tau_tv_real"])
+                                 self.prox_parameters["fast_tau_tv_real"])
 
             if self.prox_parameters["fast_tau_tv_imag"] != 0:
                 x_imag = parallel_proximal_tv(x_imag,
-                                 self.prox_parameters["tau_tv_imag"])
+                                 self.prox_parameters["fast_tau_tv_imag"])
 
             return x_real, x_imag
 
