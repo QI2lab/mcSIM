@@ -20,6 +20,7 @@ except ImportError:
 
 try:
     from cucim.skimage.restoration import denoise_tv_chambolle as denoise_tv_chambolle_gpu
+    from mcsim.analysis.prox_tv import parallel_proximal_tv
 except ImportError:
     denoise_tv_chambolle_gpu = None
 

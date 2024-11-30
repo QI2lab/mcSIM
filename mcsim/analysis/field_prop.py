@@ -13,6 +13,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import svds
 from mcsim.analysis.fft import ft2, ift2, ft3, ift3
 from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, median_prox
+from mcsim.analysis.prox_tv import parallel_proximal_tv
 
 try:
     import cupy as cp
@@ -832,6 +833,14 @@ class RIOptimizer(Optimizer):
                 x_imag = tv_prox(x_imag,
                                  self.prox_parameters["tau_tv_imag"],
                                  max_num_iter=self.prox_parameters["max_num_iter"])
+                
+            if self.prox_parameters["fast_tau_tv_real"] != 0:
+                x_real = parallel_proximal_tv(x_real,
+                                 self.prox_parameters["tau_tv_real"])
+
+            if self.prox_parameters["fast_tau_tv_imag"] != 0:
+                x_imag = parallel_proximal_tv(x_imag,
+                                 self.prox_parameters["tau_tv_imag"])
 
             return x_real, x_imag
 
