@@ -640,7 +640,6 @@ class Tomography:
             imgs = da.concatenate((imgs[fg_slice1], imgs[fg_slice2]), axis=bg_axis)
         else:
             imgs_bg = None
-
         return zraw, zc, imgs, imgs_bg
 
     def save(self,
