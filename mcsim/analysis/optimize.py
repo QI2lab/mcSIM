@@ -324,6 +324,9 @@ class Optimizer:
         if n_batch is None or n_batch > self.n_samples:
             n_batch = self.n_samples
 
+        if line_search_iter_limit is None:
+            line_search_iter_limit = max_iterations
+
         # ###################################
         # initialize
         # ###################################
@@ -368,7 +371,7 @@ class Optimizer:
             # ###################################
 
             ls_iters = 0
-            if line_search_iter_limit is not None and ii >= line_search_iter_limit:
+            if ii >= line_search_iter_limit:
                 # ###################################
                 # compute cost
                 # ###################################
