@@ -351,6 +351,8 @@ class Optimizer:
         costs = np.zeros((max_iterations + 1, self.n_samples)) * np.nan
         steps = np.ones(max_iterations) * step
         xdiffs = np.ones(max_iterations) * np.nan
+        gnorms = np.ones(max_iterations) * np.nan
+        batch_inds = []
         line_search_iters = np.ones(max_iterations, dtype=int)
         q_last = 1
         x = xp.array(x_start, copy=True)
@@ -358,6 +360,7 @@ class Optimizer:
         for ii in range(max_iterations):
             # select batch indices
             inds = sample(range(self.n_samples), n_batch)
+            batch_inds.append(inds)
 
             if stop_on_nan:
                 if xp.any(xp.isnan(x)):
@@ -391,13 +394,13 @@ class Optimizer:
                 tstart_grad = perf_counter()
 
                 if compute_batch_grad_parallel:
-                    x -= steps[ii] * xp.mean(self.gradient(x, inds=inds), axis=0)
+                    gx = xp.mean(self.gradient(x, inds=inds), axis=0)
                 else:
-                    grad_mean = 0
+                    gx = 0
                     for inow in inds:
-                        grad_mean += self.gradient(x, inds=[inow])[0] / n_batch
+                        gx += self.gradient(x, inds=[inow])[0] / n_batch
 
-                    x -= steps[ii] * grad_mean
+                x -= steps[ii] * gx
 
                 timing["grad"] = np.concatenate((timing["grad"], np.array([perf_counter() - tstart_grad])))
 
@@ -409,11 +412,11 @@ class Optimizer:
 
                 timing["prox"] = np.concatenate((timing["prox"], np.array([perf_counter() - tstart_prox])))
 
-            else:
-                # cost at current point
-                # always grab costs, since computing for line-search
+            else:                
                 tstart_err = perf_counter()
 
+                # cost at current point
+                # always grab costs, since computing for line-search
                 if compute_all_costs:
                     c_all = self.cost(x)
                     costs[ii] = to_cpu(c_all)
@@ -475,8 +478,9 @@ class Optimizer:
             if ftol != 0:
                 raise NotImplementedError("ftol != 0 not implemented")
 
+            gnorms[ii] = to_cpu(xp.sqrt(xp.sum(xp.abs(gx)**2)))
             if gtol != 0:
-                raise NotImplementedError("gtol != 0 not implemented")
+                raise NotImplementedError("gtol != 0 not implemented")                
 
             stop = xdiffs[ii] < xtol or ii == (max_iterations - 1)
 
@@ -507,8 +511,9 @@ class Optimizer:
                     status = f"{label:s}iteration {ii + 1:d}/{max_iterations:d}," \
                              f" cost={np.nanmean(costs[ii]):.3g}," \
                              f" diff={xdiffs[ii]:.3g}," \
+                             f" |g|={gnorms[ii]:.3g}," \
                              f" step={steps[ii]:.3g}," \
-                             f" lsearch #={line_search_iters[ii]:d}," \
+                             f" ls#={line_search_iters[ii]:d}," \
                              f" grad={timing['grad'][ii]:.3f}s," \
                              f" prox={timing['prox'][ii]:.3f}s," \
                              f" cost={timing['cost'][ii]:.3f}s," \
@@ -543,6 +548,8 @@ class Optimizer:
                         "costs": costs,
                         "steps": steps,
                         "xdiffs": xdiffs,
+                        "gnorms": gnorms,
+                        "batch_indices": batch_inds,
                         "line_search_iterations": line_search_iters,
                         "x": x})
 
