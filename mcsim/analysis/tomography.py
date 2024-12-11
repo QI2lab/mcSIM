@@ -121,6 +121,7 @@ class Tomography:
                  fit_phase_profile: bool = False,
                  phase_profile_l1: float = 1e3,
                  apodization: Optional[np.ndarray] = None,
+                 alpha: float = 0.1,
                  save_auxiliary_fields: bool = False,
                  compressor: Codec = Zlib(),
                  save_float32: bool = False,
@@ -165,7 +166,8 @@ class Tomography:
         :param fit_phases: whether to fit phase differences between image and background holograms
         :param fit_translations: whether to fit the spatial translation between the data and reference images
         :param translation_thresh:
-        :param apodization: if None use tukey apodization with alpha = 0.1. To use no apodization set equal to 1
+        :param apodization: if None use tukey apodization. To use no apodization set equal to 1
+        :param alpha: if apodization is None, use tukey apodization with this alpha
         :param save_auxiliary_fields:
         :param compressor: by default use Zlib(), which is a good combination of fast/reasonable compression ratio.
           For better compression, use bz2.BZ2(), although this is much slower.
@@ -344,9 +346,10 @@ class Tomography:
         # other arrays
         # ########################
         self.realspace_mask = realspace_mask
+        self.alpha = alpha
         if apodization is None:
-            apodization = np.outer(tukey(self.ny, alpha=0.1),
-                                   tukey(self.nx, alpha=0.1))
+            apodization = np.outer(tukey(self.ny, alpha=self.alpha),
+                                   tukey(self.nx, alpha=self.alpha))
         self.apodization = apodization
 
         self.ctf = (np.sqrt(self.fxs[None, :] ** 2 + self.fys[:, None] ** 2) <= self.fmax).astype(complex)
@@ -1606,8 +1609,8 @@ class Tomography:
         atf = (xp.sqrt(fx_atf[None, :] ** 2 +
                        fy_atf[:, None] ** 2) <= self.fmax).astype(complex)
 
-        apodization_n = xp.outer(xp.asarray(tukey(self.n_shape[-2], alpha=0.1)),
-                                 xp.asarray(tukey(self.n_shape[-1], alpha=0.1)))
+        apodization_n = xp.outer(xp.asarray(tukey(self.n_shape[-2], alpha=self.alpha)),
+                                 xp.asarray(tukey(self.n_shape[-1], alpha=self.alpha)))
 
         if self.model == "born" or self.model == "rytov":
             optimizer = self.model
