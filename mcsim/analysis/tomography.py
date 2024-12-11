@@ -1696,7 +1696,6 @@ class Tomography:
             dims = tuple(range(nextra_dims))
             nimgs, ny, nx = efields_ft.shape[-3:]
 
-            # nmax_multiplex = np.max([len(f) for f in beam_frqs])
             nmax_multiplex = beam_frqs.shape[0]
 
             if isinstance(efields_ft, dask.array.Array):
@@ -3267,7 +3266,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
         # ######################
         if show_scattered_fields and hasattr(img_z, "escatt"):
             print('loading escatt')
-            escatt = da.expand_dims(da.from_zarr(img_z.escatt)[slices], axis=-3)
+            escatt = da.from_zarr(img_z.escatt)[slices]
             escatt_real = da.real(escatt)
             escatt_imag = da.imag(escatt)
         else:
@@ -3279,10 +3278,10 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
                 escatt_real, escatt_imag = dask.compute([escatt_real, escatt_imag])[0]
 
             # this can be a different size due to multiplexing
-            bcast_root_scatt = (1,) * n_extra_dims + (1, nz, 1, 1)
-            bcast_shape_scatt = np.broadcast_shapes(escatt_real.shape, bcast_root_scatt)
-            escatt_real = np.broadcast_to(escatt_real, bcast_shape_scatt)
-            escatt_imag = np.broadcast_to(escatt_imag, bcast_shape_scatt)
+            #bcast_root_scatt = (1,) * n_extra_dims + (1, 1, 1, 1)
+            #bcast_shape_scatt = np.broadcast_shapes(escatt_real.shape, bcast_root_scatt)
+            #escatt_real = np.broadcast_to(escatt_real, bcast_shape_scatt)
+            #escatt_imag = np.broadcast_to(escatt_imag, bcast_shape_scatt)
 
         # ######################
         # simulated forward fields
