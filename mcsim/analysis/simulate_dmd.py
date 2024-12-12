@@ -149,7 +149,7 @@ class DMD:
                          uvecs_out: array,
                          zshifts: Optional[array] = None,
                          phase_errs: Optional[array] = None,
-                         efield_profile: Optional[array] = None) -> (array, array, array):
+                         efield_profile: Optional[array] = None) -> tuple[array, array, array]:
         """
         Simulate plane wave diffracted from a digital mirror device (DMD) naively. In most cases this function is not
         the most efficient to use! When working with SIM patterns it is much more efficient to rely on the tools
@@ -579,6 +579,8 @@ class DMD:
         :param plot_on_mirror_normal:
         :param plot_off_mirror_normal:
         :param table: None, "xz" or "mz"
+        :param azimuth:
+        :param elevation:
         :param kwargs: passed through to figure
         :return figh, ax:
         """
@@ -801,7 +803,7 @@ def xyz2mirror(vx: array,
                vy: array,
                vz: array,
                gamma: float,
-               rot_axis: Sequence[float, float, float]) -> (array, array, array):
+               rot_axis: Sequence[float, float, float]) -> tuple[array, array, array]:
     """
     Convert vector with components vx, vy, vz to v1, v2, v3.
 
@@ -835,7 +837,7 @@ def mirror2xyz(v1: Union[array, float],
                v2: Union[array, float],
                v3: Union[array, float],
                gamma: float,
-               rot_axis: Sequence[float, float, float]) -> (array, array, array):
+               rot_axis: Sequence[float, float, float]) -> tuple[array, array, array]:
     """
     Inverse function for xyz2mirror()
 
@@ -859,7 +861,7 @@ def mirror2xyz(v1: Union[array, float],
 
 def xyz2mpz(vx: array,
             vy: array,
-            vz: array) -> (array, array, array):
+            vz: array) -> tuple[array, array, array]:
     """
     Convert from x, y, z coordinate system to m = (x-y)/sqrt(2), p = (x+y)/sqrt(2), z
 
@@ -877,7 +879,7 @@ def xyz2mpz(vx: array,
 
 def mpz2xyz(vm: array,
             vp: array,
-            vz: array) -> (array, array, array):
+            vz: array) -> tuple[array, array, array]:
     """
     Convert from m = (x-y)/sqrt(2), p = (x+y)/sqrt(2), z coordinate system to x, y, z
     :param vm:
@@ -896,7 +898,7 @@ def mpz2xyz(vm: array,
 # convert between different angular or unit vector representations of input and output directions
 # ###########################################
 def angle2xy(tp: Union[array, float],
-             tm: Union[array, float]) -> (array, array):
+             tm: Union[array, float]) -> tuple[array, array]:
     """
     Convert angle projections along the x- and y-axis to angle projections along the p=(x+y)/sqrt(2)
     and m=(x-y)/sqrt(2) axis.
@@ -913,7 +915,7 @@ def angle2xy(tp: Union[array, float],
 
 
 def angle2pm(tx: array,
-             ty: array) -> (array, array):
+             ty: array) -> tuple[array, array]:
     """
     Convert angle projections along the p=(x+y)/sqrt(2) and m=(x-y)/sqrt(2) to x and y axes.
 
@@ -930,7 +932,7 @@ def angle2pm(tx: array,
 
 def uvector2txty(vx: array,
                  vy: array,
-                 vz: array) -> (array, array):
+                 vz: array) -> tuple[array, array]:
     """
     Convert unit vector from components to theta_x, theta_y representation. Inverse function for get_unit_vector()
 
@@ -949,7 +951,7 @@ def uvector2txty(vx: array,
 
 def uvector2tmtp(vx: array,
                  vy: array,
-                 vz: array) -> (array, array):
+                 vz: array) -> tuple[array, array]:
     """
     Convert unit vector to angle projections along ep and em
     :param vx:
@@ -964,7 +966,7 @@ def uvector2tmtp(vx: array,
 
 def pm2uvector(tm: array,
                tp: array,
-               incoming: bool) -> (array, array, array):
+               incoming: bool) -> tuple[array, array, array]:
     """
 
     :param tm:
@@ -978,7 +980,7 @@ def pm2uvector(tm: array,
 
 def xy2uvector(tx: array,
                ty: array,
-               incoming: bool) -> (array, array, array):
+               incoming: bool) -> tuple[array, array, array]:
     """
     Get incoming or outgoing unit vector of light propagation parameterized by angles tx and ty
     Let a represent an incoming vector, and b and outgoing one. We parameterize these by
@@ -1021,7 +1023,7 @@ def dmd_frq2uvec(uvec_out_dc: array,
                  fy: Union[float, array],
                  wavelength: Union[float, array],
                  dx: float,
-                 dy: float) -> (array, array, array):
+                 dy: float) -> tuple[array, array, array]:
     """
     Determine the output diffraction vector b(f) given the output vector b(0) and the
     spatial frequency f = [fx, fy] in 1/mirrors.
@@ -1048,7 +1050,7 @@ def uvec2dmd_frq(uvec_out_dc: Sequence[float],
                  uvec_f: array,
                  wavelength: float,
                  dx: float,
-                 dy: float) -> (array, array):
+                 dy: float) -> tuple[array, array]:
     """
     Inverse function of freq2uvec()
 
@@ -1067,7 +1069,7 @@ def uvec2dmd_frq(uvec_out_dc: Sequence[float],
 # ###########################################
 # mapping from DMD coordinates to optical axis coordinates
 # ###########################################
-def get_fourier_plane_basis(optical_axis: Sequence[float, float, float]) -> (np.ndarray, np.ndarray):
+def get_fourier_plane_basis(optical_axis: Sequence[float, float, float]) -> tuple[np.ndarray, np.ndarray]:
     """
     Get basis vectors which are orthogonal to a given optical axis. This is useful when
     we suppose that a lens has been placed one focal length after the DMD and we are interested
@@ -1087,7 +1089,7 @@ def get_fourier_plane_basis(optical_axis: Sequence[float, float, float]) -> (np.
 
 
 def dmd_uvec2opt_axis_uvec(dmd_uvecs: array,
-                           optical_axis: Sequence[float, float, float]) -> (array, array, array):
+                           optical_axis: Sequence[float, float, float]) -> tuple[array, array, array]:
     """
     Convert unit vectors expressed relative to the dmd coordinate system (ex, ey, ez)
     dmd_uvecs = bx * ex + by * ey + bz * ez
@@ -1124,7 +1126,7 @@ def dmd_uvec2opt_axis_uvec(dmd_uvecs: array,
 
 
 def opt_axis_uvec2dmd_uvec(opt_axis_uvecs: np.ndarray,
-                           optical_axis) -> (array, array, array):
+                           optical_axis) -> tuple[array, array, array]:
     """
     The inverse function for dmd_uvec2opt_axis_uvec()
 
@@ -1186,7 +1188,7 @@ def blaze_envelope(wavelength: float,
 
 def blaze_condition_fn(gamma: float,
                        b_minus_a: array,
-                       rot_axis: Sequence[float, float, float]) -> (array, array):
+                       rot_axis: Sequence[float, float, float]) -> tuple[array, array]:
     """
     Return the dimensionless part of the sinc function argument which determines the blaze condition.
     We refer to these functions as A_+(b-a, gamma) and A_-(b-a, gamma).
@@ -1383,7 +1385,7 @@ def get_diffraction_order_limits(wavelength: float,
 def solve_1color_1d(wavelength: float,
                     d: float,
                     gamma: float,
-                    order: int) -> (array, array):
+                    order: int) -> tuple[array, array]:
     """
     Solve for the input and output angles satisfying both the diffraction condition and blaze angle for a given
     diffraction order (if possible). These function assumes that (1) the mirror rotation axis is the (x+y) axis and
@@ -1500,7 +1502,7 @@ def solve_combined_condition(d: float,
                              gamma: float,
                              rot_axis: Sequence[float, float, float],
                              wavelength: float,
-                             order: Sequence[int, int]) -> (Callable, Callable, np.ndarray):
+                             order: Sequence[int, int]) -> tuple[Callable, Callable, np.ndarray]:
     """
     Solve the combined diffraction/blaze condition. Since in general the system of equation is overdetermined,
     return the vectors which solve the diffraction condition and minimize the blaze condition cost, defined by
@@ -1758,7 +1760,7 @@ def plot_1d_sim(data: dict,
                 plot_log: bool = False,
                 save_dir: Optional[Union[str, Path]] = None,
                 figsize: Sequence[float, float] = (18., 14.)) \
-        -> (list[Figure], list[str]):
+        -> tuple[list[Figure], list[str]]:
     """
     Plot and optionally save results of simulate_1d()
 
@@ -2073,7 +2075,7 @@ def simulate_2d(pattern: array,
 def plot_2d_sim(data: dict,
                 save_dir: Optional[Union[str, Path]] = None,
                 figsize: Sequence[float, float] = (18., 14.),
-                gamma: float = 0.1) -> (list[Figure], list[str]):
+                gamma: float = 0.1) -> tuple[list[Figure], list[str]]:
     """
     Plot results from simulate_2d(). For print out values to be correct, distance
     units should be um

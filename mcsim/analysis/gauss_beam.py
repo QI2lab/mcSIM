@@ -83,8 +83,11 @@ def get_q(wo: np.ndarray,
     assuming we use the phasor convention assuming phasor convention exp(-iwt). If using the other phasor convention,
     then take the complex conjugate of q
 
+    :param wo:
     :param z:
-    :param p: [wo, zc, wavelength, n]
+    :param wavelength:
+    :param zc:
+    :param n:
     :return:
     """
     zr = np.pi * wo ** 2 / wavelength * n
@@ -100,6 +103,7 @@ def q2beam_params(qz,
 
     :param qz: complex beam parameter
     :param wavelength:
+    :param n:
     :return R(z), w(z)^2, w(o)^2, z, zr:
     """
 

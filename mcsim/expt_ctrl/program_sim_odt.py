@@ -275,6 +275,7 @@ def get_odt_sequence(daq_do_map: dict,
     :param n_analog_ch: number of analog lines
     :param average_patterns:
     :param camera:
+    :param dmd: specify index of DMD device to use
     :param use_dmd_as_shutter: whether to assume there are 2x as many DMD patterns with "off" pattern interleaved
       between on patterns
     :param dmd_on_time:
@@ -444,10 +445,11 @@ def get_sim_sequence(daq_do_map: dict,
     :param n_digital_ch:
     :param n_analog_ch:
     :param use_dmd_as_shutter: if True, add extra trigger signal to advance DMD pattern to "OFF" state. In non-average
-    mode there is on display-pattern and on off-pattern per frame, and these alternate. In average mode there are
-    npatterns display-patterns followed by one off-pattern per frame.
+      mode there is on display-pattern and on off-pattern per frame, and these alternate. In average mode there are
+      npatterns display-patterns followed by one off-pattern per frame.
     :param average_patterns: display all patterns sequentially in frame
     :param camera: "cam1", "cam2", or "both"
+    :param dmd: specify which DMD device to use
     :param force_equal_subpatterns:
     :param turn_laser_off_during_interval:
     :param dmd_on_time: time DMD is on

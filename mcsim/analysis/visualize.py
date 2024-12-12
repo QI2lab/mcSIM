@@ -76,7 +76,7 @@ def assemble_2d_projections(p_xy: array,
                             n_pix_sep: int = 5,
                             boundary_value: float = 0.,
                             interp_method: str = "nearest",
-                            ) -> (array, dict):
+                            ) -> tuple[array, dict]:
     """
     Assemble 2D projections into one image
 
@@ -86,6 +86,7 @@ def assemble_2d_projections(p_xy: array,
     :param z_to_xy_ratio: pixel size ratio dz/dxy
     :param n_pix_sep: number of blank pixels between projections
     :param boundary_value:
+    :param interp_method: passed through to xform_mat()
     :return img, affines: 2D image showing projections and dictionary of affine matrices
       which can be used to help plot points or etc.
     """
@@ -181,7 +182,7 @@ def get_color_projection(n: np.ndarray,
                          mask: Optional[np.ndarray] = None,
                          cmap="turbo",
                          max_z: bool = False,
-                         background_color: np.ndarray = np.array([0., 0., 0.])) -> (np.ndarray, np.ndarray):
+                         background_color: np.ndarray = np.array([0., 0., 0.])) -> tuple[np.ndarray, np.ndarray]:
     """
     Given a 3D refractive index distribution, take the max-z projection and color code the results
     by height. For each xy position, only consider the voxel along z with the maximum value.

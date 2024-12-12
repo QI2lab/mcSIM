@@ -66,7 +66,7 @@ def get_v(n: array,
 
 
 def frqs2angles(frqs: array,
-                magnitude: float = 1.) -> (array, array):
+                magnitude: float = 1.) -> tuple[array, array]:
     """
     Convert from frequency vectors to angle vectors
 
@@ -1505,7 +1505,7 @@ class SSNP(RIOptimizer):
         return phi_fwd[..., :-2, :, :, 0]
 
     def get_estart(self,
-                   inds: Optional[Sequence[int]] = None) -> (array, array):
+                   inds: Optional[Sequence[int]] = None) -> tuple[array, array]:
         if inds is None:
             inds = list(range(self.n_samples))
 

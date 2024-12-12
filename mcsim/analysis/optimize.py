@@ -182,7 +182,7 @@ class Optimizer:
                       x: array,
                       jind: int = 0,
                       inds: Optional[Sequence[int]] = None,
-                      dx: float = 1e-5) -> (array, array):
+                      dx: float = 1e-5) -> tuple[array, array]:
         """
         Numerically test the gradient computation at a single coordinate of x.
 

@@ -154,7 +154,7 @@ def get_pixel_statistics(imgs: array,
 def get_gain_map(means: np.ndarray,
                  vars: np.ndarray,
                  vars_sd: Optional[np.ndarray] = None,
-                 max_mean: float = np.inf) -> (np.ndarray, np.ndarray, np.ndarray):
+                 max_mean: float = np.inf) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute camera pixel gains by finding the best-fit line describing the variance as a function of the mean
 
@@ -193,7 +193,7 @@ def plot_camera_noise_results(gains: np.ndarray,
                               means_err: Optional[np.ndarray] = None,
                               vars_err: Optional[np.ndarray] = None,
                               nbins: int = 600,
-                              **kwargs) -> (list[Figure], list[str]):
+                              **kwargs) -> tuple[list[Figure], list[str]]:
     """
     Display gain curve for single pixel vs. illumination data.
     Additional keyword arguments are passed through to plt.figure()
@@ -201,6 +201,7 @@ def plot_camera_noise_results(gains: np.ndarray,
     :param gains: ny x nx
     :param means: nill x ny x nx
     :param vars: nill x ny x nx
+    :param gains_err:
     :param gains: estimated uncertainty (standard dev) of each gain value
     :param means_err: estimated uncertainty (standard dev) of each mean value
     :param vars_err: estimated uncertainty (standard dev) of each variance value

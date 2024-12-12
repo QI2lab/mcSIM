@@ -227,7 +227,7 @@ else:
 
 
 # helper function
-def spherical_hn(n: int, z: np.ndarray) -> (np.ndarray, np.ndarray):
+def spherical_hn(n: int, z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     hn = spherical_jn(n, z) + 1j * spherical_yn(n, z)
     dhn = spherical_jn(n, z, derivative=True) + 1j * spherical_yn(n, z, derivative=True)
     return hn, dhn
@@ -244,7 +244,7 @@ def mie_efield(wavelength: float,
                beam_phi: float = 0.,
                beam_psi: float = 0.,
                use_gpu: bool = False,
-               **kwargs) -> (array, array, array, array):
+               **kwargs) -> tuple[array, array, array, array]:
     """
     Use miepython to compute multipolar coefficients, and use either scipy special functions
     or GPU accelerated custom CuPy kernels to calculate fields. There are many good references

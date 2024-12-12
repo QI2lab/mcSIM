@@ -597,6 +597,7 @@ class Tomography:
         :param n_every: take images from slice_axis with this spacing
         :param bg_axis: take background image from this axis
         :param bg_index: use this index along bg_axis to get image
+        :param one_chunk_per_volume:
         :return imgs, imgs_bg:
         """
 
@@ -1559,7 +1560,7 @@ class Tomography:
                       print_fft_cache: bool = False,
                       processes: bool = False,
                       n_workers: int = 1,
-                      **kwargs) -> (array, tuple, dict):
+                      **kwargs) -> tuple[array, tuple, dict]:
 
         """
         Reconstruct refractive index using one of a several different models Additional keyword arguments are
@@ -2914,7 +2915,7 @@ def get_reconstruction_nyquist_sampling(no: float,
                                         wavelength: float,
                                         fov: Sequence[int, int, int],
                                         sampling_factors: Sequence[float, float, float] = (1., 1., 1.)
-                                        ) -> (tuple[float, float, float], tuple[int, int, int]):
+                                        ) -> tuple[tuple[float, float, float], tuple[int, int, int]]:
     """
     Helper function for computing Nyquist sampled grid size for scattering potential based on incoming beam angles.
     Note that this may not always be the ideal grid size, especially for multislice methods where the accuracy
@@ -2988,6 +2989,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     :param show_scattered_fields:
     :param show_efields:
     :param show_efields_fwd:
+    :param show_phase_correction_profiles:
     :param compute:
     :param slices: slice n others fields using this tuple of slices. Should be of length n.ndim - 3
     :param data_slice:
@@ -2995,6 +2997,7 @@ def display_tomography_recon(location: Union[str, Path, zarr.hierarchy.Group],
     :param n_lim: (nmin, nmax)
     :param e_lim: (emin, emax)
     :param escatt_lim: (emin, emax)
+    :param n_cmap:
     :param real_cmap: color map to use for intensity-like images
     :param phase_cmap: color map to use for phase-like images
     :param xshift_pix: shift images laterally to view electric fields and n simultaneously by this many pixels
@@ -3637,7 +3640,7 @@ def compare_recons(fnames: Sequence[Union[str, Path]],
     return v
 
 
-def parse_time(dt: float) -> (tuple, str):
+def parse_time(dt: float) -> tuple[tuple, str]:
     """
     Parse a time difference in seconds into days, hours, minutes and seconds
 
@@ -3736,6 +3739,8 @@ def map_blocks_joblib(fn,
     :param processes: whether to use processes or threads
     :param chunks: size of chunks
     :param verbose: whether to display a progress bar
+    :param return_generator: return result as generator, instead of list
+    :param debug: run without joblib for debugging
     :param kwargs: should not be arrays
     :return results:
     """

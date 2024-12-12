@@ -2,7 +2,7 @@
 CPU/GPU agnostic FFT functions using our preferred idioms
 """
 
-from typing import Union, Optional
+from typing import Union, Optional, Any
 from collections.abc import Sequence
 import numpy as np
 import numpy.fft as fft_cpu
@@ -26,7 +26,7 @@ def _noshift(arr: array, **kwargs) -> array:
 
 def ft2(m: array,
         axes: tuple[int, int] = (-1, -2),
-        plan: Optional = None,
+        plan: Optional[Any] = None,
         no_cache: bool = False,
         shift: bool = True,
         adjoint: bool = False) -> array:
@@ -52,7 +52,7 @@ def ft2(m: array,
 
 def ift2(m: array,
          axes: tuple[int, int] = (-1, -2),
-         plan: Optional = None,
+         plan: Optional[Any] = None,
          no_cache: bool = False,
          shift: bool = True,
          adjoint: bool = False) -> array:
@@ -72,7 +72,7 @@ def ift2(m: array,
 
 def irft2(m: array,
           axes: tuple[int, int] = (-2, -1),
-          plan: Optional = None,
+          plan: Optional[Any] = None,
           no_cache: bool = False,
           shift: bool = True,
           adjoint: bool = False) -> array:
@@ -120,7 +120,7 @@ def irft2(m: array,
 
 def ft3(m: array,
         axes: tuple[int, int, int] = (-1, -2, -3),
-        plan: Optional = None,
+        plan: Optional[Any] = None,
         no_cache: bool = False,
         shift: bool = True,
         adjoint: bool = False) -> array:
@@ -141,7 +141,7 @@ def ft3(m: array,
 
 def ift3(m: array,
          axes: tuple[int, int, int] = (-1, -2, -3),
-         plan: Optional = None,
+         plan: Optional[Any] = None,
          no_cache: bool = False,
          shift: bool = True,
          adjoint: bool = False) -> array:
@@ -161,7 +161,7 @@ def ift3(m: array,
 
 def ftn(m: array,
         axes: tuple[int],
-        plan: Optional = None,
+        plan: Optional[Any] = None,
         no_cache: bool = False,
         shift: bool = True,
         adjoint: bool = False) -> array:
@@ -209,7 +209,7 @@ def ftn(m: array,
 
 def iftn(m: array,
          axes: tuple[int],
-         plan: Optional = None,
+         plan: Optional[Any] = None,
          no_cache: bool = False,
          shift: bool = True,
          adjoint: bool = False) -> array:

@@ -138,7 +138,7 @@ def fit_pattern_peaks(img: np.ndarray,
                       chi_squared_relative_max: float = np.inf,
                       max_position_err: float = 0.1,
                       img_sd: Optional[np.ndarray] = None,
-                      debug: bool = False) -> (np.ndarray, np.ndarray, np.ndarray):
+                      debug: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Fit peaks of fluorescence image corresponding to affine calibration pattern.
 
@@ -385,6 +385,7 @@ def plot_affine_summary(img: np.ndarray,
     :param vmin_percentile:
     :param vmax_percentile:
     :param gamma: gamma used in displaying image
+    :param cmap:
     :param kwargs: passed through to figure
     :return fig: figure handle to summary figure
     """
@@ -598,7 +599,7 @@ def estimate_xform(img: np.ndarray,
                    vmax_percentile: float = 99.,
                    gamma: float = 1.,
                    figsize: Sequence[float, float] = (16., 12.),
-                   **kwargs) -> (dict, Figure):
+                   **kwargs) -> tuple[dict, Figure]:
     """
     Estimate affine transformation from DMD space to camera image space from an image.
 

@@ -213,7 +213,7 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
 
 def add_position_multiplexing(centers: list[np.ndarray],
                               frqs: np.ndarray,
-                              ) -> (list[np.ndarray], list[np.ndarray]):
+                              ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """
     Given a set of spot positions (which may or may not include angle multiplexing), generate a set of
     frequency multiplexed patterns. To do this, start from our original set of patterns, and
@@ -304,7 +304,7 @@ def get_odt_patterns(pupil_positions: Sequence[np.ndarray],
                      pupil_radius_mirrors: float,
                      frqs: Sequence[np.ndarray],
                      phase: Union[Sequence[np.ndarray], float] = 0.,
-                     use_off_mirrors: bool = True) -> (np.ndarray, list[dict]):
+                     use_off_mirrors: bool = True) -> tuple[np.ndarray, list[dict]]:
     """
     Generate DMD patterns from a list of center positions
 

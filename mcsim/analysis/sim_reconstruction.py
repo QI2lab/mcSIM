@@ -1452,7 +1452,7 @@ class SimImageSet:
                   figsize: Sequence[float, float] = (20., 10.),
                   diagnostics_only: bool = False,
                   interactive_plotting: bool = False,
-                  imgs_dpi: Optional[int] = None) -> (list[Figure], list[str]):
+                  imgs_dpi: Optional[int] = None) -> tuple[list[Figure], list[str]]:
 
         """
         Automate plotting and saving of figures
@@ -1569,7 +1569,7 @@ class SimImageSet:
                              figsize: Sequence[float, float] = (20., 10.),
                              nbins_histogram: int = 50,
                              gamma: float = 1.,
-                             **kwargs) -> (list[plt.figure], list[str]):
+                             **kwargs) -> tuple[list[plt.figure], list[str]]:
         """
         Display SIM images for visual inspection. Use this to examine SIM pictures and their Fourier transforms
         as an aid to guessing frequencies before doing reconstruction.
@@ -1905,7 +1905,7 @@ class SimImageSet:
     def plot_reconstruction_diagnostics(self,
                                         slices: Optional[tuple[slice]] = None,
                                         figsize: Sequence[float, float] = (20., 10.),
-                                        **kwargs) -> (list[Figure], list[str]):
+                                        **kwargs) -> tuple[list[Figure], list[str]]:
         """
         Diagnostics showing progress of SIM reconstruction
         This function can be called at any point in the reconstruction, and is useful for assessing if the guess
@@ -2200,7 +2200,7 @@ class SimImageSet:
 
     def plot_frequency_fits(self,
                             figsize: Sequence[float, float] = (20., 10.)) \
-            -> (list[Figure], list[str]):
+            -> tuple[list[Figure], list[str]]:
         """
         Plot frequency fits
 
@@ -2797,7 +2797,7 @@ def fit_modulation_frq(mft1: np.ndarray,
                        fbounds: Sequence[float] = (0., np.inf),
                        otf: Optional[np.ndarray] = None,
                        wiener_param: float = 0.3,
-                       keep_guess_if_better: bool = True) -> (np.ndarray, np.ndarray, dict):
+                       keep_guess_if_better: bool = True) -> tuple[np.ndarray, np.ndarray, dict]:
     """
     Find SIM frequency from image by maximizing the cross correlation between ft1 and ft2
 
@@ -3302,7 +3302,7 @@ def get_phase_wicker_iterative(imgs_ft: np.ndarray,
                                fmax: float,
                                phases_guess: Optional[Sequence[float]] = None,
                                fit_amps: bool = True,
-                               debug: bool = False) -> (np.ndarray, np.ndarray, dict):
+                               debug: bool = False) -> tuple[np.ndarray, np.ndarray, dict]:
     """
     Estimate relative phases between components using the iterative cross-correlation minimization method of Wicker,
     described in detail here https://doi.org/10.1364/OE.21.002032. This function is hard coded for 3 bands. This
@@ -3762,7 +3762,7 @@ def get_band_overlap(band0: array,
                      band1: array,
                      otf0: array,
                      otf1: array,
-                     mask: array) -> (array, array):
+                     mask: array) -> tuple[array, array]:
     """
     Compare the unshifted (0th) SIM band with the shifted (1st) SIM band to estimate the global phase shift and
     modulation depth.
@@ -3947,7 +3947,7 @@ def translate_pix(img: array,
                   dr: Sequence[float] = (1, 1),
                   axes: Sequence[int] = (-2, -1),
                   wrap: bool = True,
-                  pad_val: float = 0) -> (array, list[int]):
+                  pad_val: float = 0) -> tuple[array, list[int]]:
     """
     Translate image by given number of pixels with several different boundary conditions. If the shifts are sx, sy,
     then the image will be shifted by sx/dx and sy/dy. If these are not integers, they will be rounded to the closest
@@ -4112,7 +4112,7 @@ def get_simulated_sim_imgs(ground_truth: array,
                            coherent_projection: bool = True,
                            psf: Optional[np.ndarray] = None,
                            nbin: int = 1,
-                           **kwargs) -> (array, array, array, array):
+                           **kwargs) -> tuple[array, array, array, array]:
     """
     Get simulated SIM images, including the effects of shot-noise and camera noise.
 

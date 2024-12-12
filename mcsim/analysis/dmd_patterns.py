@@ -40,7 +40,7 @@ def get_sim_pattern(dmd_size: Sequence[int, int],
                     vec_b: array,
                     nphases: int,
                     phase_index: int,
-                    geometry: str = "orthogonal") -> (array, array):
+                    geometry: str = "orthogonal") -> tuple[array, array]:
     """
     Convenience function for generating SIM patterns from the tile_patterns() function.
     This function can run either on the CPU or the GPU. If vec_a is a NumPy array, it will
@@ -233,7 +233,7 @@ def double_cell(cell: array,
                 vec_a: array,
                 vec_b: array,
                 na: int = 1,
-                nb: int = 0) -> (np.ndarray, np.ndarray, np.ndarray):
+                nb: int = 0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Create new unit cell by doubling the original one by a factor of na along vec_a and nb along vec_b
 
@@ -290,7 +290,7 @@ def double_cell(cell: array,
 def get_sim_unit_cell(vec_a: array,
                       vec_b: array,
                       nphases: int,
-                      phase_index: int = 0) -> (array, array, array):
+                      phase_index: int = 0) -> tuple[array, array, array]:
     """
     Get unit cell, which can be repeated to form SIM pattern.
 
@@ -339,7 +339,7 @@ def get_sim_unit_cell(vec_a: array,
 
 
 def get_unit_cell(vec_a: array,
-                  vec_b: array) -> (array, array, array):
+                  vec_b: array) -> tuple[array, array, array]:
     """
     Generate a mask which represents one unit cell of a pattern for given vectors.
     This mask is a square array with NaNs at positions outside the unit cell, and
@@ -470,7 +470,7 @@ def test_in_cell(points: array,
 
 def reduce2cell(point: array,
                 va: array,
-                vb: array) -> (array, array, array):
+                vb: array) -> tuple[array, array, array]:
     """
     Given a vector, reduce it to coordinates within the unit cell.
 
@@ -507,7 +507,7 @@ def convert_cell(cell1: array,
                  va1: array,
                  vb1: array,
                  va2: array,
-                 vb2: array) -> (array, array, array):
+                 vb2: array) -> tuple[array, array, array]:
     """
     Given a unit cell described by vectors va1 and vb2, convert to equivalent description
     in terms of va2, vb2
@@ -550,7 +550,7 @@ def get_minimal_cell(cell: array,
                      x: array,
                      y: array,
                      va: array,
-                     vb: array) -> (array, array, array, array):
+                     vb: array) -> tuple[array, array, array, array, array]:
     """
     Convert to cell using the smallest lattice vectors
 
@@ -636,7 +636,7 @@ def show_cell(v1: np.ndarray,
 
 # determine parameters of SIM patterns
 def get_reciprocal_vects(vec_a: array,
-                         vec_b: array) -> (array, array):
+                         vec_b: array) -> tuple[array, array]:
     """
     Compute the reciprocal vectors for (real-space) lattice vectors vec_a and vec_b.
     If we call the lattice vectors a_i and the reciprocal vectors b_j, then these should be defined such that
@@ -711,7 +711,7 @@ def get_sim_period(vec_a: array,
 
 
 def get_sim_frqs(vec_a: array,
-                 vec_b: array) -> (float, float):
+                 vec_b: array) -> tuple[float, float]:
     """
     Get spatial frequency of SIM pattern constructed from periodicity vectors.
 
@@ -772,7 +772,7 @@ def get_sim_phase(vec_a: array,
 
 
 def ldftfreq(vec_a: np.ndarray,
-             vec_b: np.ndarray) -> (array, array, array):
+             vec_b: np.ndarray) -> tuple[array, array, array]:
     """
     Get the Fourier frequencies for the lattice fourier transform (LDFT). See ldft2() for more details.
     This function is an analog of fftfreq().
@@ -862,7 +862,7 @@ def get_pattern_fourier_component(unit_cell: array,
                                   nphases: int = 3,
                                   phase_index: int = 0,
                                   use_fft_origin: bool = True,
-                                  dmd_size: Optional[Sequence[int]] = None) -> (np.ndarray, np.ndarray):
+                                  dmd_size: Optional[Sequence[int]] = None) -> tuple[np.ndarray, np.ndarray]:
     """
     Get fourier component at f = n * recp_vec_a + m * recp_vec_b.
 
@@ -1038,7 +1038,7 @@ def get_intensity_fourier_components(unit_cell: np.ndarray,
                                      use_fft_origin: bool = True,
                                      include_blaze_correction: bool = True,
                                      dmd_params: Optional[dict] = None) -> \
-        (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Utility function for computing many electric field and intensity components of the Fourier pattern, including the
     effect of the Blaze angle and system numerical aperture
@@ -1501,7 +1501,7 @@ def show_fourier_components(vec_a: np.ndarray,
 
 # Lagrange-Gauss basis reduction
 def reduce_basis(va: array,
-                 vb: array) -> (array, array):
+                 vb: array) -> tuple[array, array]:
     """
     Find the "smallest" set of basis vectors using Lagrange-Gauss basis reduction.
 
@@ -1544,7 +1544,7 @@ def reduce_basis(va: array,
 
 
 def reduce_recp_basis(va: array,
-                      vb: array) -> (array, array):
+                      vb: array) -> tuple[array, array]:
     """
     Compute the shortest pair of reciprocal basis vectors. These vectors may not be dual to the lattice vectors
     in the sense that vi * rsj = delta_{ij}, but they do form a basis for the reciprocal lattice vectors.
@@ -1559,7 +1559,7 @@ def reduce_recp_basis(va: array,
 
 def get_closest_lattice_vec(point: np.ndarray,
                             va: np.ndarray,
-                            vb: np.ndarray) -> (np.ndarray, int, int):
+                            vb: np.ndarray) -> tuple[np.ndarray, int, int]:
     """
     Find the closest lattice vector to point
 
@@ -1610,7 +1610,7 @@ def get_closest_lattice_vec(point: np.ndarray,
 
 def get_closest_recip_vec(recp_point: np.ndarray,
                           va: np.ndarray,
-                          vb: np.ndarray) -> (np.ndarray, int, int):
+                          vb: np.ndarray) -> tuple[np.ndarray, int, int]:
     """
     Find the closest reciprocal lattive vector, f = na * rva + nb * rvb, to a given point in reciprocal space,
     recp_point.
@@ -1819,7 +1819,7 @@ def find_closest_multicolor_set(period: float,
                                 angle_sep_tol: float = 5*np.pi/180,
                                 max_solutions_to_search: int = 20,
                                 pitch: float = 7560.,
-                                minimize_leakage: bool = True) -> (np.ndarray, np.ndarray):
+                                minimize_leakage: bool = True) -> tuple[np.ndarray, np.ndarray]:
     """
     Generate set of SIM patterns for multiple colors with period close to specified value and maximizing distance
     between angles. The patterns are determined such that the diffracted orders will pass through the same positions
@@ -2173,7 +2173,7 @@ def find_rational_approx_angle(angle: float,
 
 def find_allowed_periods(angle: float,
                          nphases: int,
-                         nmax: int) -> (list[float], list[int], list):
+                         nmax: int) -> tuple[array, array, array]:
     """
     Given a DMD pattern with fixed angle, get allowed pattern periods which allow perfect phase shifting for nphases
 
@@ -2295,7 +2295,7 @@ def vects2pattern_data(dmd_size: Sequence[int, int],
                        invert: bool = False,
                        pitch: float = 7560,
                        generate_patterns: bool = True,
-                       geometry: str = "orthogonal") -> (np.ndarray, dict):
+                       geometry: str = "orthogonal") -> tuple[np.ndarray, dict]:
     """
     Generate pattern and useful data (angles, phases, frequencies, reciprocal vectors, ...) from the lattice
     vectors for a given pattern set.
@@ -2504,7 +2504,7 @@ def export_pattern_set(dmd_size: Sequence[int, int],
                        wavelength: float = 1.,
                        save_dir: Union[str, Path] = 'sim_patterns',
                        plot_results: bool = False,
-                       geometry: str = "orthogonal") -> (np.ndarray, dict, Figure):
+                       geometry: str = "orthogonal") -> tuple[np.ndarray, dict, Figure]:
     """
     Export a single set of SIM patterns, i.e. single wavelength, single period
 
@@ -2854,7 +2854,7 @@ def export_otf_test_set(dmd_size: Sequence[int],
                         bvec_max_size: int = 40,
                         phase_index: int = 0,
                         save_dir: Optional[Union[str, Path]] = None,
-                        verbose: bool = True) -> (np.ndarray, dict):
+                        verbose: bool = True) -> tuple[np.ndarray, dict]:
     """
     Generate many SIM-like patterns at a variety of different periods and angles
 
