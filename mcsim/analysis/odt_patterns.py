@@ -85,11 +85,12 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
                                    max_dist: float = 0.25,
                                    n_swap_cycles: int = 5,
                                    n_swaps_per_pair: int = 300,
+                                   include_line_penalty: bool = True,
                                    verbose: bool = False
                                    ) -> list[np.ndarray]:
     """
-    Generate multiplexed spot positions from a list of initial spot positions
-    Try and optimize this set so that no spots are near each other
+    Generate multiplexed spot centers from a list of non-multiplexed spot centers.
+    Optimize this set so that centers in a given pattern are far from each other.
 
     :param centers: Spot pattern center positions in the pupil. npatterns x 2 array. Typically centers are generated
       from get_odt_spot_locations()
@@ -97,8 +98,10 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
     :param max_dist: spot distances above this threshold experience the same penalty
     :param n_swap_cycles: number of times to loop through pairs of patterns
     :param n_swaps_per_pair: for each pair of patterns, randomly swap this many spot positions and search for lower cost
+    :param include_line_penalty: penalize centers if they lie on a line
     :param verbose: print progress of swapping algorithm
-    :return center_sets:
+    :return center_sets: list where each entry describes the centers in a given pattern. The list has length
+      n_multiplexed_patterns, and each entry is an array of size size n_multiplex x 2
     """
 
     # generate first guess at steps
@@ -108,8 +111,6 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
 
     center_sets = []
     for ii in range(npatterns):
-
-        # not multiplexing
         if n_multiplex == 1:
             centers_now = centers[ii][None, :]
         else:
@@ -120,7 +121,7 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
                     # get next unused index
                     ind = np.min(np.arange(ncenters)[np.logical_not(centers_used_now)])
                 else:
-                    # compute furthest remaining ...
+                    # compute furthest remaining position and add this to current set
                     dists = np.linalg.norm(centers_now[:, None, :] - centers[None, :, :], axis=-1)
 
                     # only scale distance penalty up to certain maximum distance
@@ -134,18 +135,16 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
                         line_penalty = 0
                     else:
                         slope, pt_line = _nearest_line_pts(centers_now[:jj])
-
                         _, d = _nearest_pt_line(centers, slope, pt_line)
                         line_penalty = np.mean(d)
+                        d[np.isnan(d)] = 0 #  todo: fix bug when slope -> inf
 
-                        # todo: fix bug when slope -> inf
-                        d[np.isnan(d)] = 0
-
-                    # exclude any points already found (unless there aren't any left)
+                    # exclude any points already found, unless there aren't any left
+                    # otherwise, re-cycle through first indices if necessary to ensure all patterns
+                    # have the same number of multiplexed frequencies
                     nan_mask = np.ones(centers_used_now.shape)
                     if np.any(np.logical_not(centers_used_now)):
                         nan_mask[centers_used_now] = np.nan
-
                     ind = np.nanargmax((dist_sum + line_penalty) * nan_mask)
 
                 centers_used_now[ind] = True
@@ -153,15 +152,12 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
 
         center_sets.append(centers_now)
 
-        # re-cycle through first indices if necessary to ensure all patterns at a given level
-        # of multiplexing have the same number of frequencies
-
-    def loss(c, include_line_penalty=True):
+    def loss(c, use_lp):
         d = np.linalg.norm(c - c[:, None, :], axis=-1)
         d[d > max_dist] = max_dist
 
         # distance from line
-        if include_line_penalty:
+        if use_lp:
             slope, pt_line = _nearest_line_pts(c)
             _, d_line = _nearest_pt_line(c, slope, pt_line)
             line_penalty = np.sum(d_line)
@@ -174,9 +170,12 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
     tstart_swap = perf_counter()
     if n_multiplex > 1:
         for aa in range(n_swap_cycles):
+            optimality = np.sum([loss(c, include_line_penalty) for c in center_sets])
             if verbose:
                 print(f"swap {aa + 1:d}/{n_swap_cycles:d}, "
-                      f"elapsed time = {perf_counter() - tstart_swap:.2f}", end="\r")
+                      f"optimality={optimality:.3f} (> is better), "
+                      f"elapsed time = {perf_counter() - tstart_swap:.2f}s",
+                      end="\r" if aa < n_swap_cycles - 1 else "\n")
 
             for ii in range(npatterns):
                 for jj in range(npatterns):
@@ -187,7 +186,7 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
                         p1 = center_sets[ii]
                         p2 = center_sets[jj]
 
-                        cstart = loss(p1) + loss(p2)
+                        cstart = loss(p1, include_line_penalty) + loss(p2, include_line_penalty)
 
                         # choose random integers and swap patterns
                         rand1 = np.random.randint(0, len(p1))
@@ -199,14 +198,12 @@ def get_multiplexed_spot_positions(centers: np.ndarray,
                         p2_prop = np.array(p2, copy=True)
                         p2_prop[rand2] = p1[rand1]
 
-                        cprop = loss(p1_prop) + loss(p2_prop)
+                        cprop = loss(p1_prop, include_line_penalty) + loss(p2_prop, include_line_penalty)
 
                         # if swap improved things, keep it
                         if cprop > cstart:
                             center_sets[ii] = p1_prop
                             center_sets[jj] = p2_prop
-
-        print("")
 
     return center_sets
 
