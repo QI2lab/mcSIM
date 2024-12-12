@@ -69,6 +69,138 @@ def soft_threshold(tau: float,
     return x_out
 
 
+def haar_wavelet_transform_3d(x: array, use_gpu: bool = True) -> Sequence[array]:
+    """Compute the 3D Haar wavelet transform.
+
+    Returns a tuple of (approximation, details along z, y, x, yz, xz, xy, xyz).
+
+    :param x: 3D image to decompose into haar wavelets.
+    :param use_gpu: Use GPU (Default = True).
+    :return: Haar wavelet decomposition
+    """
+
+    xp = cp if use_gpu and cp else np
+
+    scale = 8
+    avg = (
+        x[::2, ::2, ::2]
+        + x[1::2, ::2, ::2]
+        + x[::2, 1::2, ::2]
+        + x[::2, ::2, 1::2]
+        + x[1::2, 1::2, ::2]
+        + x[1::2, ::2, 1::2]
+        + x[::2, 1::2, 1::2]
+        + x[1::2, 1::2, 1::2]
+    ) / scale
+
+    diff_z = (x[::2, ::2, ::2] - x[1::2, ::2, ::2]) / scale
+    diff_y = (x[::2, ::2, ::2] - x[::2, 1::2, ::2]) / scale
+    diff_x = (x[::2, ::2, ::2] - x[::2, ::2, 1::2]) / scale
+    diff_yz = (x[::2, ::2, ::2] - x[1::2, 1::2, ::2]) / scale
+    diff_xz = (x[::2, ::2, ::2] - x[1::2, ::2, 1::2]) / scale
+    diff_xy = (x[::2, ::2, ::2] - x[::2, 1::2, 1::2]) / scale
+    diff_xyz = (x[::2, ::2, ::2] - x[1::2, 1::2, 1::2]) / scale
+
+    return avg, diff_z, diff_y, diff_x, diff_yz, diff_xz, diff_xy, diff_xyz
+
+
+def inverse_haar_wavelet_transform_3d(
+    avg: array,
+    diff_z: array,
+    diff_y: array,
+    diff_x: array,
+    diff_yz: array,
+    diff_xz: array,
+    diff_xy: array,
+    diff_xyz: array,
+    original_shape: Sequence[int],
+    use_gpu: bool = True,
+) -> array:
+    """Compute the inverse 3D Haar wavelet transform.
+
+    Reconstructs the original 3D signal from its wavelet coefficients.
+
+    :param avg: Average term of Haar decomposition.
+    :param diff_z: difference in z term of Haar wavelet decomposition.
+    :param diff_y: difference in y term of Haar wavelet decomposition.
+    :param diff_x: difference in x term of Haar wavelet decomposition.
+    :param diff_yz: difference in yz term of Haar wavelet decomposition.
+    :param diff_xz: difference in xz term of Haar wavelet decomposition.
+    :param diff_xy: difference in xy term of Haar wavelet decomposition.
+    :param diff_xyz: difference in xyz term of Haar wavelet decomposition.
+    :param original_shape: original image shape
+    :param use_gpu: Use GPU (Default = True).
+    :return x: inverse Haar wavelet transform. 
+    """
+
+    xp = cp if use_gpu and cp else np
+
+    out_shape = (avg.shape[0] * 2, avg.shape[1] * 2, avg.shape[2] * 2)
+    x = xp.zeros(out_shape, dtype=avg.dtype)
+
+    x[::2, ::2, ::2] = avg + diff_z + diff_y + diff_x + diff_yz + diff_xz + diff_xy + diff_xyz
+    x[1::2, ::2, ::2] = avg - diff_z + diff_y + diff_x - diff_yz - diff_xz + diff_xy - diff_xyz
+    x[::2, 1::2, ::2] = avg + diff_z - diff_y + diff_x - diff_yz + diff_xz - diff_xy - diff_xyz
+    x[1::2, 1::2, ::2] = avg - diff_z - diff_y + diff_x + diff_yz - diff_xz - diff_xy + diff_xyz
+    x[::2, ::2, 1::2] = avg + diff_z + diff_y - diff_x - diff_yz - diff_xz + diff_xy - diff_xyz
+    x[1::2, ::2, 1::2] = avg - diff_z + diff_y - diff_x + diff_yz + diff_xz - diff_xy + diff_xyz
+    x[::2, 1::2, 1::2] = avg + diff_z - diff_y - diff_x + diff_yz - diff_xz - diff_xy + diff_xyz
+    x[1::2, 1::2, 1::2] = avg - diff_z - diff_y - diff_x - diff_yz + diff_xz + diff_xy - diff_xyz
+
+    return x[: original_shape[0], : original_shape[1], : original_shape[2]]
+
+
+def parallel_tv_prox(img: array, lambda_reg: float, use_gpu: bool = True) -> array:
+    """Fast parallel proximal algorithm for anisotropic total variation [1].
+
+    [1]
+
+    :param img: 3D image to denoise.
+    :param lambda_reg: Regularization parameter.
+    :param use_gpu: Use GPU (Default = True).
+    :return x: Denoised 3D image.
+    """
+    xp = cp if use_gpu and cp else np
+
+    # Record the original shape
+    original_shape = img.shape
+
+    # Calculate necessary padding for each dimension
+    z_pad, y_pad, x_pad = [dim % 2 for dim in img.shape]
+    if z_pad or y_pad or x_pad:
+        img = xp.pad(
+            img,
+            ((0, z_pad), (0, y_pad), (0, x_pad)),
+            mode="constant",
+            constant_values=0,
+        )
+
+    # Haar wavelet transform
+    avg, diff_z, diff_y, diff_x, diff_yz, diff_xz, diff_xy, diff_xyz = haar_wavelet_transform_3d(img)
+
+    # Compute tau as sqrt(2) * K * lambda_reg with K = 8
+    tau = np.sqrt(2) * 8 * lambda_reg
+
+    # Shrinkage on the difference components
+    diff_z = soft_threshold(tau, diff_z)
+    diff_y = soft_threshold(tau, diff_y)
+    diff_x = soft_threshold(tau, diff_x)
+    diff_yz = soft_threshold(tau, diff_yz)
+    diff_xz = soft_threshold(tau, diff_xz)
+    diff_xy = soft_threshold(tau, diff_xy)
+    diff_xyz = soft_threshold(tau, diff_xyz)
+
+    # Inverse Haar wavelet transform
+    x = inverse_haar_wavelet_transform_3d(
+        avg, diff_z, diff_y, diff_x, diff_yz, diff_xz, diff_xy, diff_xyz, original_shape=original_shape
+    )
+
+    # Trim padding from the result
+    x = x[:original_shape[0], :original_shape[1], :original_shape[2]]
+
+    return x
+
+
 def tv_prox(x: array,
             tau: float,
             max_num_iter: int = 200,

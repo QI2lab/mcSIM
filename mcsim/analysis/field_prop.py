@@ -12,7 +12,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import svds
 from mcsim.analysis.fft import ft2, ift2, ft3, ift3
-from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, median_prox
+from mcsim.analysis.optimize import Optimizer, soft_threshold, tv_prox, median_prox, parallel_tv_prox
 
 try:
     import cupy as cp
@@ -718,6 +718,8 @@ class RIOptimizer(Optimizer):
                  tau_tv_imag: float = 0.,
                  tau_l1_real: float = 0.,
                  tau_l1_imag: float = 0.,
+                 fast_tau_tv_real: float = 0.,
+                 fast_tau_tv_imag: float = 0.,
                  max_num_iter: int = 200,
                  median_filter_size: Sequence[int, int, int] = (1, 1, 1),
                  apply_tv_first: bool = False,
@@ -745,6 +747,8 @@ class RIOptimizer(Optimizer):
         :param apodization: apodization applied during 2D FFT's
         :param tau_tv_real: weight for TV proximal operator applied to real-part
         :param tau_tv_imag: weight for TV proximal operator applied to imaginary-part
+        :param fast_tau_tv_real: weight for parallel TV proximal operator applied to real-part
+        :param fast_tau_tv_imag: weight for parallel TV proximal operator applied to imaginary-part
         :param tau_l1_real:
         :param tau_l1_imag:
         :param use_imaginary_constraint: enforce im(n) > 0
@@ -758,6 +762,8 @@ class RIOptimizer(Optimizer):
                                                            "tau_tv_imag": float(tau_tv_imag),
                                                            "tau_l1_real": float(tau_l1_real),
                                                            "tau_l1_imag": float(tau_l1_imag),
+                                                           "fast_tau_tv_real" : float(fast_tau_tv_real),
+                                                           "fast_tau_tv_imag" : float(fast_tau_tv_imag),
                                                            "use_imaginary_constraint": bool(use_imaginary_constraint),
                                                            "use_real_constraint": bool(use_real_constraint),
                                                            "max_imaginary_part": float(max_imaginary_part),
@@ -832,6 +838,14 @@ class RIOptimizer(Optimizer):
                 x_imag = tv_prox(x_imag,
                                  self.prox_parameters["tau_tv_imag"],
                                  max_num_iter=self.prox_parameters["max_num_iter"])
+                
+            if self.prox_parameters["fast_tau_tv_real"] != 0:
+                x_real = parallel_tv_prox(x_real,
+                                 self.prox_parameters["fast_tau_tv_real"])
+
+            if self.prox_parameters["fast_tau_tv_imag"] != 0:
+                x_imag = parallel_tv_prox(x_imag,
+                                 self.prox_parameters["fast_tau_tv_imag"])
 
             return x_real, x_imag
 
