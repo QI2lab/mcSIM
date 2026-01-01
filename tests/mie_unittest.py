@@ -52,3 +52,6 @@ class TestMie(unittest.TestCase):
 
         np.testing.assert_allclose(yn_scipy[mask], yn_cp[mask], atol=1e-8)
         np.testing.assert_allclose(dyn_scipy[mask], dyn_cp[mask], atol=1e-8)
+
+if __name__ == "__main__":
+    unittest.main()

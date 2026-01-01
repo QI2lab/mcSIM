@@ -47,7 +47,7 @@ gpu = ['cupy-cuda11x',  # assuming 11.2 <= CUDA version < 12. Otherwise, manuall
        'cucim ; platform_system != "win32"'
       ]
 optional = ['napari',
-            'miepython',
+            'miepython==2.5.5',
             'psfmodels']
 dev = ['sphinx']
 all = ['mcsim[expt_ctrl, gpu, optional, dev]']
