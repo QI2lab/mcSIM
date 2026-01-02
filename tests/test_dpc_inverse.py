@@ -1,10 +1,15 @@
 import numpy as np
 import pytest
 
+try:
+    import cupy as cp  # type: ignore
+except ImportError:
+    cp = None
+
 from mcsim.analysis.dpc_inverse import DPCGeometry, DPCRytovInverse
 
 
-def _make_simple_solver(ny=16, nx=16, n_planes=2):
+def _make_simple_solver(ny=16, nx=16, n_planes=2, use_gpu: bool = False):
     # Four LEDs, one per half-plane
     led_na = np.array(
         [
@@ -33,6 +38,8 @@ def _make_simple_solver(ny=16, nx=16, n_planes=2):
     # simple ground truth RI
     n0 = np.full(n_shape, geom.n_medium, dtype=np.float32)
     n0[0, ny // 2, nx // 2] += 1e-3  # small perturbation
+    if use_gpu and cp is not None:
+        n0 = cp.asarray(n0)
 
     # simulate data from the forward model
     solver = DPCRytovInverse(
@@ -41,7 +48,7 @@ def _make_simple_solver(ny=16, nx=16, n_planes=2):
         geom=geom,
         n_shape=n_shape,
         drs_n=drs_n,
-        use_gpu=False,
+        use_gpu=use_gpu,
     )
     dpc_pred, _ = solver._predict_fields(n0)
 
@@ -52,26 +59,35 @@ def _make_simple_solver(ny=16, nx=16, n_planes=2):
         geom=geom,
         n_shape=n_shape,
         drs_n=drs_n,
-        use_gpu=False,
+        use_gpu=use_gpu,
     )
     return solver, n0
 
 
-def test_forward_shape_and_values():
-    solver, n0 = _make_simple_solver()
+@pytest.mark.parametrize("use_gpu", [False] if cp is None else [False, True])
+def test_forward_shape_and_values(use_gpu):
+    solver, n0 = _make_simple_solver(use_gpu=use_gpu)
     pred, _ = solver._predict_fields(n0)
     assert pred.shape == solver.data.shape == (solver.n_planes, 4, solver.ny, solver.nx)
     # Forward evaluated at ground truth should match data
-    np.testing.assert_allclose(pred, solver.data, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(
+        cp.asnumpy(pred) if cp and use_gpu else pred,
+        cp.asnumpy(solver.data) if cp and use_gpu else solver.data,
+        rtol=1e-5,
+        atol=1e-6,
+    )
 
 
-def test_gradient_matches_numeric():
-    solver, n0 = _make_simple_solver()
+@pytest.mark.parametrize("use_gpu", [False] if cp is None else [False, True])
+def test_gradient_matches_numeric(use_gpu):
+    solver, n0 = _make_simple_solver(use_gpu=use_gpu)
     g, gn = solver.test_gradient(n0, jind=0, dx=1e-6)
-    np.testing.assert_allclose(g, gn, rtol=1e-3, atol=1e-5)
+    g_np = cp.asnumpy(g) if cp and use_gpu else g
+    gn_np = cp.asnumpy(gn) if cp and use_gpu else gn
+    np.testing.assert_allclose(g_np, gn_np, rtol=1e-3, atol=1e-5)
 
 
-def _make_multiled_solver(ny=16, nx=16, n_planes=2):
+def _make_multiled_solver(ny=16, nx=16, n_planes=2, use_gpu: bool = False):
     # Multiple LEDs per half-plane
     led_na = np.array(
         [
@@ -103,6 +119,8 @@ def _make_multiled_solver(ny=16, nx=16, n_planes=2):
 
     n0 = np.full(n_shape, geom.n_medium, dtype=np.float32)
     n0[1, ny // 2, nx // 2] += 5e-4
+    if use_gpu and cp is not None:
+        n0 = cp.asarray(n0)
 
     solver = DPCRytovInverse(
         np.zeros((n_planes, 4, ny, nx), dtype=np.float32),
@@ -110,7 +128,7 @@ def _make_multiled_solver(ny=16, nx=16, n_planes=2):
         geom=geom,
         n_shape=n_shape,
         drs_n=drs_n,
-        use_gpu=False,
+        use_gpu=use_gpu,
     )
     dpc_pred, _ = solver._predict_fields(n0)
 
@@ -120,20 +138,28 @@ def _make_multiled_solver(ny=16, nx=16, n_planes=2):
         geom=geom,
         n_shape=n_shape,
         drs_n=drs_n,
-        use_gpu=False,
+        use_gpu=use_gpu,
     )
     return solver, n0
 
 
-def test_forward_multiled_shape_and_values():
-    solver, n0 = _make_multiled_solver()
+@pytest.mark.parametrize("use_gpu", [False] if cp is None else [False, True])
+def test_forward_multiled_shape_and_values(use_gpu):
+    solver, n0 = _make_multiled_solver(use_gpu=use_gpu)
     pred, _ = solver._predict_fields(n0)
     assert pred.shape == solver.data.shape == (solver.n_planes, 4, solver.ny, solver.nx)
-    np.testing.assert_allclose(pred, solver.data, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(
+        cp.asnumpy(pred) if cp and use_gpu else pred,
+        cp.asnumpy(solver.data) if cp and use_gpu else solver.data,
+        rtol=1e-5,
+        atol=1e-6,
+    )
 
 
-@pytest.mark.slow
-def test_gradient_multiled_matches_numeric():
-    solver, n0 = _make_multiled_solver()
+@pytest.mark.parametrize("use_gpu", [False] if cp is None else [False, True])
+def test_gradient_multiled_matches_numeric(use_gpu):
+    solver, n0 = _make_multiled_solver(use_gpu=use_gpu)
     g, gn = solver.test_gradient(n0, jind=0, dx=1e-6)
-    np.testing.assert_allclose(g, gn, rtol=1e-3, atol=1e-5)
+    g_np = cp.asnumpy(g) if cp and use_gpu else g
+    gn_np = cp.asnumpy(gn) if cp and use_gpu else gn
+    np.testing.assert_allclose(g_np, gn_np, rtol=1e-3, atol=1e-5)
