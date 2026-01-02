@@ -163,3 +163,29 @@ def test_gradient_multiled_matches_numeric(use_gpu):
     g_np = cp.asnumpy(g) if cp and use_gpu else g
     gn_np = cp.asnumpy(gn) if cp and use_gpu else gn
     np.testing.assert_allclose(g_np, gn_np, rtol=1e-3, atol=1e-5)
+
+
+@pytest.mark.parametrize("use_gpu", [False] if cp is None else [False, True])
+def test_reconstruction_improves_mse(use_gpu):
+    solver, n_true = _make_simple_solver(ny=12, nx=12, n_planes=1, use_gpu=use_gpu)
+    xp = cp if (use_gpu and cp is not None) else np
+
+    n_init = xp.full_like(n_true, solver.geom.n_medium)
+
+    step = solver.guess_step()
+    res = solver.run(
+        n_init,
+        step=step,
+        max_iterations=6,
+        use_fista=True,
+        compute_cost=False,
+        verbose=False,
+        compute_all_costs=False,
+        line_search_iter_limit=None,
+        label="recon-test ",
+    )
+    n_rec = res["x"]
+
+    mse_init = xp.mean(xp.abs(n_init - n_true) ** 2)
+    mse_final = xp.mean(xp.abs(n_rec - n_true) ** 2)
+    assert float(mse_final) < float(mse_init)
