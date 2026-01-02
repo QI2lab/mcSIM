@@ -176,7 +176,7 @@ def test_reconstruction_improves_mse(use_gpu):
     res = solver.run(
         n_init,
         step=step,
-        max_iterations=6,
+        max_iterations=50,
         use_fista=True,
         compute_cost=False,
         verbose=False,
@@ -188,4 +188,5 @@ def test_reconstruction_improves_mse(use_gpu):
 
     mse_init = xp.mean(xp.abs(n_init - n_true) ** 2)
     mse_final = xp.mean(xp.abs(n_rec - n_true) ** 2)
-    assert float(mse_final) < float(mse_init)
+    # Expect a substantial reduction
+    assert float(mse_final) < 0.1 * float(mse_init)
