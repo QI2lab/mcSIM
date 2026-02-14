@@ -310,3 +310,5 @@ expt_ctrl/temp*.cfg
 
 # documentation
 docs/_*
+
+.codex/**
