@@ -71,6 +71,8 @@ try:
 except Exception as _e:  # pragma: no cover
     propagate_homogeneous = None
 
+from mcsim.analysis.dpc_fista_solver import LEDBoard, compute_led_geometry
+
 
 if cp:
     array = np.ndarray | cp.ndarray
@@ -356,12 +358,13 @@ def _open_led_cache_zarr(
                 f"Existing LED cache shape {tuple(I_arr.shape)} != {(int(n_led), int(n_planes), int(ny), int(nx))}"
             )
     else:
-        create_kwargs = {
-            "shape": (int(n_led), int(n_planes), int(ny), int(nx)),
-            "dtype": "float32",
-        }
         # Use chunks kwarg for compatibility with current Zarr API
-        I_arr = g.create_array("I_cam", chunks=chunks, **create_kwargs)  # type: ignore[call-arg]
+        I_arr = g.create_array(
+            "I_cam",
+            shape=(int(n_led), int(n_planes), int(ny), int(nx)),
+            dtype="float32",
+            chunks=chunks,
+        )  # type: ignore[call-arg]
 
     if "done" in g:
         done = g["done"]
@@ -377,7 +380,16 @@ def _open_led_cache_zarr(
     return g, I_arr, done
 
 
-def _zarr_write_array(g, name: str, data: np.ndarray, *, dtype: str = "float32", chunks=None, overwrite: bool = True):
+def _zarr_write_array(
+    g,
+    name: str,
+    data: np.ndarray,
+    *,
+    dtype: str = "float32",
+    chunks=None,
+    compressor=None,
+    overwrite: bool = True,
+):
     """
     Write an array using Zarr v3 `Group.create_array`.
 
@@ -402,10 +414,12 @@ def _zarr_write_array(g, name: str, data: np.ndarray, *, dtype: str = "float32",
         Written array.
     """
     shape = tuple(int(s) for s in data.shape)
-    create_kwargs = {
-        "shape": shape,
-        "dtype": dtype,
-    }
+    create_kwargs = {"shape": shape, "dtype": dtype}
+    if compressor is not None:
+        if isinstance(compressor, dict):
+            create_kwargs.update(compressor)
+        else:
+            create_kwargs["compressor"] = compressor
 
     if chunks is not None:
         arr = g.create_array(name, chunks=chunks, **create_kwargs)  # type: ignore[call-arg]
@@ -916,6 +930,8 @@ class DPCMieSimulator:
         Camera grid/noise settings forwarded to `localize_psf.camera.simulated_img`.
     led_grid_shape : tuple[int, int], optional
         LED board dimensions.
+    pitch_mm : float, optional
+        LED pitch (mm) on the board.
     inner_na : float, optional
         Inner NA for annular illumination mask.
     include_center_led : bool, optional
@@ -945,6 +961,7 @@ class DPCMieSimulator:
         simulation: SimulationSpace,
         camera: CameraSpace,
         led_grid_shape: tuple[int, int] = (64, 64),
+        pitch_mm: float = 2.5,
         inner_na: float = 0.0,
         include_center_led: bool = False,
         pattern_order: Sequence[PatternName] = ("left", "right", "up", "down"),
@@ -976,6 +993,7 @@ class DPCMieSimulator:
         self.simulation = simulation
         self.camera = camera
         self.led_grid_shape = (int(led_grid_shape[0]), int(led_grid_shape[1]))
+        self.pitch_mm = float(pitch_mm)
         self.inner_na = float(inner_na)
         self.include_center_led = bool(include_center_led)
         self.pattern_order = pattern_order
@@ -1216,9 +1234,9 @@ class DPCMieSimulator:
 
         Notes
         -----
-        - LED NA grid and pattern membership come from `make_led_na_positions` and
-          `split_dpc_patterns` using `led_grid_shape`, `inner_na`, `include_center_led`,
-          and `pattern_order`.
+        - LED NA grid and pattern membership come from board geometry (n_side, pitch_mm)
+          mapped to NA via inscribed circle matched to na_obj, then split by
+          `split_dpc_patterns` using `inner_na`, `include_center_led`, and `pattern_order`.
         - Each LED image is produced by `_simulate_led` (internally
           `mie_fields.mie_efield` → `propagate_homogeneous` → `apply_objective_imaging`
           → `localize_psf.camera.simulated_img`).
@@ -1226,13 +1244,21 @@ class DPCMieSimulator:
         """
         allowed: tuple[PatternName, ...] = ("left", "right", "up", "down")
         ny_led, nx_led = self.led_grid_shape
-        na_xy_all = make_led_na_positions(
-            ny_led,
-            nx_led,
+        board = LEDBoard(
+            n_side=ny_led,
+            pitch_mm=float(self.pitch_mm),
             na_obj=float(self.na_obj),
-            inner_na=float(self.inner_na),
-            include_center=bool(self.include_center_led),
+            wavelength_um=float(self.wavelength_um),
+            n_medium=float(self.sphere.n_medium),
         )
+        geom = compute_led_geometry(board)
+        na_xy_all = geom.na_components
+        if not self.include_center_led:
+            r = np.linalg.norm(na_xy_all, axis=1)
+            na_xy_all = na_xy_all[r > 0]
+        if float(self.inner_na) > 0:
+            r = np.linalg.norm(na_xy_all, axis=1)
+            na_xy_all = na_xy_all[r >= float(self.inner_na)]
         patterns_full = split_dpc_patterns(na_xy_all, order=self.pattern_order)
 
         na_xy = na_xy_all[:: self.led_subsample]
@@ -1267,6 +1293,7 @@ class DPCMieSimulator:
                 "wavelength_um": float(self.wavelength_um),
                 "na_obj": float(self.na_obj),
                 "led_grid_shape": [int(self.led_grid_shape[0]), int(self.led_grid_shape[1])],
+                "pitch_mm": float(self.pitch_mm),
                 "camera_pixel_um": float(self.camera.pixel_um),
                 "magnification": float(self.camera.magnification),
                 "camera_shape": [int(ny_cam), int(nx_cam)],
@@ -1344,7 +1371,7 @@ class DPCMieSimulator:
 
         dpc = xp.stack([acc[p].copy() for p in self.pattern_order], axis=0)
         dpc = xp.moveaxis(dpc, 0, 1)  # (n_planes, 4, ny, nx)
-        dpc_out: array
+        dpc_out: array # type: ignore
         if dpc.shape[0] == 1:
             dpc_out = dpc[0]
         else:
@@ -1352,6 +1379,7 @@ class DPCMieSimulator:
 
         meta: dict[str, array] = { # type: ignore
             "na_xy": na_xy_all,
+            "pitch_mm": float(self.pitch_mm),
             "simulation_dxy_um": np.asarray(self.simulation.dxy_um, dtype=np.float32),
             "simulation_esize": (int(self.simulation.esize[0]), int(self.simulation.esize[1])),
             "camera_shape": (int(ny_cam), int(nx_cam)),
@@ -1463,6 +1491,7 @@ def simulate_dpc_images_sphere(
     wavelength_um: float = 0.515,
     na_obj: float = 0.8,
     led_grid_shape: tuple[int, int] = (64, 64),
+    pitch_mm: float = 2.5,
     camera_pixel_um: float = 2.4,
     magnification: float = 20.0,
     camera_oversample: int = 1,
@@ -1503,7 +1532,9 @@ def simulate_dpc_images_sphere(
         Objective NA. Sets the coherent cutoff in `apply_objective_imaging` via
         `make_pupil`.
     led_grid_shape : (int, int)
-        LED board shape (ny_led, nx_led) for `make_led_na_positions`.
+        LED board shape (ny_led, nx_led).
+    pitch_mm : float
+        LED pitch on the board (mm), used to map board radius to illumination NA.
     camera_pixel_um : float
         Camera pixel pitch (µm) in the camera plane; combined with `magnification` to
         derive object-plane sampling and the bin size for `localize_psf.camera.simulated_img`.
@@ -1621,6 +1652,7 @@ def simulate_dpc_images_sphere(
         simulation=sim_space,
         camera=cam_space,
         led_grid_shape=led_grid_shape,
+        pitch_mm=float(pitch_mm),
         inner_na=float(inner_na),
         include_center_led=bool(include_center_led),
         pattern_order=pattern_order,
@@ -1647,7 +1679,7 @@ def simulate_dpc_images_sphere(
     })
 
     # Crop 10% border from each side to keep central region
-    def _crop_center(arr: array) -> array:
+    def _crop_center(arr: array) -> array: # type: ignore
         if arr.ndim == 3:
             _, ny, nx = arr.shape
         elif arr.ndim == 4:
@@ -1691,6 +1723,14 @@ def write_dpc_zarr(
     sphere: SphereSpec,
     inner_na: float,
     include_center_led: bool,
+    camera_gains: array | float = 1.0, # type: ignore
+    camera_offsets: array | float = 0.0, # type: ignore
+    camera_readout_noise_sds: array | float = 0.0, # type: ignore
+    camera_photon_shot_noise: bool = False,
+    camera_saturation: int | None = None,
+    camera_image_is_integer: bool = False,
+    exposure_time_ms: float = 1.0,
+    illumination_photons_per_s_per_um2: float = 1.0,
     nz: int | None = None,
     z_span_um: float | None = None,
     overwrite: bool = True,
@@ -1724,6 +1764,22 @@ def write_dpc_zarr(
         Sphere parameters; radius/index stored as extra attrs.
     inner_na : float
         Inner NA stored as extra attr.
+    camera_gains : array or float, optional
+        Camera gain(s) stored in attrs.
+    camera_offsets : array or float, optional
+        Camera offset(s) stored in attrs.
+    camera_readout_noise_sds : array or float, optional
+        Camera readout noise sds stored in attrs.
+    camera_photon_shot_noise : bool, optional
+        Camera shot noise flag stored in attrs.
+    camera_saturation : int or None, optional
+        Camera saturation stored in attrs.
+    camera_image_is_integer : bool, optional
+        Camera integer flag stored in attrs.
+    exposure_time_ms : float, optional
+        Exposure time stored in attrs.
+    illumination_photons_per_s_per_um2 : float, optional
+        Illumination intensity stored in attrs.
     include_center_led : bool
         Whether center LED included; stored as extra attr.
     nz : int or None, optional
@@ -1754,6 +1810,7 @@ def write_dpc_zarr(
     g.attrs["n_medium"] = float(n_medium)
     g.attrs["led_grid_shape"] = [int(led_grid_shape[0]), int(led_grid_shape[1])]
     g.attrs["pattern_order"] = [str(p) for p in pattern_order]
+    g.attrs["pitch_mm"] = float(meta.get("pitch_mm", np.nan))
     # Effective Mie evaluation plane used for simulation (µm).
     if "z_plane_um" in meta:
         g.attrs["field_generation_z_um"] = float(np.asarray(meta["z_plane_um"]))
@@ -1778,6 +1835,22 @@ def write_dpc_zarr(
     g.attrs["inner_na"] = float(inner_na)
     g.attrs["include_center_led"] = bool(include_center_led)
     g.attrs["dxy_um"] = float(np.asarray(meta.get("dxy_um", camera_pixel_um / magnification)))
+    g.attrs["camera_gains"] = (
+        float(camera_gains) if np.isscalar(camera_gains) else np.asarray(camera_gains).tolist()
+    )
+    g.attrs["camera_offsets"] = (
+        float(camera_offsets) if np.isscalar(camera_offsets) else np.asarray(camera_offsets).tolist()
+    )
+    g.attrs["camera_readout_noise_sds"] = (
+        float(camera_readout_noise_sds)
+        if np.isscalar(camera_readout_noise_sds)
+        else np.asarray(camera_readout_noise_sds).tolist()
+    )
+    g.attrs["camera_photon_shot_noise"] = bool(camera_photon_shot_noise)
+    g.attrs["camera_saturation"] = camera_saturation if camera_saturation is None else int(camera_saturation)
+    g.attrs["camera_image_is_integer"] = bool(camera_image_is_integer)
+    g.attrs["exposure_time_ms"] = float(exposure_time_ms)
+    g.attrs["illumination_photons_per_s_per_um2"] = float(illumination_photons_per_s_per_um2)
 
     if dpc_np.ndim == 3:
         if dpc_np.shape[0] != 4:
@@ -1811,6 +1884,7 @@ def simulate_dpc_images_sphere_to_zarr(
     wavelength_um: float = 0.515,
     na_obj: float = 0.8,
     led_grid_shape: tuple[int, int] = (64, 64),
+    pitch_mm: float = 2.5,
     camera_pixel_um: float = 2.4,
     magnification: float = 20.0,
     camera_oversample: int = 1,
@@ -1855,6 +1929,8 @@ def simulate_dpc_images_sphere_to_zarr(
         Objective NA for pupil cutoff and attrs.
     led_grid_shape : tuple[int, int], optional
         LED board shape for pattern generation.
+    pitch_mm : float, optional
+        LED pitch on the board (mm), used to map board radius to illumination NA.
     camera_pixel_um : float, optional
         Camera pixel size (µm) for attrs and camera sampling.
     magnification : float, optional
@@ -1929,6 +2005,7 @@ def simulate_dpc_images_sphere_to_zarr(
         wavelength_um=wavelength_um,
         na_obj=na_obj,
         led_grid_shape=led_grid_shape,
+        pitch_mm=pitch_mm,
         camera_pixel_um=camera_pixel_um,
         magnification=magnification,
         camera_oversample=camera_oversample,
@@ -1974,6 +2051,14 @@ def simulate_dpc_images_sphere_to_zarr(
         sphere=sphere_used,
         inner_na=inner_na,
         include_center_led=include_center_led,
+        camera_gains=camera_gains,
+        camera_offsets=camera_offsets,
+        camera_readout_noise_sds=camera_readout_noise_sds,
+        camera_photon_shot_noise=camera_photon_shot_noise,
+        camera_saturation=camera_saturation,
+        camera_image_is_integer=camera_image_is_integer,
+        exposure_time_ms=exposure_time_ms,
+        illumination_photons_per_s_per_um2=illumination_photons_per_s_per_um2,
         nz=nz,
         z_span_um=z_span_um,
         overwrite=overwrite,

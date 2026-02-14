@@ -285,6 +285,7 @@ class Optimizer:
             gtol: float = 0.0,
             print_newline: bool = False,
             label: str = "",
+            iteration_callback=None,
             **kwargs) -> dict:
 
         """
@@ -535,6 +536,9 @@ class Optimizer:
             # ###################################
             if stop:
                 break
+
+            if iteration_callback is not None:
+                iteration_callback(ii, x)
 
         # compute final cost
         if compute_cost:
