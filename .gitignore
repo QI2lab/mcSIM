@@ -297,6 +297,7 @@ dask-worker-space/
 
 # temporary files
 *.*~
+build/**
 
 # scratch space
 examples/data/**
@@ -309,3 +310,5 @@ expt_ctrl/temp*.cfg
 
 # documentation
 docs/_*
+
+.codex/**
